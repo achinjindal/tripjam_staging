@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -I -X OPTIONS \"https://photon.komoot.io/api/?q=Amber+Fort+Jaipur&limit=1\" -H \"Origin: http://localhost:5173\")",
+      "Bash(npx vite:*)",
+      "WebFetch(domain:developers.google.com)",
+      "WebSearch",
+      "Bash(supabase db:*)"
+    ]
+  }
+}
