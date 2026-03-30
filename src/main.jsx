@@ -24,17 +24,18 @@ function Root() {
       <Home
         session={session}
         onOpenTrip={(trip) => { setActiveTrip(trip); setScreen("trip"); }}
-        onCreateTrip={() => setScreen("create")}
+        onCreateTrip={() => { setActiveTrip(null); setScreen("create"); }}
+        onEditTrip={(trip) => { setActiveTrip(trip); setScreen("edit"); }}
       />
     );
   }
 
-  // 'create' and 'trip' both go into App (which handles setup + itinerary screens)
+  // 'create', 'edit', and 'trip' all go into App
   return (
     <App
       session={session}
       initialTrip={activeTrip}
-      initialScreen={screen === "create" ? "setup" : "itinerary"}
+      initialScreen={screen === "create" || screen === "edit" ? "setup" : "itinerary"}
       onHome={() => { setActiveTrip(null); setScreen("home"); }}
     />
   );

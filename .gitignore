@@ -21,3 +21,7 @@ supabase/.temp
 
 # Logs
 npm-debug.log*
+
+# Local Netlify folder
+.netlify
+.vercel

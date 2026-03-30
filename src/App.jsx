@@ -1,7 +1,9 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, createContext, useContext } from "react";
 import { supabase } from "./supabase";
+import html2canvas from "html2canvas";
 
 const FACE_ICONS = ["👦","👧","🧑","👨","👩","🧔","👱","🧓","🥸","😎"];
+const DebugContext = createContext(false);
 
 /* ─── THEME ─────────────────────────────────────────────────────────── */
 const T = {
@@ -24,45 +26,9 @@ const PLACES_HEADERS = { "Authorization": `Bearer ${import.meta.env.VITE_SUPABAS
 /* ─── PHOTO HOOK ─────────────────────────────────────────────────────── */
 const _photoCache = {};
 
-async function _fetchPhoto(geocode, city) {
-  // Tier 1: Wikipedia (free)
-  try {
-    const data = await fetch(
-      `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(geocode)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`
-    ).then(r => r.json());
-    const src = Object.values(data?.query?.pages || {})[0]?.thumbnail?.source;
-    if (src) return src;
-  } catch {}
-
-  // Tier 2: Wikimedia Commons (free)
-  try {
-    const q = city ? `${geocode} ${city}` : geocode;
-    const data = await fetch(
-      `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(q)}&gsrlimit=10&prop=imageinfo&iiprop=url&iiurlwidth=700&format=json&origin=*`
-    ).then(r => r.json());
-    const pages = Object.values(data?.query?.pages || {});
-    const photo = pages.find(p => /\.(jpe?g|png)/i.test(p.imageinfo?.[0]?.url || ""));
-    if (photo) return photo.imageinfo[0].url;
-  } catch {}
-
-  return null;
-}
-
-function useActivityPhoto(geocode, city) {
-  const [url, setUrl] = useState(undefined);
-  const key = `${geocode}||${city || ""}`;
-  useEffect(() => {
-    if (!geocode) { setUrl(null); return; }
-    if (_photoCache[key] !== undefined) { setUrl(_photoCache[key]); return; }
-    _fetchPhoto(geocode, city).then(src => {
-      _photoCache[key] = src ?? null;
-      setUrl(src ?? null);
-    });
-  }, [key]);
-  return url;
-}
 
 function PhotoStrip({ activity, city }) {
+  const debugMode = useContext(DebugContext);
   const stored = activity?.photo_url;
   const geocode = activity?.geocode || activity?.title;
   const [liveUrl, setLiveUrl] = useState(stored ? null : undefined);
@@ -82,7 +48,14 @@ function PhotoStrip({ activity, city }) {
   if (url === undefined) return (
     <div style={{marginTop:10,height:130,borderRadius:10,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
   );
-  if (!url) return null;
+  if (!url) {
+    if (!debugMode) return null;
+    return (
+      <div style={{marginTop:8,padding:"4px 8px",borderRadius:6,background:"#FFF5F5",border:"1px solid #FCCACA",fontSize:10,color:"#E05C5C",fontFamily:"monospace"}}>
+        ✗ no photo — "{activity?.geocode || activity?.title}"
+      </div>
+    );
+  }
   return (
     <div style={{marginTop:10,borderRadius:10,overflow:"hidden",height:130,background:T.sand}}>
       <img src={url} alt={geocode} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
@@ -307,7 +280,7 @@ function runQueue() {
   (async () => {
     while (_queue.length > 0) {
       _queue.shift()();
-      await new Promise(r => setTimeout(r, 120)); // 120ms between requests — prevents rate-limiting
+      await new Promise(r => setTimeout(r, 80)); // 80ms between requests — prevents rate-limiting
     }
     _queueRunning = false;
   })();
@@ -326,6 +299,26 @@ function queuedFetch(url) {
     });
     runQueue();
   });
+}
+
+async function _fetchPhoto(geocode, city) {
+  // Tier 1: Wikipedia
+  const data1 = await queuedFetch(
+    `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(geocode)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`
+  );
+  const src = Object.values(data1?.query?.pages || {})[0]?.thumbnail?.source;
+  if (src) return src;
+
+  // Tier 2: Wikimedia Commons
+  const q = city ? `${geocode} ${city}` : geocode;
+  const data2 = await queuedFetch(
+    `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(q)}&gsrlimit=10&prop=imageinfo&iiprop=url&iiurlwidth=700&format=json&origin=*`
+  );
+  const pages = Object.values(data2?.query?.pages || {});
+  const photo = pages.find(p => /\.(jpe?g|png)/i.test(p.imageinfo?.[0]?.url || ""));
+  if (photo) return photo.imageinfo[0].url;
+
+  return null;
 }
 
 async function getCityCenter(city) {
@@ -354,7 +347,7 @@ async function geocodePlace(title, city, geocodeHint) {
     const feats = data?.features || [];
     const hit = feats.find(f => {
       const c = { lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0] };
-      return !cityCenter || haversineMeters(c, cityCenter) <= 30000;
+      return !cityCenter || haversineMeters(c, cityCenter) <= 300000;
     });
     const result = hit ? { lat: hit.geometry.coordinates[1], lng: hit.geometry.coordinates[0] } : null;
     _geocodeCache.set(q, result);
@@ -375,6 +368,7 @@ function TransitionRow({ from, to, city, label = null }) {
   const [commute, setCommute] = useState(null);
   const [loading, setLoading] = useState(true);
   const [debug, setDebug] = useState(null);
+  const debugMode = useContext(DebugContext);
 
   useEffect(() => {
     let cancelled = false;
@@ -418,19 +412,22 @@ function TransitionRow({ from, to, city, label = null }) {
     </div>
   );
 
-  if (!commute) return (
-    <div style={{padding:"2px 20px"}}>
-      <div style={{fontSize:10,color:"#E05C5C",fontFamily:"monospace",background:"#FFF5F5",
-        border:"1px solid #FCCACA",borderRadius:6,padding:"3px 8px",lineHeight:1.5}}>
-        ✗ {from.title} → {to.title}<br/>
-        <span style={{color:"#999"}}>extracted: "{debug?.placeA}" → "{debug?.placeB}"</span><br/>
-        <span style={{color:"#999"}}>{debug?.reason}</span>
+  if (!commute) {
+    if (!debugMode) return null;
+    return (
+      <div style={{padding:"2px 20px"}}>
+        <div style={{fontSize:10,color:"#E05C5C",fontFamily:"monospace",background:"#FFF5F5",
+          border:"1px solid #FCCACA",borderRadius:6,padding:"3px 8px",lineHeight:1.5}}>
+          ✗ {from.title} → {to.title}<br/>
+          <span style={{color:"#999"}}>extracted: "{debug?.placeA}" → "{debug?.placeB}"</span><br/>
+          <span style={{color:"#999"}}>{debug?.reason}</span>
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
 
-  const origin   = encodeURIComponent(`${extractPlace(from.title)} ${city}`);
-  const dest     = encodeURIComponent(`${extractPlace(to.title)} ${city}`);
+  const origin   = encodeURIComponent(from.geocode || `${extractPlace(from.title)} ${city}`);
+  const dest     = encodeURIComponent(to.geocode   || `${extractPlace(to.title)} ${city}`);
   const mapsUrl  = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=${commute.mode === "walk" ? "walking" : "driving"}`;
 
   return (
@@ -456,7 +453,9 @@ function ActivityCard({ activity, city, onEdit }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({ ...activity });
   const ts = typeStyle[draft.type] || typeStyle.sight;
-  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${activity.geocode || activity.title} ${city}`)}`;
+  const mapsUrl = activity.geocode_end
+    ? `https://www.google.com/maps/dir/${encodeURIComponent(activity.geocode || activity.title)}/${encodeURIComponent(activity.geocode_end)}`
+    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${activity.geocode || activity.title} ${city}`)}`;
 
 
   const saveEdit = () => { onEdit(draft); setEditing(false); };
@@ -487,8 +486,14 @@ function ActivityCard({ activity, city, onEdit }) {
             placeholder="Note (optional)"
             style={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",marginBottom:8}}/>
           <input value={draft.geocode || ""} onChange={e=>setDraft(d=>({...d,geocode:e.target.value}))}
-            placeholder="Map pin (e.g. Gateway of India Pier Mumbai)"
-            style={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",marginBottom:10}}/>
+            placeholder={draft.type === "transit" ? "Departure (e.g. CSMT Mumbai)" : "Map pin (e.g. Gateway of India Pier Mumbai)"}
+            style={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",marginBottom:8}}/>
+          {draft.type === "transit" && (
+            <input value={draft.geocode_end || ""} onChange={e=>setDraft(d=>({...d,geocode_end:e.target.value}))}
+              placeholder="Arrival (e.g. Pune Junction)"
+              style={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",marginBottom:10}}/>
+          )}
+          {draft.type !== "transit" && <div style={{marginBottom:10}}/>}
           <div style={{display:"flex",gap:8}}>
             <button onClick={saveEdit} style={{flex:1,background:T.ocean,color:"white",border:"none",borderRadius:10,padding:"9px 0",fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer"}}>Save</button>
             <button onClick={cancelEdit} style={{flex:1,background:T.sand,color:T.ink,border:"none",borderRadius:10,padding:"9px 0",fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer"}}>Cancel</button>
@@ -536,7 +541,7 @@ function ActivityCard({ activity, city, onEdit }) {
           <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5,flexShrink:0}}>
             <div style={{display:"flex",gap:5,alignItems:"center"}}>
               {activity.duration && <span style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif"}}>⏱ {activity.duration}</span>}
-              <a href={mapsUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:13,lineHeight:1,color:T.mist,textDecoration:"none"}} title="Open in Google Maps">📍</a>
+              <a href={mapsUrl} target="_blank" rel="noopener noreferrer" style={{lineHeight:1,textDecoration:"none"}} title="Open in Google Maps"><img src="/google-maps-icon.png" alt="Maps" style={{width:14,height:14,objectFit:"contain",display:"block"}} /></a>
               <button onClick={()=>setEditing(true)} style={{background:"transparent",border:"none",cursor:"pointer",fontSize:11,padding:"0 2px",color:T.sand}}>✎</button>
             </div>
           </div>
@@ -550,42 +555,35 @@ function ActivityCard({ activity, city, onEdit }) {
 }
 
 /* ─── ARRIVAL TIMELINE ───────────────────────────────────────────────── */
-function ArrivalTimeline({ arrivalTime, hotel, city, onEditFlight }) {
-  const [travelMins, setTravelMins] = useState(null);
-  const [loading, setLoading]       = useState(true);
-
-  const arrivalHHMM = arrivalTime ? arrivalTime.split("T")[1]?.substring(0, 5) : null;
-
+const TRANSPORT_ICONS = ["✈️","🚂","⛵","🚗","🛺","🚢","🚁","🛸","🚤","🚀","🚲","🛵"];
+function TransportCarousel() {
+  const [idx, setIdx] = useState(0);
+  const [key, setKey] = useState(0);
   useEffect(() => {
-    if (!hotel?.name || !arrivalHHMM) { setLoading(false); return; }
-    let cancelled = false;
-    async function load() {
-      const [airCoord, hotelCoord] = await Promise.all([
-        geocodePlace(`${city} Airport`, city),
-        geocodePlace(hotel.name, city),
-      ]);
-      if (cancelled) return;
-      if (airCoord && hotelCoord) {
-        const dist = haversineMeters(airCoord, hotelCoord);
-        if (dist < 100000) {
-          if (!cancelled) setTravelMins(Math.max(10, Math.round((dist * 1.4) / 350)));
-        }
-      }
-      if (!cancelled) setLoading(false);
-    }
-    load();
-    return () => { cancelled = true; };
-  }, [arrivalHHMM, hotel?.name, city]);
+    const t = setInterval(() => {
+      setIdx(i => (i + 1) % TRANSPORT_ICONS.length);
+      setKey(k => k + 1);
+    }, 1800);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div style={{width:80,height:80,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
+      <span key={key} style={{fontSize:56,animation:"slideIn 1.8s ease forwards",display:"inline-block"}}>
+        {TRANSPORT_ICONS[idx]}
+      </span>
+    </div>
+  );
+}
 
+function ArrivalTimeline({ arrivalTime, onEditFlight }) {
+  const arrivalHHMM = arrivalTime ? arrivalTime.split("T")[1]?.substring(0, 5) : null;
   if (!arrivalHHMM) return null;
 
-  const [h, m]          = arrivalHHMM.split(":").map(Number);
-  const effectiveTravel = loading ? null : (travelMins ?? null);
-  const rawReady   = h * 60 + m + 30 + (effectiveTravel ?? 45) + 90;
+  const [h, m]     = arrivalHHMM.split(":").map(Number);
+  const rawReady   = h * 60 + m + 90; // ~90 min: exit + transfer + settle
   const readyTotal = Math.round(rawReady / 30) * 30;
   const readyHH    = String(Math.floor(readyTotal / 60) % 24).padStart(2, "0");
   const readyMM    = String(readyTotal % 60).padStart(2, "0");
-
 
   return (
     <div style={{padding:"0 20px 12px"}}>
@@ -596,22 +594,9 @@ function ArrivalTimeline({ arrivalTime, hotel, city, onEditFlight }) {
             style={onEditFlight ? {cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:3} : {}}
           >✈️ Land {arrivalHHMM}</span>
           <span style={{color:T.mist,fontSize:10}}>›</span>
-          <span style={{color:T.mist}}>30 min airport exit</span>
+          <span style={{color:T.mist}}>~90 min exit & transfer</span>
           <span style={{color:T.mist,fontSize:10}}>›</span>
-          {!hotel?.name
-            ? <span style={{color:T.mist}}>add hotel to estimate travel time</span>
-            : loading
-              ? <span style={{color:T.mist}}>🚗 ···</span>
-              : effectiveTravel
-                ? <span style={{color:T.ocean}}>🚗 ~{effectiveTravel} min to {hotel.name}</span>
-                : <span style={{color:T.mist}}>🚗 ~45 min to {hotel.name}</span>
-          }
-          {hotel?.name && <><span style={{color:T.mist,fontSize:10}}>›</span><span>🏨 ~1.5h check-in & rest</span></>}
-          {hotel?.name && <><span style={{color:T.mist,fontSize:10}}>›</span>
-            <span style={{fontWeight:600,color:T.moss}}>Ready ~{readyHH}:{readyMM}</span></>}
-        </div>
-        <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginTop:6,fontStyle:"italic"}}>
-          💡 Tip: if check-in isn&apos;t until 3pm, consider dropping bags and exploring nearby spots first
+          <span style={{fontWeight:600,color:T.moss}}>Ready ~{readyHH}:{readyMM}</span>
         </div>
       </div>
     </div>
@@ -619,7 +604,43 @@ function ArrivalTimeline({ arrivalTime, hotel, city, onEditFlight }) {
 }
 
 /* ─── DAY SECTION ────────────────────────────────────────────────────── */
-function DaySection({ day, hotel, onAddActivity, onEditActivity, arrivalTime = null, onEditFlight }) {
+function WishlistSection({ items, city }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{margin:"8px 20px 0"}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{
+        width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
+        background:open?"#FFF8F0":"#FDF6EE",border:`1.5px solid ${T.sand}`,
+        borderRadius:open?"14px 14px 0 0":14,padding:"10px 14px",cursor:"pointer",
+      }}>
+        <span style={{fontFamily:"Georgia,serif",fontSize:13,color:T.terra,fontWeight:600}}>✨ Local gems nearby</span>
+        <span style={{fontSize:11,color:T.mist}}>{open ? "▲" : `${items.length} spots  ▼`}</span>
+      </button>
+      {open && (
+        <div style={{background:"#FDF6EE",border:`1.5px solid ${T.sand}`,borderTop:"none",borderRadius:"0 0 14px 14px",padding:"4px 0 8px"}}>
+          {items.map((item, i) => {
+            const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${item.geocode || item.title} ${city}`)}`;
+            return (
+              <a key={i} href={mapsUrl} target="_blank" rel="noopener noreferrer" style={{
+                display:"flex",alignItems:"flex-start",gap:10,padding:"8px 14px",
+                textDecoration:"none",borderBottom: i < items.length-1 ? `1px solid ${T.sand}` : "none",
+              }}>
+                <span style={{fontSize:20,flexShrink:0,marginTop:1}}>{item.icon}</span>
+                <div>
+                  <div style={{fontSize:13,fontWeight:600,color:T.ink,fontFamily:"Georgia,serif"}}>{item.title}</div>
+                  <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginTop:2}}>{item.note}</div>
+                </div>
+                <img src="/google-maps-icon.png" alt="Maps" style={{width:14,height:14,objectFit:"contain",flexShrink:0,alignSelf:"center",marginLeft:"auto"}} />
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DaySection({ day, onAddActivity, onEditActivity, arrivalTime = null, onEditFlight, hotelActivity = null }) {
   const total = day.activities.length;
   const [adding, setAdding] = useState(false);
   const [showDesc, setShowDesc] = useState(false);
@@ -686,12 +707,17 @@ function DaySection({ day, hotel, onAddActivity, onEditActivity, arrivalTime = n
 
       {/* Arrival timeline */}
       {arrivalTime && (
-        <ArrivalTimeline arrivalTime={arrivalTime} hotel={hotel} city={day.city} onEditFlight={onEditFlight} />
+        <ArrivalTimeline arrivalTime={arrivalTime} onEditFlight={onEditFlight} />
       )}
 
-      {/* Hotel → first activity */}
-      {hotel?.name && day.activities.length > 0 && (
-        <TransitionRow from={{ title: hotel.name }} to={day.activities[0]} city={day.city} label="🏨 Hotel"/>
+      {/* Hotel → first activity transition (Day 2+ when staying at hotel) */}
+      {hotelActivity && day.activities.length > 0 && (
+        <TransitionRow
+          from={hotelActivity}
+          to={day.activities[0]}
+          city={day.city}
+          label="from hotel"
+        />
       )}
 
       {/* Activities */}
@@ -699,20 +725,18 @@ function DaySection({ day, hotel, onAddActivity, onEditActivity, arrivalTime = n
         <div key={act.id}>
           <ActivityCard activity={act} city={day.city} onEdit={(updated)=>onEditActivity(day.id, updated)}/>
           {i < day.activities.length - 1 && (
-            <TransitionRow from={act} to={day.activities[i + 1]} city={day.city}/>
+            <TransitionRow
+              from={act.type === "transit" && act.geocode_end ? { ...act, geocode: act.geocode_end } : act}
+              to={day.activities[i + 1]}
+              city={day.city}
+            />
           )}
         </div>
       ))}
 
-      {/* Last activity → hotel */}
-      {hotel?.name && day.activities.length > 0 && (
-        <TransitionRow
-          from={day.activities[day.activities.length - 1]}
-          to={{ title: hotel.name }}
-          city={day.city}
-          label="→ Hotel 🏨"
-        />
-      )}
+
+      {/* Wishlist */}
+      {day.wishlist?.length > 0 && <WishlistSection items={day.wishlist} city={day.city} />}
 
       <div style={{padding:"8px 20px 0"}}>
         <button onClick={()=>setAdding(a=>!a)} style={{
@@ -757,10 +781,21 @@ function DaySection({ day, hotel, onAddActivity, onEditActivity, arrivalTime = n
 /* ─── SETUP FORM ─────────────────────────────────────────────────────── */
 const PLACE_TYPE_EMOJI = { city:"🏙️", town:"🏙️", village:"🏘️", island:"🏝️", country:"🌍", state:"📍", region:"📍", district:"📍" };
 
-function SetupForm({ onGenerate }) {
+function SetupForm({ onGenerate, initialTrip }) {
   const [step, setStep]           = useState(0);
   const [generating, setGen]      = useState(false);
-  const [form, setForm]           = useState({ destinations:[], startDate:"", endDate:"", travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", arrivalCity:"", arrivalTime:"", departureCity:"", departureTime:"", hotelName:"", hotelArea:"" });
+  const prefill = initialTrip ? {
+    destinations: initialTrip.destination ? initialTrip.destination.split(" → ") : [],
+    startDate:    initialTrip.start_date || "",
+    endDate:      initialTrip.end_date || "",
+    arrivalTime:  initialTrip.arrival_time   ? initialTrip.arrival_time.slice(11,16)   : "",
+    departureTime:initialTrip.departure_time ? initialTrip.departure_time.slice(11,16) : "",
+  } : {};
+  const _today = new Date();
+  const _defaultStart = new Date(_today); _defaultStart.setDate(_today.getDate() + 15);
+  const _defaultEnd   = new Date(_today); _defaultEnd.setDate(_today.getDate() + 20);
+  const _fmt = (d) => d.toISOString().slice(0, 10);
+  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", notes:"", arrivalCity:"", arrivalTime:"12:00", arrivalMode:"flight", departureCity:"", departureTime:"19:00", departureMode:"flight", ...prefill });
   const [destInput, setDestInput] = useState("");
   const [destError, setDestError] = useState("");
   const [suggestions, setSuggestions] = useState([]);
@@ -768,45 +803,6 @@ function SetupForm({ onGenerate }) {
   const inputRef  = useRef(null);
   const destTimer = useRef(null);
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
-
-  const [hotelInput,     setHotelInput]     = useState("");
-  const [hotelSuggs,     setHotelSuggs]     = useState([]);
-  const [hotelSearching, setHotelSearching] = useState(false);
-  const [showHotelSuggs, setShowHotelSuggs] = useState(false);
-  const hotelTimer = useRef(null);
-
-  const handleHotelChange = (val) => {
-    setHotelInput(val);
-    set("hotelName", val);
-    set("hotelArea", "");
-    if (val.trim().length < 2) { setHotelSuggs([]); setShowHotelSuggs(false); return; }
-    clearTimeout(hotelTimer.current);
-    hotelTimer.current = setTimeout(async () => {
-      setHotelSearching(true);
-      try {
-        const res = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
-          method: "POST",
-          headers: PLACES_HEADERS,
-          body: JSON.stringify({ q: val }),
-        });
-        const data = await res.json();
-        const features = data.suggestions || [];
-        setHotelSuggs(features);
-        setShowHotelSuggs(features.length > 0);
-      } catch (e) { console.error("Hotel autocomplete error:", e); setHotelSuggs([]); }
-      finally { setHotelSearching(false); }
-    }, 300);
-  };
-
-  const pickHotel = (sugg) => {
-    const pred = sugg.placePrediction;
-    const name = pred?.structuredFormat?.mainText?.text || pred?.text?.text || "";
-    const area = pred?.structuredFormat?.secondaryText?.text || "";
-    setHotelInput(name);
-    setForm(f => ({ ...f, hotelName: name, hotelArea: area }));
-    setHotelSuggs([]);
-    setShowHotelSuggs(false);
-  };
 
   const handleDestChange = (val) => {
     setDestInput(val);
@@ -843,78 +839,18 @@ function SetupForm({ onGenerate }) {
     const country = p.country || "";
     const name = (country && p.type !== "country") ? `${p.name}, ${country}` : p.name;
     addDestination(name);
+    if (p.countrycode) {
+      setForm(f => ({ ...f, destinationCountryCodes: [...new Set([...f.destinationCountryCodes, p.countrycode.toLowerCase()])] }));
+    }
     inputRef.current?.focus();
   };
 
-  const makeAirportSearch = (formKey) => {
-    const inputKey  = formKey === "arrivalCity" ? "arrivalAptInput"  : "departureAptInput";
-    const suggsKey  = formKey === "arrivalCity" ? "arrivalAptSuggs"  : "departureAptSuggs";
-    const showKey   = formKey === "arrivalCity" ? "showArrivalSuggs" : "showDepartureSuggs";
-    return { inputKey, suggsKey, showKey };
-  };
 
-  const [arrivalAptInput,   setArrivalAptInput]   = useState("");
-  const [arrivalAptSuggs,   setArrivalAptSuggs]   = useState([]);
-  const [showArrivalSuggs,  setShowArrivalSuggs]  = useState(false);
-  const [departureAptInput, setDepartureAptInput] = useState("");
-  const [departureAptSuggs, setDepartureAptSuggs] = useState([]);
-  const [showDepartureSuggs,setShowDepartureSuggs]= useState(false);
-  const aptTimer = useRef(null);
-
-  const handleAirportChange = (val, formKey) => {
-    if (formKey === "arrivalCity")   { setArrivalAptInput(val);   setShowArrivalSuggs(false); }
-    else                             { setDepartureAptInput(val); setShowDepartureSuggs(false); }
-    set(formKey, val);
-    if (val.trim().length < 2) return;
-    clearTimeout(aptTimer.current);
-    aptTimer.current = setTimeout(async () => {
-      try {
-        const res  = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(val + " airport")}&limit=15&osm_tag=aeroway:aerodrome`);
-        const data = await res.json();
-        const features = (data.features || []).filter(f => f.properties.name);
-        if (formKey === "arrivalCity")   { setArrivalAptSuggs(features);   setShowArrivalSuggs(features.length > 0); }
-        else                             { setDepartureAptSuggs(features);  setShowDepartureSuggs(features.length > 0); }
-      } catch { /* silent */ }
-    }, 300);
-  };
-
-  const pickAirport = (feature, formKey) => {
-    const p    = feature.properties;
-    const city = p.city || p.county || p.state || "";
-    const label = city || p.name;
-    if (formKey === "arrivalCity")   { setArrivalAptInput(p.name);   setShowArrivalSuggs(false); }
-    else                             { setDepartureAptInput(p.name); setShowDepartureSuggs(false); }
-    set(formKey, label);
-  };
-
-  const AirportDropdown = ({ suggs, onPick }) => (
-    <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:T.chalk,
-      border:`1.5px solid ${T.sand}`,borderRadius:12,overflow:"hidden",zIndex:100,
-      boxShadow:"0 4px 18px rgba(0,0,0,0.12)",maxHeight:240,overflowY:"auto"}}>
-      {suggs.map((f,i) => {
-        const p    = f.properties;
-        const city = p.city || p.county || p.state || "";
-        const country = p.country || "";
-        const sub  = [city, country].filter(Boolean).join(", ");
-        return (
-          <div key={i} onMouseDown={()=>onPick(f)}
-            style={{padding:"10px 14px",cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}
-            onMouseEnter={e=>e.currentTarget.style.background=T.sand}
-            onMouseLeave={e=>e.currentTarget.style.background=T.chalk}>
-            <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,fontWeight:600}}>✈️ {p.name}</div>
-            {sub && <div style={{fontFamily:"Georgia,serif",fontSize:11,color:T.mist,marginTop:2}}>{sub}</div>}
-          </div>
-        );
-      })}
-    </div>
-  );
-
-  const styles  = ["Cultural & Heritage","Adventure & Outdoors","Food & Culinary","Relaxation & Wellness","City Break","Road Trip","Beach & Coast","I'll wing it 🎲"];
+  const styles  = ["Cultural & Heritage","Adventure & Outdoors","Food & Culinary","Relaxation & Wellness","City Break","Road Trip","Beach & Coast","Shopping","I'll wing it 🎲"];
   const budgets = [{key:"budget",label:"Budget 🏕️",sub:"Hostels, street food"},{key:"mid",label:"Mid-range 🏨",sub:"3★ hotels, restaurants"},{key:"luxury",label:"Luxury 🏰",sub:"5★ & fine dining"}];
 
   const handleGenerate = async () => {
     setGen(true);
-    await new Promise(r=>setTimeout(r,1600));
     onGenerate(form);
   };
 
@@ -990,15 +926,15 @@ function SetupForm({ onGenerate }) {
       <div style={{display:"flex",gap:12,marginBottom:22}}>
         <div style={{flex:1}}>
           <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.mist,marginBottom:6}}>Start date</div>
-          <input type="date" value={form.startDate} onChange={e=>set("startDate",e.target.value)}
+          <input type="date" value={form.startDate} onChange={e=>{ set("startDate",e.target.value); if(form.endDate && e.target.value && form.endDate < e.target.value) set("endDate",""); }}
             style={{width:"100%",padding:"12px 14px",borderRadius:12,border:`2px solid ${form.startDate?T.ocean:T.sand}`,
               fontFamily:"Georgia,serif",fontSize:14,color:T.ink,background:T.chalk,outline:"none",boxSizing:"border-box"}}/>
         </div>
         <div style={{flex:1}}>
           <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.mist,marginBottom:6}}>End date</div>
-          <input type="date" value={form.endDate} min={form.startDate} onChange={e=>set("endDate",e.target.value)}
+          <input type="date" value={form.endDate} min={form.startDate || undefined} onChange={e=>{ if(!form.startDate || e.target.value >= form.startDate) set("endDate",e.target.value); }}
             style={{width:"100%",padding:"12px 14px",borderRadius:12,border:`2px solid ${form.endDate?T.ocean:T.sand}`,
-              fontFamily:"Georgia,serif",fontSize:14,color:T.ink,background:T.chalk,outline:"none",boxSizing:"border-box"}}/>
+              fontFamily:"Georgia,serif",fontSize:14,color:T.ink,background:T.chalk,outline:"none",boxSizing:"border-box",opacity:form.startDate?1:0.5,cursor:form.startDate?"auto":"not-allowed"}}/>
         </div>
       </div>
       {form.startDate && form.endDate && (
@@ -1020,21 +956,21 @@ function SetupForm({ onGenerate }) {
       <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>🎒</div>
       <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:4}}>Trip style</div>
       <div style={{fontSize:13,color:T.mist,textAlign:"center",marginBottom:18,fontFamily:"Georgia,serif"}}>Pick all that apply</div>
-      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:24}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:24}}>
         {styles.map(s=>{
           const sel = form.styles.includes(s);
           return (
             <button key={s} onClick={()=>set("styles", sel ? form.styles.filter(x=>x!==s) : [...form.styles, s])} style={{
-              padding:"12px 16px",borderRadius:12,cursor:"pointer",textAlign:"left",
+              padding:"11px 12px",borderRadius:12,cursor:"pointer",textAlign:"left",
               border:`2px solid ${sel?T.ocean:T.sand}`,
               background:sel?"#EBF3FD":T.chalk,
               color:sel?T.ocean:T.ink,
-              fontFamily:"Georgia,serif",fontSize:14,transition:"all 0.2s",
+              fontFamily:"Georgia,serif",fontSize:13,transition:"all 0.2s",
               fontWeight:sel?700:400,
               display:"flex",alignItems:"center",justifyContent:"space-between",
             }}>
               {s}
-              {sel && <span style={{fontSize:14,color:T.ocean}}>✓</span>}
+              {sel && <span style={{fontSize:13,color:T.ocean}}>✓</span>}
             </button>
           );
         })}
@@ -1081,6 +1017,16 @@ function SetupForm({ onGenerate }) {
           );
         })}
       </div>
+
+      {/* Anything else */}
+      <div style={{marginTop:20}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:4}}>Anything else we should know?</div>
+        <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:10}}>e.g. travelling with a toddler, vegetarian only, avoid crowded places, celebrating an anniversary</div>
+        <textarea value={form.notes} onChange={e=>set("notes",e.target.value)}
+          placeholder="Optional — the more context you give, the better the itinerary"
+          rows={3}
+          style={{width:"100%",padding:"10px 12px",borderRadius:12,border:`1.5px solid ${form.notes?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",resize:"none",boxSizing:"border-box",background:T.chalk}}/>
+      </div>
     </div>,
 
     /* 3 – budget + generate */
@@ -1113,106 +1059,40 @@ function SetupForm({ onGenerate }) {
       </div>
     </div>,
 
-    /* 4 – flights & hotel (optional) */
+    /* 4 – flights (optional) */
     <div key={4} style={{animation:"fadeUp 0.3s ease"}}>
-      <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>✈️</div>
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:4}}>Flights & Hotel</div>
-      <div style={{fontSize:13,color:T.mist,textAlign:"center",marginBottom:22,fontFamily:"Georgia,serif"}}>Help us tailor Day 1 around your arrival — or skip to generate now</div>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,textAlign:"center",marginBottom:2}}>Arrival & departure</div>
+      <div style={{fontSize:12,color:T.mist,textAlign:"center",marginBottom:12,fontFamily:"Georgia,serif"}}>We'll tailor Day 1 and the last day around your schedule — or skip to generate now</div>
 
-      {/* Arrival flight */}
-      <div style={{background:T.chalk,borderRadius:14,padding:16,border:`1.5px solid ${T.sand}`,marginBottom:12}}>
-        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:14,color:T.ink,marginBottom:12}}>✈️ Arrival flight</div>
-        <div style={{position:"relative",marginBottom:10}}>
-          <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:5}}>Arriving at</div>
-          <input value={arrivalAptInput}
-            onChange={e=>handleAirportChange(e.target.value,"arrivalCity")}
-            onBlur={()=>setTimeout(()=>setShowArrivalSuggs(false),150)}
-            onFocus={()=>arrivalAptSuggs.length>0&&setShowArrivalSuggs(true)}
-            placeholder="e.g. Hanoi, Ho Chi Minh City…"
-            style={{width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${form.arrivalCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
-          {showArrivalSuggs && <AirportDropdown suggs={arrivalAptSuggs} onPick={f=>pickAirport(f,"arrivalCity")}/>}
-        </div>
-        <div style={{display:"flex",gap:10,alignItems:"flex-end"}}>
-          <div style={{flex:1}}>
-            <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:5}}>Date</div>
-            <div style={{padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.mist,background:"#f7f7f7"}}>
-              {form.startDate ? new Date(form.startDate + "T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"}) : "—"}
-            </div>
+      {/* Arrival */}
+      <div style={{background:T.chalk,borderRadius:14,padding:12,border:`1.5px solid ${T.sand}`,marginBottom:8}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:13,color:T.ink,marginBottom:8}}>Arriving</div>
+        <CityInput value={form.arrivalCity} onChange={v=>set("arrivalCity",v)}
+          placeholder="Arrival city (e.g. Jaipur, Mumbai…)"
+          inputStyle={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${form.arrivalCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <div style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+            {form.startDate ? new Date(form.startDate+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "—"}
           </div>
-          <div style={{flex:1}}>
-            <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:5}}>Landing time</div>
-            <input type="time" value={form.arrivalTime} onChange={e=>set("arrivalTime",e.target.value)}
-              style={{width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${form.arrivalTime?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
-          </div>
+          <input type="time" value={form.arrivalTime} onChange={e=>set("arrivalTime",e.target.value)}
+            style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${form.arrivalTime?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
         </div>
       </div>
 
-      {/* Return flight */}
-      <div style={{background:T.chalk,borderRadius:14,padding:16,border:`1.5px solid ${T.sand}`,marginBottom:12}}>
-        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:14,color:T.ink,marginBottom:12}}>✈️ Return flight</div>
-        <div style={{position:"relative",marginBottom:10}}>
-          <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:5}}>Departing from</div>
-          <input value={departureAptInput}
-            onChange={e=>handleAirportChange(e.target.value,"departureCity")}
-            onBlur={()=>setTimeout(()=>setShowDepartureSuggs(false),150)}
-            onFocus={()=>departureAptSuggs.length>0&&setShowDepartureSuggs(true)}
-            placeholder="e.g. Ho Chi Minh City, Hanoi…"
-            style={{width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${form.departureCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
-          {showDepartureSuggs && <AirportDropdown suggs={departureAptSuggs} onPick={f=>pickAirport(f,"departureCity")}/>}
-        </div>
-        <div style={{display:"flex",gap:10,alignItems:"flex-end"}}>
-          <div style={{flex:1}}>
-            <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:5}}>Date</div>
-            <div style={{padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.mist,background:"#f7f7f7"}}>
-              {form.endDate ? new Date(form.endDate + "T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"}) : "—"}
-            </div>
+      {/* Departure */}
+      <div style={{background:T.chalk,borderRadius:14,padding:12,border:`1.5px solid ${T.sand}`,marginBottom:12}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:13,color:T.ink,marginBottom:8}}>Departing</div>
+        <CityInput value={form.departureCity} onChange={v=>set("departureCity",v)}
+          placeholder="Departure city (e.g. Udaipur, Goa…)"
+          inputStyle={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${form.departureCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <div style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+            {form.endDate ? new Date(form.endDate+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "—"}
           </div>
-          <div style={{flex:1}}>
-            <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:5}}>Departure time</div>
-            <input type="time" value={form.departureTime} onChange={e=>set("departureTime",e.target.value)}
-              style={{width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${form.departureTime?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
-          </div>
+          <input type="time" value={form.departureTime} onChange={e=>set("departureTime",e.target.value)}
+            style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${form.departureTime?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
         </div>
       </div>
-
-      {/* Hotel */}
-      <div style={{background:T.chalk,borderRadius:14,padding:16,border:`1.5px solid ${T.sand}`,marginBottom:12}}>
-        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:14,color:T.ink,marginBottom:12}}>🏨 Hotel</div>
-        <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:5}}>Hotel name</div>
-        <div style={{position:"relative"}}>
-          <input value={hotelInput} onChange={e=>handleHotelChange(e.target.value)}
-            onBlur={()=>setTimeout(()=>setShowHotelSuggs(false),150)}
-            onFocus={()=>hotelSuggs.length>0&&setShowHotelSuggs(true)}
-            placeholder="e.g. Taj Mahal Palace"
-            style={{width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${form.hotelName?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
-          {hotelSearching && (
-            <div style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",fontSize:11,color:T.mist,fontFamily:"Georgia,serif"}}>searching…</div>
-          )}
-          {showHotelSuggs && hotelSuggs.length > 0 && (
-            <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:T.chalk,border:`1.5px solid ${T.sand}`,borderRadius:12,overflow:"hidden",zIndex:100,boxShadow:"0 4px 18px rgba(0,0,0,0.12)",maxHeight:260,overflowY:"auto"}}>
-              {hotelSuggs.map((sugg,i) => {
-                const pred = sugg.placePrediction;
-                const name = pred?.structuredFormat?.mainText?.text || pred?.text?.text || "";
-                const sub  = pred?.structuredFormat?.secondaryText?.text || "";
-                return (
-                  <div key={i} onMouseDown={()=>pickHotel(sugg)}
-                    style={{padding:"10px 14px",cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}
-                    onMouseEnter={e=>e.currentTarget.style.background=T.sand}
-                    onMouseLeave={e=>e.currentTarget.style.background=T.chalk}>
-                    <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,fontWeight:600}}>🏨 {name}</div>
-                    {sub && <div style={{fontFamily:"Georgia,serif",fontSize:11,color:T.mist,marginTop:2}}>{sub}</div>}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-        {form.hotelArea && (
-          <div style={{fontSize:11,color:T.moss,fontFamily:"Georgia,serif",marginTop:6}}>📍 {form.hotelArea}</div>
-        )}
-      </div>
-
-      <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",fontStyle:"italic",textAlign:"center",marginBottom:22}}>✈️ We will tailor the itinerary as per your flight times and hotel area</div>
 
       <button onClick={handleGenerate} disabled={generating} style={{
         width:"100%",padding:16,borderRadius:16,border:"none",
@@ -1226,7 +1106,7 @@ function SetupForm({ onGenerate }) {
       <button onClick={handleGenerate} disabled={generating} style={{
         width:"100%",padding:"10px 0",background:"none",border:"none",
         color:T.mist,fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer",
-      }}>Skip & generate without flight details</button>
+      }}>Skip & generate without these details</button>
     </div>,
   ];
 
@@ -1239,7 +1119,8 @@ function SetupForm({ onGenerate }) {
         ))}
       </div>
       {stepViews[step]}
-      <div style={{display:"flex",gap:10,marginTop:24}}>
+      {destError && <div style={{color:"#e53e3e",fontSize:13,fontFamily:"Georgia,serif",marginTop:8,textAlign:"center"}}>{destError}</div>}
+      <div style={{display:"flex",gap:10,marginTop:12}}>
         {step>0 && <button onClick={()=>setStep(s=>s-1)} style={{flex:1,padding:14,borderRadius:14,border:`2px solid ${T.sand}`,background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:15,cursor:"pointer"}}>← Back</button>}
         {step<stepViews.length-1 && (
           <button onClick={()=>{
@@ -1253,6 +1134,11 @@ function SetupForm({ onGenerate }) {
                 return;
               }
             }
+            if (step === 1) {
+              if (!form.startDate || !form.endDate) { setDestError("Please select both start and end dates."); return; }
+              if (new Date(form.endDate) < new Date(form.startDate)) { setDestError("End date cannot be before start date."); return; }
+            }
+            setDestError("");
             setStep(s=>s+1);
           }} style={{
             flex:2,padding:14,borderRadius:14,border:"none",cursor:"pointer",
@@ -1271,8 +1157,7 @@ function SetupForm({ onGenerate }) {
 /* ─── SETUP STRIP ───────────────────────────────────────────────────── */
 function SetupStrip({ done, onOpen, onDismiss }) {
   const items = [
-    { key:"flights", icon:"✈️", title:"Add flights", desc:"Optimise rest & airport time" },
-    { key:"hotel",   icon:"🏨", title:"Add hotel",   desc:"Plan around your stay" },
+    { key:"flights", icon:"✈️", title:"Add flights", desc:"Optimise Day 1 and last day" },
   ].filter(item => !done[item.key]);
 
   if (items.length === 0) return null;
@@ -1309,7 +1194,226 @@ function SetupStrip({ done, onOpen, onDismiss }) {
   );
 }
 
+/* ─── MODE PILLS ─────────────────────────────────────────────────────── */
+const TRAVEL_MODES = [
+  { id:"flight", label:"✈️ Flight" },
+  { id:"train",  label:"🚂 Train"  },
+  { id:"bus",    label:"🚌 Bus"    },
+  { id:"road",   label:"🚗 Road"   },
+];
+function ModePills({ value, onChange }) {
+  return (
+    <div style={{display:"flex",gap:6,marginBottom:8}}>
+      {TRAVEL_MODES.map(m => (
+        <button key={m.id} onClick={()=>onChange(m.id)} style={{
+          flex:1, padding:"6px 2px", borderRadius:8,
+          border:`1.5px solid ${value===m.id?T.ocean:T.sand}`,
+          background:value===m.id?T.ocean:"transparent",
+          color:value===m.id?"white":T.mist,
+          fontFamily:"Georgia,serif", fontSize:11, cursor:"pointer", transition:"all 0.2s",
+        }}>{m.label}</button>
+      ))}
+    </div>
+  );
+}
+
+/* ─── CITY INPUT ─────────────────────────────────────────────────────── */
+function CityInput({ value, onChange, placeholder, inputStyle }) {
+  const [suggs, setSuggs] = useState([]);
+  const [show, setShow]   = useState(false);
+  const timer = useRef(null);
+
+  const handleChange = (val) => {
+    onChange(val);
+    if (val.trim().length < 3) { setSuggs([]); setShow(false); return; }
+    clearTimeout(timer.current);
+    timer.current = setTimeout(async () => {
+      try {
+        const res  = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
+          method: "POST",
+          headers: PLACES_HEADERS,
+          body: JSON.stringify({ q: val }),
+        });
+        const data = await res.json();
+        const items = (data.suggestions || []).slice(0, 6);
+        setSuggs(items);
+        setShow(items.length > 0);
+      } catch { setSuggs([]); }
+    }, 300);
+  };
+
+  const pick = (s) => {
+    const fmt = s.placePrediction?.structuredFormat;
+    onChange(fmt?.mainText?.text || s.placePrediction?.text?.text || "");
+    setSuggs([]);
+    setShow(false);
+  };
+
+  return (
+    <div style={{position:"relative"}}>
+      <input
+        value={value}
+        onChange={e => handleChange(e.target.value)}
+        onBlur={() => setTimeout(() => setShow(false), 150)}
+        placeholder={placeholder}
+        style={inputStyle}
+      />
+      {show && suggs.length > 0 && (
+        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:T.chalk,border:`1.5px solid ${T.sand}`,borderRadius:10,zIndex:200,boxShadow:"0 4px 14px rgba(0,0,0,0.10)",overflow:"hidden"}}>
+          {suggs.map((s,i) => {
+            const fmt = s.placePrediction?.structuredFormat;
+            const main = fmt?.mainText?.text || s.placePrediction?.text?.text || "";
+            const sub  = fmt?.secondaryText?.text || "";
+            return (
+              <div key={i} onMouseDown={() => pick(s)}
+                style={{padding:"9px 12px",cursor:"pointer",borderBottom:i<suggs.length-1?`1px solid ${T.sand}`:"none",fontFamily:"Georgia,serif"}}>
+                <div style={{fontSize:13,color:T.ink}}>{main}</div>
+                {sub && <div style={{fontSize:11,color:T.mist,marginTop:1}}>{sub}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── COLLAB TAB ─────────────────────────────────────────────────────── */
+function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }) {
+  const cities = [...new Set(days.map(d => d.city))];
+  const [flights, setFlights] = useState({
+    arrivalCity:   trip.arrival_city   || "",
+    arrivalTime:   trip.arrival_time   ? trip.arrival_time.split("T")[1]?.substring(0,5)   : "",
+    arrivalMode:   trip.arrival_mode   || "flight",
+    departureCity: trip.departure_city || "",
+    departureTime: trip.departure_time ? trip.departure_time.split("T")[1]?.substring(0,5) : "",
+    departureMode: trip.departure_mode || "flight",
+  });
+  const [hasCar, setHasCar] = useState(trip.has_car || false);
+  const [hotels, setHotels] = useState(
+    cities.map(city => ({
+      city,
+      name: ((trip.hotels_data || []).find(h => h.city === city) || {}).name || "",
+    }))
+  );
+  const [flightsSaved, setFlightsSaved] = useState(false);
+  const [hotelsStatus, setHotelsStatus] = useState("idle"); // idle | saving | done
+
+  const handleSaveFlights = async () => {
+    await onSaveFlights({ ...flights, hasCar });
+    setFlightsSaved(true);
+    setTimeout(() => setFlightsSaved(false), 2000);
+  };
+
+  const handleSaveAndApplyHotels = async () => {
+    setHotelsStatus("saving");
+    await onSaveHotels(hotels);
+    await onApplyHotels(hotels);
+    setHotelsStatus("done");
+    setTimeout(() => setHotelsStatus("idle"), 2500);
+  };
+
+  const inputStyle = (filled) => ({
+    width:"100%", padding:"10px 12px", borderRadius:10,
+    border:`1.5px solid ${filled ? T.ocean : T.sand}`,
+    fontFamily:"Georgia,serif", fontSize:13, color:T.ink,
+    outline:"none", boxSizing:"border-box", background:"white",
+  });
+
+  const dateLabel = (iso) => iso
+    ? new Date(iso+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})
+    : "—";
+
+  const hotelsBtnLabel = hotelsStatus === "saving" ? "Applying…" : hotelsStatus === "done" ? "✓ Applied" : "Save & apply to itinerary";
+
+  return (
+    <div style={{padding:"20px 16px",display:"flex",flexDirection:"column",gap:16}}>
+
+      {/* Travel */}
+      <div style={{background:T.chalk,borderRadius:14,padding:16,border:`1.5px solid ${T.sand}`}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:14}}>🧭 Travel</div>
+
+        {/* Arrival */}
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>Arriving</div>
+          <ModePills value={flights.arrivalMode} onChange={v=>setFlights(f=>({...f,arrivalMode:v}))}/>
+          <CityInput value={flights.arrivalCity} onChange={v=>setFlights(f=>({...f,arrivalCity:v}))}
+            placeholder="Arrival city (e.g. Mumbai)"
+            inputStyle={{...inputStyle(flights.arrivalCity),marginBottom:8}}/>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <div style={{flex:1,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7"}}>
+              {dateLabel(trip.start_date)}
+            </div>
+            {flights.arrivalMode !== "road" && (
+              <input type="time" value={flights.arrivalTime} onChange={e=>setFlights(f=>({...f,arrivalTime:e.target.value}))}
+                style={{...inputStyle(flights.arrivalTime),flex:1}}/>
+            )}
+          </div>
+        </div>
+
+        {/* Departure */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>Departing</div>
+          <ModePills value={flights.departureMode} onChange={v=>setFlights(f=>({...f,departureMode:v}))}/>
+          <CityInput value={flights.departureCity} onChange={v=>setFlights(f=>({...f,departureCity:v}))}
+            placeholder="Departure city (e.g. Goa)"
+            inputStyle={{...inputStyle(flights.departureCity),marginBottom:8}}/>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <div style={{flex:1,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7"}}>
+              {dateLabel(trip.end_date)}
+            </div>
+            {flights.departureMode !== "road" && (
+              <input type="time" value={flights.departureTime} onChange={e=>setFlights(f=>({...f,departureTime:e.target.value}))}
+                style={{...inputStyle(flights.departureTime),flex:1}}/>
+            )}
+          </div>
+        </div>
+
+        {/* Car toggle */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Getting around</div>
+          <div style={{display:"flex",gap:8}}>
+            {[{v:true,label:"🚗 We have a car"},{v:false,label:"🚌 Local transport"}].map(opt=>(
+              <button key={String(opt.v)} onClick={()=>setHasCar(opt.v)} style={{
+                flex:1, padding:"9px 6px", borderRadius:10,
+                border:`1.5px solid ${hasCar===opt.v?T.ocean:T.sand}`,
+                background:hasCar===opt.v?T.ocean:"transparent",
+                color:hasCar===opt.v?"white":T.mist,
+                fontFamily:"Georgia,serif", fontSize:12, cursor:"pointer", transition:"all 0.2s",
+              }}>{opt.label}</button>
+            ))}
+          </div>
+        </div>
+
+        <button onClick={handleSaveFlights} style={{
+          width:"100%",padding:"12px 0",borderRadius:12,border:"none",
+          background:flightsSaved?T.moss:`linear-gradient(135deg,${T.ocean},${T.dusk})`,
+          color:"white",fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:"pointer",transition:"background 0.3s",
+        }}>{flightsSaved ? "✓ Saved" : "Save travel details"}</button>
+      </div>
+
+      {/* Hotels */}
+      <div style={{background:T.chalk,borderRadius:14,padding:16,border:`1.5px solid ${T.sand}`}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:14}}>🏨 Hotels</div>
+        {hotels.map((h, i) => (
+          <div key={h.city} style={{marginBottom:i < hotels.length-1 ? 12 : 16}}>
+            <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>{h.city}</div>
+            <input value={h.name} onChange={e=>setHotels(prev=>prev.map((x,j)=>j===i?{...x,name:e.target.value}:x))}
+              placeholder={`Hotel in ${h.city}`}
+              style={inputStyle(h.name)}/>
+          </div>
+        ))}
+        <button onClick={handleSaveAndApplyHotels} disabled={hotelsStatus==="saving"} style={{
+          width:"100%",padding:"12px 0",borderRadius:12,border:"none",
+          background:hotelsStatus==="done"?T.moss:hotelsStatus==="saving"?T.sand:`linear-gradient(135deg,${T.ocean},${T.dusk})`,
+          color:hotelsStatus==="saving"?T.mist:"white",
+          fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:hotelsStatus==="saving"?"default":"pointer",transition:"background 0.3s",
+        }}>{hotelsBtnLabel}</button>
+      </div>
+    </div>
+  );
+}
+
 function CollabTab({ trip, session, inviteRole, setInviteRole, inviteLink, setInviteLink, linkCopied, setLinkCopied }) {
   const members = trip.trip_members || [];
 
@@ -1388,9 +1492,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [loading,   setLoading]   = useState(initialScreen === "itinerary");
   const [tab,         setTab]         = useState("plan");
   const [collabToast, setCollabToast] = useState(false);
+  const [debugMode] = useState(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get("debug") === "1";
+    if (fromUrl) localStorage.setItem("tripjam_debug", "1");
+    return fromUrl || localStorage.getItem("tripjam_debug") === "1";
+  });
   const [activeDay, setActiveDay] = useState(0);
 
   const [generateError, setGenerateError] = useState("");
+  const [streamingDays, setStreamingDays] = useState(0);
+  const [streamingTotal, setStreamingTotal] = useState(0);
 
   useEffect(() => {
     if (initialScreen === "itinerary" && initialTrip?.id) {
@@ -1408,17 +1519,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         });
     }
   }, []);
-  const [setupDone,   setSetupDone]   = useState({
-    flights: !!(initialTrip?.arrival_time || initialTrip?.departure_time || initialTrip?.origin_city),
-    hotel:   !!(initialTrip?.hotel_name),
-  });
   const [showChat,    setShowChat]    = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput,   setChatInput]   = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [setupModal,  setSetupModal]  = useState(null);
-  const [flightsForm, setFlightsForm] = useState({ origin:"", duration:"", arrivalTime:"", departureTime:"" });
-  const [hotelForm,   setHotelForm]   = useState({ name:"", maps_url:"" });
+  const [showShare,   setShowShare]   = useState(false);
+  const shareCardRef = useRef(null);
+  const [flightsForm, setFlightsForm] = useState({ arrivalTime:"", departureTime:"" });
   const [inviteRole,  setInviteRole]  = useState("edit");
   const [inviteLink,  setInviteLink]  = useState("");
   const [linkCopied,  setLinkCopied]  = useState(false);
@@ -1438,78 +1546,149 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
 
   const saveFlights = async () => {
-    const mins = flightsForm.duration ? Math.round(parseFloat(flightsForm.duration) * 60) : null;
     const arrival_time   = flightsForm.arrivalTime   ? `${trip.start_date}T${flightsForm.arrivalTime}:00`  : null;
     const departure_time = flightsForm.departureTime ? `${trip.end_date}T${flightsForm.departureTime}:00`   : null;
     await supabase.from("trips").update({
-      origin_city: flightsForm.origin || null,
-      flight_duration_mins: mins,
       arrival_time,
       departure_time,
     }).eq("id", trip.id);
-    const updatedTrip = { ...trip, origin_city: flightsForm.origin || null, flight_duration_mins: mins, arrival_time, departure_time };
+    const updatedTrip = { ...trip, arrival_time, departure_time };
     setTrip(updatedTrip);
-    setSetupDone(d=>({...d, flights:true}));
     setSetupModal(null);
+  };
 
-    // Auto-reschedule Day 1 if arrival time is set and itinerary exists
-    if (arrival_time && days.length > 0) {
-      const [h, m] = flightsForm.arrivalTime.split(":").map(Number);
-      const rawReady = h * 60 + m + 30 + 45 + 90; // airport exit + est. drive + check-in
-      const readyMins = Math.round(rawReady / 30) * 30;
-      const readyHH = String(Math.floor(readyMins / 60) % 24).padStart(2, "0");
-      const readyMM = String(readyMins % 60).padStart(2, "0");
-      setChatLoading(true);
+  const saveLogisticsFlights = async ({ arrivalCity, arrivalTime, arrivalMode, departureCity, departureTime, departureMode, hasCar }) => {
+    const arrival_time   = arrivalTime   ? `${trip.start_date}T${arrivalTime}:00`   : null;
+    const departure_time = departureTime ? `${trip.end_date}T${departureTime}:00`   : null;
+    await supabase.from("trips").update({
+      arrival_city: arrivalCity || null, arrival_time, arrival_mode: arrivalMode || "flight",
+      departure_city: departureCity || null, departure_time, departure_mode: departureMode || "flight",
+      has_car: hasCar || false,
+    }).eq("id", trip.id);
+    setTrip(t => ({ ...t, arrival_city: arrivalCity || null, arrival_time, arrival_mode: arrivalMode, departure_city: departureCity || null, departure_time, departure_mode: departureMode, has_car: hasCar }));
+  };
+
+  const saveLogisticsHotels = async (hotels) => {
+    const data = hotels.filter(h => h.name.trim());
+    await supabase.from("trips").update({ hotels_data: data.length ? data : null }).eq("id", trip.id);
+    setTrip(t => ({ ...t, hotels_data: data.length ? data : null }));
+  };
+
+  const applyHotelsToItinerary = async (hotels) => {
+    for (const h of hotels) {
+      if (!h.name.trim()) continue;
+      const cityDay = days.find(d => d.city === h.city);
+      if (!cityDay) continue;
+      const hotelAct = cityDay.activities.find(a => a.type === "hotel");
+      if (!hotelAct) continue;
+      const newTitle = `Check in at ${h.name}`;
+      await supabase.from("activities").update({ title: newTitle }).eq("id", hotelAct.id);
       try {
-        await callChatTrip(
-          `The traveler lands at ${flightsForm.arrivalTime} and will be ready to start sightseeing around ${readyHH}:${readyMM}. Rebuild Day 1 with only what realistically fits between ${readyHH}:${readyMM} and 9:30pm — keep activities spaced naturally with time to travel and breathe, maximum 2-3 activities. Move any activities that no longer fit onto Day 2 (add them at the start of Day 2 before existing activities). Do not rush or compress the schedule.`,
-          updatedTrip,
-          days
-        );
-      } catch { /* silently ignore — user can adjust manually */ }
-      setChatLoading(false);
+        const res = await fetch(`${PLACES_PROXY}?action=photo`, {
+          method: "POST", headers: PLACES_HEADERS,
+          body: JSON.stringify({ q: h.name, city: h.city }),
+        });
+        const { url } = await res.json();
+        if (url) await supabase.from("activities").update({ photo_url: url }).eq("id", hotelAct.id);
+        editActivity(cityDay.id, { ...hotelAct, title: newTitle, photo_url: url || hotelAct.photo_url });
+      } catch {
+        editActivity(cityDay.id, { ...hotelAct, title: newTitle });
+      }
     }
   };
 
-  const saveHotel = async () => {
-    await supabase.from("trips").update({
-      hotel_name:     hotelForm.name     || null,
-      hotel_maps_url: hotelForm.maps_url || null,
-    }).eq("id", trip.id);
-    setTrip(t => ({ ...t, hotel_name: hotelForm.name || null, hotel_maps_url: hotelForm.maps_url || null }));
-    setSetupDone(d=>({...d, hotel:true}));
-    setSetupModal(null);
-  };
 
 
   const handleGenerate = async (form) => {
     setGenerateError("");
+    setStreamingDays(0);
     setScreen("generating");
+    const generatingScreenStart = Date.now();
 
     const numDays = Math.max(1, Math.round((new Date(form.endDate) - new Date(form.startDate)) / (1000*60*60*24)) + 1);
+    setStreamingTotal(numDays);
 
     // Call edge function for AI generation; fall back to local data if unavailable
     let itinerary;
+    let accumulated = ""; // declared here so catch block can log it
+    const generationStartedAt = new Date().toISOString();
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-itinerary`,
         {
           method: "POST",
+          signal: controller.signal,
           headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
-          body: JSON.stringify({ destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, startDate: form.startDate || null, arrivalCity: form.arrivalCity || null, arrivalTime: form.arrivalTime || null, departureCity: form.departureCity || null, departureTime: form.departureTime || null, hotelName: form.hotelName || null, hotelArea: form.hotelArea || null }),
+          body: JSON.stringify({ destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, arrivalCity: form.arrivalCity || null, arrivalTime: form.arrivalMode !== "road" ? (form.arrivalTime || null) : null, arrivalMode: form.arrivalMode || "flight", departureCity: form.departureCity || null, departureTime: form.departureMode !== "road" ? (form.departureTime || null) : null, departureMode: form.departureMode || "flight" }),
         }
       );
+      clearTimeout(timeout);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (data?.error) throw new Error(data.error);
-      itinerary = data;
+
+      // Read SSE stream
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let lineBuffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        lineBuffer += decoder.decode(value, { stream: true });
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (raw === "[DONE]") continue;
+          try {
+            accumulated += JSON.parse(raw);
+            const daysPlanned = (accumulated.match(/"label"\s*:/g) || []).length;
+            if (daysPlanned > 0) setStreamingDays(daysPlanned);
+          } catch { /* skip malformed chunk */ }
+        }
+      }
+
+      // Parse accumulated JSON (same cleanup logic as before)
+      const cleaned = accumulated.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("No JSON found in stream");
+      let parsed;
+      try {
+        parsed = JSON.parse(jsonMatch[0]);
+      } catch {
+        let fixed = jsonMatch[0]
+          .replace(/,\s*([}\]])/g, "$1")
+          .replace(/"((?:[^"\\]|\\.)*)"/g, (_m, inner) => `"${inner.replace(/[\n\r\t]/g, " ")}"`);
+        parsed = JSON.parse(fixed);
+      }
+      itinerary = parsed;
+
+      // Client-side enforcement: strip Day 1 activities scheduled before ready time
+      if (form.arrivalTime && itinerary.days?.[0]) {
+        const buffers = { flight: 90, train: 45, bus: 20, road: 20 };
+        const buffer = buffers[form.arrivalMode] ?? 90;
+        const [ah, am] = form.arrivalTime.split(":").map(Number);
+        const readyMins = Math.round((ah * 60 + am + buffer) / 30) * 30;
+        itinerary.days[0].activities = itinerary.days[0].activities.filter(act => {
+          if (!act.time) return true;
+          const [th, tm] = act.time.split(":").map(Number);
+          return th * 60 + tm >= readyMins;
+        });
+      }
     } catch (e) {
-      console.warn("AI generation failed, using fallback:", e.message);
-      itinerary = getItineraryForForm(form);
+      console.error("AI generation failed:", e.message);
+      console.error("Accumulated length:", accumulated.length);
+      console.error("Accumulated tail:", accumulated.slice(-300));
+      setGenerateError(`Generation failed: ${e.message}. Please try again.`);
+      setScreen("setup");
+      return;
     }
+    const generationCompletedAt = new Date().toISOString();
 
     // 1. Insert trip — generate ID client-side to avoid .select() RLS issues
     const tripId = crypto.randomUUID();
@@ -1520,56 +1699,61 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       start_date: form.startDate,
       end_date: form.endDate,
       created_by: session.user.id,
+      generation_started_at: generationStartedAt,
+      generation_completed_at: generationCompletedAt,
       ...(form.arrivalTime   && { arrival_time: `${form.startDate}T${form.arrivalTime}:00` }),
       ...(form.departureTime && { departure_time: `${form.endDate}T${form.departureTime}:00` }),
-      ...(form.hotelName     && { hotel_name: form.hotelName }),
     };
     const { error: tripErr } = await supabase.from("trips").insert(tripPayload);
 
-    if (tripErr) {
-      console.error(tripErr);
-      setGenerateError(`Failed to create trip: ${tripErr.message}`);
-      return;
-    }
+    const abort = (msg, err) => {
+      console.error(msg, err);
+      setGenerateError(`${msg}${err?.message ? `: ${err.message}` : ""}`);
+      setScreen("setup");
+    };
+
+    if (tripErr) { abort("Failed to save trip", tripErr); return; }
     const tripData = tripPayload;
 
     // 2. Add creator as organizer
-    await supabase.from("trip_members").insert({
+    const { error: memberErr } = await supabase.from("trip_members").insert({
       trip_id: tripData.id,
       user_id: session.user.id,
       role: "edit",
     });
+    if (memberErr) { abort("Failed to add you as trip member", memberErr); return; }
 
-    // 3. Insert days + activities
+    // 3. Insert days + activities (all days in parallel)
     const start = new Date(form.startDate);
-    const savedDays = [];
-    for (const [i, day] of itinerary.days.entries()) {
-      const dayDate = new Date(start);
-      dayDate.setDate(start.getDate() + i);
-      const isoDate = dayDate.toISOString().split("T")[0];
+    const savedDays = (await Promise.all(
+      itinerary.days.map(async (day, i) => {
+        const dayDate = new Date(start);
+        dayDate.setDate(start.getDate() + i);
+        const isoDate = dayDate.toISOString().split("T")[0];
 
-      const { data: dayData } = await supabase
-        .from("days")
-        .insert({ trip_id: tripData.id, label: day.label, date: isoDate, city: day.city, position: i, description: day.description || null })
-        .select()
-        .single();
+        const { data: dayData, error: dayErr } = await supabase
+          .from("days")
+          .insert({ trip_id: tripData.id, label: day.label, date: isoDate, city: day.city, position: i, description: day.description || null, wishlist: day.wishlist?.length ? day.wishlist : null })
+          .select()
+          .single();
 
-      if (!dayData) continue;
+        if (dayErr || !dayData) { abort(`Failed to save ${day.label}`, dayErr); return null; }
 
-      const activities = await Promise.all(
-        day.activities.map((act, j) =>
-          supabase.from("activities").insert({
-            day_id: dayData.id,
-            time: act.time, title: act.title, geocode: act.geocode || null, type: act.type,
-            duration: act.duration, note: act.note,
-            confirmed: act.confirmed, icon: act.icon,
-            position: j, added_by: session.user.id,
-          }).select().single().then(r => r.data)
-        )
-      );
+        const activities = await Promise.all(
+          day.activities.map((act, j) =>
+            supabase.from("activities").insert({
+              day_id: dayData.id,
+              time: act.time, title: act.title, geocode: act.geocode || null, geocode_end: act.geocodeEnd || null, type: act.type,
+              duration: act.duration, note: act.note,
+              confirmed: act.confirmed, icon: act.icon,
+              position: j, added_by: session.user.id,
+            }).select().single().then(r => r.data)
+          )
+        );
 
-      savedDays.push({ ...dayData, activities: activities.filter(Boolean) });
-    }
+        return { ...dayData, activities: activities.filter(Boolean) };
+      })
+    )).filter(Boolean);
 
     const fmt = (d) => new Date(d).toLocaleDateString("en-US", { month:"short", day:"numeric" });
     setTrip({
@@ -1578,23 +1762,28 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       travelers: parseInt(form.travelers),
       collaborators: [],
     });
-    setSetupDone({
-      flights: !!(form.arrivalTime || form.departureTime),
-      hotel:   !!form.hotelName,
-    });
     setDays(savedDays);
     setActiveDay(0);
+    // Ensure generating screen shows for at least 4s so carousel/counter are visible
+    const elapsed = Date.now() - generatingScreenStart;
+    if (elapsed < 4000) await new Promise(r => setTimeout(r, 4000 - elapsed));
     setScreen("itinerary");
 
-    // Fetch and persist photos in background — itinerary is already visible
-    Promise.all(savedDays.flatMap(day =>
-      day.activities
-        .filter(a => a.type !== "transit")
-        .map(async act => {
-          const url = await _fetchPhoto(act.geocode || act.title, day.city);
-          if (url) await supabase.from("activities").update({ photo_url: url }).eq("id", act.id);
-        })
-    ));
+    // Fetch and persist photos in background — staggered to avoid Wikimedia rate limits
+    (async () => {
+      const toFetch = savedDays.flatMap(day =>
+        day.activities.filter(a => a.type !== "transit").map(act => ({ act, city: day.city }))
+      );
+      const usedUrls = new Set();
+      for (const { act, city } of toFetch) {
+        const url = await _fetchPhoto(act.geocode || act.title, city);
+        if (url && !usedUrls.has(url)) {
+          usedUrls.add(url);
+          await supabase.from("activities").update({ photo_url: url }).eq("id", act.id);
+        }
+        await new Promise(r => setTimeout(r, 300));
+      }
+    })();
   };
 
   // Click a pill → jump-scroll to that day section
@@ -1668,7 +1857,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   };
 
   return (
-    <div style={{fontFamily:"Georgia,serif",background:T.warm,minHeight:"100vh",maxWidth:430,margin:"0 auto",position:"relative",display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden"}}>
+    <div style={{fontFamily:"Georgia,serif",background:T.warm,maxWidth:430,margin:"0 auto",position:"relative",display:"flex",flexDirection:"column",height:"100dvh",overflow:"hidden"}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;}
@@ -1677,6 +1866,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         @keyframes fadeUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
         @keyframes pulse{0%,100%{opacity:0.3;transform:scale(0.8);}50%{opacity:1;transform:scale(1);}}
         @keyframes shimmer{0%,100%{opacity:0.45;}50%{opacity:0.75;}}
+        @keyframes slideIn{0%{opacity:0;transform:translateX(40px) scale(0.7);}20%{opacity:1;transform:translateX(0) scale(1);}80%{opacity:1;transform:translateX(0) scale(1);}100%{opacity:0;transform:translateX(-40px) scale(0.7);}}
         .no-scrollbar::-webkit-scrollbar{display:none;}
         .no-scrollbar{-ms-overflow-style:none;scrollbar-width:none;}
       `}</style>
@@ -1684,9 +1874,18 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       {/* ── GENERATING ── */}
       {screen==="generating" && (
         <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:20,padding:40}}>
-          <div style={{fontSize:48,animation:"pulse 1.5s infinite"}}>✈️</div>
+          <TransportCarousel />
           <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:T.ink,textAlign:"center"}}>Building your itinerary…</div>
-          <div style={{fontSize:13,color:T.mist,fontFamily:"Georgia,serif",textAlign:"center"}}>Claude is planning real activities for your trip</div>
+          {generateError
+            ? <div style={{padding:"12px 16px",borderRadius:12,background:"#FFF0F0",border:"1.5px solid #e53e3e",fontSize:13,color:"#c53030",fontFamily:"Georgia,serif",textAlign:"center",maxWidth:300}}>
+                ⚠️ {generateError}
+              </div>
+            : streamingDays > 0 && streamingTotal > 0 && streamingDays >= streamingTotal
+            ? <div style={{fontSize:13,color:T.terra,fontFamily:"Georgia,serif",textAlign:"center",fontStyle:"italic"}}>Hold your breath…</div>
+            : streamingDays > 0
+            ? <div style={{fontSize:13,color:T.moss,fontFamily:"Georgia,serif",textAlign:"center",fontWeight:600}}>Day {streamingDays}{streamingTotal > 0 ? ` of ${streamingTotal}` : ""} planned ✓</div>
+            : <div style={{fontSize:13,color:T.mist,fontFamily:"Georgia,serif",textAlign:"center"}}>Claude is planning real activities for your trip</div>
+          }
         </div>
       )}
 
@@ -1706,7 +1905,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 {generateError}
               </div>
             )}
-            <SetupForm onGenerate={handleGenerate}/>
+            <SetupForm onGenerate={handleGenerate} initialTrip={initialScreen==="setup" && initialTrip?.destination ? initialTrip : null}/>
           </div>
         </div>
       )}
@@ -1718,7 +1917,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         </div>
       )}
       {screen==="itinerary" && !loading && (
-        <>
+        <DebugContext.Provider value={debugMode}><>
           {/* Scrollable body */}
           <div
             ref={scrollRef}
@@ -1735,7 +1934,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,lineHeight:1.2,marginBottom:4}}>{trip.name}</div>
               <div style={{fontSize:13,opacity:0.75,fontFamily:"Georgia,serif"}}>📅 {trip.dates || (trip.start_date && trip.end_date ? `${new Date(trip.start_date).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(trip.end_date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}` : "")}</div>
               <div style={{display:"flex",gap:8,marginTop:16}}>
-                {[["plan","🗓 Itinerary"],["collab","👥 Collab"]].map(([t,l])=>(
+                {[["plan","🗓 Itinerary"],["logistics","🧳 Logistics"],["collab","👥 Collab"]].map(([t,l])=>(
                   <button key={t} onClick={()=>{ if(t==="collab"){ setCollabToast(true); setTimeout(()=>setCollabToast(false),2500); } else setTab(t); }} style={{
                     background:tab===t?"white":"rgba(255,255,255,0.15)",
                     color:tab===t?T.ocean:"white",
@@ -1789,56 +1988,48 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               </div>
             )}
 
-            {/* Setup strip */}
-            <SetupStrip
-              done={setupDone}
-              onOpen={(key) => {
-                if (key === "flights") {
-                  setFlightsForm({
-                    origin: trip.origin_city || "",
-                    duration: trip.flight_duration_mins ? String(trip.flight_duration_mins / 60) : "",
-                    arrivalTime: trip.arrival_time ? trip.arrival_time.split("T")[1]?.substring(0, 5) : "",
-                    departureTime: trip.departure_time ? trip.departure_time.split("T")[1]?.substring(0, 5) : "",
-                  });
-                } else if (key === "hotel") {
-                  setHotelForm({ name: trip.hotel_name || "", maps_url: trip.hotel_maps_url || "" });
-                }
-                setSetupModal(key);
-              }}
-              onDismiss={(key)=>setSetupDone(d=>({...d,[key]:true}))}
-            />
-            {tab==="plan"
-              ? days.map((day,i)=>(
+            {tab==="plan" && (() => {
+              // Build city → hotel activity map for "from hotel" transition rows
+              const hotelByCity = {};
+              days.forEach(d => d.activities.forEach(a => { if (a.type === "hotel") hotelByCity[d.city] = a; }));
+              return days.map((day, i) => {
+                const firstIsHotel = day.activities[0]?.type === "hotel";
+                const hotelActivity = !firstIsHotel ? hotelByCity[day.city] : null;
+                return (
                   <div key={day.id} ref={el=>{ dayRefs.current[i]=el; }}>
                     <DaySection
                       day={day}
-                      hotel={{ name: trip.hotel_name, area: trip.hotel_area, maps_url: trip.hotel_maps_url }}
                       onAddActivity={addActivity}
                       onEditActivity={editActivity}
                       arrivalTime={i === 0 ? trip.arrival_time : null}
-                      onEditFlight={i === 0 ? () => {
-                        setFlightsForm({
-                          origin: trip.origin_city || "",
-                          duration: trip.flight_duration_mins ? String(trip.flight_duration_mins / 60) : "",
-                          arrivalTime: trip.arrival_time ? trip.arrival_time.split("T")[1]?.substring(0, 5) : "",
-                          departureTime: trip.departure_time ? trip.departure_time.split("T")[1]?.substring(0, 5) : "",
-                        });
-                        setSetupModal("flights");
-                      } : undefined}
+                      onEditFlight={i === 0 ? () => setTab("logistics") : undefined}
+                      hotelActivity={hotelActivity}
                     />
                   </div>
-                ))
-              : <CollabTab
-                  trip={trip}
-                  session={session}
-                  inviteRole={inviteRole}
-                  setInviteRole={setInviteRole}
-                  inviteLink={inviteLink}
-                  setInviteLink={setInviteLink}
-                  linkCopied={linkCopied}
-                  setLinkCopied={setLinkCopied}
-                />
-            }
+                );
+              });
+            })()}
+            {tab==="logistics" && (
+              <LogisticsTab
+                trip={trip}
+                days={days}
+                onSaveFlights={saveLogisticsFlights}
+                onSaveHotels={saveLogisticsHotels}
+                onApplyHotels={applyHotelsToItinerary}
+              />
+            )}
+            {tab==="collab" && (
+              <CollabTab
+                trip={trip}
+                session={session}
+                inviteRole={inviteRole}
+                setInviteRole={setInviteRole}
+                inviteLink={inviteLink}
+                setInviteLink={setInviteLink}
+                linkCopied={linkCopied}
+                setLinkCopied={setLinkCopied}
+              />
+            )}
           </div>
 
           {/* Bottom bar */}
@@ -1846,14 +2037,108 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             flexShrink:0,
             background:T.chalk,
             borderTop:`1px solid ${T.sand}`,
-            padding:"12px 20px 24px",
+            padding:"12px 20px",
+            paddingBottom:"calc(12px + env(safe-area-inset-bottom, 0px))",
             display:"flex",gap:10,
           }}>
             <button onClick={()=>setShowChat(true)} style={{flex:1,background:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",border:"none",borderRadius:14,padding:"14px 18px",fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
               ✨ Tweak my trip
             </button>
-            <button style={{width:52,background:T.sand,color:T.ink,border:"none",borderRadius:14,padding:"14px 0",fontFamily:"Georgia,serif",fontSize:17,cursor:"pointer"}}>📤</button>
+            <button onClick={()=>setShowShare(true)} style={{width:52,background:T.sand,color:T.ink,border:"none",borderRadius:14,padding:"14px 0",fontFamily:"Georgia,serif",fontSize:17,cursor:"pointer"}}>📤</button>
           </div>
+
+          {/* ── SHARE CARD (hidden, used for image capture) ── */}
+          <div style={{position:"fixed",left:"-9999px",top:0,zIndex:-1}}>
+            <div ref={shareCardRef} style={{
+              width:390,background:"linear-gradient(160deg,#1E2D3D,#2563A8)",
+              padding:"36px 32px 28px",fontFamily:"Georgia,serif",color:"white",
+            }}>
+              <div style={{fontSize:13,letterSpacing:3,opacity:0.6,textTransform:"uppercase",marginBottom:12}}>TripJam</div>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:26,lineHeight:1.2,marginBottom:6}}>{trip.name}</div>
+              <div style={{fontSize:13,opacity:0.7,marginBottom:4}}>📍 {trip.destination}</div>
+              <div style={{fontSize:13,opacity:0.7,marginBottom:24}}>
+                📅 {trip.start_date && trip.end_date
+                  ? `${new Date(trip.start_date).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(trip.end_date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}`
+                  : trip.dates || ""}
+              </div>
+              <div style={{borderTop:"1px solid rgba(255,255,255,0.2)",paddingTop:20,display:"flex",flexDirection:"column",gap:14}}>
+                {days.map(day => (
+                  <div key={day.id}>
+                    <div style={{fontSize:11,letterSpacing:2,opacity:0.5,textTransform:"uppercase",marginBottom:5}}>{day.label} · {day.city}</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                      {day.activities.map((a,i) => (
+                        <div key={i} style={{fontSize:13,opacity:0.85}}>{a.icon} {a.title}</div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{marginTop:24,borderTop:"1px solid rgba(255,255,255,0.15)",paddingTop:16,fontSize:11,opacity:0.4,textAlign:"center",letterSpacing:1}}>MADE WITH TRIPJAM</div>
+            </div>
+          </div>
+
+          {/* ── SHARE SHEET ── */}
+          {showShare && (
+            <div onClick={()=>setShowShare(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+              <div onClick={e=>e.stopPropagation()} style={{background:T.chalk,borderRadius:"20px 20px 0 0",padding:"24px 20px 36px",width:"100%",maxWidth:430}}>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:T.ink,marginBottom:4}}>Share trip</div>
+                <div style={{fontSize:13,color:T.mist,fontFamily:"Georgia,serif",marginBottom:20}}>{trip.name}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  <button onClick={async()=>{
+                    setShowShare(false);
+                    await new Promise(r=>setTimeout(r,100));
+                    const canvas = await html2canvas(shareCardRef.current,{scale:2,useCORS:true,backgroundColor:null});
+                    canvas.toBlob(async blob=>{
+                      const file = new File([blob],"tripjam.png",{type:"image/png"});
+                      if(navigator.share && navigator.canShare?.({files:[file]})){
+                        await navigator.share({files:[file],title:trip.name});
+                      } else {
+                        const a = document.createElement("a");
+                        a.href = URL.createObjectURL(blob);
+                        a.download = `${trip.name}.png`;
+                        a.click();
+                      }
+                    },"image/png");
+                  }} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:14,border:`1.5px solid ${T.sand}`,background:"white",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:600}}>
+                    <span style={{fontSize:24}}>🖼</span>
+                    <div style={{textAlign:"left"}}>
+                      <div>Share as image</div>
+                      <div style={{fontSize:11,color:T.mist,fontWeight:400}}>PNG card with your full itinerary</div>
+                    </div>
+                  </button>
+                  <button onClick={()=>{
+                    const text = [
+                      `✈️ ${trip.name}`,
+                      `${trip.destination}`,
+                      trip.start_date && trip.end_date ? `${new Date(trip.start_date).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(trip.end_date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}` : "",
+                      "",
+                      ...days.flatMap(day=>[
+                        `${day.label} · ${day.city}`,
+                        ...day.activities.map(a=>`  ${a.icon} ${a.title}`),
+                        "",
+                      ]),
+                      "Planned with TripJam",
+                    ].filter(l=>l!==undefined).join("\n");
+                    navigator.clipboard.writeText(text);
+                    setShowShare(false);
+                  }} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:14,border:`1.5px solid ${T.sand}`,background:"white",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:600}}>
+                    <span style={{fontSize:24}}>📋</span>
+                    <div style={{textAlign:"left"}}>
+                      <div>Copy as text</div>
+                      <div style={{fontSize:11,color:T.mist,fontWeight:400}}>Paste into WhatsApp, Notes, anywhere</div>
+                    </div>
+                  </button>
+                  <button style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:14,border:`1.5px solid ${T.sand}`,background:"#F9F9F9",cursor:"not-allowed",fontFamily:"Georgia,serif",fontSize:14,color:T.mist,opacity:0.6}}>
+                    <span style={{fontSize:24}}>👥</span>
+                    <div style={{textAlign:"left"}}>
+                      <div>Invite to collaborate</div>
+                      <div style={{fontSize:11,fontWeight:400}}>Coming soon</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ── CHAT PANEL ── */}
           {showChat && (
@@ -1911,7 +2196,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             </div>
             </>
           )}
-        </>
+        </></DebugContext.Provider>
       )}
 
 
@@ -1929,22 +2214,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             {/* FLIGHTS */}
             {setupModal==="flights" && <>
               <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:4}}>✈️ Add flights</div>
-              <div style={{fontSize:13,color:T.mist,fontFamily:"Georgia,serif",marginBottom:20}}>Helps plan rest time and airport transfers</div>
-              {[
-                ["Origin city","text","origin","e.g. Mumbai"],
-                ["Flight duration (hours)","number","duration","e.g. 2.5"],
-              ].map(([label,type,key,ph])=>(
-                <div key={key} style={{marginBottom:14}}>
-                  <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:4}}>{label}</div>
-                  <input type={type} placeholder={ph} value={flightsForm[key]}
-                    onChange={e=>setFlightsForm(f=>({...f,[key]:e.target.value}))}
-                    style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${T.sand}`,
-                      fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
-                </div>
-              ))}
+              <div style={{fontSize:13,color:T.mist,fontFamily:"Georgia,serif",marginBottom:20}}>Helps plan Day 1 and last day around your flights</div>
               <div style={{display:"flex",gap:12,marginBottom:20}}>
                 <div style={{flex:1}}>
-                  <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:4}}>Arrival time (Day 1)</div>
+                  <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:4}}>Landing time (Day 1)</div>
                   <input type="time" value={flightsForm.arrivalTime}
                     onChange={e=>setFlightsForm(f=>({...f,arrivalTime:e.target.value}))}
                     style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${T.sand}`,
@@ -1961,39 +2234,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               <button onClick={saveFlights} style={{width:"100%",padding:14,borderRadius:14,border:"none",
                 background:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",
                 fontFamily:"'DM Serif Display',serif",fontSize:16,cursor:"pointer"}}>Save flights</button>
-            </>}
-
-            {/* HOTEL */}
-            {setupModal==="hotel" && <>
-              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:4}}>🏨 Add hotel</div>
-              <div style={{fontSize:13,color:T.mist,fontFamily:"Georgia,serif",marginBottom:20}}>Paste the Google Maps link for your hotel</div>
-              <div style={{marginBottom:14}}>
-                <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:4}}>Google Maps link</div>
-                <input placeholder="Paste link from Google Maps"
-                  value={hotelForm.maps_url}
-                  onChange={e=>{
-                    const url = e.target.value;
-                    const match = url.match(/\/maps\/place\/([^/@]+)/);
-                    const extracted = match ? decodeURIComponent(match[1].replace(/\+/g," ")) : "";
-                    setHotelForm({ maps_url: url, name: extracted });
-                  }}
-                  style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${T.sand}`,
-                    fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
-              </div>
-              {hotelForm.maps_url.trim() && (
-                <div style={{marginBottom:20}}>
-                  <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:4}}>Hotel name {hotelForm.name ? "(auto-detected)" : "(couldn't detect — enter manually)"}</div>
-                  <input placeholder="Hotel name"
-                    value={hotelForm.name}
-                    onChange={e=>setHotelForm(f=>({...f,name:e.target.value}))}
-                    style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${hotelForm.name?T.ocean:T.sand}`,
-                      fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
-                </div>
-              )}
-              <button onClick={saveHotel} disabled={!hotelForm.maps_url.trim()} style={{width:"100%",padding:14,borderRadius:14,border:"none",
-                background:hotelForm.maps_url.trim()?`linear-gradient(135deg,${T.ocean},${T.dusk})`:T.sand,
-                color:hotelForm.maps_url.trim()?"white":T.mist,
-                fontFamily:"'DM Serif Display',serif",fontSize:16,cursor:hotelForm.maps_url.trim()?"pointer":"default"}}>Save hotel</button>
             </>}
 
 

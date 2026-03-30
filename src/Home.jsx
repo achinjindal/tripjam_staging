@@ -36,7 +36,7 @@ function formatDateRange(startDate, endDate) {
   return `${s} – ${e}`;
 }
 
-export default function Home({ session, onOpenTrip, onCreateTrip }) {
+export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) {
   const [profile, setProfile] = useState(null);
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -64,42 +64,47 @@ export default function Home({ session, onOpenTrip, onCreateTrip }) {
   }, []);
 
   async function fetchData() {
-    // 1. Fetch current user's profile + their trip memberships in parallel
-    const [{ data: prof }, { data: myMemberships }] = await Promise.all([
-      supabase.from("profiles").select("*").eq("id", session.user.id).single(),
-      supabase.from("trip_members").select("trip_id, role").eq("user_id", session.user.id),
-    ]);
-    setProfile(prof);
+    try {
+      // 1. Fetch current user's profile + their trip memberships in parallel
+      const [{ data: prof }, { data: myMemberships }] = await Promise.all([
+        supabase.from("profiles").select("*").eq("id", session.user.id).single(),
+        supabase.from("trip_members").select("trip_id, role").eq("user_id", session.user.id),
+      ]);
+      setProfile(prof);
 
-    if (!myMemberships?.length) { setLoading(false); return; }
+      if (!myMemberships?.length) { setLoading(false); return; }
 
-    const tripIds = myMemberships.map(m => m.trip_id);
-    const roleByTripId = Object.fromEntries(myMemberships.map(m => [m.trip_id, m.role]));
+      const tripIds = myMemberships.map(m => m.trip_id);
+      const roleByTripId = Object.fromEntries(myMemberships.map(m => [m.trip_id, m.role]));
 
-    // 2. Fetch the trips + all members of those trips in parallel
-    const [{ data: tripsData }, { data: allMembers }] = await Promise.all([
-      supabase.from("trips").select("*").in("id", tripIds),
-      supabase.from("trip_members").select("trip_id, user_id").in("trip_id", tripIds),
-    ]);
+      // 2. Fetch the trips + all members of those trips in parallel
+      const [{ data: tripsData }, { data: allMembers }] = await Promise.all([
+        supabase.from("trips").select("*").in("id", tripIds),
+        supabase.from("trip_members").select("trip_id, user_id").in("trip_id", tripIds),
+      ]);
 
-    // 3. Fetch profiles for every member user_id
-    const memberUserIds = [...new Set((allMembers || []).map(m => m.user_id))];
-    const { data: profiles } = await supabase
-      .from("profiles").select("id, username, face_icon").in("id", memberUserIds);
+      // 3. Fetch profiles for every member user_id
+      const memberUserIds = [...new Set((allMembers || []).map(m => m.user_id))];
+      const { data: profiles } = await supabase
+        .from("profiles").select("id, username, face_icon").in("id", memberUserIds);
 
-    const profileById = Object.fromEntries((profiles || []).map(p => [p.id, p]));
+      const profileById = Object.fromEntries((profiles || []).map(p => [p.id, p]));
 
-    // 4. Assemble
-    const assembled = (tripsData || []).map(trip => ({
-      ...trip,
-      myRole: roleByTripId[trip.id],
-      trip_members: (allMembers || [])
-        .filter(m => m.trip_id === trip.id)
-        .map(m => ({ ...m, profiles: profileById[m.user_id] || null })),
-    }));
+      // 4. Assemble
+      const assembled = (tripsData || []).map(trip => ({
+        ...trip,
+        myRole: roleByTripId[trip.id],
+        trip_members: (allMembers || [])
+          .filter(m => m.trip_id === trip.id)
+          .map(m => ({ ...m, profiles: profileById[m.user_id] || null })),
+      }));
 
-    setTrips(assembled);
-    setLoading(false);
+      setTrips(assembled);
+    } catch (err) {
+      console.error("fetchData error:", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function signOut() {
@@ -296,50 +301,21 @@ export default function Home({ session, onOpenTrip, onCreateTrip }) {
                     </div>
                   </div>
 
-                  {/* Collaborator avatars + delete */}
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{ display: "flex", alignItems: "center" }}>
-                    {members.slice(0, 4).map((m, i) => (
-                      <div key={m.user_id} style={{
-                        width: 30,
-                        height: 30,
-                        borderRadius: "50%",
-                        background: "#F0F2F5",
-                        border: "2px solid #fff",
-                        marginLeft: i === 0 ? 0 : -8,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontSize: 16,
-                        zIndex: members.length - i,
-                      }}>
-                        {FACE_ICONS[(m.profiles?.face_icon || 1) - 1]}
-                      </div>
-                    ))}
-                    {members.length > 4 && (
-                      <div style={{
-                        width: 30, height: 30, borderRadius: "50%",
-                        background: "#E8EAF0", border: "2px solid #fff",
-                        marginLeft: -8, display: "flex", alignItems: "center",
-                        justifyContent: "center", fontSize: 11, fontWeight: 600, color: T.mist,
-                      }}>
-                        +{members.length - 4}
-                      </div>
-                    )}
-                    </div>
                     {trip.myRole === "edit" && (
-                      <button
-                        onClick={(e) => deleteTrip(e, trip.id)}
-                        disabled={deletingId === trip.id}
-                        style={{
-                          background: "none", border: "none", cursor: "pointer",
-                          fontSize: 15, color: "#CCC", padding: "4px",
-                          opacity: deletingId === trip.id ? 0.4 : 1,
-                        }}
-                        title="Delete trip"
-                      >
-                        🗑️
-                      </button>
+                      <>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onEditTrip(trip); }}
+                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#CCC", padding: "4px" }}
+                          title="Edit trip"
+                        >✏️</button>
+                        <button
+                          onClick={(e) => deleteTrip(e, trip.id)}
+                          disabled={deletingId === trip.id}
+                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#CCC", padding: "4px", opacity: deletingId === trip.id ? 0.4 : 1 }}
+                          title="Delete trip"
+                        >🗑️</button>
+                      </>
                     )}
                   </div>
                 </div>
