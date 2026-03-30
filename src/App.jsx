@@ -302,19 +302,27 @@ function queuedFetch(url) {
 }
 
 async function _fetchPhoto(geocode, city) {
-  // Tier 1: Wikipedia
+  // Tier 1: Wikipedia exact title lookup
   const data1 = await queuedFetch(
     `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(geocode)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`
   );
   const src = Object.values(data1?.query?.pages || {})[0]?.thumbnail?.source;
   if (src) return src;
 
-  // Tier 2: Wikimedia Commons
-  const q = city ? `${geocode} ${city}` : geocode;
+  // Tier 2: Wikipedia search (fuzzy — handles diacritics, city suffix, alternate names)
+  const searchQ = city ? `${geocode} ${city}` : geocode;
   const data2 = await queuedFetch(
-    `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(q)}&gsrlimit=10&prop=imageinfo&iiprop=url&iiurlwidth=700&format=json&origin=*`
+    `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=3&prop=pageimages&format=json&pithumbsize=700&origin=*`
   );
-  const pages = Object.values(data2?.query?.pages || {});
+  const wpResults = Object.values(data2?.query?.pages || {});
+  const wpPhoto = wpResults.find(p => p.thumbnail?.source);
+  if (wpPhoto) return wpPhoto.thumbnail.source;
+
+  // Tier 3: Wikimedia Commons
+  const data3 = await queuedFetch(
+    `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=10&prop=imageinfo&iiprop=url&iiurlwidth=700&format=json&origin=*`
+  );
+  const pages = Object.values(data3?.query?.pages || {});
   const photo = pages.find(p => /\.(jpe?g|png)/i.test(p.imageinfo?.[0]?.url || ""));
   if (photo) return photo.imageinfo[0].url;
 
@@ -613,7 +621,7 @@ function WishlistSection({ items, city }) {
         background:open?"#FFF8F0":"#FDF6EE",border:`1.5px solid ${T.sand}`,
         borderRadius:open?"14px 14px 0 0":14,padding:"10px 14px",cursor:"pointer",
       }}>
-        <span style={{fontFamily:"Georgia,serif",fontSize:13,color:T.terra,fontWeight:600}}>✨ Local gems nearby</span>
+        <span style={{fontFamily:"Georgia,serif",fontSize:13,color:T.terra,fontWeight:600}}>✨ Local gems on the way</span>
         <span style={{fontSize:11,color:T.mist}}>{open ? "▲" : `${items.length} spots  ▼`}</span>
       </button>
       {open && (
@@ -640,27 +648,9 @@ function WishlistSection({ items, city }) {
   );
 }
 
-function DaySection({ day, onAddActivity, onEditActivity, arrivalTime = null, onEditFlight, hotelActivity = null }) {
+function DaySection({ day, onEditActivity, arrivalTime = null, onEditFlight, hotelActivity = null }) {
   const total = day.activities.length;
-  const [adding, setAdding] = useState(false);
   const [showDesc, setShowDesc] = useState(false);
-  const [newAct, setNewAct] = useState({ time:"", title:"", type:"sight", duration:"", note:"" });
-
-  const submitNew = () => {
-    if (!newAct.title.trim()) return;
-    onAddActivity(day.id, {
-      id: Date.now(),
-      time: newAct.time || "TBD",
-      title: newAct.title,
-      type: newAct.type || "sight",
-      duration: newAct.duration,
-      note: newAct.note,
-      confirmed: false,
-      icon: "📍",
-    });
-    setNewAct({ time:"", title:"", type:"sight", duration:"", note:"" });
-    setAdding(false);
-  };
 
   const dayMapsUrl = day.activities.length > 0
     ? "https://www.google.com/maps/dir/" + day.activities.map(a => encodeURIComponent(`${a.title} ${day.city}`)).join("/")
@@ -737,43 +727,6 @@ function DaySection({ day, onAddActivity, onEditActivity, arrivalTime = null, on
 
       {/* Wishlist */}
       {day.wishlist?.length > 0 && <WishlistSection items={day.wishlist} city={day.city} />}
-
-      <div style={{padding:"8px 20px 0"}}>
-        <button onClick={()=>setAdding(a=>!a)} style={{
-          width:"100%", border:`2px dashed ${adding?T.ocean:T.sand}`,
-          background:"transparent", borderRadius:14, padding:11,
-          color:adding?T.ocean:T.mist, cursor:"pointer", fontFamily:"Georgia,serif", fontSize:13,
-        }}>+ Add activity to {day.city}</button>
-
-        {adding && (
-          <div style={{marginTop:10,background:T.chalk,borderRadius:14,padding:14,border:`1.5px solid ${T.sand}`}}>
-            <div style={{display:"flex",gap:8,marginBottom:8}}>
-              <input value={newAct.time} onChange={e=>setNewAct(a=>({...a,time:e.target.value}))}
-                placeholder="Time (e.g. 14:00)"
-                style={{width:100,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none"}}/>
-              <input value={newAct.title} onChange={e=>setNewAct(a=>({...a,title:e.target.value}))}
-                placeholder="Activity name"
-                style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none"}}/>
-            </div>
-            <div style={{display:"flex",gap:8,marginBottom:8}}>
-              <select value={newAct.type} onChange={e=>setNewAct(a=>({...a,type:e.target.value}))}
-                style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",background:T.chalk}}>
-                {Object.entries(typeStyle).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
-              </select>
-              <input value={newAct.duration} onChange={e=>setNewAct(a=>({...a,duration:e.target.value}))}
-                placeholder="Duration (e.g. 2h)"
-                style={{width:120,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none"}}/>
-            </div>
-            <input value={newAct.note} onChange={e=>setNewAct(a=>({...a,note:e.target.value}))}
-              placeholder="Note (optional)"
-              style={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",marginBottom:10}}/>
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={submitNew} style={{flex:1,background:T.ocean,color:"white",border:"none",borderRadius:10,padding:"9px 0",fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer"}}>Add</button>
-              <button onClick={()=>setAdding(false)} style={{flex:1,background:T.sand,color:T.ink,border:"none",borderRadius:10,padding:"9px 0",fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer"}}>Cancel</button>
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -790,6 +743,7 @@ function SetupForm({ onGenerate, initialTrip }) {
     endDate:      initialTrip.end_date || "",
     arrivalTime:  initialTrip.arrival_time   ? initialTrip.arrival_time.slice(11,16)   : "",
     departureTime:initialTrip.departure_time ? initialTrip.departure_time.slice(11,16) : "",
+    notes:        initialTrip.notes || "",
   } : {};
   const _today = new Date();
   const _defaultStart = new Date(_today); _defaultStart.setDate(_today.getDate() + 15);
@@ -1536,10 +1490,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const pillStrip = useRef(null);
   const isJumping = useRef(false);
 
-  const addActivity = (dayId, activity) => {
-    setDays(prev=>prev.map(d=>d.id===dayId?{...d,activities:[...d.activities,activity]}:d));
-  };
-
   const editActivity = (dayId, updated) => {
     setDays(prev=>prev.map(d=>d.id===dayId?{...d,activities:d.activities.map(a=>a.id===updated.id?updated:a)}:d));
   };
@@ -1661,10 +1611,38 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       try {
         parsed = JSON.parse(jsonMatch[0]);
       } catch {
+        // Step 1: standard cleanup
         let fixed = jsonMatch[0]
           .replace(/,\s*([}\]])/g, "$1")
           .replace(/"((?:[^"\\]|\\.)*)"/g, (_m, inner) => `"${inner.replace(/[\n\r\t]/g, " ")}"`);
-        parsed = JSON.parse(fixed);
+        try {
+          parsed = JSON.parse(fixed);
+        } catch {
+          // Step 2: truncation repair — walk char-by-char tracking strings and brackets
+          const stack = [];
+          let inStr = false, esc = false, strStart = -1;
+          for (let i = 0; i < fixed.length; i++) {
+            const c = fixed[i];
+            if (esc) { esc = false; continue; }
+            if (c === "\\" && inStr) { esc = true; continue; }
+            if (c === '"') {
+              inStr = !inStr;
+              if (inStr) strStart = i; else strStart = -1;
+              continue;
+            }
+            if (inStr) continue;
+            if (c === "{" || c === "[") stack.push(c);
+            else if (c === "}" || c === "]") stack.pop();
+          }
+          // If truncated mid-string, back up to before that string's opening quote
+          let repaired = inStr && strStart !== -1 ? fixed.slice(0, strStart) : fixed;
+          // Strip trailing incomplete tokens (dangling comma, colon, whitespace)
+          repaired = repaired.replace(/[,:\s]+$/, "");
+          // Close all open containers in reverse order
+          for (let i = stack.length - 1; i >= 0; i--)
+            repaired += stack[i] === "{" ? "}" : "]";
+          parsed = JSON.parse(repaired);
+        }
       }
       itinerary = parsed;
 
@@ -1703,6 +1681,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       generation_completed_at: generationCompletedAt,
       ...(form.arrivalTime   && { arrival_time: `${form.startDate}T${form.arrivalTime}:00` }),
       ...(form.departureTime && { departure_time: `${form.endDate}T${form.departureTime}:00` }),
+      ...(itinerary.summary  && { summary: itinerary.summary }),
+      ...(form.notes         && { notes: form.notes }),
     };
     const { error: tripErr } = await supabase.from("trips").insert(tripPayload);
 
@@ -1999,7 +1979,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                   <div key={day.id} ref={el=>{ dayRefs.current[i]=el; }}>
                     <DaySection
                       day={day}
-                      onAddActivity={addActivity}
                       onEditActivity={editActivity}
                       arrivalTime={i === 0 ? trip.arrival_time : null}
                       onEditFlight={i === 0 ? () => setTab("logistics") : undefined}
@@ -2156,10 +2135,15 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               {/* Messages */}
               <div style={{flex:1,overflowY:"auto",padding:"16px 16px 8px",display:"flex",flexDirection:"column",gap:10}}>
                 {chatMessages.length === 0 && (
-                  <div style={{textAlign:"center",padding:"40px 20px",color:T.mist,fontFamily:"Georgia,serif",fontSize:13}}>
-                    <div style={{fontSize:32,marginBottom:12}}>💬</div>
-                    <div>Ask me to change activities, swap a day, add a restaurant, adjust the pace — anything.</div>
-                    <div style={{marginTop:16,display:"flex",flexDirection:"column",gap:8}}>
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    {trip.summary && (
+                      <div style={{display:"flex",justifyContent:"flex-start"}}>
+                        <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
+                          {trip.summary}
+                        </div>
+                      </div>
+                    )}
+                    <div style={{display:"flex",flexDirection:"column",gap:8,padding:"4px 0"}}>
                       {["Make day 2 more food-focused","Add a beach day","Replace morning activities with something relaxing"].map(s=>(
                         <button key={s} onClick={()=>{ setChatInput(s); }} style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:20,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer",textAlign:"left"}}>
                           "{s}"
