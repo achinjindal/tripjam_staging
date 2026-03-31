@@ -38,7 +38,7 @@ RULES:
 - GEOGRAPHY — STRICT RULE: Before placing any meal, ask: what neighbourhood am I currently in? The meal MUST be in that same neighbourhood or within a 10-minute walk/ride. Crossing the city for a meal is never acceptable when good options exist nearby.
 - ROUTING: Activities must flow geographically — each stop near the previous one. No more than one significant transit per day. Never return to a neighbourhood already left.
 - THINK IN ZONES: Mentally divide each city into zones (e.g. South Mumbai: Colaba/Fort/Marine Drive; Central: Bandra/Juhu; North: Andheri/Vile Parle). Each day stays within one zone or moves through adjacent zones in sequence. Meals must be in the same zone as surrounding sightseeing.
-- Keep "message" short: 1-2 sentences — either confirming what you changed or asking your one question.
+- Keep "message" to 2 sentences max. For changes: first sentence names the specific activities added/replaced and which day (e.g. "Replaced Day 3 with a beach morning at Juhu, lunch at Mahesh Lunch Home, and an evening walk at Bandra Bandstand."). Second sentence optional — add only if there's a useful tip. For clarifying questions: just the question.
 - ALWAYS include "updatedDays" when making any change. Never omit it for change requests.
 - Only include days that actually changed — not unchanged days.
 - If asking a clarifying question (no change made), omit "updatedDays".
