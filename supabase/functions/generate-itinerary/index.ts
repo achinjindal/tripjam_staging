@@ -27,7 +27,7 @@ Rules:
 - SUMMARY: Include a top-level "summary" string — 2 sentences max. First sentence: what the trip covers (destinations, character, travel style). Second sentence: a warm nudge to use the chat assistant to tweak anything — activities, pace, restaurants, days.
 
 Return ONLY a raw JSON object. No markdown, no code fences, no explanation. Start your response with { and end with }. Example structure:
-{"name":"Mumbai–Pune Explorer","summary":"A 2-day escape from Mumbai's waterfront energy to Pune's laid-back cafe culture, blending heritage, street food, and scenic rail travel. Ask me to swap activities, change the pace, add a restaurant, or reshape any day — I'm here to help.","days":[{"label":"Day 1","city":"Mumbai","activities":[{"time":"13:30","title":"Check in at Taj Mahal Palace","geocode":"Taj Mahal Palace Mumbai","type":"hotel","duration":"0.5h","note":"Iconic heritage hotel at Gateway of India","icon":"🏨"},{"time":"14:30","title":"Gateway of India","geocode":"Gateway of India","type":"sight","duration":"1h","note":"Arrive early to beat afternoon crowds","icon":"🏛️"}],"wishlist":[{"title":"Cafe Mondegar","geocode":"Cafe Mondegar Mumbai","note":"Vintage Colaba cafe with jukebox","icon":"🎵"},{"title":"Fab India Colaba","geocode":"Fab India Colaba Mumbai","note":"Good kurtas and block print fabrics","icon":"👕"}]},{"label":"Day 2","city":"Pune","activities":[{"time":"07:15","title":"Mumbai to Pune by Deccan Queen Express","geocode":"CSMT Mumbai","geocodeEnd":"Pune Junction","type":"transit","duration":"3.5h","note":"Scenic Western Ghats crossing book in advance","icon":"🚂"}],"wishlist":[{"title":"Vohuman Cafe","geocode":"Vohuman Cafe Pune","note":"Iconic Irani cafe bun maska chai","icon":"☕"}]}]}`;
+{"name":"Mumbai–Pune Explorer","summary":"A 2-day escape from Mumbai's waterfront energy to Pune's laid-back cafe culture, blending heritage, street food, and scenic rail travel. Ask me to swap activities, change the pace, add a restaurant, or reshape any day — I'm here to help.","days":[{"label":"Day 1","city":"Mumbai","activities":[{"time":"13:30","title":"Check in at Taj Mahal Palace","geocode":"Taj Mahal Palace Mumbai","type":"hotel","duration":"0.5h","note":"Iconic heritage hotel at Gateway of India","icon":"🏨"},{"time":"14:30","title":"Gateway of India","geocode":"Gateway of India","type":"sight","duration":"1h","note":"Arrive early to beat afternoon crowds","icon":"🏛️"}],"wishlist":[{"title":"Cafe Mondegar","geocode":"Cafe Mondegar Mumbai","note":"Vintage Colaba cafe, jukebox, cold beer","icon":"🎵"},{"title":"Fab India Colaba","geocode":"Fab India Colaba Mumbai","note":"Good kurtas and block print fabrics","icon":"👕"},{"title":"Strand Book Stall","geocode":"Strand Book Stall Mumbai","note":"Tiny legendary bookshop, great finds","icon":"📚"}]},{"label":"Day 2","city":"Pune","activities":[{"time":"07:15","title":"Mumbai to Pune by Deccan Queen Express","geocode":"CSMT Mumbai","geocodeEnd":"Pune Junction","type":"transit","duration":"3.5h","note":"Scenic Western Ghats crossing book in advance","icon":"🚂"}],"wishlist":[{"title":"Vohuman Cafe","geocode":"Vohuman Cafe Pune","note":"Iconic Irani cafe, bun maska, chai","icon":"☕"},{"title":"Aga Khan Palace","geocode":"Aga Khan Palace Pune","note":"Historic palace, Gandhi memorial inside","icon":"🏛️"},{"title":"Pune Biennale bookshop","geocode":"Koregaon Park Pune","note":"Good art books and local zines","icon":"🎨"}]}]}`;
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -98,14 +98,15 @@ ${morningNote}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDay
       headers: {
         "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": "prompt-caching-2024-07-31",
         "content-type": "application/json",
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: Math.min(16000, numDays * 1100 + 1500),
+        max_tokens: Math.min(12000, numDays * 800 + 1200),
         temperature: 0.8,
         stream: true,
-        system: SYSTEM_PROMPT,
+        system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
         messages: [
           { role: "user", content: userMessage },
         ],

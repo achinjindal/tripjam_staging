@@ -79,7 +79,7 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
 
       // 2. Fetch the trips + all members of those trips in parallel
       const [{ data: tripsData }, { data: allMembers }] = await Promise.all([
-        supabase.from("trips").select("*").in("id", tripIds),
+        supabase.from("trips").select("*").in("id", tripIds).order("created_at", { ascending: false }),
         supabase.from("trip_members").select("trip_id, user_id").in("trip_id", tripIds),
       ]);
 

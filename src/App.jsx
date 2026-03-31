@@ -25,6 +25,12 @@ const PLACES_HEADERS = { "Authorization": `Bearer ${import.meta.env.VITE_SUPABAS
 
 /* ─── PHOTO HOOK ─────────────────────────────────────────────────────── */
 const _photoCache = {};
+const _usedPhotoUrls = new Set(); // prevent same photo showing on multiple activities
+
+// Returns true if the URL looks like a person portrait rather than a place photo
+function _isPortrait(url) {
+  return /portrait|headshot|cropped|_photo_of|mug.?shot/i.test(url);
+}
 
 
 function PhotoStrip({ activity, city }) {
@@ -39,6 +45,7 @@ function PhotoStrip({ activity, city }) {
     const key = `${geocode}||${city || ""}`;
     if (_photoCache[key] !== undefined) { setLiveUrl(_photoCache[key]); return; }
     _fetchPhoto(geocode, city).then(src => {
+      if (src) _usedPhotoUrls.add(src);
       _photoCache[key] = src ?? null;
       setLiveUrl(src ?? null);
     });
@@ -302,28 +309,34 @@ function queuedFetch(url) {
 }
 
 async function _fetchPhoto(geocode, city) {
+  const good = (url) => url && !_isPortrait(url) && !_usedPhotoUrls.has(url);
+
   // Tier 1: Wikipedia exact title lookup
   const data1 = await queuedFetch(
     `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(geocode)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`
   );
   const src = Object.values(data1?.query?.pages || {})[0]?.thumbnail?.source;
-  if (src) return src;
+  if (good(src)) return src;
 
-  // Tier 2: Wikipedia search (fuzzy — handles diacritics, city suffix, alternate names)
-  const searchQ = city ? `${geocode} ${city}` : geocode;
-  const data2 = await queuedFetch(
-    `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=3&prop=pageimages&format=json&pithumbsize=700&origin=*`
-  );
-  const wpResults = Object.values(data2?.query?.pages || {});
-  const wpPhoto = wpResults.find(p => p.thumbnail?.source);
-  if (wpPhoto) return wpPhoto.thumbnail.source;
+  // Tier 2: Wikipedia exact lookup with city stripped (geocode often has city appended)
+  if (city) {
+    const stripped = geocode.replace(new RegExp(`\\s+${city}\\s*$`, "i"), "").trim();
+    if (stripped && stripped !== geocode) {
+      const data2 = await queuedFetch(
+        `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(stripped)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`
+      );
+      const src2 = Object.values(data2?.query?.pages || {})[0]?.thumbnail?.source;
+      if (good(src2)) return src2;
+    }
+  }
 
   // Tier 3: Wikimedia Commons
+  const searchQ = city ? `${geocode} ${city}` : geocode;
   const data3 = await queuedFetch(
     `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=10&prop=imageinfo&iiprop=url&iiurlwidth=700&format=json&origin=*`
   );
   const pages = Object.values(data3?.query?.pages || {});
-  const photo = pages.find(p => /\.(jpe?g|png)/i.test(p.imageinfo?.[0]?.url || ""));
+  const photo = pages.find(p => good(p.imageinfo?.[0]?.url));
   if (photo) return photo.imageinfo[0].url;
 
   return null;
@@ -1754,11 +1767,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       const toFetch = savedDays.flatMap(day =>
         day.activities.filter(a => a.type !== "transit").map(act => ({ act, city: day.city }))
       );
-      const usedUrls = new Set();
       for (const { act, city } of toFetch) {
         const url = await _fetchPhoto(act.geocode || act.title, city);
-        if (url && !usedUrls.has(url)) {
-          usedUrls.add(url);
+        if (url) {
+          _usedPhotoUrls.add(url);
           await supabase.from("activities").update({ photo_url: url }).eq("id", act.id);
         }
         await new Promise(r => setTimeout(r, 300));
