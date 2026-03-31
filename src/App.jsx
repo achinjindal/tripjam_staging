@@ -1809,13 +1809,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     }
   };
 
-  const callChatTrip = async (message, currentTrip, currentDays) => {
+  const callChatTrip = async (message, currentTrip, currentDays, history = []) => {
     const res = await fetch(
       `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-trip`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-        body: JSON.stringify({ trip: currentTrip, days: currentDays, message, history: [] }),
+        body: JSON.stringify({ trip: currentTrip, days: currentDays, message, history }),
       }
     );
     const raw = await res.text();
@@ -1836,11 +1836,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const sendChatMessage = async () => {
     if (!chatInput.trim() || chatLoading) return;
     const userMsg = { role: "user", content: chatInput.trim() };
+    const history = chatMessages; // snapshot before state update
     setChatMessages(prev => [...prev, userMsg]);
     setChatInput("");
     setChatLoading(true);
     try {
-      const data = await callChatTrip(userMsg.content, trip, days);
+      const data = await callChatTrip(userMsg.content, trip, days, history);
       setChatMessages(prev => [...prev, { role: "assistant", content: data.message || "Done." }]);
     } catch {
       setChatMessages(prev => [...prev, { role: "assistant", content: "Sorry, something went wrong. Try again." }]);
