@@ -1823,12 +1823,41 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     try { data = JSON.parse(raw); } catch { data = { message: raw }; }
     const incoming = data.updatedDays ?? data.days ?? [];
     if (incoming.length) {
-      const ts = Date.now();
-      setDays(prev => prev.map(day => {
-        const updated = incoming.find(u => u.label?.trim().toLowerCase() === day.label?.trim().toLowerCase());
-        if (!updated) return day;
-        return { ...day, city: updated.city ?? day.city, activities: (updated.activities || []).map((act, i) => ({ ...act, id: day.activities[i]?.id ?? `tmp-${ts}-${i}`, position: i })) };
-      }));
+      // Persist each updated day to Supabase: delete existing activities, insert new ones
+      for (const updatedDay of incoming) {
+        const existingDay = currentDays.find(d => d.label?.trim().toLowerCase() === updatedDay.label?.trim().toLowerCase());
+        if (!existingDay?.id) continue;
+        const dayId = existingDay.id;
+
+        // Delete all existing activities for this day
+        await supabase.from("activities").delete().eq("day_id", dayId);
+
+        // Insert new activities
+        const newActivities = (updatedDay.activities || []).map((act, j) => ({
+          day_id: dayId,
+          time: act.time, title: act.title, geocode: act.geocode || null, geocode_end: act.geocodeEnd || null,
+          type: act.type, duration: act.duration, note: act.note,
+          confirmed: act.confirmed ?? false, icon: act.icon,
+          position: j, added_by: session.user.id,
+        }));
+        const { data: insertedActs } = await supabase.from("activities").insert(newActivities).select();
+
+        // Update wishlist on the day row if LLM returned one
+        if (updatedDay.wishlist) {
+          await supabase.from("days").update({ wishlist: updatedDay.wishlist }).eq("id", dayId);
+        }
+
+        // Update in-memory state with real DB ids
+        setDays(prev => prev.map(day => {
+          if (day.id !== dayId) return day;
+          return {
+            ...day,
+            city: updatedDay.city ?? day.city,
+            wishlist: updatedDay.wishlist ?? day.wishlist,
+            activities: (insertedActs || []).map((act, i) => ({ ...act, ...updatedDay.activities[i] })),
+          };
+        }));
+      }
     }
     return data;
   };

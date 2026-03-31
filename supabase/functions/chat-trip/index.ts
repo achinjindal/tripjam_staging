@@ -13,9 +13,13 @@ serve(async (req) => {
   try {
     const { trip, days, message, history } = await req.json();
 
-    const itinerarySummary = days.map((d: any) =>
-      `${d.label} - ${d.city}: ${d.activities.map((a: any) => `${a.time} ${a.title}`).join(", ")}`
-    ).join("\n");
+    const itinerarySummary = days.map((d: any) => {
+      const acts = d.activities.map((a: any) => `${a.time} ${a.title}`).join(", ");
+      const gems = d.wishlist?.length
+        ? ` | Local gems: ${d.wishlist.map((w: any) => w.title).join(", ")}`
+        : "";
+      return `${d.label} - ${d.city}: ${acts}${gems}`;
+    }).join("\n");
 
     const systemPrompt = `You are a travel planning assistant for this trip. Your job is to answer questions and make changes when asked.
 
@@ -38,13 +42,14 @@ RULES:
 - ALWAYS include "updatedDays" when making any change. Never omit it for change requests.
 - Only include days that actually changed — not unchanged days.
 - If asking a clarifying question (no change made), omit "updatedDays".
-- Each activity: time, title, geocode, type (sight/food/shop/transit/hotel), duration, note (short, no apostrophes), icon (emoji).
+- Each activity: time, title, geocode, type (sight/food/shop/transit/hotel), duration, note (short, no apostrophes, no timing advice like "arrive early" or "go at opening" — describe the place instead), icon (emoji).
 - geocode field: shortest plain name to find this place on a map (e.g. title "Colaba Causeway Street Market" → geocode "Colaba Causeway"; title "Lunch at Trishna" → geocode "Trishna"). Strip descriptors, just the place name.
+- WISHLIST: When you change a day's activities, also return an updated "wishlist" array for that day — 3 to 5 low-commitment local gems near that day's area (a cafe, rooftop bar, bookshop, etc.) that are NOT already in the day's activities. Each item: title, geocode, note (max 9 words), icon.
 
 CRITICAL: Each day in "updatedDays" MUST have a "label" field matching EXACTLY the label from the itinerary above (e.g. "Day 1", "Day 3"). Do not rename or omit the label.
 
 Example response format:
-{"message": "Replaced Day 3 with beach activities.", "updatedDays": [{"label": "Day 3", "city": "Mumbai", "activities": [{"time": "09:00", "title": "Juhu Beach", "type": "sight", "duration": "2h", "note": "Arrive early to avoid crowds", "icon": "🏖️"}]}]}`;
+{"message": "Replaced Day 3 with beach activities.", "updatedDays": [{"label": "Day 3", "city": "Mumbai", "activities": [{"time": "09:00", "title": "Juhu Beach", "geocode": "Juhu Beach", "type": "sight", "duration": "2h", "note": "Arrive early to avoid crowds", "icon": "🏖️"}], "wishlist": [{"title": "Prithvi Theatre", "geocode": "Prithvi Theatre Juhu", "note": "Intimate venue, good chai outside", "icon": "🎭"}]}]}`;
 
     const messages = [
       ...(history || []),
