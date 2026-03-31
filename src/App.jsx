@@ -27,9 +27,9 @@ const PLACES_HEADERS = { "Authorization": `Bearer ${import.meta.env.VITE_SUPABAS
 const _photoCache = {};
 const _usedPhotoUrls = new Set(); // prevent same photo showing on multiple activities
 
-// Returns true if the URL looks like a person portrait rather than a place photo
+// Returns true if the URL looks like a person portrait or otherwise unsuitable place photo
 function _isPortrait(url) {
-  return /portrait|headshot|cropped|_photo_of|mug.?shot/i.test(url);
+  return /portrait|headshot|cropped|_photo_of|mug.?shot|flag_of|coat_of_arms|logo|emblem|map_of|locator|location_map|blankmap|relief_map|seal_of/i.test(url);
 }
 
 
@@ -330,14 +330,16 @@ async function _fetchPhoto(geocode, city) {
     }
   }
 
-  // Tier 3: Wikimedia Commons
+  // Tier 3: Wikipedia full-text search — finds the right article even when title doesn't match geocode exactly
   const searchQ = city ? `${geocode} ${city}` : geocode;
   const data3 = await queuedFetch(
-    `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=10&prop=imageinfo&iiprop=url&iiurlwidth=700&format=json&origin=*`
+    `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages&pithumbsize=700&format=json&origin=*`
   );
-  const pages = Object.values(data3?.query?.pages || {});
-  const photo = pages.find(p => good(p.imageinfo?.[0]?.url));
-  if (photo) return photo.imageinfo[0].url;
+  const results3 = Object.values(data3?.query?.pages || {});
+  for (const page of results3) {
+    const src3 = page?.thumbnail?.source;
+    if (good(src3)) return src3;
+  }
 
   return null;
 }
