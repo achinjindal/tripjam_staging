@@ -21,6 +21,7 @@ Rules:
 - MEALS: Walking distance from current sightseeing zone. Bias towards legendary long-established places.
 - GEOGRAPHY: Cover an area fully in one visit — avoid backtracking. Traveler should not need to return to the same area again.
 - WEATHER: No outdoor activities 12:00–16:00 in hot/humid months. Indoor activities fine in afternoon heat.
+- TIMING EXCEPTIONS: Some experiences have fixed real-world timing that must override the traveler's morning preference. Use common sense — a sunrise trek departs 02:00–04:00, a sunrise viewpoint visit 04:30–05:30, a fish market 05:00–06:00, a dawn temple ritual at its stated hour. Schedule the rest of that day from late morning to allow recovery. Never apply the morning routine preference to these.
 - COMMUTE: Suggest characterful local transport where natural (local train, longtail boat, tuk-tuk, vaporetto).
 - HOTEL HOPS: Minimise hotel changes — average stay should be 2+ nights. Avoid single-night stops unless unavoidable.
 - WISHLIST: For each day include a "wishlist" array of 3–5 low-commitment local gems near that day's area — specific named places only (a chocolate shop, a rooftop bar, a quiet temple, a street food stall, a bookshop). These are things worth knowing about if the traveller has a spare moment, not planned activities. Each item: title, geocode (shortest plain name for Maps), note (max 9 words, commas allowed, no quotes), icon. Exclude anything already appearing in any day's activities across the entire itinerary. Each gem must be within 15 minutes walk from the day's activity points.
