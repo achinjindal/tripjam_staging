@@ -1514,6 +1514,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput,   setChatInput]   = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const chatBottomRef = useRef(null);
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages, chatLoading]);
   const [setupModal,  setSetupModal]  = useState(null);
   const [showShare,   setShowShare]   = useState(false);
   const shareCardRef = useRef(null);
@@ -2230,6 +2234,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                     <div style={{background:T.chalk,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,color:T.mist,fontFamily:"Georgia,serif",letterSpacing:2}}>···</div>
                   </div>
                 )}
+                <div ref={chatBottomRef} />
               </div>
 
               {/* Input */}
