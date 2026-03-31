@@ -337,8 +337,13 @@ async function _fetchPhoto(geocode, city) {
   const data3 = await queuedFetch(
     `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages&pithumbsize=700&format=json&origin=*`
   );
+  const STOPWORDS = new Set(["the","a","an","of","in","at","on","and","by","for","to","de","el","la"]);
+  const geocodeWords = geocode.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !STOPWORDS.has(w));
   const results3 = Object.values(data3?.query?.pages || {});
   for (const page of results3) {
+    const titleWords = (page.title || "").toLowerCase().split(/\s+/);
+    const relevant = geocodeWords.some(w => titleWords.some(t => t.includes(w) || w.includes(t)));
+    if (!relevant) { console.log(`[photo] T3 skipped irrelevant: "${page.title}" for "${geocode}"`); continue; }
     const src3 = page?.thumbnail?.source;
     if (good(src3)) return src3;
     else if (src3) console.log(`[photo] T3 filtered: ${src3.split("/").pop()} for "${geocode}"`);
