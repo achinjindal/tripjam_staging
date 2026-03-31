@@ -344,16 +344,18 @@ async function _fetchPhoto(geocode, city) {
     else if (src3) console.log(`[photo] T3 filtered: ${src3.split("/").pop()} for "${geocode}"`);
   }
 
-  // Tier 4: Google Places — covers commercial venues (restaurants, clubs, hotels) with no Wikipedia article
-  try {
-    const res = await fetch(`${PLACES_PROXY}?action=photo`, {
-      method: "POST", headers: PLACES_HEADERS,
-      body: JSON.stringify({ q: geocode, city }),
-    });
-    const { url: placesUrl } = await res.json();
-    if (good(placesUrl)) return placesUrl;
-    else if (placesUrl) console.log(`[photo] T4 filtered: ${placesUrl.split("/").pop()} for "${geocode}"`);
-  } catch { /* Places proxy unavailable, skip */ }
+  // Tier 4: Google Places — 50% of misses only, to limit cost
+  if (Math.random() < 0.5) {
+    try {
+      const res = await fetch(`${PLACES_PROXY}?action=photo`, {
+        method: "POST", headers: PLACES_HEADERS,
+        body: JSON.stringify({ q: geocode, city }),
+      });
+      const { url: placesUrl } = await res.json();
+      if (good(placesUrl)) return placesUrl;
+      else if (placesUrl) console.log(`[photo] T4 filtered: ${placesUrl.split("/").pop()} for "${geocode}"`);
+    } catch { /* Places proxy unavailable, skip */ }
+  }
 
   console.log(`[photo] no photo found for "${geocode}" (${city})`);
   return null;
