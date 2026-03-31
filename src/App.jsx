@@ -317,6 +317,7 @@ async function _fetchPhoto(geocode, city) {
   );
   const src = Object.values(data1?.query?.pages || {})[0]?.thumbnail?.source;
   if (good(src)) return src;
+  else if (src) console.log(`[photo] T1 filtered: ${src.split("/").pop()} for "${geocode}"`);
 
   // Tier 2: Wikipedia exact lookup with city stripped (geocode often has city appended)
   if (city) {
@@ -327,6 +328,7 @@ async function _fetchPhoto(geocode, city) {
       );
       const src2 = Object.values(data2?.query?.pages || {})[0]?.thumbnail?.source;
       if (good(src2)) return src2;
+      else if (src2) console.log(`[photo] T2 filtered: ${src2.split("/").pop()} for "${stripped}"`);
     }
   }
 
@@ -339,8 +341,21 @@ async function _fetchPhoto(geocode, city) {
   for (const page of results3) {
     const src3 = page?.thumbnail?.source;
     if (good(src3)) return src3;
+    else if (src3) console.log(`[photo] T3 filtered: ${src3.split("/").pop()} for "${geocode}"`);
   }
 
+  // Tier 4: Google Places — covers commercial venues (restaurants, clubs, hotels) with no Wikipedia article
+  try {
+    const res = await fetch(`${PLACES_PROXY}?action=photo`, {
+      method: "POST", headers: PLACES_HEADERS,
+      body: JSON.stringify({ q: geocode, city }),
+    });
+    const { url: placesUrl } = await res.json();
+    if (good(placesUrl)) return placesUrl;
+    else if (placesUrl) console.log(`[photo] T4 filtered: ${placesUrl.split("/").pop()} for "${geocode}"`);
+  } catch { /* Places proxy unavailable, skip */ }
+
+  console.log(`[photo] no photo found for "${geocode}" (${city})`);
   return null;
 }
 
