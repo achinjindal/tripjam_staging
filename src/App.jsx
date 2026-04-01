@@ -1724,6 +1724,43 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       setScreen("setup");
       return;
     }
+    // Validate dining activities — replace with alternatives if primary unverifiable
+    try {
+      const allFoodActs = itinerary.days.flatMap((day, di) =>
+        day.activities.flatMap((act, ai) => {
+          if (act.type !== "food") return [];
+          const candidates = [act, ...(act.alternatives || [])].map(c => ({ title: c.geocode || c.title, city: day.city }));
+          return candidates.map((c, ci) => ({ di, ai, ci, ...c }));
+        })
+      );
+      if (allFoodActs.length) {
+        const res = await fetch(`${PLACES_PROXY}?action=validate`, {
+          method: "POST", headers: PLACES_HEADERS,
+          body: JSON.stringify({ activities: allFoodActs.map(({ title, city }) => ({ title, city })) }),
+        });
+        const { results } = await res.json();
+        // Map results back by [di][ai] → array of exists booleans per candidate
+        const resultMap = {};
+        allFoodActs.forEach(({ di, ai, ci }, idx) => {
+          if (!resultMap[di]) resultMap[di] = {};
+          if (!resultMap[di][ai]) resultMap[di][ai] = [];
+          resultMap[di][ai][ci] = results[idx]?.exists ?? false;
+        });
+        itinerary.days.forEach((day, di) => {
+          day.activities = day.activities.map((act, ai) => {
+            if (act.type !== "food") return act;
+            const exists = resultMap[di]?.[ai] || [];
+            if (exists[0]) return { ...act, alternatives: undefined }; // primary verified
+            const alts = act.alternatives || [];
+            for (let ci = 0; ci < alts.length; ci++) {
+              if (exists[ci + 1]) return { ...act, ...alts[ci], alternatives: undefined }; // swap in alt
+            }
+            return { ...act, alternatives: undefined }; // all failed — keep primary as-is
+          });
+        });
+      }
+    } catch (e) { console.warn("Dining validation failed, proceeding without:", e.message); }
+
     const generationCompletedAt = new Date().toISOString();
 
     // 1. Insert trip — generate ID client-side to avoid .select() RLS issues
