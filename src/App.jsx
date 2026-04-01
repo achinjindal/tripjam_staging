@@ -38,26 +38,39 @@ function PhotoStrip({ activity, city }) {
   const stored = activity?.photo_url;
   const geocode = activity?.geocode || activity?.title;
   const [liveUrl, setLiveUrl] = useState(stored ? null : undefined);
+  const [visible, setVisible] = useState(false);
+  const ref = useRef(null);
+
+  // Only fetch when the card scrolls into view
+  useEffect(() => {
+    if (stored) return;
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) { setVisible(true); obs.disconnect(); }
+    }, { rootMargin: "200px" });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [stored]);
 
   useEffect(() => {
-    if (stored) return; // already have a URL from DB
+    if (stored || !visible) return;
     if (!geocode) { setLiveUrl(null); return; }
     const key = `${geocode}||${city || ""}`;
     if (_photoCache[key] !== undefined) { setLiveUrl(_photoCache[key]); return; }
     _fetchPhoto(geocode, city).then(src => {
       if (src) {
         _usedPhotoUrls.add(src);
-        // Persist so re-opens load instantly
         if (activity?.id) supabase.from("activities").update({ photo_url: src }).eq("id", activity.id).then();
       }
       _photoCache[key] = src ?? null;
       setLiveUrl(src ?? null);
     });
-  }, [stored, geocode, city]);
+  }, [stored, visible, geocode, city]);
 
   const url = stored || liveUrl;
   if (url === undefined) return (
-    <div style={{marginTop:10,height:130,borderRadius:10,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
+    <div ref={ref} style={{marginTop:10,height:130,borderRadius:10,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
   );
   if (!url) {
     if (!debugMode) return null;
