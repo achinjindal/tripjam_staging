@@ -1863,7 +1863,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         const dayId = existingDay.id;
 
         // Delete all existing activities for this day
-        await supabase.from("activities").delete().eq("day_id", dayId);
+        const { error: deleteError } = await supabase.from("activities").delete().eq("day_id", dayId);
+        if (deleteError) {
+          console.error("[TMT] delete failed for day", dayId, deleteError);
+          continue; // don't insert if delete failed — avoids duplicates
+        }
 
         // Insert new activities
         const newActivities = (updatedDay.activities || []).map((act, j) => ({
@@ -1873,7 +1877,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           confirmed: act.confirmed ?? false, icon: act.icon,
           position: j, added_by: session.user.id,
         }));
-        const { data: insertedActs } = await supabase.from("activities").insert(newActivities).select();
+        const { data: insertedActs, error: insertError } = await supabase.from("activities").insert(newActivities).select();
+        if (insertError) { console.error("[TMT] insert failed for day", dayId, insertError); continue; }
 
         // Update wishlist on the day row if LLM returned one
         if (updatedDay.wishlist) {
