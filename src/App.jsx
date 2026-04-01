@@ -1799,9 +1799,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         const url = await _fetchPhoto(act.geocode || act.title, city);
         if (url) {
           _usedPhotoUrls.add(url);
+          // Update in-memory state immediately so PhotoStrip stops shimming without waiting for DB
+          setDays(prev => prev.map(day => ({
+            ...day,
+            activities: day.activities.map(a => a.id === act.id ? { ...a, photo_url: url } : a),
+          })));
           await supabase.from("activities").update({ photo_url: url }).eq("id", act.id);
         }
-        await new Promise(r => setTimeout(r, 300));
       }
     })();
   };
