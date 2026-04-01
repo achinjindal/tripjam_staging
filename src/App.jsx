@@ -1806,6 +1806,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           })));
           await supabase.from("activities").update({ photo_url: url }).eq("id", act.id);
         }
+        await new Promise(r => setTimeout(r, 500)); // Wikimedia rate limit buffer
       }
     })();
   };
