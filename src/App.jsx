@@ -292,27 +292,23 @@ function extractPlace(title) {
   return stripped || title.trim();
 }
 
-// Global serialized geocoding queue — prevents rate-limiting from concurrent requests
+// Global serialized queues — separate delays for geocoding vs Wikimedia photo API
 const _geocodeCache = new Map();
 const _cityCache = new Map();
-const _queue = [];
-let _queueRunning = false;
 
-function runQueue() {
-  if (_queueRunning || _queue.length === 0) return;
-  _queueRunning = true;
-  (async () => {
-    while (_queue.length > 0) {
-      _queue.shift()();
-      await new Promise(r => setTimeout(r, 80)); // 80ms between requests — prevents rate-limiting
-    }
-    _queueRunning = false;
-  })();
-}
-
-function queuedFetch(url) {
-  return new Promise(resolve => {
-    _queue.push(async () => {
+function makeQueue(delayMs) {
+  const q = [];
+  let running = false;
+  const run = () => {
+    if (running || q.length === 0) return;
+    running = true;
+    (async () => {
+      while (q.length > 0) { q.shift()(); await new Promise(r => setTimeout(r, delayMs)); }
+      running = false;
+    })();
+  };
+  return (url) => new Promise(resolve => {
+    q.push(async () => {
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 6000);
@@ -321,37 +317,46 @@ function queuedFetch(url) {
         resolve(res.ok ? await res.json() : null);
       } catch { resolve(null); }
     });
-    runQueue();
+    run();
   });
 }
+
+const queuedFetch = makeQueue(80);   // geocoding (Photon) — fast
+const wikiQueuedFetch = makeQueue(800); // Wikimedia — conservative to avoid rate limits
 
 async function _fetchPhoto(geocode, city) {
   const good = (url) => url && !_isPortrait(url) && !_usedPhotoUrls.has(url);
 
+  // Deduplicate: return cached result immediately if already fetched
+  const cacheKey = `${geocode}||${city || ""}`;
+  if (_photoCache[cacheKey] !== undefined) return _photoCache[cacheKey];
+  // Mark in-flight to prevent concurrent duplicate fetches
+  _photoCache[cacheKey] = null;
+
   // Tier 1: Wikipedia exact title lookup
-  const data1 = await queuedFetch(
+  const data1 = await wikiQueuedFetch(
     `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(geocode)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`
   );
   const src = Object.values(data1?.query?.pages || {})[0]?.thumbnail?.source;
-  if (good(src)) return src;
+  if (good(src)) { _photoCache[cacheKey] = src; return src; }
   else if (src) console.log(`[photo] T1 filtered: ${src.split("/").pop()} for "${geocode}"`);
 
   // Tier 2: Wikipedia exact lookup with city stripped (geocode often has city appended)
   if (city) {
     const stripped = geocode.replace(new RegExp(`\\s+${city}\\s*$`, "i"), "").trim();
     if (stripped && stripped !== geocode) {
-      const data2 = await queuedFetch(
+      const data2 = await wikiQueuedFetch(
         `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(stripped)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`
       );
       const src2 = Object.values(data2?.query?.pages || {})[0]?.thumbnail?.source;
-      if (good(src2)) return src2;
+      if (good(src2)) { _photoCache[cacheKey] = src2; return src2; }
       else if (src2) console.log(`[photo] T2 filtered: ${src2.split("/").pop()} for "${stripped}"`);
     }
   }
 
   // Tier 3: Wikipedia full-text search — finds the right article even when title doesn't match geocode exactly
   const searchQ = city ? `${geocode} ${city}` : geocode;
-  const data3 = await queuedFetch(
+  const data3 = await wikiQueuedFetch(
     `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages&pithumbsize=700&format=json&origin=*`
   );
   const STOPWORDS = new Set(["the","a","an","of","in","at","on","and","by","for","to","de","el","la"]);
@@ -362,7 +367,7 @@ async function _fetchPhoto(geocode, city) {
     const relevant = geocodeWords.some(w => titleWords.some(t => t.includes(w) || w.includes(t)));
     if (!relevant) { console.log(`[photo] T3 skipped irrelevant: "${page.title}" for "${geocode}"`); continue; }
     const src3 = page?.thumbnail?.source;
-    if (good(src3)) return src3;
+    if (good(src3)) { _photoCache[cacheKey] = src3; return src3; }
     else if (src3) console.log(`[photo] T3 filtered: ${src3.split("/").pop()} for "${geocode}"`);
   }
 
@@ -374,12 +379,13 @@ async function _fetchPhoto(geocode, city) {
         body: JSON.stringify({ q: geocode, city }),
       });
       const { url: placesUrl } = await res.json();
-      if (good(placesUrl)) return placesUrl;
+      if (good(placesUrl)) { _photoCache[cacheKey] = placesUrl; return placesUrl; }
       else if (placesUrl) console.log(`[photo] T4 filtered: ${placesUrl.split("/").pop()} for "${geocode}"`);
     } catch { /* Places proxy unavailable, skip */ }
   }
 
   console.log(`[photo] no photo found for "${geocode}" (${city})`);
+  _photoCache[cacheKey] = null;
   return null;
 }
 
