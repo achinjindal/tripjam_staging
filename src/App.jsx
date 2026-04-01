@@ -45,7 +45,11 @@ function PhotoStrip({ activity, city }) {
     const key = `${geocode}||${city || ""}`;
     if (_photoCache[key] !== undefined) { setLiveUrl(_photoCache[key]); return; }
     _fetchPhoto(geocode, city).then(src => {
-      if (src) _usedPhotoUrls.add(src);
+      if (src) {
+        _usedPhotoUrls.add(src);
+        // Persist so re-opens load instantly
+        if (activity?.id) supabase.from("activities").update({ photo_url: src }).eq("id", activity.id).then();
+      }
       _photoCache[key] = src ?? null;
       setLiveUrl(src ?? null);
     });
