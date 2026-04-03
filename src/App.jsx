@@ -328,7 +328,8 @@ const queuedFetch = makeQueue(80);   // geocoding (Photon) — fast
 const wikiQueuedFetch = makeQueue(800); // Wikimedia — conservative to avoid rate limits
 
 async function _fetchPhoto(geocode, city, type) {
-  const good = (url) => url && !_isPortrait(url) && !_usedPhotoUrls.has(url);
+  const BAD_PATTERNS = /\.(svg)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank/i;
+  const good = (url) => url && !_isPortrait(url) && !_usedPhotoUrls.has(url) && !BAD_PATTERNS.test(url);
 
   // Deduplicate: return cached result immediately if already fetched
   const cacheKey = `${geocode}||${city || ""}`;
