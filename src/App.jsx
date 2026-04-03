@@ -1671,6 +1671,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages, chatLoading]);
   const [setupModal,  setSetupModal]  = useState(null);
+  const [editingTrip, setEditingTrip] = useState(null);
   const [showShare,   setShowShare]   = useState(false);
   const shareCardRef = useRef(null);
   const [flightsForm, setFlightsForm] = useState({ arrivalTime:"", departureTime:"" });
@@ -2154,7 +2155,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 {generateError}
               </div>
             )}
-            <SetupForm onGenerate={handleGenerate} initialTrip={initialScreen==="setup" && initialTrip?.destination ? initialTrip : null}/>
+            <SetupForm onGenerate={handleGenerate} initialTrip={editingTrip || (initialScreen==="setup" && initialTrip?.destination ? initialTrip : null)}/>
           </div>
         </div>
       )}
@@ -2179,7 +2180,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
                 <div style={{display:"flex",gap:8}}>
                   {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
-                  <button onClick={()=>setScreen("setup")} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>+ New trip</button>
+                  <button onClick={()=>{ setEditingTrip(trip); setScreen("setup"); }} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>✏️ Edit trip</button>
                 </div>
                 <button onClick={()=>setShowShare(true)} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:14,cursor:"pointer"}}>📤</button>
               </div>
@@ -2355,7 +2356,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           }}>
             {[
               { key:"itinerary", icon:"🗓", label:"Itinerary" },
-              { key:"chat",      icon:"✨", label:"Chat" },
+              { key:"chat",      icon:"💬", label:"Chat" },
               { key:"map",       icon:"🗺", label:"Map" },
               { key:"board",     icon:"📋", label:"Board" },
             ].map(({ key, icon, label }) => {
