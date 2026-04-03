@@ -445,15 +445,20 @@ function MapView({ days }) {
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }}>
-      {/* City legend — grouped same as itinerary pill strip; hidden for single-city trips */}
+      {/* City legend — based on hotel location, carried forward for day-trip days */}
       {(() => {
-        const allSameCity = days.every(d => d.city === days[0].city);
+        let lastHotelCity = days[0]?.city || "";
+        const hotelCity = days.map(day => {
+          if (day.activities.some(a => a.type === "hotel")) lastHotelCity = day.city;
+          return lastHotelCity;
+        });
+        const allSameCity = hotelCity.every(c => c === hotelCity[0]);
         if (allSameCity) return null;
         const cityGroups = [];
-        for (const [i, day] of days.entries()) {
+        for (const [i, city] of hotelCity.entries()) {
           const last = cityGroups[cityGroups.length - 1];
-          if (last && last.city === day.city) { last.lastIndex = i; }
-          else cityGroups.push({ city: day.city, firstIndex: i, lastIndex: i });
+          if (last && last.city === city) { last.lastIndex = i; }
+          else cityGroups.push({ city, firstIndex: i, lastIndex: i });
         }
         return (
           <div className="no-scrollbar" style={{ display: "flex", gap: 8, padding: "10px 14px", overflowX: "auto", flexShrink: 0, background: "#fff", borderBottom: `1px solid ${T.sand}`, alignItems: "center" }}>
@@ -2217,15 +2222,22 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               </div>
             )}
 
-            {/* City-pill strip — sticky within scroll area; hidden for single-city trips */}
+            {/* City-pill strip — based on hotel location, carried forward for non-hotel days */}
             {(() => {
-              const allSameCity = days.every(d => d.city === days[0].city);
+              // Derive hotel city per day: use the day's city when it has a hotel activity,
+              // carry forward the last known hotel city for day-trip / non-hotel days
+              let lastHotelCity = days[0]?.city || "";
+              const hotelCity = days.map(day => {
+                if (day.activities.some(a => a.type === "hotel")) lastHotelCity = day.city;
+                return lastHotelCity;
+              });
+              const allSameCity = hotelCity.every(c => c === hotelCity[0]);
               if (allSameCity) return null;
               const cityGroups = [];
-              for (const [i, day] of days.entries()) {
+              for (const [i, city] of hotelCity.entries()) {
                 const last = cityGroups[cityGroups.length - 1];
-                if (last && last.city === day.city) { last.lastIndex = i; }
-                else cityGroups.push({ city: day.city, firstIndex: i, lastIndex: i });
+                if (last && last.city === city) { last.lastIndex = i; }
+                else cityGroups.push({ city, firstIndex: i, lastIndex: i });
               }
               return (
                 <div style={{position:"sticky",top:0,zIndex:10,background:T.warm,borderBottom:`1px solid ${T.sand}`,padding:"8px 16px"}}>
