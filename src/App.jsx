@@ -422,6 +422,7 @@ function makeDayIcon(color) {
 /* ─── MAP VIEW ───────────────────────────────────────────────────────── */
 function MapView({ days }) {
   const [pins, setPins] = useState(null);
+  const [selectedDays, setSelectedDays] = useState(new Set()); // empty = show all
 
   useEffect(() => {
     let cancelled = false;
@@ -435,48 +436,55 @@ function MapView({ days }) {
             result.push({ ...act, lat: coords.lat, lng: coords.lng, dayIndex: di, dayLabel: day.label });
           }
         }
-        if (!cancelled) setPins([...result]); // stream pins as each day resolves
+        if (!cancelled) setPins([...result]);
       }
     })();
     return () => { cancelled = true; };
   }, []);
 
-  const center = pins?.length ? [pins[0].lat, pins[0].lng] : [20, 0];
+  const toggleDay = (i) => {
+    setSelectedDays(prev => {
+      const next = new Set(prev);
+      next.has(i) ? next.delete(i) : next.add(i);
+      return next;
+    });
+  };
+
+  const visiblePins = (pins || []).filter(p => selectedDays.size === 0 || selectedDays.has(p.dayIndex));
+  const center = visiblePins.length ? [visiblePins[0].lat, visiblePins[0].lng]
+    : pins?.length ? [pins[0].lat, pins[0].lng] : [20, 0];
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }}>
-      {/* City legend — based on hotel location, carried forward for day-trip days */}
-      {(() => {
-        let lastHotelCity = days[0]?.city || "";
-        const hotelCity = days.map(day => {
-          if (day.activities.some(a => a.type === "hotel")) lastHotelCity = day.city;
-          return lastHotelCity;
-        });
-        const allSameCity = hotelCity.every(c => c === hotelCity[0]);
-        if (allSameCity) return null;
-        const cityGroups = [];
-        for (const [i, city] of hotelCity.entries()) {
-          const last = cityGroups[cityGroups.length - 1];
-          if (last && last.city === city) { last.lastIndex = i; }
-          else cityGroups.push({ city, firstIndex: i, lastIndex: i });
-        }
-        return (
-          <div className="no-scrollbar" style={{ display: "flex", gap: 8, padding: "10px 14px", overflowX: "auto", flexShrink: 0, background: "#fff", borderBottom: `1px solid ${T.sand}`, alignItems: "center" }}>
-            {cityGroups.map((g, gi) => {
-              const dayRange = g.firstIndex === g.lastIndex
-                ? `Day ${g.firstIndex + 1}`
-                : `Day ${g.firstIndex + 1}–${g.lastIndex + 1}`;
-              return (
-                <div key={gi} style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: DAY_COLORS[g.firstIndex % DAY_COLORS.length], flexShrink: 0 }} />
-                  <span style={{ fontSize: 12, color: T.ink, fontFamily: "Georgia,serif", whiteSpace: "nowrap", fontWeight: 600 }}>{g.city.split(",")[0]}</span>
-                  <span style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", whiteSpace: "nowrap" }}>{dayRange}</span>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })()}
+      {/* Day filter pills — multi-select */}
+      <div className="no-scrollbar" style={{ display: "flex", gap: 6, padding: "10px 14px", overflowX: "auto", flexShrink: 0, background: "#fff", borderBottom: `1px solid ${T.sand}`, alignItems: "center" }}>
+        {days.map((d, i) => {
+          const active = selectedDays.has(i);
+          const color = DAY_COLORS[i % DAY_COLORS.length];
+          return (
+            <button key={i} onClick={() => toggleDay(i)} style={{
+              display: "flex", alignItems: "center", gap: 5, flexShrink: 0,
+              padding: "4px 11px", borderRadius: 20,
+              border: `1.5px solid ${active ? color : T.sand}`,
+              background: active ? color : T.chalk,
+              color: active ? "white" : T.mist,
+              fontSize: 11, fontFamily: "Georgia,serif",
+              cursor: "pointer", transition: "all 0.18s",
+              fontWeight: active ? 700 : 400,
+            }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: active ? "rgba(255,255,255,0.8)" : color, flexShrink: 0 }} />
+              {d.label}
+            </button>
+          );
+        })}
+        {selectedDays.size > 0 && (
+          <button onClick={() => setSelectedDays(new Set())} style={{
+            flexShrink: 0, padding: "4px 11px", borderRadius: 20,
+            border: `1.5px solid ${T.sand}`, background: "none",
+            color: T.mist, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer",
+          }}>Clear</button>
+        )}
+      </div>
 
       {(!pins || pins.length === 0) && (
         <div style={{ position: "absolute", inset: 0, top: 50, display: "flex", alignItems: "center", justifyContent: "center", color: T.mist, fontFamily: "Georgia,serif", fontSize: 14, zIndex: 500, pointerEvents: "none" }}>
@@ -485,27 +493,22 @@ function MapView({ days }) {
       )}
 
       {pins !== null && (
-        <MapContainer
-          center={center}
-          zoom={13}
-          style={{ flex: 1 }}
-          key={center.join(",")}
-        >
+        <MapContainer center={center} zoom={13} style={{ flex: 1 }} key={center.join(",")}>
           <TileLayer
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           />
-          {pins.map((pin, i) => (
+          {visiblePins.map((pin, i) => (
             <Marker key={i} position={[pin.lat, pin.lng]} icon={makeDayIcon(DAY_COLORS[pin.dayIndex % DAY_COLORS.length])}>
               <Popup>
                 <div style={{ fontFamily: "Georgia,serif", fontSize: 13, lineHeight: 1.5 }}>
                   <div style={{ fontWeight: 700, marginBottom: 2 }}>{pin.icon} {pin.title}</div>
                   <div style={{ color: "#666", fontSize: 12 }}>{pin.time} · {pin.dayLabel}</div>
-                  <a
-                    href={`https://maps.google.com/?q=${encodeURIComponent(pin.geocode || pin.title)}`}
+                  <a href={`https://maps.google.com/?q=${encodeURIComponent(pin.geocode || pin.title)}`}
                     target="_blank" rel="noreferrer"
-                    style={{ fontSize: 12, color: "#2563A8", display: "block", marginTop: 6 }}
-                  >Open in Google Maps ↗</a>
+                    style={{ fontSize: 12, color: "#2563A8", display: "block", marginTop: 6 }}>
+                    Open in Google Maps ↗
+                  </a>
                 </div>
               </Popup>
             </Marker>
