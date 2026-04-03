@@ -445,15 +445,31 @@ function MapView({ days }) {
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }}>
-      {/* Day legend */}
-      <div className="no-scrollbar" style={{ display: "flex", gap: 6, padding: "10px 14px", overflowX: "auto", flexShrink: 0, background: "#fff", borderBottom: `1px solid ${T.sand}` }}>
-        {days.map((d, i) => (
-          <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-            <div style={{ width: 10, height: 10, borderRadius: "50%", background: DAY_COLORS[i % DAY_COLORS.length] }} />
-            <span style={{ fontSize: 11, color: T.ink, fontFamily: "Georgia,serif", whiteSpace: "nowrap" }}>{d.label} · {d.city}</span>
+      {/* City legend — grouped same as itinerary pill strip */}
+      {(() => {
+        const cityGroups = [];
+        for (const [i, day] of days.entries()) {
+          const last = cityGroups[cityGroups.length - 1];
+          if (last && last.city === day.city) { last.lastIndex = i; }
+          else cityGroups.push({ city: day.city, firstIndex: i, lastIndex: i });
+        }
+        return (
+          <div className="no-scrollbar" style={{ display: "flex", gap: 8, padding: "10px 14px", overflowX: "auto", flexShrink: 0, background: "#fff", borderBottom: `1px solid ${T.sand}`, alignItems: "center" }}>
+            {cityGroups.map((g, gi) => {
+              const dayRange = g.firstIndex === g.lastIndex
+                ? `Day ${g.firstIndex + 1}`
+                : `Day ${g.firstIndex + 1}–${g.lastIndex + 1}`;
+              return (
+                <div key={gi} style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: DAY_COLORS[g.firstIndex % DAY_COLORS.length], flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, color: T.ink, fontFamily: "Georgia,serif", whiteSpace: "nowrap", fontWeight: 600 }}>{g.city}</span>
+                  <span style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", whiteSpace: "nowrap" }}>{dayRange}</span>
+                </div>
+              );
+            })}
           </div>
-        ))}
-      </div>
+        );
+      })()}
 
       {(!pins || pins.length === 0) && (
         <div style={{ position: "absolute", inset: 0, top: 50, display: "flex", alignItems: "center", justifyContent: "center", color: T.mist, fontFamily: "Georgia,serif", fontSize: 14, zIndex: 500, pointerEvents: "none" }}>
