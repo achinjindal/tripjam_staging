@@ -878,7 +878,7 @@ function WishlistSection({ items, city }) {
   );
 }
 
-function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, onEditFlight, hotelActivity = null }) {
+function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, onEditFlight, hotelActivity = null, hotelCity = null, endHotelActivity = null }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
 
@@ -935,27 +935,39 @@ function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, onE
         <TransitionRow
           from={hotelActivity}
           to={day.activities[0]}
-          city={day.city}
+          city={hotelCity || day.city}
           label="from hotel"
           delay={dayIndex * 400}
         />
       )}
 
       {/* Activities */}
-      {day.activities.map((act, i) => (
-        <div key={act.id}>
-          <ActivityCard activity={act} city={day.city} onEdit={(updated)=>onEditActivity(day.id, updated)}/>
-          {i < day.activities.length - 1 && (
-            <TransitionRow
-              from={act.type === "transit" && act.geocode_end ? { ...act, geocode: act.geocode_end } : act}
-              to={day.activities[i + 1]}
-              city={day.city}
-              delay={dayIndex * 400}
-            />
-          )}
-        </div>
-      ))}
-
+      {day.activities.map((act, i) => {
+        const lastAct = i === day.activities.length - 1;
+        return (
+          <div key={act.id}>
+            <ActivityCard activity={act} city={day.city} onEdit={(updated)=>onEditActivity(day.id, updated)}/>
+            {!lastAct && (
+              <TransitionRow
+                from={act.type === "transit" && act.geocode_end ? { ...act, geocode: act.geocode_end } : act}
+                to={day.activities[i + 1]}
+                city={day.city}
+                delay={dayIndex * 400}
+              />
+            )}
+            {/* Last activity → hotel */}
+            {lastAct && endHotelActivity && act.type !== "hotel" && (
+              <TransitionRow
+                from={act.type === "transit" && act.geocode_end ? { ...act, geocode: act.geocode_end } : act}
+                to={endHotelActivity}
+                city={day.city}
+                label="to hotel"
+                delay={dayIndex * 400}
+              />
+            )}
+          </div>
+        );
+      })}
 
       {/* Wishlist */}
       {day.wishlist?.length > 0 && <WishlistSection items={day.wishlist} city={day.city} />}
@@ -2293,12 +2305,27 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             })()}
 
             {(() => {
-              // Build city → hotel activity map for "from hotel" transition rows
+              // Build city → hotel activity map for transition rows
               const hotelByCity = {};
               days.forEach(d => d.activities.forEach(a => { if (a.type === "hotel") hotelByCity[d.city] = a; }));
               return days.map((day, i) => {
                 const firstIsHotel = day.activities[0]?.type === "hotel";
-                const hotelActivity = !firstIsHotel ? hotelByCity[day.city] : null;
+                const lastAct = day.activities[day.activities.length - 1];
+                const lastIsHotel = lastAct?.type === "hotel";
+                const prevDay = i > 0 ? days[i - 1] : null;
+                const cityChanged = prevDay && prevDay.city !== day.city;
+
+                // Start-of-day hotel: on city-change days use previous city's hotel
+                const startHotel = cityChanged
+                  ? (hotelByCity[prevDay.city] || null)
+                  : (!firstIsHotel ? hotelByCity[day.city] || null : null);
+                const startHotelCity = cityChanged ? prevDay.city : day.city;
+
+                // End-of-day hotel: go back to current city's hotel after last activity
+                const endHotel = !lastIsHotel && day.activities.length > 0
+                  ? hotelByCity[day.city] || null
+                  : null;
+
                 return (
                   <div key={day.id} ref={el=>{ dayRefs.current[i]=el; }}>
                     <DaySection
@@ -2307,7 +2334,9 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                       onEditActivity={editActivity}
                       arrivalTime={i === 0 ? trip.arrival_time : null}
                       onEditFlight={i === 0 ? () => setTab("logistics") : undefined}
-                      hotelActivity={hotelActivity}
+                      hotelActivity={startHotel}
+                      hotelCity={startHotelCity}
+                      endHotelActivity={endHotel}
                     />
                   </div>
                 );
