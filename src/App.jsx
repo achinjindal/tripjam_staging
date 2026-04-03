@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect, createContext, useContext } from "react";
 import { supabase } from "./supabase";
 import html2canvas from "html2canvas";
+import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 const FACE_ICONS = ["👦","👧","🧑","👨","👩","🧔","👱","🧓","🥸","😎"];
 const DebugContext = createContext(false);
@@ -387,6 +390,118 @@ async function _fetchPhoto(geocode, city) {
   console.log(`[photo] no photo found for "${geocode}" (${city})`);
   _photoCache[cacheKey] = null;
   return null;
+}
+
+/* ─── DAY COLOURS (map + board) ─────────────────────────────────────── */
+const DAY_COLORS = ["#E05C5C","#D4A847","#3D7A5C","#2563A8","#C4622D","#7B5EA7","#2E86AB","#E91E63","#00897B","#F4511E"];
+
+function makeDayIcon(color) {
+  return L.divIcon({
+    className: "",
+    html: `<div style="width:14px;height:14px;border-radius:50%;background:${color};border:2.5px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.35)"></div>`,
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+    popupAnchor: [0, -10],
+  });
+}
+
+/* ─── MAP VIEW ───────────────────────────────────────────────────────── */
+function MapView({ days }) {
+  const [pins, setPins] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const result = [];
+      for (const [di, day] of days.entries()) {
+        for (const act of day.activities) {
+          if (act.type === "transit") continue;
+          const coords = await geocodePlace(act.title, day.city, act.geocode);
+          if (coords && !cancelled) {
+            result.push({ ...act, lat: coords.lat, lng: coords.lng, dayIndex: di, dayLabel: day.label });
+          }
+        }
+        if (!cancelled) setPins([...result]); // stream pins as each day resolves
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const center = pins?.length ? [pins[0].lat, pins[0].lng] : [20, 0];
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }}>
+      {/* Day legend */}
+      <div className="no-scrollbar" style={{ display: "flex", gap: 6, padding: "10px 14px", overflowX: "auto", flexShrink: 0, background: "#fff", borderBottom: `1px solid ${T.sand}` }}>
+        {days.map((d, i) => (
+          <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+            <div style={{ width: 10, height: 10, borderRadius: "50%", background: DAY_COLORS[i % DAY_COLORS.length] }} />
+            <span style={{ fontSize: 11, color: T.ink, fontFamily: "Georgia,serif", whiteSpace: "nowrap" }}>{d.label} · {d.city}</span>
+          </div>
+        ))}
+      </div>
+
+      {(!pins || pins.length === 0) && (
+        <div style={{ position: "absolute", inset: 0, top: 50, display: "flex", alignItems: "center", justifyContent: "center", color: T.mist, fontFamily: "Georgia,serif", fontSize: 14, zIndex: 500, pointerEvents: "none" }}>
+          {!pins ? "Resolving locations…" : "No locations found"}
+        </div>
+      )}
+
+      {pins !== null && (
+        <MapContainer
+          center={center}
+          zoom={13}
+          style={{ flex: 1 }}
+          key={center.join(",")}
+        >
+          <TileLayer
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          />
+          {pins.map((pin, i) => (
+            <Marker key={i} position={[pin.lat, pin.lng]} icon={makeDayIcon(DAY_COLORS[pin.dayIndex % DAY_COLORS.length])}>
+              <Popup>
+                <div style={{ fontFamily: "Georgia,serif", fontSize: 13, lineHeight: 1.5 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 2 }}>{pin.icon} {pin.title}</div>
+                  <div style={{ color: "#666", fontSize: 12 }}>{pin.time} · {pin.dayLabel}</div>
+                  <a
+                    href={`https://maps.google.com/?q=${encodeURIComponent(pin.geocode || pin.title)}`}
+                    target="_blank" rel="noreferrer"
+                    style={{ fontSize: 12, color: "#2563A8", display: "block", marginTop: 6 }}
+                  >Open in Google Maps ↗</a>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+      )}
+    </div>
+  );
+}
+
+/* ─── BOARD VIEW ─────────────────────────────────────────────────────── */
+const BOARD_SECTIONS = [
+  { key: "expenses", icon: "💸", title: "Expenses", desc: "Track who paid what and split costs" },
+  { key: "polls",    icon: "🗳️", title: "Polls",    desc: "Vote on destinations, restaurants, activities" },
+  { key: "notes",    icon: "📝", title: "Notes",    desc: "Shared notes and reminders for the trip" },
+  { key: "todo",     icon: "✅", title: "To-do",    desc: "Packing lists, bookings, things to sort" },
+];
+
+function BoardView() {
+  return (
+    <div style={{ padding: "20px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+      {BOARD_SECTIONS.map(s => (
+        <div key={s.key} style={{ background: T.chalk, borderRadius: 14, border: `1px solid ${T.sand}`, padding: "18px 18px", display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ fontSize: 28, flexShrink: 0 }}>{s.icon}</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600, fontSize: 15, color: T.ink, fontFamily: "'DM Serif Display',serif", marginBottom: 3 }}>{s.title}</div>
+            <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif" }}>{s.desc}</div>
+          </div>
+          <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: T.sand, borderRadius: 10, padding: "3px 10px", whiteSpace: "nowrap" }}>Coming soon</div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 async function getCityCenter(city) {
@@ -1533,7 +1648,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         });
     }
   }, []);
-  const [showChat,    setShowChat]    = useState(false);
+  const [activeBottomTab, setActiveBottomTab] = useState("itinerary");
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput,   setChatInput]   = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -2038,18 +2153,21 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       )}
       {screen==="itinerary" && !loading && (
         <DebugContext.Provider value={debugMode}><>
-          {/* Scrollable body */}
+          {/* Scrollable body — only visible in itinerary tab */}
           <div
             ref={scrollRef}
             onScroll={handleScroll}
-            style={{flex:1,overflowY:"auto",paddingBottom: showChat ? "56vh" : 100, transition:"padding-bottom 0.3s"}}
+            style={{flex:1,overflowY:"auto",paddingBottom:80,display:activeBottomTab==="itinerary"?"block":"none"}}
           >
             {/* Header — scrolls away */}
             <div style={{background:`linear-gradient(160deg,${T.dusk},${T.ocean})`,padding:"28px 20px 20px",color:"white",position:"relative",overflow:"hidden"}}>
               <div style={{position:"absolute",top:-30,right:-30,width:130,height:130,borderRadius:"50%",background:"rgba(255,255,255,0.04)"}}/>
-              <div style={{display:"flex",gap:8,marginBottom:12}}>
-                {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
-                <button onClick={()=>setScreen("setup")} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>+ New trip</button>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                <div style={{display:"flex",gap:8}}>
+                  {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
+                  <button onClick={()=>setScreen("setup")} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>+ New trip</button>
+                </div>
+                <button onClick={()=>setShowShare(true)} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:14,cursor:"pointer"}}>📤</button>
               </div>
               <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,lineHeight:1.2,marginBottom:4}}>{trip.name}</div>
               <div style={{fontSize:13,opacity:0.75,fontFamily:"Georgia,serif"}}>📅 {trip.dates || (trip.start_date && trip.end_date ? `${new Date(trip.start_date).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(trip.end_date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}` : "")}</div>
@@ -2151,19 +2269,102 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             )}
           </div>
 
-          {/* Bottom bar */}
+          {/* ── CHAT TAB ── */}
+          {activeBottomTab === "chat" && (
+            <div style={{flex:1,display:"flex",flexDirection:"column",background:T.warm,overflow:"hidden"}}>
+              {/* Chat header */}
+              <div style={{background:`linear-gradient(135deg,${T.dusk},${T.ocean})`,padding:"20px 20px 16px",color:"white",flexShrink:0}}>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,marginBottom:2}}>✨ AI Trip Assistant</div>
+                <div style={{fontSize:12,opacity:0.75,fontFamily:"Georgia,serif"}}>{trip.name} · ask me to change anything</div>
+              </div>
+              {/* Messages */}
+              <div style={{flex:1,overflowY:"auto",padding:"16px 16px 8px",display:"flex",flexDirection:"column",gap:10}}>
+                {chatMessages.length === 0 && (
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    {trip.summary && (
+                      <div style={{display:"flex",justifyContent:"flex-start"}}>
+                        <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>{trip.summary}</div>
+                      </div>
+                    )}
+                    <div style={{display:"flex",flexDirection:"column",gap:8,padding:"4px 0"}}>
+                      {["Make day 2 more food-focused","Add a beach day","Replace morning activities with something relaxing"].map(s=>(
+                        <button key={s} onClick={()=>setChatInput(s)} style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:20,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer",textAlign:"left"}}>"{s}"</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {chatMessages.map((m,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+                    <div style={{maxWidth:"80%",background:m.role==="user"?T.ocean:T.chalk,color:m.role==="user"?"white":T.ink,borderRadius:m.role==="user"?"18px 18px 4px 18px":"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.5,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>{m.content}</div>
+                  </div>
+                ))}
+                {chatLoading && (
+                  <div style={{display:"flex",justifyContent:"flex-start"}}>
+                    <div style={{background:T.chalk,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,color:T.mist,fontFamily:"Georgia,serif",letterSpacing:2}}>···</div>
+                  </div>
+                )}
+                <div ref={chatBottomRef} />
+              </div>
+              {/* Input */}
+              <div style={{padding:"8px 12px",paddingBottom:"calc(8px + env(safe-area-inset-bottom, 0px))",background:T.chalk,borderTop:`1px solid ${T.sand}`,display:"flex",gap:8,flexShrink:0}}>
+                <input
+                  value={chatInput}
+                  onChange={e=>setChatInput(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&sendChatMessage()}
+                  placeholder="e.g. Make day 2 more relaxing…"
+                  style={{flex:1,padding:"11px 14px",borderRadius:24,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",background:T.warm}}
+                />
+                <button onClick={sendChatMessage} disabled={chatLoading||!chatInput.trim()} style={{width:44,height:44,borderRadius:"50%",background:chatInput.trim()?T.ocean:T.sand,color:"white",border:"none",fontSize:18,cursor:chatInput.trim()?"pointer":"default"}}>↑</button>
+              </div>
+            </div>
+          )}
+
+          {/* ── MAP TAB ── */}
+          {activeBottomTab === "map" && (
+            <MapView days={days} />
+          )}
+
+          {/* ── BOARD TAB ── */}
+          {activeBottomTab === "board" && (
+            <div style={{flex:1,overflowY:"auto",paddingBottom:80}}>
+              <BoardView />
+            </div>
+          )}
+
+          {/* ── BOTTOM NAV ── */}
           <div style={{
             flexShrink:0,
             background:T.chalk,
             borderTop:`1px solid ${T.sand}`,
-            padding:"12px 20px",
-            paddingBottom:"calc(12px + env(safe-area-inset-bottom, 0px))",
-            display:"flex",gap:10,
+            display:"flex",
+            paddingBottom:"env(safe-area-inset-bottom, 0px)",
           }}>
-            <button onClick={()=>setShowChat(true)} style={{flex:1,background:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",border:"none",borderRadius:14,padding:"14px 18px",fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
-              ✨ Tweak my trip
-            </button>
-            <button onClick={()=>setShowShare(true)} style={{width:52,background:T.sand,color:T.ink,border:"none",borderRadius:14,padding:"14px 0",fontFamily:"Georgia,serif",fontSize:17,cursor:"pointer"}}>📤</button>
+            {[
+              { key:"itinerary", icon:"🗓", label:"Itinerary" },
+              { key:"chat",      icon:"✨", label:"Chat" },
+              { key:"map",       icon:"🗺", label:"Map" },
+              { key:"board",     icon:"📋", label:"Board" },
+            ].map(({ key, icon, label }) => {
+              const active = activeBottomTab === key;
+              return (
+                <button key={key} onClick={()=>setActiveBottomTab(key)} style={{
+                  flex:1,
+                  display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+                  gap:3,
+                  padding:"10px 0 8px",
+                  border:"none",
+                  background:"none",
+                  cursor:"pointer",
+                  color: active ? T.ocean : T.mist,
+                  transition:"color 0.15s",
+                  position:"relative",
+                }}>
+                  {active && <div style={{position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:32,height:2.5,borderRadius:"0 0 2px 2px",background:T.ocean}}/>}
+                  <span style={{fontSize:20}}>{icon}</span>
+                  <span style={{fontSize:10,fontFamily:"'Inter','Segoe UI',sans-serif",fontWeight: active ? 600 : 400,letterSpacing:0.3}}>{label}</span>
+                </button>
+              );
+            })}
           </div>
 
           {/* ── SHARE CARD (hidden, used for image capture) ── */}
@@ -2259,68 +2460,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             </div>
           )}
 
-          {/* ── CHAT PANEL ── */}
-          {showChat && (
-            <>
-            <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,height:"52%",zIndex:300,display:"flex",flexDirection:"column",background:T.warm,borderTop:`2px solid ${T.sand}`,borderRadius:"20px 20px 0 0",boxShadow:"0 -8px 32px rgba(0,0,0,0.12)"}}>
-              {/* Chat header */}
-              <div style={{background:`linear-gradient(135deg,${T.dusk},${T.ocean})`,padding:"20px 20px 16px",color:"white",flexShrink:0}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
-                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18}}>✨ AI Trip Assistant</div>
-                  <button onClick={()=>setShowChat(false)} style={{background:"rgba(255,255,255,0.2)",border:"none",borderRadius:20,padding:"4px 12px",color:"white",cursor:"pointer",fontSize:13,fontFamily:"Georgia,serif"}}>Done</button>
-                </div>
-                <div style={{fontSize:12,opacity:0.75,fontFamily:"Georgia,serif"}}>{trip.name} · ask me to change anything</div>
-              </div>
-
-              {/* Messages */}
-              <div style={{flex:1,overflowY:"auto",padding:"16px 16px 8px",display:"flex",flexDirection:"column",gap:10}}>
-                {chatMessages.length === 0 && (
-                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                    {trip.summary && (
-                      <div style={{display:"flex",justifyContent:"flex-start"}}>
-                        <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
-                          {trip.summary}
-                        </div>
-                      </div>
-                    )}
-                    <div style={{display:"flex",flexDirection:"column",gap:8,padding:"4px 0"}}>
-                      {["Make day 2 more food-focused","Add a beach day","Replace morning activities with something relaxing"].map(s=>(
-                        <button key={s} onClick={()=>{ setChatInput(s); }} style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:20,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer",textAlign:"left"}}>
-                          "{s}"
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {chatMessages.map((m,i)=>(
-                  <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
-                    <div style={{maxWidth:"80%",background:m.role==="user"?T.ocean:T.chalk,color:m.role==="user"?"white":T.ink,borderRadius:m.role==="user"?"18px 18px 4px 18px":"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.5,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
-                      {m.content}
-                    </div>
-                  </div>
-                ))}
-                {chatLoading && (
-                  <div style={{display:"flex",justifyContent:"flex-start"}}>
-                    <div style={{background:T.chalk,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,color:T.mist,fontFamily:"Georgia,serif",letterSpacing:2}}>···</div>
-                  </div>
-                )}
-                <div ref={chatBottomRef} />
-              </div>
-
-              {/* Input */}
-              <div style={{padding:"8px 12px 28px",background:T.chalk,borderTop:`1px solid ${T.sand}`,display:"flex",gap:8,flexShrink:0}}>
-                <input
-                  value={chatInput}
-                  onChange={e=>setChatInput(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&sendChatMessage()}
-                  placeholder="e.g. Make day 2 more relaxing…"
-                  style={{flex:1,padding:"11px 14px",borderRadius:24,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",background:T.warm}}
-                />
-                <button onClick={sendChatMessage} disabled={chatLoading||!chatInput.trim()} style={{width:44,height:44,borderRadius:"50%",background:chatInput.trim()?T.ocean:T.sand,color:"white",border:"none",fontSize:18,cursor:chatInput.trim()?"pointer":"default"}}>↑</button>
-              </div>
-            </div>
-            </>
-          )}
         </></DebugContext.Provider>
       )}
 
