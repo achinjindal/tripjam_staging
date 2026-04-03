@@ -462,7 +462,7 @@ function MapView({ days }) {
               return (
                 <div key={gi} style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: DAY_COLORS[g.firstIndex % DAY_COLORS.length], flexShrink: 0 }} />
-                  <span style={{ fontSize: 12, color: T.ink, fontFamily: "Georgia,serif", whiteSpace: "nowrap", fontWeight: 600 }}>{g.city}</span>
+                  <span style={{ fontSize: 12, color: T.ink, fontFamily: "Georgia,serif", whiteSpace: "nowrap", fontWeight: 600 }}>{g.city.split(",")[0]}</span>
                   <span style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", whiteSpace: "nowrap" }}>{dayRange}</span>
                 </div>
               );
@@ -2247,7 +2247,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                           boxShadow: active ? "0 2px 8px rgba(37,99,168,0.28)" : "none",
                           whiteSpace:"nowrap",
                         }}>
-                          <span style={{fontWeight: active ? 700 : 500}}>{g.city}</span>
+                          <span style={{fontWeight: active ? 700 : 500}}>{g.city.split(",")[0]}</span>
                           <span style={{opacity:0.75, fontSize:11}}>{dayRange}</span>
                         </button>
                       );
