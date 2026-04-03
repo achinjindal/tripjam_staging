@@ -600,7 +600,7 @@ function haversineMeters(a, b) {
 }
 
 /* ─── TRANSITION ROW ────────────────────────────────────────────────── */
-function TransitionRow({ from, to, city, label = null }) {
+function TransitionRow({ from, to, city, label = null, delay = 0 }) {
   const [commute, setCommute] = useState(null);
   const [loading, setLoading] = useState(true);
   const [debug, setDebug] = useState(null);
@@ -609,6 +609,7 @@ function TransitionRow({ from, to, city, label = null }) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      if (delay > 0) await new Promise(r => setTimeout(r, delay));
       const placeA = from.geocode || extractPlace(from.title);
       const placeB = to.geocode   || extractPlace(to.title);
       const [coordA, coordB] = await Promise.all([
@@ -876,7 +877,7 @@ function WishlistSection({ items, city }) {
   );
 }
 
-function DaySection({ day, onEditActivity, arrivalTime = null, onEditFlight, hotelActivity = null }) {
+function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, onEditFlight, hotelActivity = null }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
 
@@ -935,6 +936,7 @@ function DaySection({ day, onEditActivity, arrivalTime = null, onEditFlight, hot
           to={day.activities[0]}
           city={day.city}
           label="from hotel"
+          delay={dayIndex * 400}
         />
       )}
 
@@ -947,6 +949,7 @@ function DaySection({ day, onEditActivity, arrivalTime = null, onEditFlight, hot
               from={act.type === "transit" && act.geocode_end ? { ...act, geocode: act.geocode_end } : act}
               to={day.activities[i + 1]}
               city={day.city}
+              delay={dayIndex * 400}
             />
           )}
         </div>
@@ -2299,6 +2302,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                   <div key={day.id} ref={el=>{ dayRefs.current[i]=el; }}>
                     <DaySection
                       day={day}
+                      dayIndex={i}
                       onEditActivity={editActivity}
                       arrivalTime={i === 0 ? trip.arrival_time : null}
                       onEditFlight={i === 0 ? () => setTab("logistics") : undefined}
