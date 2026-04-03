@@ -445,8 +445,10 @@ function MapView({ days }) {
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }}>
-      {/* City legend — grouped same as itinerary pill strip */}
+      {/* City legend — grouped same as itinerary pill strip; hidden for single-city trips */}
       {(() => {
+        const allSameCity = days.every(d => d.city === days[0].city);
+        if (allSameCity) return null;
         const cityGroups = [];
         for (const [i, day] of days.entries()) {
           const last = cityGroups[cityGroups.length - 1];
@@ -2215,9 +2217,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               </div>
             )}
 
-            {/* City-pill strip — sticky within scroll area */}
+            {/* City-pill strip — sticky within scroll area; hidden for single-city trips */}
             {(() => {
-              // Group consecutive days by city
+              const allSameCity = days.every(d => d.city === days[0].city);
+              if (allSameCity) return null;
               const cityGroups = [];
               for (const [i, day] of days.entries()) {
                 const last = cityGroups[cityGroups.length - 1];
