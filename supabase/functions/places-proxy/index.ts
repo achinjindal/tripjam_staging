@@ -74,6 +74,27 @@ async function handlePhoto(req: Request): Promise<Response> {
   return Response.json({ url, placeId: place.id }, { headers: corsHeaders });
 }
 
+async function handleGeocode(req: Request): Promise<Response> {
+  const { q, city } = await req.json();
+  if (!q) return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
+
+  const query = city ? `${q} ${city}` : q;
+  const res = await fetch(`${PLACES_BASE}/places:searchText`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": PLACES_KEY,
+      "X-Goog-FieldMask": "places.location,places.displayName",
+    },
+    body: JSON.stringify({ textQuery: query, languageCode: "en", maxResultCount: 1 }),
+  });
+  if (!res.ok) return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
+  const data: any = await res.json();
+  const loc = data?.places?.[0]?.location;
+  if (!loc) return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
+  return Response.json({ lat: loc.latitude, lng: loc.longitude }, { headers: corsHeaders });
+}
+
 async function handleValidate(req: Request): Promise<Response> {
   const { activities } = await req.json(); // [{ title, city }]
   if (!activities?.length) return Response.json({ results: [] }, { headers: corsHeaders });
@@ -111,6 +132,7 @@ serve(async (req) => {
     if (action === "autocomplete") return await handleAutocomplete(req);
     if (action === "photo")        return await handlePhoto(req);
     if (action === "validate")     return await handleValidate(req);
+    if (action === "geocode")      return await handleGeocode(req);
     return Response.json({ error: "Unknown action" }, { status: 400, headers: corsHeaders });
   } catch (err) {
     console.error("places-proxy error:", err.message);

@@ -576,6 +576,19 @@ async function geocodePlace(title, city, geocodeHint) {
     _geocodeCache.set(q, result);
     if (result) return result;
   }
+  // Google Places fallback when Photon returns nothing
+  try {
+    const res = await fetch(`${PLACES_PROXY}?action=geocode`, {
+      method: "POST", headers: PLACES_HEADERS,
+      body: JSON.stringify({ q: place, city }),
+    });
+    const { lat, lng } = await res.json();
+    if (lat && lng) {
+      const result = { lat, lng };
+      _geocodeCache.set(place, result);
+      return result;
+    }
+  } catch { }
   return null;
 }
 
