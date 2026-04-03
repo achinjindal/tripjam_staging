@@ -61,7 +61,7 @@ function PhotoStrip({ activity, city }) {
     if (!geocode) { setLiveUrl(null); return; }
     const key = `${geocode}||${city || ""}`;
     if (_photoCache[key] !== undefined) { setLiveUrl(_photoCache[key]); return; }
-    _fetchPhoto(geocode, city).then(src => {
+    _fetchPhoto(geocode, city, activity?.type).then(src => {
       if (src) {
         _usedPhotoUrls.add(src);
         if (activity?.id) supabase.from("activities").update({ photo_url: src }).eq("id", activity.id).then();
@@ -327,7 +327,7 @@ function makeQueue(delayMs) {
 const queuedFetch = makeQueue(80);   // geocoding (Photon) — fast
 const wikiQueuedFetch = makeQueue(800); // Wikimedia — conservative to avoid rate limits
 
-async function _fetchPhoto(geocode, city) {
+async function _fetchPhoto(geocode, city, type) {
   const good = (url) => url && !_isPortrait(url) && !_usedPhotoUrls.has(url);
 
   // Deduplicate: return cached result immediately if already fetched
@@ -335,6 +335,20 @@ async function _fetchPhoto(geocode, city) {
   if (_photoCache[cacheKey] !== undefined) return _photoCache[cacheKey];
   // Mark in-flight to prevent concurrent duplicate fetches
   _photoCache[cacheKey] = null;
+
+  // Hotels: skip Wikipedia entirely, go straight to Google Places for accurate property photos
+  if (type === "hotel") {
+    try {
+      const res = await fetch(`${PLACES_PROXY}?action=photo`, {
+        method: "POST", headers: PLACES_HEADERS,
+        body: JSON.stringify({ q: geocode, city }),
+      });
+      const { url: placesUrl } = await res.json();
+      if (good(placesUrl)) { _photoCache[cacheKey] = placesUrl; return placesUrl; }
+    } catch { /* Places proxy unavailable */ }
+    _photoCache[cacheKey] = null;
+    return null;
+  }
 
   // Tier 1: Wikipedia exact title lookup
   const data1 = await wikiQueuedFetch(
@@ -1971,7 +1985,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         day.activities.filter(a => a.type !== "transit").map(act => ({ act, city: day.city }))
       );
       for (const { act, city } of toFetch) {
-        const url = await _fetchPhoto(act.geocode || act.title, city);
+        const url = await _fetchPhoto(act.geocode || act.title, city, act.type);
         if (url) {
           _usedPhotoUrls.add(url);
           // Update in-memory state immediately so PhotoStrip stops shimming without waiting for DB
