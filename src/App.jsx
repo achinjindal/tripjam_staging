@@ -351,13 +351,24 @@ async function _fetchPhoto(geocode, city, type) {
     return null;
   }
 
+  const STOPWORDS = new Set(["the","a","an","of","in","at","on","and","by","for","to","de","el","la"]);
+  const geocodeWords = geocode.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !STOPWORDS.has(w));
+  // Check that the Wikipedia page title (after redirect) is still relevant to the geocode.
+  // Prevents generic city/country article thumbnails from being returned for specific places.
+  const pageRelevant = (pageTitle) => {
+    if (geocodeWords.length === 0) return true;
+    const t = (pageTitle || "").toLowerCase();
+    return geocodeWords.some(w => t.includes(w));
+  };
+
   // Tier 1: Wikipedia exact title lookup
   const data1 = await wikiQueuedFetch(
     `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(geocode)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`
   );
-  const src = Object.values(data1?.query?.pages || {})[0]?.thumbnail?.source;
-  if (good(src)) { _photoCache[cacheKey] = src; return src; }
-  else if (src) console.log(`[photo] T1 filtered: ${src.split("/").pop()} for "${geocode}"`);
+  const page1 = Object.values(data1?.query?.pages || {})[0];
+  const src = page1?.thumbnail?.source;
+  if (good(src) && pageRelevant(page1?.title)) { _photoCache[cacheKey] = src; return src; }
+  else if (src) console.log(`[photo] T1 filtered: "${page1?.title}" / ${src.split("/").pop()} for "${geocode}"`);
 
   // Tier 2: Wikipedia exact lookup with city stripped (geocode often has city appended)
   if (city) {
@@ -366,9 +377,10 @@ async function _fetchPhoto(geocode, city, type) {
       const data2 = await wikiQueuedFetch(
         `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(stripped)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`
       );
-      const src2 = Object.values(data2?.query?.pages || {})[0]?.thumbnail?.source;
-      if (good(src2)) { _photoCache[cacheKey] = src2; return src2; }
-      else if (src2) console.log(`[photo] T2 filtered: ${src2.split("/").pop()} for "${stripped}"`);
+      const page2 = Object.values(data2?.query?.pages || {})[0];
+      const src2 = page2?.thumbnail?.source;
+      if (good(src2) && pageRelevant(page2?.title)) { _photoCache[cacheKey] = src2; return src2; }
+      else if (src2) console.log(`[photo] T2 filtered: "${page2?.title}" / ${src2.split("/").pop()} for "${stripped}"`);
     }
   }
 
@@ -377,13 +389,9 @@ async function _fetchPhoto(geocode, city, type) {
   const data3 = await wikiQueuedFetch(
     `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages&pithumbsize=700&format=json&origin=*`
   );
-  const STOPWORDS = new Set(["the","a","an","of","in","at","on","and","by","for","to","de","el","la"]);
-  const geocodeWords = geocode.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !STOPWORDS.has(w));
   const results3 = Object.values(data3?.query?.pages || {});
   for (const page of results3) {
-    const titleWords = (page.title || "").toLowerCase().split(/\s+/);
-    const relevant = geocodeWords.some(w => titleWords.some(t => t.includes(w) || w.includes(t)));
-    if (!relevant) { console.log(`[photo] T3 skipped irrelevant: "${page.title}" for "${geocode}"`); continue; }
+    if (!pageRelevant(page.title)) { console.log(`[photo] T3 skipped irrelevant: "${page.title}" for "${geocode}"`); continue; }
     const src3 = page?.thumbnail?.source;
     if (good(src3)) { _photoCache[cacheKey] = src3; return src3; }
     else if (src3) console.log(`[photo] T3 filtered: ${src3.split("/").pop()} for "${geocode}"`);
