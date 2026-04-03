@@ -2171,17 +2171,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               </div>
               <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,lineHeight:1.2,marginBottom:4}}>{trip.name}</div>
               <div style={{fontSize:13,opacity:0.75,fontFamily:"Georgia,serif"}}>📅 {trip.dates || (trip.start_date && trip.end_date ? `${new Date(trip.start_date).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(trip.end_date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}` : "")}</div>
-              <div style={{display:"flex",gap:8,marginTop:16}}>
-                {[["plan","🗓 Itinerary"],["logistics","🧳 Logistics"],["collab","👥 Collab"]].map(([t,l])=>(
-                  <button key={t} onClick={()=>{ if(t==="collab"){ setCollabToast(true); setTimeout(()=>setCollabToast(false),2500); } else setTab(t); }} style={{
-                    background:tab===t?"white":"rgba(255,255,255,0.15)",
-                    color:tab===t?T.ocean:"white",
-                    border:"none",borderRadius:20,padding:"6px 18px",
-                    fontSize:13,cursor:"pointer",fontFamily:"Georgia,serif",
-                    fontWeight:tab===t?700:400,transition:"all 0.2s",
-                  }}>{l}</button>
-                ))}
-              </div>
             </div>
 
             {/* Coming soon toast */}
@@ -2195,38 +2184,49 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               </div>
             )}
 
-            {/* Day-pill strip — sticky within scroll area */}
-            {tab==="plan" && (
-              <div style={{position:"sticky",top:0,zIndex:10,background:T.warm,borderBottom:`1px solid ${T.sand}`,padding:"8px 16px"}}>
-                <div ref={pillStrip} className="no-scrollbar" style={{display:"flex",gap:6,overflowX:"auto"}}>
-                  {days.map((d,i) => {
-                    const active = i === activeDay;
-                    return (
-                      <button key={d.id} onClick={()=>scrollToDay(i)} style={{
-                        flexShrink:0,
-                        display:"flex", alignItems:"center", gap:5,
-                        padding: active ? "5px 13px" : "5px 11px",
-                        borderRadius:20,
-                        border:`1.5px solid ${active ? T.ocean : T.sand}`,
-                        background: active ? T.ocean : T.chalk,
-                        color: active ? "white" : T.mist,
-                        fontSize:12, fontFamily:"Georgia,serif",
-                        cursor:"pointer", transition:"all 0.22s",
-                        fontWeight: active ? 700 : 400,
-                        boxShadow: active ? "0 2px 8px rgba(37,99,168,0.28)" : "none",
-                        whiteSpace:"nowrap",
-                      }}>
-                        <span style={{fontSize:14, lineHeight:1}}>{d.activities[0]?.icon}</span>
-                        <span>{d.label}</span>
-                        {active && <span style={{opacity:0.8, fontSize:11}}>· {d.city}</span>}
-                      </button>
-                    );
-                  })}
+            {/* City-pill strip — sticky within scroll area */}
+            {(() => {
+              // Group consecutive days by city
+              const cityGroups = [];
+              for (const [i, day] of days.entries()) {
+                const last = cityGroups[cityGroups.length - 1];
+                if (last && last.city === day.city) { last.lastIndex = i; }
+                else cityGroups.push({ city: day.city, firstIndex: i, lastIndex: i });
+              }
+              return (
+                <div style={{position:"sticky",top:0,zIndex:10,background:T.warm,borderBottom:`1px solid ${T.sand}`,padding:"8px 16px"}}>
+                  <div ref={pillStrip} className="no-scrollbar" style={{display:"flex",gap:6,overflowX:"auto"}}>
+                    {cityGroups.map((g, gi) => {
+                      const active = activeDay >= g.firstIndex && activeDay <= g.lastIndex;
+                      const dayRange = g.firstIndex === g.lastIndex
+                        ? `Day ${g.firstIndex + 1}`
+                        : `Day ${g.firstIndex + 1}–${g.lastIndex + 1}`;
+                      return (
+                        <button key={gi} onClick={()=>scrollToDay(g.firstIndex)} style={{
+                          flexShrink:0,
+                          display:"flex", alignItems:"center", gap:5,
+                          padding:"5px 13px",
+                          borderRadius:20,
+                          border:`1.5px solid ${active ? T.ocean : T.sand}`,
+                          background: active ? T.ocean : T.chalk,
+                          color: active ? "white" : T.mist,
+                          fontSize:12, fontFamily:"Georgia,serif",
+                          cursor:"pointer", transition:"all 0.22s",
+                          fontWeight: active ? 700 : 400,
+                          boxShadow: active ? "0 2px 8px rgba(37,99,168,0.28)" : "none",
+                          whiteSpace:"nowrap",
+                        }}>
+                          <span style={{fontWeight: active ? 700 : 500}}>{g.city}</span>
+                          <span style={{opacity:0.75, fontSize:11}}>{dayRange}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
-            {tab==="plan" && (() => {
+            {(() => {
               // Build city → hotel activity map for "from hotel" transition rows
               const hotelByCity = {};
               days.forEach(d => d.activities.forEach(a => { if (a.type === "hotel") hotelByCity[d.city] = a; }));
