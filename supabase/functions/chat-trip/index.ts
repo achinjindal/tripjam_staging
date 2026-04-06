@@ -69,6 +69,7 @@ Example response format:
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 4096,
+        stream: true,
         system: systemPrompt,
         messages,
       }),
@@ -76,26 +77,42 @@ Example response format:
 
     if (!response.ok) throw new Error(`Anthropic error: ${response.status}`);
 
-    const data = await response.json();
-    const text = data.content[0].text;
+    // Forward text deltas as SSE stream
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const encoder = new TextEncoder();
 
-    let result;
-    try {
-      // Strip markdown fences then find the outermost JSON object
-      const stripped = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-      // Find first { and last } to extract the JSON object
-      const start = stripped.indexOf("{");
-      const end = stripped.lastIndexOf("}");
-      if (start === -1 || end === -1) throw new Error("no JSON object found");
-      result = JSON.parse(stripped.slice(start, end + 1));
-      if (!result.message) result.message = "Done.";
-    } catch (e) {
-      console.error("JSON parse failed:", e.message, "raw:", text.slice(0, 300));
-      result = { message: text };
-    }
+    (async () => {
+      try {
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let lineBuffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          lineBuffer += decoder.decode(value, { stream: true });
+          const lines = lineBuffer.split("\n");
+          lineBuffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const raw = line.slice(6).trim();
+            if (raw === "[DONE]") continue;
+            try {
+              const event = JSON.parse(raw);
+              if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+                await writer.write(encoder.encode(`data: ${JSON.stringify(event.delta.text)}\n\n`));
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+      } finally {
+        await writer.write(encoder.encode("data: [DONE]\n\n"));
+        await writer.close();
+      }
+    })();
 
-    return new Response(JSON.stringify(result), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    return new Response(readable, {
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
     });
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), {

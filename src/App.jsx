@@ -2095,7 +2095,18 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     }
   };
 
-  const callChatTrip = async (message, currentTrip, currentDays, history = []) => {
+  // Extract the message string progressively from partial JSON as it streams in
+  const extractPartialMessage = (text) => {
+    // Try complete match first
+    const full = text.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (full) return full[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+    // Partial match (closing quote not yet received)
+    const partial = text.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)/);
+    if (partial) return partial[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+    return null;
+  };
+
+  const callChatTrip = async (message, currentTrip, currentDays, history = [], onChunk) => {
     const res = await fetch(
       `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-trip`,
       {
@@ -2104,9 +2115,38 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         body: JSON.stringify({ trip: currentTrip, days: currentDays, message, history }),
       }
     );
-    const raw = await res.text();
+
+    // Read SSE stream and accumulate full JSON text
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let accumulated = "";
+    let lineBuffer = "";
+    outer: while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      lineBuffer += decoder.decode(value, { stream: true });
+      const lines = lineBuffer.split("\n");
+      lineBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const raw = line.slice(6).trim();
+        if (raw === "[DONE]") break outer;
+        try {
+          accumulated += JSON.parse(raw);
+          onChunk?.(accumulated);
+        } catch { }
+      }
+    }
+
+    // Parse accumulated JSON
+    const stripped = accumulated.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    const start = stripped.indexOf("{");
+    const end = stripped.lastIndexOf("}");
     let data;
-    try { data = JSON.parse(raw); } catch { data = { message: raw }; }
+    try {
+      data = JSON.parse(stripped.slice(start, end + 1));
+      if (!data.message) data.message = "Done.";
+    } catch { data = { message: accumulated }; }
     const incoming = data.updatedDays ?? data.days ?? [];
     if (incoming.length) {
       // Persist each updated day to Supabase: delete existing activities, insert new ones
@@ -2157,14 +2197,33 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     if (!chatInput.trim() || chatLoading) return;
     const userMsg = { role: "user", content: chatInput.trim() };
     const history = chatMessages; // snapshot before state update
-    setChatMessages(prev => [...prev, userMsg]);
+    // Add user message + placeholder assistant message
+    setChatMessages(prev => [...prev, userMsg, { role: "assistant", content: "", streaming: true }]);
     setChatInput("");
     setChatLoading(true);
     try {
-      const data = await callChatTrip(userMsg.content, trip, days, history);
-      setChatMessages(prev => [...prev, { role: "assistant", content: data.message || "Done." }]);
+      const data = await callChatTrip(userMsg.content, trip, days, history, (accumulated) => {
+        const partial = extractPartialMessage(accumulated);
+        if (partial !== null) {
+          setChatMessages(prev => {
+            const updated = [...prev];
+            updated[updated.length - 1] = { role: "assistant", content: partial, streaming: true };
+            return updated;
+          });
+        }
+      });
+      // Replace streaming placeholder with final message
+      setChatMessages(prev => {
+        const updated = [...prev];
+        updated[updated.length - 1] = { role: "assistant", content: data.message || "Done." };
+        return updated;
+      });
     } catch {
-      setChatMessages(prev => [...prev, { role: "assistant", content: "Sorry, something went wrong. Try again." }]);
+      setChatMessages(prev => {
+        const updated = [...prev];
+        updated[updated.length - 1] = { role: "assistant", content: "Sorry, something went wrong. Try again." };
+        return updated;
+      });
     }
     setChatLoading(false);
   };
@@ -2179,6 +2238,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         @keyframes fadeUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
         @keyframes pulse{0%,100%{opacity:0.3;transform:scale(0.8);}50%{opacity:1;transform:scale(1);}}
         @keyframes shimmer{0%,100%{opacity:0.45;}50%{opacity:0.75;}}
+        @keyframes blink{0%,100%{opacity:1;}50%{opacity:0;}}
         @keyframes slideIn{0%{opacity:0;transform:translateX(40px) scale(0.7);}20%{opacity:1;transform:translateX(0) scale(1);}80%{opacity:1;transform:translateX(0) scale(1);}100%{opacity:0;transform:translateX(-40px) scale(0.7);}}
         .no-scrollbar::-webkit-scrollbar{display:none;}
         .no-scrollbar{-ms-overflow-style:none;scrollbar-width:none;}
@@ -2399,14 +2459,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 )}
                 {chatMessages.map((m,i)=>(
                   <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
-                    <div style={{maxWidth:"80%",background:m.role==="user"?T.ocean:T.chalk,color:m.role==="user"?"white":T.ink,borderRadius:m.role==="user"?"18px 18px 4px 18px":"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.5,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>{m.content}</div>
+                    <div style={{maxWidth:"80%",background:m.role==="user"?T.ocean:T.chalk,color:m.role==="user"?"white":T.ink,borderRadius:m.role==="user"?"18px 18px 4px 18px":"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.5,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
+                      {m.content || (m.streaming ? <span style={{color:T.mist,letterSpacing:2}}>···</span> : "")}
+                      {m.streaming && m.content && <span style={{display:"inline-block",width:2,height:"1em",background:T.ink,marginLeft:2,verticalAlign:"text-bottom",animation:"blink 1s step-end infinite"}}/>}
+                    </div>
                   </div>
                 ))}
-                {chatLoading && (
-                  <div style={{display:"flex",justifyContent:"flex-start"}}>
-                    <div style={{background:T.chalk,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,color:T.mist,fontFamily:"Georgia,serif",letterSpacing:2}}>···</div>
-                  </div>
-                )}
                 <div ref={chatBottomRef} />
               </div>
               {/* Input */}
