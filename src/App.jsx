@@ -2899,11 +2899,30 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                       <div style={{fontSize:11,color:T.mist,fontWeight:400}}>Paste into WhatsApp, Notes, anywhere</div>
                     </div>
                   </button>
-                  <button style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:14,border:`1.5px solid ${T.sand}`,background:"#F9F9F9",cursor:"not-allowed",fontFamily:"Georgia,serif",fontSize:14,color:T.mist,opacity:0.6}}>
-                    <span style={{fontSize:24}}>👥</span>
+                  <button onClick={async()=>{
+                    let token = trip.share_token;
+                    if (!token) {
+                      // Generate a new share token
+                      const { data } = await supabase
+                        .from("trips").update({ share_token: crypto.randomUUID() })
+                        .eq("id", trip.id).select("share_token").single();
+                      token = data?.share_token;
+                      if (token) setTrip(t => ({ ...t, share_token: token }));
+                    }
+                    if (!token) return;
+                    const url = `${window.location.origin}/trip/${token}`;
+                    if (navigator.share) {
+                      await navigator.share({ title: trip.name, text: `Check out our trip: ${trip.name}`, url });
+                    } else {
+                      await navigator.clipboard.writeText(url);
+                      alert("Link copied!");
+                    }
+                    setShowShare(false);
+                  }} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:14,border:`1.5px solid ${T.sand}`,background:"white",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:600}}>
+                    <span style={{fontSize:24}}>🔗</span>
                     <div style={{textAlign:"left"}}>
-                      <div>Invite to collaborate</div>
-                      <div style={{fontSize:11,fontWeight:400}}>Coming soon</div>
+                      <div>Share link</div>
+                      <div style={{fontSize:11,color:T.mist,fontWeight:400}}>Anyone with the link can view this trip</div>
                     </div>
                   </button>
                 </div>
