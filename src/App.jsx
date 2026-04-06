@@ -529,24 +529,124 @@ function MapView({ days }) {
 }
 
 /* ─── BOARD VIEW ─────────────────────────────────────────────────────── */
-const BOARD_SECTIONS = [
-  { key: "expenses", icon: "💸", title: "Expenses", desc: "Track who paid what and split costs" },
-  { key: "polls",    icon: "🗳️", title: "Polls",    desc: "Vote on destinations, restaurants, activities" },
-  { key: "notes",    icon: "📝", title: "Notes",    desc: "Shared notes and reminders for the trip" },
-  { key: "todo",     icon: "✅", title: "To-do",    desc: "Packing lists, bookings, things to sort" },
-];
 
-function BoardView() {
+function NotesView({ trip, onSaveNotes, onBack }) {
+  const [text, setText] = useState(trip.board_notes || "");
+  const [saveStatus, setSaveStatus] = useState(null); // null | "saving" | "saved"
+  const timerRef = useRef(null);
+  const textareaRef = useRef(null);
+
+  // Focus textarea on mount
+  useEffect(() => { textareaRef.current?.focus(); }, []);
+
+  const handleChange = (e) => {
+    const val = e.target.value;
+    setText(val);
+    setSaveStatus("saving");
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(async () => {
+      await onSaveNotes(val);
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus(null), 2000);
+    }, 1000);
+  };
+
+  // Save on unmount if there's a pending change
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: T.warm }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 16px 10px", borderBottom: `1px solid ${T.sand}`, flexShrink: 0 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: T.ocean, padding: "0 4px", lineHeight: 1 }}>←</button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink }}>Notes</div>
+        </div>
+        <div style={{ fontSize: 11, fontFamily: "Georgia,serif", color: saveStatus === "saving" ? T.mist : T.moss, minWidth: 50, textAlign: "right" }}>
+          {saveStatus === "saving" && "Saving…"}
+          {saveStatus === "saved" && "✓ Saved"}
+        </div>
+      </div>
+
+      {/* Textarea */}
+      <textarea
+        ref={textareaRef}
+        value={text}
+        onChange={handleChange}
+        placeholder={"Jot anything down — hotel confirmation numbers, visa requirements, things to remember, packing notes…"}
+        style={{
+          flex: 1, width: "100%", padding: "16px 18px",
+          border: "none", outline: "none", resize: "none",
+          fontFamily: "Georgia,serif", fontSize: 14, lineHeight: 1.7,
+          color: T.ink, background: T.warm,
+          boxSizing: "border-box",
+        }}
+      />
+
+      {/* Footer word count */}
+      {wordCount > 0 && (
+        <div style={{ padding: "6px 18px 10px", fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", flexShrink: 0 }}>
+          {wordCount} word{wordCount !== 1 ? "s" : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BoardView({ trip, onSaveNotes }) {
+  const [activeSection, setActiveSection] = useState(null);
+
+  if (activeSection === "notes") {
+    return <NotesView trip={trip} onSaveNotes={onSaveNotes} onBack={() => setActiveSection(null)} />;
+  }
+
+  const sections = [
+    {
+      key: "expenses", icon: "💸", title: "Expenses",
+      desc: "Track who paid what and split costs",
+      comingSoon: true,
+    },
+    {
+      key: "polls", icon: "🗳️", title: "Polls",
+      desc: "Vote on destinations, restaurants, activities",
+      comingSoon: true,
+    },
+    {
+      key: "notes", icon: "📝", title: "Notes",
+      desc: trip.board_notes ? `${trip.board_notes.trim().slice(0, 48)}${trip.board_notes.length > 48 ? "…" : ""}` : "Shared notes and reminders for the trip",
+      comingSoon: false,
+    },
+    {
+      key: "todo", icon: "✅", title: "To-do",
+      desc: "Packing lists, bookings, things to sort",
+      comingSoon: true,
+    },
+  ];
+
   return (
     <div style={{ padding: "20px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-      {BOARD_SECTIONS.map(s => (
-        <div key={s.key} style={{ background: T.chalk, borderRadius: 14, border: `1px solid ${T.sand}`, padding: "18px 18px", display: "flex", alignItems: "center", gap: 14 }}>
+      {sections.map(s => (
+        <div
+          key={s.key}
+          onClick={s.comingSoon ? undefined : () => setActiveSection(s.key)}
+          style={{
+            background: T.chalk, borderRadius: 14, border: `1px solid ${T.sand}`,
+            padding: "18px 18px", display: "flex", alignItems: "center", gap: 14,
+            cursor: s.comingSoon ? "default" : "pointer",
+            opacity: s.comingSoon ? 0.7 : 1,
+          }}
+        >
           <div style={{ fontSize: 28, flexShrink: 0 }}>{s.icon}</div>
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 600, fontSize: 15, color: T.ink, fontFamily: "'DM Serif Display',serif", marginBottom: 3 }}>{s.title}</div>
-            <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif" }}>{s.desc}</div>
+            <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.desc}</div>
           </div>
-          <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: T.sand, borderRadius: 10, padding: "3px 10px", whiteSpace: "nowrap" }}>Coming soon</div>
+          {s.comingSoon
+            ? <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: T.sand, borderRadius: 10, padding: "3px 10px", whiteSpace: "nowrap", flexShrink: 0 }}>Coming soon</div>
+            : <div style={{ fontSize: 16, color: T.mist, flexShrink: 0 }}>›</div>
+          }
         </div>
       ))}
     </div>
@@ -2488,8 +2588,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
           {/* ── BOARD TAB ── */}
           {activeBottomTab === "board" && (
-            <div style={{flex:1,overflowY:"auto",paddingBottom:80}}>
-              <BoardView />
+            <div style={{flex:1,overflowY:"auto",paddingBottom:80,display:"flex",flexDirection:"column"}}>
+              <BoardView
+                trip={trip}
+                onSaveNotes={async (text) => {
+                  setTrip(t => ({ ...t, board_notes: text }));
+                  await supabase.from("trips").update({ board_notes: text }).eq("id", trip.id);
+                }}
+              />
             </div>
           )}
 
