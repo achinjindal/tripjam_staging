@@ -595,11 +595,194 @@ function NotesView({ trip, onSaveNotes, onBack }) {
   );
 }
 
+const CATEGORY_ORDER = ["Bookings", "Documents", "Health & safety", "Money", "Packing", "Day of travel"];
+
+function TodoView({ trip, onBack }) {
+  const [todos, setTodos]           = useState([]);
+  const [suggestions, setSuggestions] = useState([]); // AI-generated, pending review
+  const [generating, setGenerating] = useState(false);
+  const [newText, setNewText]       = useState("");
+  const [loading, setLoading]       = useState(true);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    supabase.from("trip_todos").select("*").eq("trip_id", trip.id).order("position")
+      .then(({ data }) => { setTodos(data || []); setLoading(false); });
+  }, [trip.id]);
+
+  const generate = async () => {
+    setGenerating(true);
+    setSuggestions([]);
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-todos`,
+        { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+          body: JSON.stringify({ trip }) }
+      );
+      const { items } = await res.json();
+      // Filter out items already in the todo list (by text)
+      const existingTexts = new Set(todos.map(t => t.text.toLowerCase()));
+      setSuggestions((items || []).filter(s => !existingTexts.has(s.text.toLowerCase())));
+    } catch { /* silent */ }
+    setGenerating(false);
+  };
+
+  const accept = async (item, idx) => {
+    const { data } = await supabase.from("trip_todos")
+      .insert({ trip_id: trip.id, text: item.text, done: false, position: todos.length })
+      .select().single();
+    if (data) setTodos(prev => [...prev, data]);
+    setSuggestions(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const discard = (idx) => setSuggestions(prev => prev.filter((_, i) => i !== idx));
+
+  const acceptAll = async () => {
+    const rows = suggestions.map((s, i) => ({ trip_id: trip.id, text: s.text, done: false, position: todos.length + i }));
+    const { data } = await supabase.from("trip_todos").insert(rows).select();
+    setTodos(prev => [...prev, ...(data || [])]);
+    setSuggestions([]);
+  };
+
+  const toggleDone = async (todo) => {
+    const done = !todo.done;
+    setTodos(prev => prev.map(t => t.id === todo.id ? { ...t, done } : t));
+    await supabase.from("trip_todos").update({ done }).eq("id", todo.id);
+  };
+
+  const deleteTodo = async (todo) => {
+    setTodos(prev => prev.filter(t => t.id !== todo.id));
+    await supabase.from("trip_todos").delete().eq("id", todo.id);
+  };
+
+  const addManual = async () => {
+    const text = newText.trim();
+    if (!text) return;
+    const { data } = await supabase.from("trip_todos")
+      .insert({ trip_id: trip.id, text, done: false, position: todos.length })
+      .select().single();
+    if (data) setTodos(prev => [...prev, data]);
+    setNewText("");
+  };
+
+  const done = todos.filter(t => t.done).length;
+  const total = todos.length;
+
+  // Group suggestions by category
+  const grouped = CATEGORY_ORDER.reduce((acc, cat) => {
+    const items = suggestions.filter(s => s.category === cat);
+    if (items.length) acc.push({ cat, items });
+    return acc;
+  }, []);
+  // Catch any uncategorised
+  const knownCats = new Set(CATEGORY_ORDER);
+  const otherItems = suggestions.filter(s => !knownCats.has(s.category));
+  if (otherItems.length) grouped.push({ cat: "Other", items: otherItems });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: T.warm }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 16px 10px", borderBottom: `1px solid ${T.sand}`, flexShrink: 0 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: T.ocean, padding: "0 4px", lineHeight: 1 }}>←</button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink }}>To-do</div>
+          {total > 0 && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}>{done}/{total} done</div>}
+        </div>
+        <button onClick={generate} disabled={generating} style={{
+          background: generating ? T.sand : T.ocean, color: "white", border: "none",
+          borderRadius: 20, padding: "7px 14px", fontSize: 12,
+          fontFamily: "Georgia,serif", cursor: generating ? "default" : "pointer",
+        }}>
+          {generating ? "Generating…" : suggestions.length ? "Regenerate" : "✨ Generate"}
+        </button>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {/* Suggestions */}
+        {suggestions.length > 0 && (
+          <div style={{ margin: "16px 16px 0" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: T.ocean, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1 }}>
+                Suggestions — {suggestions.length} items
+              </div>
+              <button onClick={acceptAll} style={{ fontSize: 12, color: T.moss, fontFamily: "Georgia,serif", background: "none", border: `1px solid ${T.moss}`, borderRadius: 20, padding: "4px 12px", cursor: "pointer" }}>
+                Accept all
+              </button>
+            </div>
+            {grouped.map(({ cat, items }) => (
+              <div key={cat} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", letterSpacing: 0.5, marginBottom: 6, paddingLeft: 2 }}>{cat}</div>
+                {items.map((item, globalIdx) => {
+                  const idx = suggestions.indexOf(item);
+                  return (
+                    <div key={globalIdx} style={{ display: "flex", alignItems: "center", gap: 8, background: "#F0F7FF", border: `1px solid #C8DFFE`, borderRadius: 10, padding: "10px 12px", marginBottom: 6 }}>
+                      <div style={{ flex: 1, fontSize: 13, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.4 }}>{item.text}</div>
+                      <button onClick={() => accept(item, idx)} title="Add to list" style={{ background: T.moss, border: "none", borderRadius: "50%", width: 28, height: 28, color: "white", fontSize: 14, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</button>
+                      <button onClick={() => discard(idx)} title="Discard" style={{ background: "none", border: `1px solid ${T.sand}`, borderRadius: "50%", width: 28, height: 28, color: T.mist, fontSize: 14, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+            <div style={{ height: 1, background: T.sand, margin: "8px 0 16px" }} />
+          </div>
+        )}
+
+        {/* Todos list */}
+        {loading ? (
+          <div style={{ padding: "24px 16px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13, textAlign: "center" }}>Loading…</div>
+        ) : todos.length === 0 && suggestions.length === 0 ? (
+          <div style={{ padding: "32px 24px", textAlign: "center" }}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>✅</div>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, marginBottom: 6 }}>Nothing here yet</div>
+            <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif", lineHeight: 1.6 }}>Tap <strong>✨ Generate</strong> for a personalised checklist, or add items below.</div>
+          </div>
+        ) : (
+          <div style={{ padding: "12px 16px 0" }}>
+            {todos.map(todo => (
+              <div key={todo.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 4px", borderBottom: `1px solid ${T.sand}` }}>
+                <button onClick={() => toggleDone(todo)} style={{
+                  width: 22, height: 22, borderRadius: "50%", flexShrink: 0, marginTop: 1, cursor: "pointer",
+                  border: `2px solid ${todo.done ? T.moss : T.sand}`,
+                  background: todo.done ? T.moss : "transparent",
+                  display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 12,
+                }}>
+                  {todo.done ? "✓" : ""}
+                </button>
+                <div style={{ flex: 1, fontSize: 13, fontFamily: "Georgia,serif", color: todo.done ? T.mist : T.ink, textDecoration: todo.done ? "line-through" : "none", lineHeight: 1.5, paddingTop: 2 }}>
+                  {todo.text}
+                </div>
+                <button onClick={() => deleteTodo(todo)} style={{ background: "none", border: "none", fontSize: 14, color: T.sand, cursor: "pointer", padding: "0 2px", flexShrink: 0 }}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Add manual item */}
+      <div style={{ padding: "10px 16px", paddingBottom: "calc(10px + env(safe-area-inset-bottom, 0px))", borderTop: `1px solid ${T.sand}`, background: T.chalk, display: "flex", gap: 8, flexShrink: 0 }}>
+        <input
+          ref={inputRef}
+          value={newText}
+          onChange={e => setNewText(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && addManual()}
+          placeholder="Add an item…"
+          style={{ flex: 1, padding: "10px 14px", borderRadius: 22, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm }}
+        />
+        <button onClick={addManual} disabled={!newText.trim()} style={{ width: 40, height: 40, borderRadius: "50%", background: newText.trim() ? T.ocean : T.sand, color: "white", border: "none", fontSize: 18, cursor: newText.trim() ? "pointer" : "default" }}>+</button>
+      </div>
+    </div>
+  );
+}
+
 function BoardView({ trip, onSaveNotes }) {
   const [activeSection, setActiveSection] = useState(null);
 
   if (activeSection === "notes") {
     return <NotesView trip={trip} onSaveNotes={onSaveNotes} onBack={() => setActiveSection(null)} />;
+  }
+  if (activeSection === "todo") {
+    return <TodoView trip={trip} onBack={() => setActiveSection(null)} />;
   }
 
   const sections = [
@@ -620,8 +803,8 @@ function BoardView({ trip, onSaveNotes }) {
     },
     {
       key: "todo", icon: "✅", title: "To-do",
-      desc: "Packing lists, bookings, things to sort",
-      comingSoon: true,
+      desc: "AI-generated checklist, or add your own",
+      comingSoon: false,
     },
   ];
 
