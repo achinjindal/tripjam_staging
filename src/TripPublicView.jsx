@@ -28,8 +28,14 @@ function ActivityRow({ activity }) {
 }
 
 function DayCard({ day }) {
+  const photo = (day.activities || []).find(a => a.photo_url)?.photo_url ?? null;
   return (
-    <div style={{ marginBottom: 28 }}>
+    <div style={{ marginBottom: 32 }}>
+      {photo && (
+        <div style={{ borderRadius: 12, overflow: "hidden", height: 160, marginBottom: 12 }}>
+          <img src={photo} alt={day.city} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <div style={{ background: T.ocean, color: "white", borderRadius: 8, padding: "4px 11px", fontFamily: "Georgia,serif", fontSize: 12, flexShrink: 0 }}>{day.label}</div>
         <div>

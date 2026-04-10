@@ -5,9 +5,13 @@ import Auth from "./Auth.jsx";
 import Home from "./Home.jsx";
 import App from "./App.jsx";
 import TripPublicView from "./TripPublicView.jsx";
+import JoinView from "./JoinView.jsx";
 
 // Detect /trip/{token} URLs — served without authentication
 const PUBLIC_TRIP_MATCH = window.location.pathname.match(/^\/trip\/([a-f0-9-]{36})$/);
+// Detect /join/{token} URLs — requires auth
+const JOIN_MATCH = window.location.pathname.match(/^\/join\/([a-f0-9-]{36})$/);
+const JOIN_TOKEN = JOIN_MATCH?.[1] ?? null;
 const PUBLIC_TRIP_TOKEN = PUBLIC_TRIP_MATCH?.[1] ?? null;
 
 function Root() {
@@ -26,6 +30,9 @@ function Root() {
 
   if (session === undefined) return null;
   if (!session) return <Auth />;
+
+  // Join flow — requires auth
+  if (JOIN_TOKEN) return <JoinView token={JOIN_TOKEN} session={session} />;
 
   if (screen === "home") {
     return (

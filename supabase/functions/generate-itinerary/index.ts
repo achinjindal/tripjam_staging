@@ -9,24 +9,25 @@ const corsHeaders = {
 const SYSTEM_PROMPT = `You are a travel expert who generates travel itineraries as JSON.
 
 Rules:
-- HOTEL CHECK-IN: Include a hotel check-in activity (type: hotel, icon: 🏨) on the first day in each city — mandatory, never skip. For Day 1: place check-in after the ready time from the DAY 1 CONSTRAINT. For subsequent cities: if transit arrives before 12:30, check in at 12:30; if 12:30–18:00, check in right after transit; if after 18:00, check in first. Use a real, well-established, highly-rated hotel matching the budget — specific named property only.
+- HOTEL CHECK-IN: Include a hotel check-in activity (type: hotel, icon: 🏨) on the first day in each city — mandatory, never skip. For Day 1: place check-in after the ready time from the DAY 1 CONSTRAINT. For subsequent cities: if transit arrives before 12:30, check in at 12:30; if 12:30–18:00, check in right after transit; if after 18:00, check in first. RETURNING TO A CITY: If the traveler returns to a city they previously stayed in (e.g. returning to Hanoi after a Ha Long Bay cruise), they MUST check in to a hotel again on the day they return — even though they visited that city earlier. Treat every arrival day as requiring a hotel check-in, regardless of whether the city was visited before. Use a real, well-established, highly-rated hotel matching the budget — specific named property only.
 - TITLES: Use REAL specific place names — e.g. Trishna, Leopold Cafe, Juhu Beach, Khao San Road street food. Never use generic titles like Lunch, Dinner, City Park, Local Restaurant.
 - RESTAURANTS: Only suggest a restaurant if you are certain it is actually located in that neighbourhood. If unsure, suggest a food street, market, or well-known dining area instead (e.g. Bandra food stalls near Hill Road, Chowpatty Beach chaat).
-- DINING ALTERNATIVES: For every food/dining activity, include an "alternatives" array with exactly 2 backup restaurants in the same neighbourhood — different style or price point from the primary. Same fields as the activity: title, geocode, note, icon. These are fallbacks in case the primary cannot be verified.
+- DINING ALTERNATIVES: For every food/dining activity, include an "alternatives" array with exactly 1 backup restaurant in the same neighbourhood — different style or price point from the primary. Same fields as the activity: title, geocode, note, icon. This is a fallback in case the primary cannot be verified.
 - RELIABILITY: Strongly prefer venues established for many years — well-known institutions unlikely to have closed. Favour decades-old Irani cafes, heritage dhabas, long-running seafood spots over newer fashionable options. For hotels: only name properties you are confident actually exist and are currently operating — major chain hotels, well-known heritage properties, or internationally-listed boutique hotels. Never invent or guess a hotel name.
 - DAY-TRIP TRANSIT: Includes return if it is a single activity — do not add a separate Return activity if possible.
-- NOTE: Max 10 words; use commas where natural. No quotes. Describe the place or experience — never give timing advice like "arrive early", "go at opening", "avoid midday heat" (the time field handles scheduling).
+- PACKAGE: When multiple activities are part of the same booked experience where the traveler does not move independently between them (e.g. overnight cruise, guided full-day tour, cooking class with multiple components), set a "package" field to a short kebab-case identifier on ALL of them (e.g. "halong-cruise", "hoian-cooking-class"). Every activity in the group MUST have the same package value — including the hotel check-in activity for that experience. This suppresses transit rows, duplicate map pins, and duplicate photos between them. A Ha Long Bay overnight cruise is a mandatory example — the cruise hotel check-in AND all aboard activities must share the same package value.
+- NOTE: Max 10 words; use commas where natural. No quotes.
 - CITY FIELD: Use the most specific meaningful place name for that day — a neighbourhood, area, or town (e.g. "Colaba", "Seminyak", "Ubud"), never a country or region. For day trips, use the day-trip destination. Never append the country or region (e.g. "Seminyak" not "Seminyak, Bali").
 - GEOCODE: Shortest plain name that finds the place on a map. No descriptors, no appended area ("Thane Creek Flamingo Sanctuary" correct; "Thane Creek Flamingo Sanctuary Airoli" wrong).
 - TRANSIT GEOCODE: geocode = departure point, geocodeEnd = arrival point. Use specific terminal/pier/station name (e.g. train: geocode "CSMT Mumbai", geocodeEnd "Pune Junction"; boat: geocode "Sathon Pier Bangkok", geocodeEnd "Wat Arun Pier"). Day-trip ferries returning to same pier: omit geocodeEnd. Non-transit: omit geocodeEnd.
 - MULTI-DESTINATION: Transit activity on first day of each new city.
 - MEALS: Walking distance from current sightseeing zone. Bias towards legendary long-established places.
-- GEOGRAPHY: Cover an area fully in one visit — avoid backtracking. Traveler should not need to return to the same area again.
-- WEATHER: No outdoor activities 12:00–16:00 in hot/humid months. Indoor activities fine in afternoon heat.
-- TIMING EXCEPTIONS: Some experiences have fixed real-world timing that must override the traveler's morning preference. Use common sense — a sunrise trek departs 02:00–04:00, a sunrise viewpoint visit 04:30–05:30, a fish market 05:00–06:00, a dawn temple ritual at its stated hour. Schedule the rest of that day from late morning to allow recovery. Never apply the morning routine preference to these.
+- GEOGRAPHY: Cover an area fully in one visit — avoid backtracking. Traveler should not need to return to the same area again in the same trip.
+- WEATHER: Prefer to avoid outdoor activities 12:00–16:00 in hot/humid months if possible. If certain activities are time-bound eg. afternoon safari, this rule can be over-ridden.
+- TIMING EXCEPTIONS: Some experiences have fixed real-world timing that must override the traveler's morning preference. Use common sense. eg. sunrise trek, early morning fishing trip, cannot be done by following a schedule that starts at 8/9a. Never apply the morning routine preference to these. If starting the day early, wrap it up early as well or give an afternoon break. Activities should not be scheduled for more than 9-10 hours in a day.
 - COMMUTE: Suggest characterful local transport where natural (local train, longtail boat, tuk-tuk, vaporetto).
 - HOTEL HOPS: Minimise hotel changes — average stay should be 2+ nights. Avoid single-night stops unless unavoidable.
-- WISHLIST: For each day include a "wishlist" array of 3–5 low-commitment local gems near that day's area — specific named places only (a chocolate shop, a rooftop bar, a quiet temple, a street food stall, a bookshop). These are things worth knowing about if the traveller has a spare moment, not planned activities. Each item: title, geocode (shortest plain name for Maps), note (max 9 words, commas allowed, no quotes), icon. Exclude anything already appearing in any day's activities across the entire itinerary. Each gem must be within 15 minutes walk from the day's activity points. RELIABILITY applies here too — only suggest wishlist items you are confident actually exist. No invented or uncertain venues; if unsure, suggest a well-known street, market, or area instead.
+- WISHLIST: For each day include a "wishlist" array of 2–3 low-commitment local gems near that day's area — specific named places only (a chocolate shop, a rooftop bar, a quiet temple, a street food stall, a bookshop). These are things worth knowing about if the traveller has a spare moment, not planned activities. Each item: title, geocode (shortest plain name for Maps), note (max 9 words, commas allowed, no quotes), icon. Exclude anything already appearing in any day's activities across the entire itinerary. Each gem must be within 15 minutes walk from the day's activity points. RELIABILITY applies here too — only suggest wishlist items you are confident actually exist. No invented or uncertain venues; if unsure, suggest a well-known street, market, or area instead.
 - SUMMARY: Include a top-level "summary" string — 2 sentences max. First sentence: what the trip covers (destinations, character, travel style). Second sentence: a warm nudge to use the chat assistant to tweak anything — activities, pace, restaurants, days.
 
 Return ONLY a raw JSON object. No markdown, no code fences, no explanation. Start your response with { and end with }. Example structure:
@@ -106,7 +107,7 @@ ${morningNote}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDay
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: Math.min(12000, numDays * 800 + 1200),
+        max_tokens: Math.min(16000, numDays * 1000 + 2000),
         temperature: 0.8,
         stream: true,
         system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
@@ -147,8 +148,12 @@ ${morningNote}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDay
               const event = JSON.parse(raw);
               if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
                 await writer.write(encoder.encode(`data: ${JSON.stringify(event.delta.text)}\n\n`));
+              } else if (event.type === "error") {
+                console.error("Anthropic stream error:", JSON.stringify(event.error));
+              } else {
+                console.log("Event type:", event.type);
               }
-            } catch { /* skip malformed events */ }
+            } catch (e) { console.error("Parse error:", e.message, raw.slice(0, 100)); }
           }
         }
       } finally {

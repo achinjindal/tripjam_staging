@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, createContext, useContext } from "react";
 import { supabase } from "./supabase";
 import html2canvas from "html2canvas";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -41,6 +41,7 @@ function PhotoStrip({ activity, city }) {
   const stored = activity?.photo_url;
   const geocode = activity?.geocode || activity?.title;
   const [liveUrl, setLiveUrl] = useState(stored ? null : undefined);
+  const [coords, setCoords] = useState(null);
   const [visible, setVisible] = useState(false);
   const ref = useRef(null);
 
@@ -71,6 +72,11 @@ function PhotoStrip({ activity, city }) {
     });
   }, [stored, visible, geocode, city]);
 
+  useEffect(() => {
+    if (!debugMode || !geocode) return;
+    geocodePlace(geocode, city, activity?.geocode).then(c => setCoords(c));
+  }, [debugMode, geocode, city]);
+
   const url = stored || liveUrl;
   if (url === undefined) return (
     <div ref={ref} style={{marginTop:10,height:130,borderRadius:10,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
@@ -84,8 +90,13 @@ function PhotoStrip({ activity, city }) {
     );
   }
   return (
-    <div style={{marginTop:10,borderRadius:10,overflow:"hidden",height:130,background:T.sand}}>
+    <div style={{marginTop:10,borderRadius:10,overflow:"hidden",height:130,background:T.sand,position:"relative"}}>
       <img src={url} alt={geocode} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+      {debugMode && (
+        <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(0,0,0,0.55)",color:"#fff",fontSize:10,fontFamily:"monospace",padding:"3px 6px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+          {coords ? `📍 ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : "📍 …"}
+        </div>
+      )}
     </div>
   );
 }
@@ -272,6 +283,22 @@ const typeStyle = {
   hotel:   { bg: "#F5F0FA", color: "#7B5EA7", label: "Stay" },
 };
 
+const PACKAGE_PALETTE = [
+  { bg: "#E8F4FD", color: "#1A6FA8" },
+  { bg: "#FDE8F4", color: "#A8186F" },
+  { bg: "#E8FDF0", color: "#1A8A4A" },
+  { bg: "#FDF5E8", color: "#A85A1A" },
+  { bg: "#F0E8FD", color: "#6A1AA8" },
+  { bg: "#FDE8E8", color: "#A81A1A" },
+  { bg: "#E8FDFD", color: "#1A8AA8" },
+  { bg: "#FDF0E8", color: "#8A5A1A" },
+];
+function packageColor(pkg) {
+  let hash = 0;
+  for (let i = 0; i < pkg.length; i++) hash = (hash * 31 + pkg.charCodeAt(i)) >>> 0;
+  return PACKAGE_PALETTE[hash % PACKAGE_PALETTE.length];
+}
+
 
 /* ─── COMMUTE UTILS ─────────────────────────────────────────────────── */
 function fmtTime(mins) {
@@ -295,9 +322,27 @@ function extractPlace(title) {
   return stripped || title.trim();
 }
 
+function playDoneChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const notes = [523.25, 659.25, 783.99, 1046.50]; // C5 E5 G5 C6
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      const t = ctx.currentTime + i * 0.15;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.18, t + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+      osc.start(t); osc.stop(t + 0.5);
+    });
+  } catch { /* audio not available */ }
+}
+
 // Global serialized queues — separate delays for geocoding vs Wikimedia photo API
 const _geocodeCache = new Map();
-const _cityCache = new Map();
 
 function makeQueue(delayMs) {
   const q = [];
@@ -324,16 +369,18 @@ function makeQueue(delayMs) {
   });
 }
 
-const queuedFetch = makeQueue(80);   // geocoding (Photon) — fast
 const wikiQueuedFetch = makeQueue(800); // Wikimedia — conservative to avoid rate limits
 
 async function _fetchPhoto(geocode, city, type) {
-  const BAD_PATTERNS = /\.(svg)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank/i;
+  const BAD_PATTERNS = /\.(svg)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial/i;
   const good = (url) => url && !_isPortrait(url) && !_usedPhotoUrls.has(url) && !BAD_PATTERNS.test(url);
 
   // Deduplicate: return cached result immediately if already fetched
   const cacheKey = `${geocode}||${city || ""}`;
-  if (_photoCache[cacheKey] !== undefined) return _photoCache[cacheKey];
+  if (_photoCache[cacheKey] !== undefined) {
+    const cached = _photoCache[cacheKey];
+    return (cached && _usedPhotoUrls.has(cached)) ? null : cached;
+  }
   // Mark in-flight to prevent concurrent duplicate fetches
   _photoCache[cacheKey] = null;
 
@@ -345,20 +392,25 @@ async function _fetchPhoto(geocode, city, type) {
         body: JSON.stringify({ q: geocode, city }),
       });
       const { url: placesUrl } = await res.json();
-      if (good(placesUrl)) { _photoCache[cacheKey] = placesUrl; return placesUrl; }
+      if (good(placesUrl)) { _usedPhotoUrls.add(placesUrl); _photoCache[cacheKey] = placesUrl; return placesUrl; }
     } catch { /* Places proxy unavailable */ }
     _photoCache[cacheKey] = null;
     return null;
   }
 
   const STOPWORDS = new Set(["the","a","an","of","in","at","on","and","by","for","to","de","el","la"]);
-  const geocodeWords = geocode.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !STOPWORDS.has(w));
+  // Strip city words from geocode — city name alone shouldn't count as a relevance match
+  // e.g. "Hang Dao Street Hanoi" → "Hang Dao Street" so "Hanoi Film Festival" doesn't pass
+  const cityWords = new Set((city || "").toLowerCase().split(/\s+/).filter(Boolean));
+  const geocodeWithoutCity = geocode.toLowerCase().split(/\s+/).filter(w => !cityWords.has(w)).join(" ");
+  const geocodeWords = geocodeWithoutCity.split(/\s+/).filter(w => w.length > 3 && !STOPWORDS.has(w));
+  // Fallback: if all words are too short (e.g. "Pho Bat Dan"), use the full geocode as one token
+  const relevanceTokens = geocodeWords.length > 0 ? geocodeWords : [geocode.toLowerCase()];
   // Check that the Wikipedia page title (after redirect) is still relevant to the geocode.
   // Prevents generic city/country article thumbnails from being returned for specific places.
   const pageRelevant = (pageTitle) => {
-    if (geocodeWords.length === 0) return true;
     const t = (pageTitle || "").toLowerCase();
-    return geocodeWords.some(w => t.includes(w));
+    return relevanceTokens.some(w => t.includes(w));
   };
 
   // Tier 1: Wikipedia exact title lookup
@@ -367,7 +419,7 @@ async function _fetchPhoto(geocode, city, type) {
   );
   const page1 = Object.values(data1?.query?.pages || {})[0];
   const src = page1?.thumbnail?.source;
-  if (good(src) && pageRelevant(page1?.title)) { _photoCache[cacheKey] = src; return src; }
+  if (good(src) && pageRelevant(page1?.title)) { _usedPhotoUrls.add(src); _photoCache[cacheKey] = src; return src; }
   else if (src) console.log(`[photo] T1 filtered: "${page1?.title}" / ${src.split("/").pop()} for "${geocode}"`);
 
   // Tier 2: Wikipedia exact lookup with city stripped (geocode often has city appended)
@@ -379,7 +431,7 @@ async function _fetchPhoto(geocode, city, type) {
       );
       const page2 = Object.values(data2?.query?.pages || {})[0];
       const src2 = page2?.thumbnail?.source;
-      if (good(src2) && pageRelevant(page2?.title)) { _photoCache[cacheKey] = src2; return src2; }
+      if (good(src2) && pageRelevant(page2?.title)) { _usedPhotoUrls.add(src2); _photoCache[cacheKey] = src2; return src2; }
       else if (src2) console.log(`[photo] T2 filtered: "${page2?.title}" / ${src2.split("/").pop()} for "${stripped}"`);
     }
   }
@@ -393,19 +445,19 @@ async function _fetchPhoto(geocode, city, type) {
   for (const page of results3) {
     if (!pageRelevant(page.title)) { console.log(`[photo] T3 skipped irrelevant: "${page.title}" for "${geocode}"`); continue; }
     const src3 = page?.thumbnail?.source;
-    if (good(src3)) { _photoCache[cacheKey] = src3; return src3; }
+    if (good(src3)) { _usedPhotoUrls.add(src3); _photoCache[cacheKey] = src3; return src3; }
     else if (src3) console.log(`[photo] T3 filtered: ${src3.split("/").pop()} for "${geocode}"`);
   }
 
-  // Tier 4: Google Places — 50% of misses only, to limit cost
-  if (Math.random() < 0.5) {
+  // Tier 4: Google Places fallback
+  {
     try {
       const res = await fetch(`${PLACES_PROXY}?action=photo`, {
         method: "POST", headers: PLACES_HEADERS,
         body: JSON.stringify({ q: geocode, city }),
       });
       const { url: placesUrl } = await res.json();
-      if (good(placesUrl)) { _photoCache[cacheKey] = placesUrl; return placesUrl; }
+      if (good(placesUrl)) { _usedPhotoUrls.add(placesUrl); _photoCache[cacheKey] = placesUrl; return placesUrl; }
       else if (placesUrl) console.log(`[photo] T4 filtered: ${placesUrl.split("/").pop()} for "${geocode}"`);
     } catch { /* Places proxy unavailable, skip */ }
   }
@@ -429,34 +481,83 @@ function makeDayIcon(color) {
 }
 
 /* ─── MAP VIEW ───────────────────────────────────────────────────────── */
+function FitBounds({ pins, fallback }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!pins || pins.length === 0) {
+      if (fallback) map.setView(fallback, 12);
+      return;
+    }
+    if (pins.length === 1) {
+      map.setView([pins[0].lat, pins[0].lng], 14);
+      return;
+    }
+    map.fitBounds(pins.map(p => [p.lat, p.lng]), { padding: [40, 40], maxZoom: 15 });
+  }, [pins]);
+  return null;
+}
+
 function MapView({ days }) {
   const [pins, setPins] = useState(null);
   const [selectedDays, setSelectedDays] = useState(new Set()); // empty = show all
+  const [multiSelect, setMultiSelect] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const result = [];
-      for (const [di, day] of days.entries()) {
-        for (const act of day.activities) {
-          if (act.type === "transit") continue;
-          const coords = await geocodePlace(act.title, day.city, act.geocode);
-          if (coords && !cancelled) {
-            result.push({ ...act, lat: coords.lat, lng: coords.lng, dayIndex: di, dayLabel: day.label });
-          }
-        }
-        if (!cancelled) setPins([...result]);
-      }
+      // Geocode all days in parallel; update pins as each day resolves
+      const allPins = days.map(() => []);
+      await Promise.all(days.map(async (day, di) => {
+        const seenPackages = new Set();
+        const dayPins = await Promise.all(
+          day.activities
+            .filter(act => {
+              if (act.type === "transit") return false;
+              if (act.package) {
+                if (seenPackages.has(act.package)) return false;
+                seenPackages.add(act.package);
+              }
+              return true;
+            })
+            .map(async act => {
+              // Use stored coords if available, otherwise resolve and persist
+              let coords = (act.lat && act.lng) ? { lat: act.lat, lng: act.lng } : null;
+              if (!coords) {
+                coords = await geocodePlace(act.title, day.city, act.geocode);
+                if (coords && act.id) {
+                  supabase.from("activities").update({ lat: coords.lat, lng: coords.lng }).eq("id", act.id);
+                }
+              }
+              return coords ? { ...act, lat: coords.lat, lng: coords.lng, dayIndex: di, dayLabel: day.label } : null;
+            })
+        );
+        allPins[di] = dayPins.filter(Boolean);
+        if (!cancelled) setPins(allPins.flat());
+      }));
     })();
     return () => { cancelled = true; };
   }, []);
 
   const toggleDay = (i) => {
-    setSelectedDays(prev => {
-      const next = new Set(prev);
-      next.has(i) ? next.delete(i) : next.add(i);
-      return next;
-    });
+    if (multiSelect) {
+      setSelectedDays(prev => {
+        const next = new Set(prev);
+        next.has(i) ? next.delete(i) : next.add(i);
+        return next;
+      });
+    } else {
+      // Single-select: tap same day to deselect (show all)
+      setSelectedDays(prev => prev.size === 1 && prev.has(i) ? new Set() : new Set([i]));
+    }
+  };
+
+  const handleMultiToggle = () => {
+    if (multiSelect) {
+      // Collapse back to single: keep first selected day if any
+      const first = [...selectedDays][0];
+      setSelectedDays(first !== undefined ? new Set([first]) : new Set());
+    }
+    setMultiSelect(prev => !prev);
   };
 
   const visiblePins = (pins || []).filter(p => selectedDays.size === 0 || selectedDays.has(p.dayIndex));
@@ -465,7 +566,7 @@ function MapView({ days }) {
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }}>
-      {/* Day filter pills — multi-select */}
+      {/* Day filter pills */}
       <div className="no-scrollbar" style={{ display: "flex", gap: 6, padding: "10px 14px", overflowX: "auto", flexShrink: 0, background: "#fff", borderBottom: `1px solid ${T.sand}`, alignItems: "center" }}>
         {days.map((d, i) => {
           const active = selectedDays.has(i);
@@ -486,13 +587,24 @@ function MapView({ days }) {
             </button>
           );
         })}
-        {selectedDays.size > 0 && (
-          <button onClick={() => setSelectedDays(new Set())} style={{
-            flexShrink: 0, padding: "4px 11px", borderRadius: 20,
-            border: `1.5px solid ${T.sand}`, background: "none",
-            color: T.mist, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer",
-          }}>Clear</button>
-        )}
+        {/* Divider */}
+        <div style={{ width: 1, height: 18, background: T.sand, flexShrink: 0, marginLeft: 2 }} />
+        {/* Multi-select toggle */}
+        <label onClick={handleMultiToggle} style={{
+          display: "flex", alignItems: "center", gap: 5, flexShrink: 0,
+          cursor: "pointer", padding: "4px 4px", whiteSpace: "nowrap",
+        }}>
+          <div style={{
+            width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+            border: `1.5px solid ${multiSelect ? T.ocean : T.mist}`,
+            background: multiSelect ? T.ocean : "none",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            transition: "all 0.15s",
+          }}>
+            {multiSelect && <span style={{ fontSize: 9, color: "white", lineHeight: 1 }}>✓</span>}
+          </div>
+          <span style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.mist }}>Multiple</span>
+        </label>
       </div>
 
       {(!pins || pins.length === 0) && (
@@ -502,11 +614,12 @@ function MapView({ days }) {
       )}
 
       {pins !== null && (
-        <MapContainer center={center} zoom={13} style={{ flex: 1 }} key={center.join(",")}>
+        <MapContainer center={center} zoom={13} style={{ flex: 1 }}>
           <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            url={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}@2x?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}`}
+            attribution='&copy; <a href="https://www.mapbox.com/about/maps/">Mapbox</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           />
+          <FitBounds pins={visiblePins} fallback={center} />
           {visiblePins.map((pin, i) => (
             <Marker key={i} position={[pin.lat, pin.lng]} icon={makeDayIcon(DAY_COLORS[pin.dayIndex % DAY_COLORS.length])}>
               <Popup>
@@ -535,6 +648,7 @@ function NotesView({ trip, onSaveNotes, onBack }) {
   const [saveStatus, setSaveStatus] = useState(null); // null | "saving" | "saved"
   const timerRef = useRef(null);
   const textareaRef = useRef(null);
+  const pendingRef = useRef(null); // tracks text waiting to be saved
 
   // Focus textarea on mount
   useEffect(() => { textareaRef.current?.focus(); }, []);
@@ -543,16 +657,21 @@ function NotesView({ trip, onSaveNotes, onBack }) {
     const val = e.target.value;
     setText(val);
     setSaveStatus("saving");
+    pendingRef.current = val;
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(async () => {
       await onSaveNotes(val);
+      pendingRef.current = null;
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus(null), 2000);
     }, 1000);
   };
 
-  // Save on unmount if there's a pending change
-  useEffect(() => () => clearTimeout(timerRef.current), []);
+  // Flush any pending save on unmount (e.g. user navigates back within 1s)
+  useEffect(() => () => {
+    clearTimeout(timerRef.current);
+    if (pendingRef.current !== null) onSaveNotes(pendingRef.current);
+  }, []);
 
   const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
 
@@ -658,11 +777,12 @@ function TodoView({ trip, onBack }) {
   const addManual = async () => {
     const text = newText.trim();
     if (!text) return;
-    const { data } = await supabase.from("trip_todos")
+    setNewText("");
+    const { data, error } = await supabase.from("trip_todos")
       .insert({ trip_id: trip.id, text, done: false, position: todos.length })
       .select().single();
+    if (error) { console.error("trip_todos insert:", error); return; }
     if (data) setTodos(prev => [...prev, data]);
-    setNewText("");
   };
 
   const done = todos.filter(t => t.done).length;
@@ -775,8 +895,323 @@ function TodoView({ trip, onBack }) {
   );
 }
 
+const BRAINSTORM_CATEGORIES = ["All", "Sightseeing", "Dining", "Experiences", "Nightlife", "Nature", "Culture", "Shopping", "Day Trip"];
+const BRAINSTORM_CATEGORY_ICONS = { Sightseeing:"🏛️", Dining:"🍜", Experiences:"🎭", Nightlife:"🍸", Nature:"🌿", Culture:"🎨", Shopping:"🛍️", "Day Trip":"🚌" };
+
+function BrainstormView({ trip, session }) {
+  const [items, setItems] = useState(null); // null = loading, [] = empty, [...] = loaded
+  const [votes, setVotes] = useState({}); // { [item_id]: { up: n, down: n, mine: 1|-1|0 } }
+  const [generating, setGenerating] = useState(false);
+  const [activeCategory, setActiveCategory] = useState("All");
+  const [genError, setGenError] = useState(null);
+
+  const igReq = trip?.ig_request || {};
+  const destinations = igReq.destinations?.length
+    ? igReq.destinations
+    : (trip?.destination || "").split(" → ").map(s => s.trim()).filter(Boolean);
+
+  useEffect(() => {
+    loadItems();
+  }, [trip?.id]);
+
+  async function loadItems() {
+    if (!trip?.id) return;
+    const { data } = await supabase
+      .from("brainstorm_items")
+      .select("*")
+      .eq("trip_id", trip.id)
+      .order("position");
+    setItems(data || []);
+    if (data?.length) loadVotes(data.map(i => i.id));
+  }
+
+  async function loadVotes(itemIds) {
+    if (!itemIds.length) return;
+    const { data } = await supabase
+      .from("brainstorm_votes")
+      .select("item_id, user_id, vote")
+      .in("item_id", itemIds);
+    const agg = {};
+    for (const id of itemIds) agg[id] = { up: 0, down: 0, mine: 0 };
+    for (const row of (data || [])) {
+      if (row.vote === 1)  agg[row.item_id].up++;
+      if (row.vote === -1) agg[row.item_id].down++;
+      if (row.user_id === session?.user?.id) agg[row.item_id].mine = row.vote;
+    }
+    setVotes(agg);
+  }
+
+  async function generate() {
+    if (!destinations.length) return;
+    setGenerating(true);
+    setGenError(null);
+    setItems([]);
+    try {
+      const travelMonth = igReq.startDate ? new Date(igReq.startDate).toLocaleString("en-US", { month: "long" }) : null;
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-brainstorm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({ destinations, styles: igReq.styles, budget: igReq.budget, travelMonth }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      // Stream text deltas and progressively parse complete JSON objects
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let lineBuffer = "";
+      let jsonBuffer = "";
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      const streamedItems = [];
+
+      const tryParseItem = (chunk) => {
+        // Track characters to find complete {...} objects at depth 1
+        for (const ch of chunk) {
+          jsonBuffer += ch;
+          if (escape) { escape = false; continue; }
+          if (ch === "\\") { escape = true; continue; }
+          if (ch === '"') { inString = !inString; continue; }
+          if (inString) continue;
+          if (ch === "{") depth++;
+          if (ch === "}") {
+            depth--;
+            if (depth === 0) {
+              // Extract the last complete object from jsonBuffer
+              const start = jsonBuffer.lastIndexOf("{", jsonBuffer.length - 1);
+              // Find the matching { by scanning backwards for depth=0
+              let d = 0, objStart = -1;
+              for (let i = jsonBuffer.length - 1; i >= 0; i--) {
+                if (jsonBuffer[i] === "}") d++;
+                if (jsonBuffer[i] === "{") d--;
+                if (d === 0) { objStart = i; break; }
+              }
+              if (objStart >= 0) {
+                const objStr = jsonBuffer.slice(objStart);
+                try {
+                  const item = JSON.parse(objStr);
+                  if (item.title && item.category) {
+                    streamedItems.push(item);
+                    setItems([...streamedItems]);
+                  }
+                } catch { /* partial object, skip */ }
+              }
+            }
+          }
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        lineBuffer += decoder.decode(value, { stream: true });
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (raw === "[DONE]") continue;
+          try { tryParseItem(JSON.parse(raw)); } catch { /* skip */ }
+        }
+      }
+
+      if (!streamedItems.length) throw new Error("No items received");
+
+      // Clear old items and persist all at once
+      await supabase.from("brainstorm_items").delete().eq("trip_id", trip.id);
+      const rows = streamedItems.map((item, i) => ({ ...item, trip_id: trip.id, position: i }));
+      const { data, error: insertErr } = await supabase.from("brainstorm_items").insert(rows).select();
+      if (insertErr) throw new Error(`Insert error: ${insertErr.message}`);
+      setItems(data || streamedItems);
+      setVotes({});
+    } catch (e) {
+      console.error("Brainstorm generate error:", e);
+      setGenError(e.message);
+    }
+    setGenerating(false);
+  }
+
+  async function castVote(itemId, value) {
+    const current = votes[itemId]?.mine || 0;
+    const newVote = current === value ? 0 : value; // toggle off if same
+
+    // Optimistic update
+    setVotes(prev => {
+      const v = { ...(prev[itemId] || { up: 0, down: 0, mine: 0 }) };
+      if (current === 1)  v.up--;
+      if (current === -1) v.down--;
+      if (newVote === 1)  v.up++;
+      if (newVote === -1) v.down++;
+      v.mine = newVote;
+      return { ...prev, [itemId]: v };
+    });
+
+    if (newVote === 0) {
+      await supabase.from("brainstorm_votes").delete().eq("item_id", itemId).eq("user_id", session.user.id);
+    } else {
+      await supabase.from("brainstorm_votes").upsert({ item_id: itemId, user_id: session.user.id, vote: newVote }, { onConflict: "item_id,user_id" });
+    }
+  }
+
+  const visibleItems = (items || []).filter(it => activeCategory === "All" || it.category === activeCategory);
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", background: T.warm }}>
+      {/* Header */}
+      <div style={{ padding: "20px 16px 12px", background: T.chalk, borderBottom: `1px solid ${T.sand}`, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 20, color: T.ink }}>Brainstorm</div>
+            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", marginTop: 2 }}>
+              {generating
+                ? items?.length ? `Found ${items.length} ideas so far…` : "Curating ideas…"
+                : items?.length ? `${items.length} ideas · vote to shape your itinerary` : "Generate ideas for the group to vote on"}
+            </div>
+          </div>
+          <button
+            onClick={generate}
+            disabled={generating || !destinations.length}
+            style={{
+              padding: "8px 16px", borderRadius: 20, border: "none", cursor: generating ? "default" : "pointer",
+              background: generating ? T.sand : T.ocean, color: "white",
+              fontFamily: "Georgia,serif", fontSize: 13, fontWeight: 600, opacity: generating ? 0.7 : 1,
+            }}
+          >
+            {generating ? "Generating…" : items?.length ? "Regenerate" : "Generate"}
+          </button>
+        </div>
+
+        {/* Category filter pills */}
+        {items?.length > 0 && (
+          <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
+            {BRAINSTORM_CATEGORIES.filter(c => c === "All" || items.some(it => it.category === c)).map(cat => (
+              <button
+                key={cat}
+                onClick={() => setActiveCategory(cat)}
+                style={{
+                  flexShrink: 0, padding: "5px 12px", borderRadius: 20, border: "none", cursor: "pointer",
+                  background: activeCategory === cat ? T.ocean : T.sand,
+                  color: activeCategory === cat ? "white" : T.mist,
+                  fontFamily: "Georgia,serif", fontSize: 12, fontWeight: activeCategory === cat ? 600 : 400,
+                }}
+              >
+                {cat === "All" ? "All" : `${BRAINSTORM_CATEGORY_ICONS[cat] || ""} ${cat}`}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px 80px" }}>
+        {items === null && (
+          <div style={{ textAlign: "center", padding: "60px 20px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 14 }}>
+            Loading…
+          </div>
+        )}
+
+        {genError && (
+          <div style={{margin:"12px 0",padding:"10px 14px",borderRadius:10,background:"#FEE2E2",border:"1px solid #FECACA",fontSize:12,color:"#DC2626",fontFamily:"monospace",wordBreak:"break-all"}}>
+            ⚠️ {genError}
+          </div>
+        )}
+
+        {items?.length === 0 && !generating && (
+          <div style={{ textAlign: "center", padding: "60px 20px" }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>🗺️</div>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink, marginBottom: 8 }}>No ideas yet</div>
+            <div style={{ fontFamily: "Georgia,serif", fontSize: 13, color: T.mist, lineHeight: 1.5 }}>
+              Hit Generate to get a list of things to do,<br/>see and eat — then vote with your group.
+            </div>
+          </div>
+        )}
+
+        {generating && items?.length === 0 && (
+          <div style={{ textAlign: "center", padding: "60px 20px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 14 }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>✨</div>
+            Curating ideas…
+          </div>
+        )}
+
+        {visibleItems.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {visibleItems.map(item => {
+              const v = votes[item.id] || { up: 0, down: 0, mine: 0 };
+              return (
+                <div key={item.id} style={{
+                  background: T.chalk, borderRadius: 14, padding: "12px 14px",
+                  border: `1.5px solid ${T.sand}`, display: "flex", alignItems: "center", gap: 12,
+                }}>
+                  {/* Icon */}
+                  <div style={{ fontSize: 24, flexShrink: 0, width: 36, textAlign: "center" }}>{item.icon}</div>
+
+                  {/* Text */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, flexWrap: "wrap" }}>
+                      <span style={{ fontFamily: "'DM Serif Display',serif", fontSize: 14, color: T.ink, lineHeight: 1.3 }}>{item.title}</span>
+                      <span style={{
+                        fontSize: 10, borderRadius: 20, padding: "1px 7px", fontFamily: "Georgia,serif", fontWeight: 600, flexShrink: 0,
+                        background: "#EBF3FD", color: T.ocean,
+                      }}>{item.category}</span>
+                    </div>
+                    {item.city && (
+                      <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", marginBottom: 2 }}>📍 {item.city}</div>
+                    )}
+                    {item.note && (
+                      <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>{item.note}</div>
+                    )}
+                  </div>
+
+                  {/* Vote buttons */}
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                    <button
+                      onClick={() => castVote(item.id, 1)}
+                      style={{
+                        width: 34, height: 34, borderRadius: "50%", border: "none", cursor: "pointer", fontSize: 16,
+                        background: v.mine === 1 ? "#DCFCE7" : T.sand,
+                        color: v.mine === 1 ? "#16A34A" : T.mist,
+                        display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 0,
+                        transition: "background 0.15s",
+                      }}
+                    >
+                      👍
+                    </button>
+                    {v.up > 0 && <span style={{ fontSize: 10, color: "#16A34A", fontFamily: "Georgia,serif", fontWeight: 600 }}>{v.up}</span>}
+
+                    <button
+                      onClick={() => castVote(item.id, -1)}
+                      style={{
+                        width: 34, height: 34, borderRadius: "50%", border: "none", cursor: "pointer", fontSize: 16,
+                        background: v.mine === -1 ? "#FEE2E2" : T.sand,
+                        color: v.mine === -1 ? "#DC2626" : T.mist,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        transition: "background 0.15s",
+                        marginTop: v.up > 0 ? 0 : 4,
+                      }}
+                    >
+                      👎
+                    </button>
+                    {v.down > 0 && <span style={{ fontSize: 10, color: "#DC2626", fontFamily: "Georgia,serif", fontWeight: 600 }}>{v.down}</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BoardView({ trip, onSaveNotes }) {
   const [activeSection, setActiveSection] = useState(null);
+  const [todoItems, setTodoItems] = useState(null);
+
+  useEffect(() => {
+    if (!trip?.id) return;
+    supabase.from("trip_todos").select("id, text, done").eq("trip_id", trip.id).order("position").limit(5)
+      .then(({ data }) => setTodoItems(data || []));
+  }, [trip?.id, activeSection]); // re-fetch when returning from sub-view
 
   if (activeSection === "notes") {
     return <NotesView trip={trip} onSaveNotes={onSaveNotes} onBack={() => setActiveSection(null)} />;
@@ -785,102 +1220,136 @@ function BoardView({ trip, onSaveNotes }) {
     return <TodoView trip={trip} onBack={() => setActiveSection(null)} />;
   }
 
-  const sections = [
-    {
-      key: "expenses", icon: "💸", title: "Expenses",
-      desc: "Track who paid what and split costs",
-      comingSoon: true,
-    },
-    {
-      key: "polls", icon: "🗳️", title: "Polls",
-      desc: "Vote on destinations, restaurants, activities",
-      comingSoon: true,
-    },
-    {
-      key: "notes", icon: "📝", title: "Notes",
-      desc: trip.board_notes ? `${trip.board_notes.trim().slice(0, 48)}${trip.board_notes.length > 48 ? "…" : ""}` : "Shared notes and reminders for the trip",
-      comingSoon: false,
-    },
-    {
-      key: "todo", icon: "✅", title: "To-do",
-      desc: "AI-generated checklist, or add your own",
-      comingSoon: false,
-    },
-  ];
+  const noteText = trip.board_notes?.trim() || null;
+  const notePreview = noteText ? noteText.slice(0, 120) + (noteText.length > 120 ? "…" : "") : null;
+  const doneTodos = (todoItems || []).filter(t => t.done).length;
 
   return (
-    <div style={{ padding: "20px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-      {sections.map(s => (
-        <div
-          key={s.key}
-          onClick={s.comingSoon ? undefined : () => setActiveSection(s.key)}
-          style={{
-            background: T.chalk, borderRadius: 14, border: `1px solid ${T.sand}`,
-            padding: "18px 18px", display: "flex", alignItems: "center", gap: 14,
-            cursor: s.comingSoon ? "default" : "pointer",
-            opacity: s.comingSoon ? 0.7 : 1,
-          }}
-        >
-          <div style={{ fontSize: 28, flexShrink: 0 }}>{s.icon}</div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 15, color: T.ink, fontFamily: "'DM Serif Display',serif", marginBottom: 3 }}>{s.title}</div>
-            <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.desc}</div>
+    <div style={{ padding: "16px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+
+      {/* ── EXPENSES ── */}
+      <div style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, opacity: 0.65 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
+          <div style={{ fontSize: 24, flexShrink: 0 }}>💸</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: T.ink }}>Expenses</div>
+            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>Plan your trip budget</div>
           </div>
-          {s.comingSoon
-            ? <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: T.sand, borderRadius: 10, padding: "3px 10px", whiteSpace: "nowrap", flexShrink: 0 }}>Coming soon</div>
-            : <div style={{ fontSize: 16, color: T.mist, flexShrink: 0 }}>›</div>
+          <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: T.sand, borderRadius: 10, padding: "3px 10px", flexShrink: 0 }}>Coming soon</div>
+        </div>
+        <div style={{ borderTop: `1px solid ${T.sand}`, padding: "10px 16px 14px" }}>
+          <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>No expenses planned yet</div>
+        </div>
+      </div>
+
+      {/* ── POLLS ── */}
+      <div style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, opacity: 0.65 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
+          <div style={{ fontSize: 24, flexShrink: 0 }}>🗳️</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: T.ink }}>Polls</div>
+            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>Vote on destinations, restaurants, activities</div>
+          </div>
+          <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: T.sand, borderRadius: 10, padding: "3px 10px", flexShrink: 0 }}>Coming soon</div>
+        </div>
+        <div style={{ borderTop: `1px solid ${T.sand}`, padding: "10px 16px 14px" }}>
+          <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>No polls yet</div>
+        </div>
+      </div>
+
+      {/* ── NOTES ── */}
+      <div onClick={() => setActiveSection("notes")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
+          <div style={{ fontSize: 24, flexShrink: 0 }}>📝</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: T.ink }}>Notes</div>
+            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>Shared notes for the trip</div>
+          </div>
+          <div style={{ fontSize: 16, color: T.mist, flexShrink: 0 }}>›</div>
+        </div>
+        <div style={{ borderTop: `1px solid ${T.sand}`, padding: "10px 16px 14px" }}>
+          {notePreview
+            ? <div style={{ fontSize: 12, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.7, opacity: 0.8, whiteSpace: "pre-line" }}>{notePreview}</div>
+            : <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>No notes yet — tap to add</div>
           }
         </div>
-      ))}
+      </div>
+
+      {/* ── TO-DO ── */}
+      <div onClick={() => setActiveSection("todo")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
+          <div style={{ fontSize: 24, flexShrink: 0 }}>✅</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: T.ink }}>To-do</div>
+            {todoItems && todoItems.length > 0
+              ? <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>{doneTodos}/{todoItems.length} done</div>
+              : <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>Checklist for your trip</div>
+            }
+          </div>
+          <div style={{ fontSize: 16, color: T.mist, flexShrink: 0 }}>›</div>
+        </div>
+        <div style={{ borderTop: `1px solid ${T.sand}`, padding: "10px 16px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+          {todoItems === null && (
+            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>Loading…</div>
+          )}
+          {todoItems !== null && todoItems.length === 0 && (
+            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>No items yet — tap to generate or add</div>
+          )}
+          {(todoItems || []).slice(0, 4).map(t => (
+            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{
+                width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                border: `1.5px solid ${t.done ? T.ocean : T.sand}`,
+                background: t.done ? T.ocean : "none",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                {t.done && <span style={{ fontSize: 9, color: "white", lineHeight: 1 }}>✓</span>}
+              </div>
+              <span style={{ fontSize: 12, fontFamily: "Georgia,serif", color: t.done ? T.mist : T.ink, textDecoration: t.done ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.text}</span>
+            </div>
+          ))}
+          {todoItems && todoItems.length > 4 && (
+            <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", paddingLeft: 22 }}>+{todoItems.length - 4} more</div>
+          )}
+        </div>
+      </div>
+
     </div>
   );
 }
 
-async function getCityCenter(city) {
-  if (_cityCache.has(city)) return _cityCache.get(city);
-  const data = await queuedFetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(city)}&limit=1`);
-  const feat = data?.features?.[0];
-  const result = feat ? { lat: feat.geometry.coordinates[1], lng: feat.geometry.coordinates[0] } : null;
-  _cityCache.set(city, result);
-  return result;
-}
-
 async function geocodePlace(title, city, geocodeHint) {
-  // Use AI-provided geocode hint if available, otherwise extract from title
-  const place = geocodeHint || extractPlace(title);
-  const cityCenter = await getCityCenter(city);
-  // zoom=14 strongly biases results towards the city area
-  const bias = cityCenter ? `&lat=${cityCenter.lat}&lon=${cityCenter.lng}&zoom=14` : "";
-  // Deduplicate queries; if we have a hint, only use it (don't fall back to full title)
-  const queries = geocodeHint
-    ? [`${place} ${city}`]
-    : [...new Set([`${place} ${city}`, `${title} ${city}`])];
-  for (const q of queries) {
-    if (_geocodeCache.has(q)) { const c = _geocodeCache.get(q); if (c) return c; continue; }
-    // Fetch 5 candidates, take the first one within 30km of city center
-    const data = await queuedFetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5${bias}`);
-    const feats = data?.features || [];
-    const hit = feats.find(f => {
-      const c = { lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0] };
-      return !cityCenter || haversineMeters(c, cityCenter) <= 300000;
-    });
-    const result = hit ? { lat: hit.geometry.coordinates[1], lng: hit.geometry.coordinates[0] } : null;
-    _geocodeCache.set(q, result);
-    if (result) return result;
+  // If geocodeHint is raw coordinates "lat,lng", use directly
+  if (geocodeHint) {
+    const m = geocodeHint.trim().match(/^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$/);
+    if (m) return { lat: parseFloat(m[1]), lng: parseFloat(m[2]) };
   }
-  // Google Places fallback when Photon returns nothing
-  try {
-    const res = await fetch(`${PLACES_PROXY}?action=geocode`, {
-      method: "POST", headers: PLACES_HEADERS,
-      body: JSON.stringify({ q: place, city }),
-    });
-    const { lat, lng } = await res.json();
-    if (lat && lng) {
-      const result = { lat, lng };
-      _geocodeCache.set(place, result);
-      return result;
-    }
-  } catch { }
+  const place = geocodeHint || extractPlace(title);
+  const cacheKey = `${place}|${city}`;
+  if (_geocodeCache.has(cacheKey)) return _geocodeCache.get(cacheKey);
+
+  // Google Places primary — reliable city-aware geocoding
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 2000));
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 8000);
+      const res = await fetch(`${PLACES_PROXY}?action=geocode`, {
+        method: "POST", headers: PLACES_HEADERS,
+        body: JSON.stringify({ q: place, city }),
+        signal: ctrl.signal,
+      });
+      clearTimeout(tid);
+      const { lat, lng } = await res.json();
+      if (lat && lng) {
+        const result = { lat, lng };
+        _geocodeCache.set(cacheKey, result);
+        return result;
+      }
+      break;
+    } catch { /* timeout or network error — retry */ }
+  }
+  _geocodeCache.set(cacheKey, null);
   return null;
 }
 
@@ -892,13 +1361,15 @@ function haversineMeters(a, b) {
 }
 
 /* ─── TRANSITION ROW ────────────────────────────────────────────────── */
-function TransitionRow({ from, to, city, label = null, delay = 0 }) {
-  const [commute, setCommute] = useState(null);
-  const [loading, setLoading] = useState(true);
+function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = false, initialCommute = null, onResolved = null }) {
+  const [commute, setCommute] = useState(initialCommute);
+  const [loading, setLoading] = useState(!initialCommute);
   const [debug, setDebug] = useState(null);
   const debugMode = useContext(DebugContext);
 
   useEffect(() => {
+    // Walk: if we already have a stored walk value, skip recalculation
+    if (initialCommute?.mode === "walk") return;
     let cancelled = false;
     async function load() {
       if (delay > 0) await new Promise(r => setTimeout(r, delay));
@@ -921,8 +1392,12 @@ function TransitionRow({ from, to, city, label = null, delay = 0 }) {
           const road = dist * 1.4;
           const walkMins  = Math.max(1, Math.round(road / 80));
           const driveMins = Math.max(1, Math.round(road / 350));
-          const useWalk = walkMins <= 20;
-          if (!cancelled) setCommute({ mode: useWalk ? "walk" : "drive", mins: useWalk ? walkMins : driveMins });
+          const useWalk = !forceDrive && walkMins <= 20;
+          const result = { mode: useWalk ? "walk" : "drive", mins: useWalk ? walkMins : driveMins };
+          if (!cancelled) {
+            setCommute(result);
+            onResolved?.(result.mins, result.mode);
+          }
         }
       }
       if (!cancelled) setDebug({ placeA, placeB, reason });
@@ -961,7 +1436,6 @@ function TransitionRow({ from, to, city, label = null, delay = 0 }) {
 
   return (
     <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 20px"}}>
-      {label && <span style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",whiteSpace:"nowrap",flexShrink:0}}>{label}</span>}
       <div style={{flex:1,height:1,background:T.sand}}/>
       <a href={mapsUrl} target="_blank" rel="noopener noreferrer"
         style={{fontSize:11,fontFamily:"Georgia,serif",textDecoration:"none",whiteSpace:"nowrap",
@@ -973,13 +1447,15 @@ function TransitionRow({ from, to, city, label = null, delay = 0 }) {
         {commute.mode === "walk" ? "🚶" : "🚗"} {fmtTime(commute.mins)} {commute.mode === "walk" ? "walk" : "drive"}
       </a>
       <div style={{flex:1,height:1,background:T.sand}}/>
+      {label && <span style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",whiteSpace:"nowrap",flexShrink:0}}>{label}</span>}
     </div>
   );
 }
 
 /* ─── ACTIVITY CARD ──────────────────────────────────────────────────── */
-function ActivityCard({ activity, city, onEdit }) {
+function ActivityCard({ activity, city, onEdit, flag = null, counts = null, onFlag }) {
   const [editing, setEditing] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [draft, setDraft] = useState({ ...activity });
   const ts = typeStyle[draft.type] || typeStyle.sight;
   const mapsUrl = activity.geocode_end
@@ -1058,9 +1534,11 @@ function ActivityCard({ activity, city, onEdit }) {
           <div style={{flex:1, paddingRight:8}}>
             <div style={{display:"flex", alignItems:"center", gap:7, marginBottom:4}}>
               <span style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",letterSpacing:0.5}}>{activity.time}</span>
-              <span style={{background:ts.bg,color:ts.color,fontSize:10,borderRadius:20,padding:"1px 7px",fontFamily:"Georgia,serif",fontWeight:600}}>
-                {ts.label.toUpperCase()}
+              {(() => { const ps = activity.package ? packageColor(activity.package) : ts; return (
+              <span style={{background:ps.bg,color:ps.color,fontSize:10,borderRadius:20,padding:"1px 7px",fontFamily:"Georgia,serif",fontWeight:600}}>
+                {activity.package ? activity.package.replace(/-/g, " ").toUpperCase() : ts.label.toUpperCase()}
               </span>
+              ); })()}
             </div>
             <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:T.ink,lineHeight:1.3}}>{activity.title}</div>
             {activity.note && (
@@ -1078,6 +1556,47 @@ function ActivityCard({ activity, city, onEdit }) {
         {activity.type !== "transit" && (
           <PhotoStrip activity={activity} city={city}/>
         )}
+        {onFlag && (() => {
+          const FLAGS = [["love","❤️"],["skip","👎"],["discuss","🤔"]];
+          const activeCounts = FLAGS.filter(([t]) => counts?.[t] > 0);
+          return (
+            <div style={{display:"flex",gap:5,marginTop:8,alignItems:"center",flexWrap:"wrap"}}>
+              {/* Existing flag counts */}
+              {activeCounts.map(([type, emoji]) => (
+                <button key={type} onClick={()=>{ onFlag(activity.id, type); setPickerOpen(false); }} style={{
+                  display:"flex", alignItems:"center", gap:3,
+                  background: flag===type ? (type==="love"?"#FFF0F0":type==="skip"?"#F0F4FF":"#F0FFF4") : T.warm,
+                  border: `1px solid ${flag===type ? (type==="love"?"#FFAAAA":type==="skip"?"#AAAAEE":"#AADDBB") : T.sand}`,
+                  borderRadius:20, padding:"2px 8px", fontSize:12, cursor:"pointer", color:T.ink,
+                }}>
+                  <span>{emoji}</span>
+                  <span style={{fontSize:11,color:T.mist}}>{counts[type]}</span>
+                </button>
+              ))}
+              {/* Add / open picker */}
+              {!pickerOpen ? (
+                <button onClick={()=>setPickerOpen(true)} style={{
+                  background:"transparent", border:`1px solid ${T.sand}`,
+                  borderRadius:20, padding:"2px 8px", fontSize:11, cursor:"pointer", color:T.mist,
+                }}>＋</button>
+              ) : (
+                <>
+                  {FLAGS.map(([type, emoji]) => (
+                    <button key={type} onClick={()=>{ onFlag(activity.id, type); setPickerOpen(false); }} style={{
+                      background: flag===type ? (type==="love"?"#FFF0F0":type==="skip"?"#F0F4FF":"#F0FFF4") : T.chalk,
+                      border: `1px solid ${flag===type ? (type==="love"?"#FFAAAA":type==="skip"?"#AAAAEE":"#AADDBB") : T.sand}`,
+                      borderRadius:20, padding:"2px 9px", fontSize:13, cursor:"pointer",
+                    }}>{emoji}</button>
+                  ))}
+                  <button onClick={()=>setPickerOpen(false)} style={{
+                    background:"transparent", border:`1px solid ${T.sand}`,
+                    borderRadius:20, padding:"2px 8px", fontSize:11, cursor:"pointer", color:T.mist,
+                  }}>✕</button>
+                </>
+              )}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
@@ -1104,15 +1623,47 @@ function TransportCarousel() {
   );
 }
 
-function ArrivalTimeline({ arrivalTime, onEditFlight }) {
+function DepartureTimeline({ departureTime, departureMode, onEdit }) {
+  const hhmm = departureTime ? departureTime.split("T")[1]?.substring(0, 5) : null;
+  if (!hhmm) return null;
+
+  const [h, m]      = hhmm.split(":").map(Number);
+  const leaveTotal  = h * 60 + m - 90; // ~90 min to airport/station before departure
+  const leaveCapped = Math.max(0, Math.round(leaveTotal / 30) * 30);
+  const leaveHH     = String(Math.floor(leaveCapped / 60) % 24).padStart(2, "0");
+  const leaveMM     = String(leaveCapped % 60).padStart(2, "0");
+  const modeIcon    = departureMode === "train" ? "🚂" : departureMode === "road" ? "🚗" : departureMode === "bus" ? "🚌" : "✈️";
+  const modeLabel   = departureMode === "train" ? "Train" : departureMode === "road" ? "Drive out" : departureMode === "bus" ? "Bus" : "Flight";
+
+  return (
+    <div style={{padding:"12px 20px 0"}}>
+      <div style={{background:"#EBF5FF",borderRadius:10,padding:"10px 14px",border:"1px solid #C5DEFF"}}>
+        <div style={{fontSize:12,fontFamily:"Georgia,serif",color:T.ink,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+          <span style={{fontWeight:600,color:T.moss}}>Leave ~{leaveHH}:{leaveMM}</span>
+          <span style={{color:T.mist,fontSize:10}}>›</span>
+          <span style={{color:T.mist}}>~90 min to {departureMode === "road" ? "departure" : "terminal"}</span>
+          <span style={{color:T.mist,fontSize:10}}>›</span>
+          <span
+            onClick={onEdit}
+            style={onEdit ? {cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:3} : {}}
+          >{modeIcon} {modeLabel} {hhmm}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ArrivalTimeline({ arrivalTime, arrivalMode, onEditFlight }) {
   const arrivalHHMM = arrivalTime ? arrivalTime.split("T")[1]?.substring(0, 5) : null;
   if (!arrivalHHMM) return null;
 
   const [h, m]     = arrivalHHMM.split(":").map(Number);
-  const rawReady   = h * 60 + m + 90; // ~90 min: exit + transfer + settle
+  const rawReady   = h * 60 + m + 90;
   const readyTotal = Math.round(rawReady / 30) * 30;
   const readyHH    = String(Math.floor(readyTotal / 60) % 24).padStart(2, "0");
   const readyMM    = String(readyTotal % 60).padStart(2, "0");
+  const icon  = arrivalMode === "train" ? "🚂" : arrivalMode === "road" ? "🚗" : arrivalMode === "bus" ? "🚌" : "✈️";
+  const verb  = arrivalMode === "train" ? "Arrive" : arrivalMode === "road" ? "Drive in" : arrivalMode === "bus" ? "Arrive" : "Land";
 
   return (
     <div style={{padding:"0 20px 12px"}}>
@@ -1121,9 +1672,9 @@ function ArrivalTimeline({ arrivalTime, onEditFlight }) {
           <span
             onClick={onEditFlight}
             style={onEditFlight ? {cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:3} : {}}
-          >✈️ Land {arrivalHHMM}</span>
+          >{icon} {verb} {arrivalHHMM}</span>
           <span style={{color:T.mist,fontSize:10}}>›</span>
-          <span style={{color:T.mist}}>~90 min exit & transfer</span>
+          <span style={{color:T.mist}}>~90 min to settle in</span>
           <span style={{color:T.mist,fontSize:10}}>›</span>
           <span style={{fontWeight:600,color:T.moss}}>Ready ~{readyHH}:{readyMM}</span>
         </div>
@@ -1169,7 +1720,7 @@ function WishlistSection({ items, city }) {
   );
 }
 
-function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, onEditFlight, hotelActivity = null, hotelCity = null, endHotelActivity = null }) {
+function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, flags = {}, flagCounts = {}, onFlag }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
 
@@ -1188,7 +1739,7 @@ function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, onE
       }}>
         <div style={{background:T.ocean,color:"white",borderRadius:10,padding:"5px 13px",fontFamily:"'DM Serif Display',serif",fontSize:14}}>{day.label}</div>
         <div style={{flex:1}}>
-          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,lineHeight:1}}>{day.city}</div>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,lineHeight:1}}>{displayCity || day.city}</div>
           <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginTop:2}}>{day.date} · {total} activities</div>
         </div>
         {dayMapsUrl && (
@@ -1218,11 +1769,23 @@ function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, onE
 
       {/* Arrival timeline */}
       {arrivalTime && (
-        <ArrivalTimeline arrivalTime={arrivalTime} onEditFlight={onEditFlight} />
+        <ArrivalTimeline arrivalTime={arrivalTime} arrivalMode={arrivalMode} onEditFlight={onEditFlight} />
+      )}
+
+      {/* Arrival point → first activity transition */}
+      {arrivalTime && arrivalCity && day.activities.length > 0 && (
+        <TransitionRow
+          from={{ title: arrivalCity, geocode: arrivalCity }}
+          to={day.activities[0]}
+          city={day.city}
+          label="from arrival"
+          delay={0}
+          forceDrive
+        />
       )}
 
       {/* Hotel → first activity transition (Day 2+ when staying at hotel) */}
-      {hotelActivity && day.activities.length > 0 && (
+      {hotelActivity && day.activities.length > 0 && !day.activities[0]?.package && !(hotelActivity.package && hotelActivity.package === day.activities[0]?.package) && (
         <TransitionRow
           from={hotelActivity}
           to={day.activities[0]}
@@ -1233,41 +1796,72 @@ function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, onE
       )}
 
       {/* Activities */}
-      {day.activities.map((act, i) => {
+      {(() => {
+        const seenPkgs = new Set();
+        return day.activities.map((act, i) => {
         const lastAct = i === day.activities.length - 1;
+        if (act.package) seenPkgs.add(act.package);
+        const nextAct = day.activities[i + 1];
+        const samePackageAsNext = (act.package && act.package === nextAct?.package) || (act.type === "hotel" && nextAct?.package);
+        const samePackageAsHotel = act.package && act.package === endHotelActivity?.package;
         return (
           <div key={act.id}>
-            <ActivityCard activity={act} city={day.city} onEdit={(updated)=>onEditActivity(day.id, updated)}/>
-            {!lastAct && (
+            <ActivityCard activity={act} city={day.city} onEdit={(updated)=>onEditActivity(day.id, updated)} flag={flags[act.id] ?? null} counts={flagCounts[act.id] ?? null} onFlag={onFlag}/>
+            {!lastAct && !samePackageAsNext && (
               <TransitionRow
                 from={act.type === "transit" && act.geocode_end ? { ...act, geocode: act.geocode_end } : act}
                 to={day.activities[i + 1]}
                 city={day.city}
                 delay={dayIndex * 400}
+                initialCommute={act.transition_mins ? { mins: act.transition_mins, mode: act.transition_mode } : null}
+                onResolved={(mins, mode) => {
+                  if (act.id) supabase.from("activities").update({ transition_mins: mins, transition_mode: mode }).eq("id", act.id);
+                }}
               />
             )}
             {/* Last activity → hotel */}
-            {lastAct && endHotelActivity && act.type !== "hotel" && (
+            {lastAct && endHotelActivity && act.type !== "hotel" && !samePackageAsHotel && (
               <TransitionRow
                 from={act.type === "transit" && act.geocode_end ? { ...act, geocode: act.geocode_end } : act}
                 to={endHotelActivity}
                 city={day.city}
                 label="to hotel"
                 delay={dayIndex * 400}
+                initialCommute={act.transition_mins ? { mins: act.transition_mins, mode: act.transition_mode } : null}
+                onResolved={(mins, mode) => {
+                  if (act.id) supabase.from("activities").update({ transition_mins: mins, transition_mode: mode }).eq("id", act.id);
+                }}
               />
             )}
           </div>
         );
-      })}
+      });
+      })()}
 
       {/* Wishlist */}
       {day.wishlist?.length > 0 && <WishlistSection items={day.wishlist} city={day.city} />}
+
+      {/* Last activity / hotel → departure point */}
+      {departureTime && departureCity && day.activities.length > 0 && (
+        <TransitionRow
+          from={endHotelActivity || day.activities[day.activities.length - 1]}
+          to={{ title: departureCity, geocode: departureCity }}
+          city={day.city}
+          label="to departure"
+          delay={dayIndex * 400}
+          forceDrive
+        />
+      )}
+
+      {/* Departure timeline (last day only) */}
+      {departureTime && (
+        <DepartureTimeline departureTime={departureTime} departureMode={departureMode} onEdit={onEditDeparture} />
+      )}
     </div>
   );
 }
 
 /* ─── SETUP FORM ─────────────────────────────────────────────────────── */
-const PLACE_TYPE_EMOJI = { city:"🏙️", town:"🏙️", village:"🏘️", island:"🏝️", country:"🌍", state:"📍", region:"📍", district:"📍" };
 
 function SetupForm({ onGenerate, initialTrip }) {
   const [step, setStep]           = useState(0);
@@ -1284,7 +1878,7 @@ function SetupForm({ onGenerate, initialTrip }) {
   const _defaultStart = new Date(_today); _defaultStart.setDate(_today.getDate() + 15);
   const _defaultEnd   = new Date(_today); _defaultEnd.setDate(_today.getDate() + 20);
   const _fmt = (d) => d.toISOString().slice(0, 10);
-  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", notes:"", arrivalCity:"", arrivalTime:"12:00", arrivalMode:"flight", departureCity:"", departureTime:"19:00", departureMode:"flight", ...prefill });
+  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", notes:"", ...prefill });
   const [destInput, setDestInput] = useState("");
   const [destError, setDestError] = useState("");
   const [suggestions, setSuggestions] = useState([]);
@@ -1300,13 +1894,14 @@ function SetupForm({ onGenerate, initialTrip }) {
     clearTimeout(destTimer.current);
     destTimer.current = setTimeout(async () => {
       try {
-        const res  = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(val)}&limit=20`);
+        const res  = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
+          method: "POST", headers: PLACES_HEADERS,
+          body: JSON.stringify({ q: val }),
+        });
         const data = await res.json();
-        const features = (data.features || [])
-          .filter(f => f.properties.name && ["place","boundary","natural"].includes(f.properties.osm_key))
-          .slice(0, 10);
-        setSuggestions(features);
-        setShowSugg(features.length > 0);
+        const suggestions = (data.suggestions || []).slice(0, 8);
+        setSuggestions(suggestions);
+        setShowSugg(suggestions.length > 0);
       } catch { setSuggestions([]); }
     }, 300);
   };
@@ -1323,14 +1918,9 @@ function SetupForm({ onGenerate, initialTrip }) {
 
   const removeDestination = (idx) => set("destinations", form.destinations.filter((_, i) => i !== idx));
 
-  const pickSuggestion = (feature) => {
-    const p    = feature.properties;
-    const country = p.country || "";
-    const name = (country && p.type !== "country") ? `${p.name}, ${country}` : p.name;
-    addDestination(name);
-    if (p.countrycode) {
-      setForm(f => ({ ...f, destinationCountryCodes: [...new Set([...f.destinationCountryCodes, p.countrycode.toLowerCase()])] }));
-    }
+  const pickSuggestion = (suggestion) => {
+    const text = suggestion.placePrediction?.text?.text || suggestion.placePrediction?.structuredFormat?.mainText?.text || "";
+    if (text) addDestination(text);
     inputRef.current?.focus();
   };
 
@@ -1373,19 +1963,16 @@ function SetupForm({ onGenerate, initialTrip }) {
             fontFamily:"Georgia,serif",fontSize:15,color:T.ink,background:T.chalk,outline:"none",transition:"border 0.2s"}}/>
         {showSugg && suggestions.length > 0 && (
           <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:T.chalk,border:`1.5px solid ${T.sand}`,borderRadius:12,overflow:"hidden",zIndex:100,boxShadow:"0 4px 18px rgba(0,0,0,0.10)",maxHeight:300,overflowY:"auto"}}>
-            {suggestions.map((f,i) => {
-              const p       = f.properties;
-              const emoji   = PLACE_TYPE_EMOJI[p.type] || "🌍";
-              const country = p.country || "";
-              const state   = p.state && p.state !== p.name ? p.state : "";
-              const sub     = [state, country].filter(Boolean).join(", ");
+            {suggestions.map((s,i) => {
+              const main = s.placePrediction?.structuredFormat?.mainText?.text || s.placePrediction?.text?.text || "";
+              const secondary = s.placePrediction?.structuredFormat?.secondaryText?.text || "";
               return (
-                <div key={i} onMouseDown={()=>pickSuggestion(f)}
+                <div key={i} onMouseDown={()=>pickSuggestion(s)}
                   style={{padding:"10px 16px",cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}
                   onMouseEnter={e=>e.currentTarget.style.background=T.sand}
                   onMouseLeave={e=>e.currentTarget.style.background=T.chalk}>
-                  <div style={{fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:600}}>{emoji} {p.name}</div>
-                  {sub && <div style={{fontFamily:"Georgia,serif",fontSize:11,color:T.mist,marginTop:2}}>{sub}</div>}
+                  <div style={{fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:600}}>🌍 {main}</div>
+                  {secondary && <div style={{fontFamily:"Georgia,serif",fontSize:11,color:T.mist,marginTop:2}}>{secondary}</div>}
                 </div>
               );
             })}
@@ -1444,19 +2031,21 @@ function SetupForm({ onGenerate, initialTrip }) {
     <div key={2} style={{animation:"fadeUp 0.3s ease"}}>
       <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>🎒</div>
       <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:4}}>Trip style</div>
-      <div style={{fontSize:13,color:T.mist,textAlign:"center",marginBottom:18,fontFamily:"Georgia,serif"}}>Pick all that apply</div>
+      <div style={{fontSize:13,color:T.mist,textAlign:"center",marginBottom:18,fontFamily:"Georgia,serif"}}>Pick up to 3</div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:24}}>
         {styles.map(s=>{
           const sel = form.styles.includes(s);
+          const maxed = !sel && form.styles.length >= 3;
           return (
-            <button key={s} onClick={()=>set("styles", sel ? form.styles.filter(x=>x!==s) : [...form.styles, s])} style={{
-              padding:"11px 12px",borderRadius:12,cursor:"pointer",textAlign:"left",
+            <button key={s} onClick={()=>{ if (maxed) return; set("styles", sel ? form.styles.filter(x=>x!==s) : [...form.styles, s]); }} style={{
+              padding:"11px 12px",borderRadius:12,cursor:maxed?"default":"pointer",textAlign:"left",
               border:`2px solid ${sel?T.ocean:T.sand}`,
               background:sel?"#EBF3FD":T.chalk,
-              color:sel?T.ocean:T.ink,
+              color:sel?T.ocean:maxed?T.mist:T.ink,
               fontFamily:"Georgia,serif",fontSize:13,transition:"all 0.2s",
               fontWeight:sel?700:400,
               display:"flex",alignItems:"center",justifyContent:"space-between",
+              opacity:maxed?0.45:1,
             }}>
               {s}
               {sel && <span style={{fontSize:13,color:T.ocean}}>✓</span>}
@@ -1546,43 +2135,6 @@ function SetupForm({ onGenerate, initialTrip }) {
           </div>
         ))}
       </div>
-    </div>,
-
-    /* 4 – flights (optional) */
-    <div key={4} style={{animation:"fadeUp 0.3s ease"}}>
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,textAlign:"center",marginBottom:2}}>Arrival & departure</div>
-      <div style={{fontSize:12,color:T.mist,textAlign:"center",marginBottom:12,fontFamily:"Georgia,serif"}}>We'll tailor Day 1 and the last day around your schedule — or skip to generate now</div>
-
-      {/* Arrival */}
-      <div style={{background:T.chalk,borderRadius:14,padding:12,border:`1.5px solid ${T.sand}`,marginBottom:8}}>
-        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:13,color:T.ink,marginBottom:8}}>Arriving</div>
-        <CityInput value={form.arrivalCity} onChange={v=>set("arrivalCity",v)}
-          placeholder="Arrival city (e.g. Jaipur, Mumbai…)"
-          inputStyle={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${form.arrivalCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <div style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-            {form.startDate ? new Date(form.startDate+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "—"}
-          </div>
-          <input type="time" value={form.arrivalTime} onChange={e=>set("arrivalTime",e.target.value)}
-            style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${form.arrivalTime?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
-        </div>
-      </div>
-
-      {/* Departure */}
-      <div style={{background:T.chalk,borderRadius:14,padding:12,border:`1.5px solid ${T.sand}`,marginBottom:12}}>
-        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:13,color:T.ink,marginBottom:8}}>Departing</div>
-        <CityInput value={form.departureCity} onChange={v=>set("departureCity",v)}
-          placeholder="Departure city (e.g. Udaipur, Goa…)"
-          inputStyle={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${form.departureCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <div style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-            {form.endDate ? new Date(form.endDate+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) : "—"}
-          </div>
-          <input type="time" value={form.departureTime} onChange={e=>set("departureTime",e.target.value)}
-            style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${form.departureTime?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
-        </div>
-      </div>
-
       <button onClick={handleGenerate} disabled={generating} style={{
         width:"100%",padding:16,borderRadius:16,border:"none",
         cursor:generating?"default":"pointer",
@@ -1590,12 +2142,8 @@ function SetupForm({ onGenerate, initialTrip }) {
         color:generating?T.mist:"white",
         fontFamily:"'DM Serif Display',serif",fontSize:18,
         boxShadow:generating?"none":"0 6px 22px rgba(37,99,168,0.4)",
-        transition:"all 0.3s",marginBottom:12,
+        transition:"all 0.3s",marginTop:8,
       }}>{generating?"✨ Generating your itinerary…":"Generate Itinerary ✨"}</button>
-      <button onClick={handleGenerate} disabled={generating} style={{
-        width:"100%",padding:"10px 0",background:"none",border:"none",
-        color:T.mist,fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer",
-      }}>Skip & generate without these details</button>
     </div>,
   ];
 
@@ -1707,7 +2255,7 @@ function ModePills({ value, onChange }) {
 }
 
 /* ─── CITY INPUT ─────────────────────────────────────────────────────── */
-function CityInput({ value, onChange, placeholder, inputStyle }) {
+function CityInput({ value, onChange, placeholder, inputStyle, airportOnly = false }) {
   const [suggs, setSuggs] = useState([]);
   const [show, setShow]   = useState(false);
   const timer = useRef(null);
@@ -1721,7 +2269,7 @@ function CityInput({ value, onChange, placeholder, inputStyle }) {
         const res  = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
           method: "POST",
           headers: PLACES_HEADERS,
-          body: JSON.stringify({ q: val }),
+          body: JSON.stringify(airportOnly ? { q: val, types: "airport" } : { q: val }),
         });
         const data = await res.json();
         const items = (data.suggestions || []).slice(0, 6);
@@ -1779,27 +2327,52 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
     departureMode: trip.departure_mode || "flight",
   });
   const [hasCar, setHasCar] = useState(trip.has_car || false);
+
+  useEffect(() => {
+    setFlights({
+      arrivalCity:   trip.arrival_city   || "",
+      arrivalTime:   trip.arrival_time   ? trip.arrival_time.split("T")[1]?.substring(0,5)   : "",
+      arrivalMode:   trip.arrival_mode   || "flight",
+      departureCity: trip.departure_city || "",
+      departureTime: trip.departure_time ? trip.departure_time.split("T")[1]?.substring(0,5) : "",
+      departureMode: trip.departure_mode || "flight",
+    });
+    setHasCar(trip.has_car || false);
+  }, [trip.id]);
   const [hotels, setHotels] = useState(
     cities.map(city => ({
       city,
       name: ((trip.hotels_data || []).find(h => h.city === city) || {}).name || "",
     }))
   );
-  const [flightsSaved, setFlightsSaved] = useState(false);
-  const [hotelsStatus, setHotelsStatus] = useState("idle"); // idle | saving | done
+  const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | done
 
-  const handleSaveFlights = async () => {
-    await onSaveFlights({ ...flights, hasCar });
-    setFlightsSaved(true);
-    setTimeout(() => setFlightsSaved(false), 2000);
+  const saved = {
+    arrivalCity:   trip.arrival_city   || "",
+    arrivalTime:   trip.arrival_time   ? trip.arrival_time.split("T")[1]?.substring(0,5)   : "",
+    arrivalMode:   trip.arrival_mode   || "flight",
+    departureCity: trip.departure_city || "",
+    departureTime: trip.departure_time ? trip.departure_time.split("T")[1]?.substring(0,5) : "",
+    departureMode: trip.departure_mode || "flight",
   };
+  const hotelsChanged = hotels.some((h, i) => {
+    const orig = ((trip.hotels_data || []).find(x => x.city === h.city) || {}).name || "";
+    return h.name !== orig;
+  });
+  const hasChanges = saveStatus !== "saving" && (
+    JSON.stringify(flights) !== JSON.stringify(saved) ||
+    hasCar !== (trip.has_car || false) ||
+    hotelsChanged
+  );
 
-  const handleSaveAndApplyHotels = async () => {
-    setHotelsStatus("saving");
+  const handleSaveAll = async () => {
+    if (!hasChanges) return;
+    setSaveStatus("saving");
+    await onSaveFlights({ ...flights, hasCar });
     await onSaveHotels(hotels);
     await onApplyHotels(hotels);
-    setHotelsStatus("done");
-    setTimeout(() => setHotelsStatus("idle"), 2500);
+    setSaveStatus("done");
+    setTimeout(() => setSaveStatus("idle"), 2500);
   };
 
   const inputStyle = (filled) => ({
@@ -1813,10 +2386,9 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
     ? new Date(iso+"T12:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})
     : "—";
 
-  const hotelsBtnLabel = hotelsStatus === "saving" ? "Applying…" : hotelsStatus === "done" ? "✓ Applied" : "Save & apply to itinerary";
 
   return (
-    <div style={{padding:"20px 16px",display:"flex",flexDirection:"column",gap:16}}>
+    <div style={{padding:"20px 16px 100px",display:"flex",flexDirection:"column",gap:16}}>
 
       {/* Travel */}
       <div style={{background:T.chalk,borderRadius:14,padding:16,border:`1.5px solid ${T.sand}`}}>
@@ -1827,7 +2399,8 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
           <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>Arriving</div>
           <ModePills value={flights.arrivalMode} onChange={v=>setFlights(f=>({...f,arrivalMode:v}))}/>
           <CityInput value={flights.arrivalCity} onChange={v=>setFlights(f=>({...f,arrivalCity:v}))}
-            placeholder="Arrival city (e.g. Mumbai)"
+            placeholder={flights.arrivalMode === "flight" ? "Arrival airport (e.g. Mumbai)" : "Arrival city (e.g. Mumbai)"}
+            airportOnly={flights.arrivalMode === "flight"}
             inputStyle={{...inputStyle(flights.arrivalCity),marginBottom:8}}/>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             <div style={{flex:1,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7"}}>
@@ -1845,7 +2418,8 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
           <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>Departing</div>
           <ModePills value={flights.departureMode} onChange={v=>setFlights(f=>({...f,departureMode:v}))}/>
           <CityInput value={flights.departureCity} onChange={v=>setFlights(f=>({...f,departureCity:v}))}
-            placeholder="Departure city (e.g. Goa)"
+            placeholder={flights.departureMode === "flight" ? "Departure airport (e.g. Goa)" : "Departure city (e.g. Goa)"}
+            airportOnly={flights.departureMode === "flight"}
             inputStyle={{...inputStyle(flights.departureCity),marginBottom:8}}/>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             <div style={{flex:1,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7"}}>
@@ -1874,11 +2448,6 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
           </div>
         </div>
 
-        <button onClick={handleSaveFlights} style={{
-          width:"100%",padding:"12px 0",borderRadius:12,border:"none",
-          background:flightsSaved?T.moss:`linear-gradient(135deg,${T.ocean},${T.dusk})`,
-          color:"white",fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:"pointer",transition:"background 0.3s",
-        }}>{flightsSaved ? "✓ Saved" : "Save travel details"}</button>
       </div>
 
       {/* Hotels */}
@@ -1892,12 +2461,17 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
               style={inputStyle(h.name)}/>
           </div>
         ))}
-        <button onClick={handleSaveAndApplyHotels} disabled={hotelsStatus==="saving"} style={{
+      </div>
+
+      <div style={{position:"sticky",bottom:0,padding:"12px 0 8px",background:T.warm}}>
+        <button onClick={handleSaveAll} disabled={!hasChanges} style={{
           width:"100%",padding:"12px 0",borderRadius:12,border:"none",
-          background:hotelsStatus==="done"?T.moss:hotelsStatus==="saving"?T.sand:`linear-gradient(135deg,${T.ocean},${T.dusk})`,
-          color:hotelsStatus==="saving"?T.mist:"white",
-          fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:hotelsStatus==="saving"?"default":"pointer",transition:"background 0.3s",
-        }}>{hotelsBtnLabel}</button>
+          background: saveStatus==="done" ? T.moss : !hasChanges ? T.sand : `linear-gradient(135deg,${T.ocean},${T.dusk})`,
+          color: !hasChanges ? T.mist : "white",
+          fontFamily:"'DM Serif Display',serif",fontSize:15,
+          cursor: hasChanges ? "pointer" : "default",
+          transition:"background 0.3s",
+        }}>{saveStatus==="saving" ? "Saving…" : saveStatus==="done" ? "✓ Saved" : "Save and update itinerary"}</button>
       </div>
     </div>
   );
@@ -1984,13 +2558,26 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [debugMode] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get("debug") === "1";
     if (fromUrl) localStorage.setItem("tripjam_debug", "1");
-    return fromUrl || localStorage.getItem("tripjam_debug") === "1";
+    return fromUrl || localStorage.getItem("tripjam_debug") === "1" || window.location.hostname === "localhost";
   });
   const [activeDay, setActiveDay] = useState(0);
 
   const [generateError, setGenerateError] = useState("");
   const [streamingDays, setStreamingDays] = useState(0);
   const [streamingTotal, setStreamingTotal] = useState(0);
+
+  const [myFlags,    setMyFlags]    = useState({}); // { [activityId]: 'love'|'skip'|'discuss' }
+  const [flagCounts, setFlagCounts] = useState({}); // { [activityId]: { love:N, skip:N, discuss:N } }
+
+  const buildFlagState = (flagData, userId) => {
+    const my = {}, counts = {};
+    (flagData || []).forEach(({ activity_id, flag, user_id }) => {
+      if (user_id === userId) my[activity_id] = flag;
+      if (!counts[activity_id]) counts[activity_id] = { love: 0, skip: 0, discuss: 0 };
+      counts[activity_id][flag] = (counts[activity_id][flag] || 0) + 1;
+    });
+    return { my, counts };
+  };
 
   useEffect(() => {
     if (initialScreen === "itinerary" && initialTrip?.id) {
@@ -1999,23 +2586,105 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         .select("*, activities(*)")
         .eq("trip_id", initialTrip.id)
         .order("position")
-        .then(({ data }) => {
+        .then(async ({ data }) => {
+          const seenPhotos = new Set();
           setDays((data || []).map(d => ({
             ...d,
-            activities: (d.activities || []).sort((a, b) => a.position - b.position),
+            activities: (d.activities || []).sort((a, b) => a.position - b.position).map(a => {
+              if (a.photo_url) {
+                if (seenPhotos.has(a.photo_url)) return { ...a, photo_url: null };
+                seenPhotos.add(a.photo_url);
+                _usedPhotoUrls.add(a.photo_url);
+              }
+              return a;
+            }),
           })));
+          const actIds = (data || []).flatMap(d => (d.activities || []).map(a => a.id));
+          if (actIds.length) {
+            const { data: flagData } = await supabase
+              .from("activity_flags")
+              .select("activity_id, flag, user_id")
+              .in("activity_id", actIds);
+            const { my, counts } = buildFlagState(flagData, session.user.id);
+            setMyFlags(my);
+            setFlagCounts(counts);
+          }
+
+          // Load trip members + profiles
+          const { data: members } = await supabase
+            .from("trip_members")
+            .select("trip_id, user_id, role")
+            .eq("trip_id", initialTrip.id);
+          if (members?.length) {
+            const uids = members.map(m => m.user_id);
+            const { data: profiles } = await supabase.from("profiles").select("id, username, face_icon").in("id", uids);
+            const profileById = Object.fromEntries((profiles || []).map(p => [p.id, p]));
+            setTrip(prev => ({ ...prev, trip_members: members.map(m => ({ ...m, profiles: profileById[m.user_id] || null })) }));
+          }
+
           setLoading(false);
         });
     }
   }, []);
+
+  const handleFlag = async (activityId, flagType) => {
+    const current = myFlags[activityId];
+    if (current === flagType) {
+      // Toggle off
+      setMyFlags(f => { const n = { ...f }; delete n[activityId]; return n; });
+      setFlagCounts(c => {
+        const n = { ...c, [activityId]: { ...c[activityId] } };
+        n[activityId][flagType] = Math.max(0, (n[activityId]?.[flagType] || 1) - 1);
+        return n;
+      });
+      await supabase.from("activity_flags").delete().eq("activity_id", activityId).eq("user_id", session.user.id);
+    } else {
+      // Swap or add
+      setMyFlags(f => ({ ...f, [activityId]: flagType }));
+      setFlagCounts(c => {
+        const prev = { love: 0, skip: 0, discuss: 0, ...c[activityId] };
+        if (current) prev[current] = Math.max(0, prev[current] - 1);
+        prev[flagType] = (prev[flagType] || 0) + 1;
+        return { ...c, [activityId]: prev };
+      });
+      await supabase.from("activity_flags").upsert({ activity_id: activityId, user_id: session.user.id, flag: flagType }, { onConflict: "activity_id,user_id" });
+    }
+  };
   const [activeBottomTab, setActiveBottomTab] = useState("itinerary");
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput,   setChatInput]   = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const chatBottomRef = useRef(null);
+  const [chatFilter, setChatFilter] = useState("all");
+  const [mentionSearch, setMentionSearch] = useState(null);
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages, chatLoading]);
+
+  // Load persisted messages and subscribe to real-time updates
+  useEffect(() => {
+    if (!trip?.id) return;
+    supabase
+      .from("trip_messages")
+      .select("id, role, content, user_id")
+      .eq("trip_id", trip.id)
+      .order("created_at")
+      .then(({ data }) => {
+        setChatMessages((data || []).map(m => ({ id: m.id, role: m.role, content: m.content, user_id: m.user_id })));
+      });
+
+    // Real-time: show messages from other users as they arrive
+    const channel = supabase
+      .channel(`trip-chat-${trip.id}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "trip_messages", filter: `trip_id=eq.${trip.id}` },
+        (payload) => {
+          const m = payload.new;
+          if (m.user_id === session.user.id) return; // already handled locally
+          setChatMessages(prev => [...prev, { id: m.id, role: m.role, content: m.content, user_id: m.user_id }]);
+        })
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [trip?.id]);
   const [setupModal,  setSetupModal]  = useState(null);
   const [editingTrip, setEditingTrip] = useState(null);
   const [showShare,   setShowShare]   = useState(false);
@@ -2025,10 +2694,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [inviteLink,  setInviteLink]  = useState("");
   const [linkCopied,  setLinkCopied]  = useState(false);
 
-  const scrollRef = useRef(null);
-  const dayRefs   = useRef([]);
-  const pillStrip = useRef(null);
-  const isJumping = useRef(false);
+  const scrollRef     = useRef(null);
+  const dayRefs       = useRef([]);
+  const pillStrip     = useRef(null);
+  const isJumping     = useRef(false);
+  const logisticsRef  = useRef(null);
 
   const editActivity = (dayId, updated) => {
     setDays(prev=>prev.map(d=>d.id===dayId?{...d,activities:d.activities.map(a=>a.id===updated.id?updated:a)}:d));
@@ -2114,7 +2784,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             "Content-Type": "application/json",
             "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
-          body: JSON.stringify({ destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, arrivalCity: form.arrivalCity || null, arrivalTime: form.arrivalMode !== "road" ? (form.arrivalTime || null) : null, arrivalMode: form.arrivalMode || "flight", departureCity: form.departureCity || null, departureTime: form.departureMode !== "road" ? (form.departureTime || null) : null, departureMode: form.departureMode || "flight" }),
+          body: JSON.stringify({ destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null }),
         }
       );
       clearTimeout(timeout);
@@ -2146,7 +2816,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       // Parse accumulated JSON (same cleanup logic as before)
       const cleaned = accumulated.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
       const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("No JSON found in stream");
+      if (!jsonMatch) {
+        console.error("Stream accumulated:", accumulated.slice(0, 500));
+        throw new Error("No JSON found in stream");
+      }
       let parsed;
       try {
         parsed = JSON.parse(jsonMatch[0]);
@@ -2186,18 +2859,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       }
       itinerary = parsed;
 
-      // Client-side enforcement: strip Day 1 activities scheduled before ready time
-      if (form.arrivalTime && itinerary.days?.[0]) {
-        const buffers = { flight: 90, train: 45, bus: 20, road: 20 };
-        const buffer = buffers[form.arrivalMode] ?? 90;
-        const [ah, am] = form.arrivalTime.split(":").map(Number);
-        const readyMins = Math.round((ah * 60 + am + buffer) / 30) * 30;
-        itinerary.days[0].activities = itinerary.days[0].activities.filter(act => {
-          if (!act.time) return true;
-          const [th, tm] = act.time.split(":").map(Number);
-          return th * 60 + tm >= readyMins;
-        });
-      }
     } catch (e) {
       console.error("AI generation failed:", e.message);
       console.error("Accumulated length:", accumulated.length);
@@ -2247,17 +2908,18 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
     // 1. Insert trip — generate ID client-side to avoid .select() RLS issues
     const tripId = crypto.randomUUID();
+    const igRequest = { destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null };
     const tripPayload = {
       id: tripId,
-      name: itinerary.name,
+      name: `${itinerary.name} · ${new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short"})} ${Math.random().toString(36).slice(2,5).toUpperCase()}`,
       destination: form.destinations.join(" → "),
       start_date: form.startDate,
       end_date: form.endDate,
       created_by: session.user.id,
       generation_started_at: generationStartedAt,
       generation_completed_at: generationCompletedAt,
-      ...(form.arrivalTime   && { arrival_time: `${form.startDate}T${form.arrivalTime}:00` }),
-      ...(form.departureTime && { departure_time: `${form.endDate}T${form.departureTime}:00` }),
+      ig_request: igRequest,
+      ig_response: itinerary,
       ...(itinerary.summary  && { summary: itinerary.summary }),
       ...(form.notes         && { notes: form.notes }),
     };
@@ -2302,7 +2964,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               day_id: dayData.id,
               time: act.time, title: act.title, geocode: act.geocode || null, geocode_end: act.geocodeEnd || null, type: act.type,
               duration: act.duration, note: act.note,
-              confirmed: act.confirmed, icon: act.icon,
+              confirmed: act.confirmed, icon: act.icon, package: act.package || null,
               position: j, added_by: session.user.id,
             }).select().single().then(r => r.data)
           )
@@ -2317,13 +2979,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       ...tripData,
       dates: `${fmt(form.startDate)} – ${fmt(form.endDate)}, ${new Date(form.endDate).getFullYear()}`,
       travelers: parseInt(form.travelers),
-      collaborators: [],
+      trip_members: [{ user_id: session.user.id, role: "edit", profiles: null }],
     });
     setDays(savedDays);
     setActiveDay(0);
     // Ensure generating screen shows for at least 4s so carousel/counter are visible
     const elapsed = Date.now() - generatingScreenStart;
     if (elapsed < 4000) await new Promise(r => setTimeout(r, 4000 - elapsed));
+    playDoneChime();
     setScreen("itinerary");
 
     // Fetch and persist photos in background — staggered to avoid Wikimedia rate limits
@@ -2334,7 +2997,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       for (const { act, city } of toFetch) {
         const url = await _fetchPhoto(act.geocode || act.title, city, act.type);
         if (url) {
-          _usedPhotoUrls.add(url);
           // Update in-memory state immediately so PhotoStrip stops shimming without waiting for DB
           setDays(prev => prev.map(day => ({
             ...day,
@@ -2450,7 +3112,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           day_id: dayId,
           time: act.time, title: act.title, geocode: act.geocode || null, geocode_end: act.geocodeEnd || null,
           type: act.type, duration: act.duration, note: act.note,
-          confirmed: act.confirmed ?? false, icon: act.icon,
+          confirmed: act.confirmed ?? false, icon: act.icon, package: act.package || null,
           position: j, added_by: session.user.id,
         }));
         const { data: insertedActs, error: insertError } = await supabase.from("activities").insert(newActivities).select();
@@ -2476,14 +3138,55 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     return data;
   };
 
+  const getMemberName = (userId) => {
+    const m = (trip.trip_members || []).find(mem => mem.user_id === userId);
+    return m?.profiles?.username || "Traveler";
+  };
+
+  const renderMentions = (text) => {
+    if (!text) return "";
+    const parts = text.split(/(\*\*[^*]+\*\*|_[^_]+_|\*[^*]+\*|@\w+)/g);
+    if (parts.length === 1) return text;
+    return parts.map((part, i) => {
+      if (/^\*\*[^*]+\*\*$/.test(part)) return <strong key={i}>{part.slice(2,-2)}</strong>;
+      if (/^(_[^_]+_|\*[^*]+\*)$/.test(part)) return <em key={i}>{part.slice(1,-1)}</em>;
+      if (/^@\w+/.test(part)) return <span key={i} style={{fontWeight:600,background:"rgba(37,99,168,0.12)",borderRadius:4,padding:"0 2px",color:T.ocean}}>{part}</span>;
+      return part;
+    });
+  };
+
+  const chatMembers = (trip.trip_members || [])
+    .filter(m => m.user_id !== session.user.id && m.profiles?.username)
+    .map(m => ({ name: m.profiles.username, icon: m.profiles.face_icon || "👤" }));
+
+  const mentionOptions = [
+    { name: "all", icon: "👥" },
+    ...chatMembers,
+  ].filter(opt => opt.name.toLowerCase().startsWith(mentionSearch || ""));
+
+  const selectMention = (name) => {
+    setChatInput(prev => prev.replace(/@\w*$/, `@${name} `));
+    setMentionSearch(null);
+  };
+
+  const filteredMessages = chatMessages.filter(m => {
+    if (chatFilter === "group") return m.role === "user";
+    if (chatFilter === "ai") return m.role === "assistant";
+    return true;
+  });
+
   const sendChatMessage = async () => {
     if (!chatInput.trim() || chatLoading) return;
-    const userMsg = { role: "user", content: chatInput.trim() };
-    const history = chatMessages; // snapshot before state update
-    // Add user message + placeholder assistant message
+    const userMsg = { role: "user", content: chatInput.trim(), user_id: session.user.id };
+    const history = chatMessages;
     setChatMessages(prev => [...prev, userMsg, { role: "assistant", content: "", streaming: true }]);
     setChatInput("");
     setChatLoading(true);
+
+    // Persist user message
+    supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "user", content: userMsg.content });
+
+    let finalContent = "Sorry, something went wrong. Try again.";
     try {
       const data = await callChatTrip(userMsg.content, trip, days, history, (accumulated) => {
         const partial = extractPartialMessage(accumulated);
@@ -2495,19 +3198,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           });
         }
       });
-      // Replace streaming placeholder with final message
-      setChatMessages(prev => {
-        const updated = [...prev];
-        updated[updated.length - 1] = { role: "assistant", content: data.message || "Done." };
-        return updated;
-      });
-    } catch {
-      setChatMessages(prev => {
-        const updated = [...prev];
-        updated[updated.length - 1] = { role: "assistant", content: "Sorry, something went wrong. Try again." };
-        return updated;
-      });
-    }
+      finalContent = data.message || "Done.";
+    } catch { /* use default error message */ }
+
+    setChatMessages(prev => {
+      const updated = [...prev];
+      updated[updated.length - 1] = { role: "assistant", content: finalContent };
+      return updated;
+    });
+    // Persist assistant message
+    supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "assistant", content: finalContent });
     setChatLoading(false);
   };
 
@@ -2582,13 +3282,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           >
             {/* Header — scrolls away */}
             <div style={{background:`linear-gradient(160deg,${T.dusk},${T.ocean})`,padding:"28px 20px 20px",color:"white",position:"relative",overflow:"hidden"}}>
-              <div style={{position:"absolute",top:-30,right:-30,width:130,height:130,borderRadius:"50%",background:"rgba(255,255,255,0.04)"}}/>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+              <div style={{position:"absolute",top:-30,right:-30,width:130,height:130,borderRadius:"50%",background:"rgba(255,255,255,0.04)",pointerEvents:"none"}}/>
+              <div style={{position:"relative",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
                 <div style={{display:"flex",gap:8}}>
                   {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
-                  <button onClick={()=>{ setEditingTrip(trip); setScreen("setup"); }} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>✏️ Edit trip</button>
+                  <button onClick={()=>{ setEditingTrip(trip); setScreen("setup"); }} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>Edit trip</button>
                 </div>
-                <button onClick={()=>setShowShare(true)} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:14,cursor:"pointer"}}>📤</button>
+                <button onClick={()=>setShowShare(true)} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>📤 Share</button>
               </div>
               <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,lineHeight:1.2,marginBottom:4}}>{trip.name}</div>
               <div style={{fontSize:13,opacity:0.75,fontFamily:"Georgia,serif"}}>📅 {trip.dates || (trip.start_date && trip.end_date ? `${new Date(trip.start_date).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(trip.end_date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}` : "")}</div>
@@ -2656,9 +3356,18 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             })()}
 
             {(() => {
-              // Build city → hotel activity map for transition rows
+              // Build hotel-per-day array: carry forward last seen hotel across days
               const hotelByCity = {};
               days.forEach(d => d.activities.forEach(a => { if (a.type === "hotel") hotelByCity[d.city] = a; }));
+              // For each day, track which hotel the traveler is currently staying at
+              let currentHotel = null;
+              let currentHotelCity = null;
+              const hotelPerDay = days.map(d => {
+                const dayHotel = d.activities.find(a => a.type === "hotel");
+                if (dayHotel) { currentHotel = dayHotel; currentHotelCity = d.city; }
+                return { hotel: currentHotel, city: currentHotelCity };
+              });
+
               return days.map((day, i) => {
                 const firstIsHotel = day.activities[0]?.type === "hotel";
                 const lastAct = day.activities[day.activities.length - 1];
@@ -2666,15 +3375,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 const prevDay = i > 0 ? days[i - 1] : null;
                 const cityChanged = prevDay && prevDay.city !== day.city;
 
-                // Start-of-day hotel: on city-change days use previous city's hotel
+                // Start-of-day hotel: on city-change days use previous day's hotel
+                const prevHotel = i > 0 ? hotelPerDay[i - 1] : null;
                 const startHotel = cityChanged
-                  ? (hotelByCity[prevDay.city] || null)
-                  : (!firstIsHotel ? hotelByCity[day.city] || null : null);
-                const startHotelCity = cityChanged ? prevDay.city : day.city;
+                  ? (prevHotel?.hotel || null)
+                  : (!firstIsHotel ? hotelPerDay[i]?.hotel || null : null);
+                const startHotelCity = cityChanged ? prevHotel?.city : hotelPerDay[i]?.city;
 
-                // End-of-day hotel: go back to current city's hotel after last activity
+                // End-of-day hotel: use current day's hotel (or carried-forward)
                 const endHotel = !lastIsHotel && day.activities.length > 0
-                  ? hotelByCity[day.city] || null
+                  ? hotelPerDay[i]?.hotel || null
                   : null;
 
                 return (
@@ -2683,17 +3393,35 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                       day={day}
                       dayIndex={i}
                       onEditActivity={editActivity}
-                      arrivalTime={i === 0 ? trip.arrival_time : null}
-                      onEditFlight={i === 0 ? () => setTab("logistics") : undefined}
+                      arrivalTime={i === 0 ? (trip.arrival_time || (trip.start_date ? `${trip.start_date}T12:00:00` : null)) : null}
+                      arrivalMode={i === 0 ? (trip.arrival_mode || "flight") : null}
+                      arrivalCity={i === 0 ? trip.arrival_city : null}
+                      onEditFlight={i === 0 ? () => {
+                        if (logisticsRef.current && scrollRef.current) {
+                          scrollRef.current.scrollTop = logisticsRef.current.offsetTop;
+                        }
+                      } : undefined}
+                      departureTime={i === days.length - 1 ? (trip.departure_time || (trip.end_date ? `${trip.end_date}T19:00:00` : null)) : null}
+                      departureMode={i === days.length - 1 ? (trip.departure_mode || "flight") : null}
+                      departureCity={i === days.length - 1 ? (trip.departure_city || null) : null}
+                      onEditDeparture={i === days.length - 1 ? () => {
+                        if (logisticsRef.current && scrollRef.current) {
+                          scrollRef.current.scrollTop = logisticsRef.current.offsetTop;
+                        }
+                      } : undefined}
                       hotelActivity={startHotel}
                       hotelCity={startHotelCity}
                       endHotelActivity={endHotel}
+                      displayCity={hotelPerDay[i]?.city || null}
+                      flags={myFlags}
+                      flagCounts={flagCounts}
+                      onFlag={handleFlag}
                     />
                   </div>
                 );
               });
             })()}
-            {tab==="logistics" && (
+            <div ref={logisticsRef}>
               <LogisticsTab
                 trip={trip}
                 days={days}
@@ -2701,7 +3429,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 onSaveHotels={saveLogisticsHotels}
                 onApplyHotels={applyHotelsToItinerary}
               />
-            )}
+            </div>
             {tab==="collab" && (
               <CollabTab
                 trip={trip}
@@ -2716,17 +3444,33 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             )}
           </div>
 
+          {/* ── BRAINSTORM TAB ── */}
+          {activeBottomTab === "brainstorm" && import.meta.env.VITE_BRAINSTORM_ENABLED && (
+            <BrainstormView trip={trip} session={session} />
+          )}
+
           {/* ── CHAT TAB ── */}
           {activeBottomTab === "chat" && (
             <div style={{flex:1,display:"flex",flexDirection:"column",background:T.warm,overflow:"hidden"}}>
               {/* Chat header */}
-              <div style={{background:`linear-gradient(135deg,${T.dusk},${T.ocean})`,padding:"20px 20px 16px",color:"white",flexShrink:0}}>
-                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,marginBottom:2}}>✨ AI Trip Assistant</div>
-                <div style={{fontSize:12,opacity:0.75,fontFamily:"Georgia,serif"}}>{trip.name} · ask me to change anything</div>
+              <div style={{background:`linear-gradient(135deg,${T.dusk},${T.ocean})`,padding:"14px 20px 12px",color:"white",flexShrink:0}}>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,marginBottom:2}}>Chat</div>
+                <div style={{fontSize:12,opacity:0.75,fontFamily:"Georgia,serif"}}>{trip.name}</div>
+              </div>
+              {/* Filter pills */}
+              <div style={{display:"flex",gap:6,padding:"8px 16px",background:T.chalk,borderBottom:`1px solid ${T.sand}`,flexShrink:0}}>
+                {[["all","All"],["group","Group"],["ai","AI ✨"]].map(([f,label])=>(
+                  <button key={f} onClick={()=>setChatFilter(f)} style={{
+                    padding:"4px 14px",borderRadius:20,border:"none",cursor:"pointer",
+                    background:chatFilter===f?T.ocean:T.sand,
+                    color:chatFilter===f?"white":T.mist,
+                    fontSize:12,fontFamily:"Georgia,serif",transition:"background 0.15s",
+                  }}>{label}</button>
+                ))}
               </div>
               {/* Messages */}
               <div style={{flex:1,overflowY:"auto",padding:"16px 16px 8px",display:"flex",flexDirection:"column",gap:10}}>
-                {chatMessages.length === 0 && (
+                {filteredMessages.length === 0 && chatFilter !== "group" && (
                   <div style={{display:"flex",flexDirection:"column",gap:10}}>
                     {trip.summary && (
                       <div style={{display:"flex",justifyContent:"flex-start"}}>
@@ -2740,23 +3484,64 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                     </div>
                   </div>
                 )}
-                {chatMessages.map((m,i)=>(
-                  <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
-                    <div style={{maxWidth:"80%",background:m.role==="user"?T.ocean:T.chalk,color:m.role==="user"?"white":T.ink,borderRadius:m.role==="user"?"18px 18px 4px 18px":"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.5,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
-                      {m.content || (m.streaming ? <span style={{color:T.mist,letterSpacing:2}}>···</span> : "")}
-                      {m.streaming && m.content && <span style={{display:"inline-block",width:2,height:"1em",background:T.ink,marginLeft:2,verticalAlign:"text-bottom",animation:"blink 1s step-end infinite"}}/>}
-                    </div>
+                {filteredMessages.length === 0 && chatFilter === "group" && (
+                  <div style={{textAlign:"center",color:T.mist,fontFamily:"Georgia,serif",fontSize:13,paddingTop:40}}>
+                    No group messages yet
                   </div>
-                ))}
+                )}
+                {filteredMessages.map((m,i)=>{
+                  const isOwn = m.role==="user" && m.user_id===session.user.id;
+                  const isAI = m.role==="assistant";
+                  const isOther = m.role==="user" && m.user_id!==session.user.id;
+                  return (
+                    <div key={i} style={{display:"flex",flexDirection:"column",alignItems:isOwn?"flex-end":"flex-start"}}>
+                      {isAI && (
+                        <div style={{fontSize:11,color:T.ocean,fontFamily:"Georgia,serif",marginBottom:2,paddingLeft:4,fontWeight:600}}>✨ AI</div>
+                      )}
+                      {isOther && (
+                        <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:2,paddingLeft:4}}>{getMemberName(m.user_id)}</div>
+                      )}
+                      <div style={{
+                        maxWidth:"80%",
+                        background: isOwn ? T.ocean : isAI ? T.chalk : "#F0F4F0",
+                        color: isOwn ? "white" : T.ink,
+                        borderRadius: isOwn ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+                        padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.5,
+                        boxShadow:"0 1px 4px rgba(0,0,0,0.06)",
+                        borderLeft: isAI ? `3px solid ${T.ocean}` : "none",
+                      }}>
+                        {m.streaming && !m.content ? <span style={{color:T.mist,letterSpacing:2}}>···</span> : renderMentions(m.content||"")}
+                        {m.streaming && m.content && <span style={{display:"inline-block",width:2,height:"1em",background:T.ink,marginLeft:2,verticalAlign:"text-bottom",animation:"blink 1s step-end infinite"}}/>}
+                      </div>
+                    </div>
+                  );
+                })}
                 <div ref={chatBottomRef} />
               </div>
+              {/* Mention picker */}
+              {mentionSearch !== null && mentionOptions.length > 0 && (
+                <div style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:12,margin:"0 12px 4px",overflow:"hidden",flexShrink:0,maxHeight:160,overflowY:"auto"}}>
+                  {mentionOptions.map(opt=>(
+                    <div key={opt.name} onMouseDown={e=>{e.preventDefault();selectMention(opt.name);}} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 14px",cursor:"pointer",borderBottom:`1px solid ${T.sand}`,fontSize:13,fontFamily:"Georgia,serif",color:T.ink}}>
+                      <span>{opt.icon}</span><span style={{color:T.ocean,fontWeight:600}}>@{opt.name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               {/* Input */}
               <div style={{padding:"8px 12px",paddingBottom:"calc(8px + env(safe-area-inset-bottom, 0px))",background:T.chalk,borderTop:`1px solid ${T.sand}`,display:"flex",gap:8,flexShrink:0}}>
                 <input
                   value={chatInput}
-                  onChange={e=>setChatInput(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&sendChatMessage()}
-                  placeholder="e.g. Make day 2 more relaxing…"
+                  onChange={e=>{
+                    setChatInput(e.target.value);
+                    const match = e.target.value.match(/@(\w*)$/);
+                    setMentionSearch(match ? match[1].toLowerCase() : null);
+                  }}
+                  onKeyDown={e=>{
+                    if (e.key==="Escape") { setMentionSearch(null); return; }
+                    if (e.key==="Enter" && mentionSearch===null) sendChatMessage();
+                  }}
+                  placeholder="Message… type @ to mention"
                   style={{flex:1,padding:"11px 14px",borderRadius:24,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",background:T.warm}}
                 />
                 <button onClick={sendChatMessage} disabled={chatLoading||!chatInput.trim()} style={{width:44,height:44,borderRadius:"50%",background:chatInput.trim()?T.ocean:T.sand,color:"white",border:"none",fontSize:18,cursor:chatInput.trim()?"pointer":"default"}}>↑</button>
@@ -2791,6 +3576,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             paddingBottom:"env(safe-area-inset-bottom, 0px)",
           }}>
             {[
+              ...(import.meta.env.VITE_BRAINSTORM_ENABLED ? [{ key:"brainstorm", icon:"💡", label:"Brainstorm" }] : []),
               { key:"itinerary", icon:"🗓", label:"Itinerary" },
               { key:"chat",      icon:"💬", label:"Chat" },
               { key:"map",       icon:"🗺", label:"Map" },
