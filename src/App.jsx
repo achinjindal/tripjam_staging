@@ -61,7 +61,13 @@ function PhotoStrip({ activity, city }) {
     if (stored || !visible) return;
     if (!geocode) { setLiveUrl(null); return; }
     const key = `${geocode}||${city || ""}`;
-    if (_photoCache[key] !== undefined) { setLiveUrl(_photoCache[key]); return; }
+    if (_photoCache[key] !== undefined) {
+      const cached = _photoCache[key];
+      if (cached && _usedPhotoUrls.has(cached)) { setLiveUrl(null); return; } // already shown by another activity
+      if (cached) _usedPhotoUrls.add(cached); // claim it
+      setLiveUrl(cached);
+      return;
+    }
     _fetchPhoto(geocode, city, activity?.type).then(src => {
       if (src) {
         _usedPhotoUrls.add(src);
@@ -1863,9 +1869,25 @@ function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, arr
 
 /* ─── SETUP FORM ─────────────────────────────────────────────────────── */
 
-function SetupForm({ onGenerate, initialTrip }) {
+function SetupForm({ onGenerate, initialTrip, onStepChange }) {
   const [step, setStep]           = useState(0);
   const [generating, setGen]      = useState(false);
+
+  // Notify parent of step changes
+  useEffect(() => { onStepChange?.(step); }, [step]);
+
+  // Sync browser history with form steps so back button works
+  useEffect(() => {
+    window.history.replaceState({ step: 0 }, "");
+  }, []);
+  useEffect(() => {
+    const onPop = (e) => {
+      const s = e.state?.step ?? 0;
+      setStep(s);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const prefill = initialTrip ? {
     destinations: initialTrip.destination ? initialTrip.destination.split(" → ") : [],
     startDate:    initialTrip.start_date || "",
@@ -1925,7 +1947,7 @@ function SetupForm({ onGenerate, initialTrip }) {
   };
 
 
-  const styles  = ["Cultural & Heritage","Adventure & Outdoors","Food & Culinary","Relaxation & Wellness","City Break","Road Trip","Beach & Coast","Shopping","I'll wing it 🎲"];
+  const styles  = ["History & Culture","Nature & Wildlife","Adventure & Thrill","Food & Culinary","Relaxation & Wellness","Nightlife & Bars","Family & Kids","Photography & Scenery","Shopping & Markets"];
   const budgets = [{key:"budget",label:"Budget 🏕️",sub:"Hostels, street food"},{key:"mid",label:"Mid-range 🏨",sub:"3★ hotels, restaurants"},{key:"luxury",label:"Luxury 🏰",sub:"5★ & fine dining"}];
 
   const handleGenerate = async () => {
@@ -2158,7 +2180,7 @@ function SetupForm({ onGenerate, initialTrip }) {
       {stepViews[step]}
       {destError && <div style={{color:"#e53e3e",fontSize:13,fontFamily:"Georgia,serif",marginTop:8,textAlign:"center"}}>{destError}</div>}
       <div style={{display:"flex",gap:10,marginTop:12}}>
-        {step>0 && <button onClick={()=>setStep(s=>s-1)} style={{flex:1,padding:14,borderRadius:14,border:`2px solid ${T.sand}`,background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:15,cursor:"pointer"}}>← Back</button>}
+        {step>0 && <button onClick={()=>window.history.back()} style={{flex:1,padding:14,borderRadius:14,border:`2px solid ${T.sand}`,background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:15,cursor:"pointer"}}>← Back</button>}
         {step<stepViews.length-1 && (
           <button onClick={()=>{
             if (step === 0) {
@@ -2176,7 +2198,11 @@ function SetupForm({ onGenerate, initialTrip }) {
               if (new Date(form.endDate) < new Date(form.startDate)) { setDestError("End date cannot be before start date."); return; }
             }
             setDestError("");
-            setStep(s=>s+1);
+            setStep(s => {
+              const next = s + 1;
+              window.history.pushState({ step: next }, "");
+              return next;
+            });
           }} style={{
             flex:2,padding:14,borderRadius:14,border:"none",cursor:"pointer",
             background:T.ocean,color:"white",
@@ -2550,6 +2576,7 @@ function CollabTab({ trip, session, inviteRole, setInviteRole, inviteLink, setIn
 /* ─── ROOT ───────────────────────────────────────────────────────────── */
 export default function App({ session, initialTrip, initialScreen = "setup", onHome }) {
   const [screen,    setScreen]    = useState(initialScreen);
+  const [setupStep, setSetupStep] = useState(0);
   const [trip,      setTrip]      = useState(initialTrip || SAMPLE_TRIP);
   const [days,      setDays]      = useState([]);
   const [loading,   setLoading]   = useState(initialScreen === "itinerary");
@@ -2911,7 +2938,20 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     const igRequest = { destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null };
     const tripPayload = {
       id: tripId,
-      name: `${itinerary.name} · ${new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short"})} ${Math.random().toString(36).slice(2,5).toUpperCase()}`,
+      name: (() => {
+        const fmt = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        const suffix = Math.random().toString(36).slice(2, 5).toUpperCase();
+        if (form.startDate && form.endDate) {
+          const start = new Date(form.startDate + "T12:00:00");
+          const end = new Date(form.endDate + "T12:00:00");
+          const startStr = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          const endStr = start.getMonth() === end.getMonth()
+            ? end.getDate()
+            : end.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          return `${itinerary.name} · ${startStr}–${endStr} ${suffix}`;
+        }
+        return `${itinerary.name} · ${suffix}`;
+      })(),
       destination: form.destinations.join(" → "),
       start_date: form.startDate,
       end_date: form.endDate,
@@ -3250,7 +3290,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         <div style={{flex:1,overflowY:"auto"}}>
           <div style={{background:`linear-gradient(160deg,${T.dusk},${T.ocean})`,padding:"44px 20px 36px",color:"white",position:"relative",overflow:"hidden"}}>
             <div style={{position:"absolute",top:-50,right:-50,width:200,height:200,borderRadius:"50%",background:"rgba(255,255,255,0.04)"}}/>
-            {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif",marginBottom:14}}>← Trips</button>}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              {setupStep > 0
+                ? <button onClick={()=>window.history.back()} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Back</button>
+                : onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>
+              }
+              {onHome && setupStep > 0 && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>Trips →</button>}
+            </div>
             <div style={{fontSize:13,letterSpacing:3,opacity:0.6,textTransform:"uppercase",marginBottom:10,fontFamily:"Georgia,serif"}}>Wayfarer</div>
             <div style={{fontFamily:"'DM Serif Display',serif",fontSize:34,lineHeight:1.2,marginBottom:10}}>Plan your next<br/>adventure ✈️</div>
             <div style={{fontSize:14,opacity:0.7,fontFamily:"Georgia,serif"}}>AI-powered itineraries, built for you</div>
@@ -3261,7 +3307,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 {generateError}
               </div>
             )}
-            <SetupForm onGenerate={handleGenerate} initialTrip={editingTrip || (initialScreen==="setup" && initialTrip?.destination ? initialTrip : null)}/>
+            <SetupForm onGenerate={handleGenerate} initialTrip={editingTrip || (initialScreen==="setup" && initialTrip?.destination ? initialTrip : null)} onStepChange={setSetupStep}/>
           </div>
         </div>
       )}
@@ -3412,7 +3458,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                       hotelActivity={startHotel}
                       hotelCity={startHotelCity}
                       endHotelActivity={endHotel}
-                      displayCity={hotelPerDay[i]?.city || null}
+                      displayCity={(() => {
+                        const hCity = hotelPerDay[i]?.city;
+                        if (!hCity) return day.city;
+                        // Hotel city matches this day's city: use it (covers day trips from base)
+                        if (hCity === day.city) return hCity;
+                        // Hotel city is from a prior destination (e.g. cruise carried forward): use day's city
+                        const hotelCheckedInToday = day.activities.some(a => a.type === "hotel");
+                        if (!hotelCheckedInToday) return day.city;
+                        return hCity;
+                      })()}
                       flags={myFlags}
                       flagCounts={flagCounts}
                       onFlag={handleFlag}
