@@ -2735,6 +2735,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [setupStep, setSetupStep] = useState(0);
   const [trip,      setTrip]      = useState(initialTrip || SAMPLE_TRIP);
   const [days,      setDays]      = useState([]);
+  const daysRef = useRef(days);
+  useEffect(() => { daysRef.current = days; }, [days]);
   const [loading,   setLoading]   = useState(initialScreen === "itinerary");
   const [tab,         setTab]         = useState("plan");
   const [collabToast, setCollabToast] = useState(false);
@@ -3329,7 +3331,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       data = JSON.parse(stripped.slice(start, end + 1));
       if (!data.message) data.message = "Done.";
     } catch { data = { message: accumulated }; }
-    const incoming = data.updatedDays ?? data.days ?? [];
+    const incoming = data.updatedDays ?? [];
     if (incoming.length) {
       // Persist each updated day to Supabase: delete existing activities, insert new ones
       for (const updatedDay of incoming) {
@@ -3344,6 +3346,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           continue; // don't insert if delete failed — avoids duplicates
         }
 
+        // Reuse existing photos where geocode matches
+        const existingPhotoMap = {};
+        (currentDays.find(d => d.id === dayId)?.activities || []).forEach(a => {
+          if (a.geocode && a.photo_url) existingPhotoMap[a.geocode] = a.photo_url;
+        });
+
         // Insert new activities
         const newActivities = (updatedDay.activities || []).map((act, j) => ({
           day_id: dayId,
@@ -3351,6 +3359,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           type: act.type, duration: act.duration, note: act.note,
           confirmed: act.confirmed ?? false, icon: act.icon, package: act.package || null,
           position: j, added_by: session.user.id,
+          photo_url: (act.geocode && existingPhotoMap[act.geocode]) || null,
         }));
         const { data: insertedActs, error: insertError } = await supabase.from("activities").insert(newActivities).select();
         if (insertError) { console.error("[TMT] insert failed for day", dayId, insertError); continue; }
@@ -3370,6 +3379,21 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             activities: (insertedActs || []).map((act, i) => ({ ...act, ...updatedDay.activities[i] })),
           };
         }));
+
+        // Fetch photos for new activities that don't have one
+        const dayCity = updatedDay.city ?? currentDays.find(d => d.id === dayId)?.city;
+        for (const [i, act] of (updatedDay.activities || []).entries()) {
+          if (act.type === "transit" || existingPhotoMap[act.geocode]) continue;
+          const insertedAct = insertedActs?.[i];
+          if (!insertedAct) continue;
+          _fetchPhoto(act.geocode || act.title, dayCity, act.type).then(url => {
+            if (!url) return;
+            supabase.from("activities").update({ photo_url: url }).eq("id", insertedAct.id);
+            setDays(prev => prev.map(d => d.id !== dayId ? d : {
+              ...d, activities: d.activities.map(a => a.id === insertedAct.id ? { ...a, photo_url: url } : a),
+            }));
+          });
+        }
       }
     }
     return data;
@@ -3416,14 +3440,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const sendChatDirect = async (message) => {
     if (!message.trim() || chatLoading) return;
     const userMsg = { role: "user", content: message.trim(), user_id: session.user.id };
-    const history = chatMessages;
+    const history = chatMessages.filter(m => m.role !== "system-undo");
     setChatMessages(prev => [...prev, userMsg, { role: "assistant", content: "", streaming: true }]);
     setChatLoading(true);
     supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "user", content: userMsg.content });
     let finalContent = "Sorry, something went wrong. Try again.";
     let suggestions = null;
     try {
-      const data = await callChatTrip(userMsg.content, trip, days, history, (accumulated) => {
+      const data = await callChatTrip(userMsg.content, trip, daysRef.current, history, (accumulated) => {
         const partial = extractPartialMessage(accumulated);
         if (partial !== null) {
           setChatMessages(prev => { const updated = [...prev]; updated[updated.length - 1] = { role: "assistant", content: partial, streaming: true }; return updated; });
@@ -3441,7 +3465,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const sendChatMessage = async () => {
     if (!chatInput.trim() || chatLoading) return;
     const userMsg = { role: "user", content: chatInput.trim(), user_id: session.user.id };
-    const history = chatMessages;
+    const history = chatMessages.filter(m => m.role !== "system-undo");
     setChatMessages(prev => [...prev, userMsg, { role: "assistant", content: "", streaming: true }]);
     setChatInput("");
     setChatLoading(true);
@@ -3452,7 +3476,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     let finalContent = "Sorry, something went wrong. Try again.";
     let suggestions = null;
     try {
-      const data = await callChatTrip(userMsg.content, trip, days, history, (accumulated) => {
+      const data = await callChatTrip(userMsg.content, trip, daysRef.current, history, (accumulated) => {
         const partial = extractPartialMessage(accumulated);
         if (partial !== null) {
           setChatMessages(prev => {
