@@ -1459,8 +1459,9 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
 }
 
 /* ─── ACTIVITY CARD ──────────────────────────────────────────────────── */
-function ActivityCard({ activity, city, onEdit, flag = null, counts = null, onFlag }) {
+function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAlternatives, onChangeHotel, flag = null, counts = null, onFlag }) {
   const [editing, setEditing] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [draft, setDraft] = useState({ ...activity });
   const ts = typeStyle[draft.type] || typeStyle.sight;
@@ -1531,11 +1532,9 @@ function ActivityCard({ activity, city, onEdit, flag = null, counts = null, onFl
         padding:"13px 15px", marginBottom:2, marginLeft:10,
         boxShadow:"0 2px 14px rgba(15,25,35,0.07)",
         border:`1px solid ${T.sand}`,
-        position:"relative", overflow:"hidden",
+        position:"relative",
+        borderRight: activity.confirmed ? `4px solid ${T.moss}` : `1px solid ${T.sand}`,
       }}>
-        {activity.confirmed && (
-          <div style={{position:"absolute",top:0,right:0,width:4,height:"100%",background:T.moss,borderRadius:"0 16px 16px 0"}}/>
-        )}
         <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start"}}>
           <div style={{flex:1, paddingRight:8}}>
             <div style={{display:"flex", alignItems:"center", gap:7, marginBottom:4}}>
@@ -1555,7 +1554,26 @@ function ActivityCard({ activity, city, onEdit, flag = null, counts = null, onFl
             <div style={{display:"flex",gap:5,alignItems:"center"}}>
               {activity.duration && <span style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif"}}>⏱ {activity.duration}</span>}
               <a href={mapsUrl} target="_blank" rel="noopener noreferrer" style={{lineHeight:1,textDecoration:"none"}} title="Open in Google Maps"><img src="/google-maps-icon.png" alt="Maps" style={{width:14,height:14,objectFit:"contain",display:"block"}} /></a>
-              <button onClick={()=>setEditing(true)} style={{background:"transparent",border:"none",cursor:"pointer",fontSize:11,padding:"0 2px",color:T.sand}}>✎</button>
+              <div style={{position:"relative"}}>
+                <button onClick={()=>setMenuOpen(m=>!m)} style={{background:"transparent",border:"none",cursor:"pointer",fontSize:16,padding:"0 3px",color:T.mist,lineHeight:1}}>⋯</button>
+                {menuOpen && (
+                  <>
+                    <div onClick={()=>setMenuOpen(false)} style={{position:"fixed",inset:0,zIndex:99}}/>
+                    <div style={{position:"absolute",right:0,top:22,zIndex:100,background:T.chalk,borderRadius:12,boxShadow:"0 4px 20px rgba(15,25,35,0.14)",border:`1px solid ${T.sand}`,minWidth:180,overflow:"hidden"}}>
+                      {activity.type === "hotel" ? <>
+                        <button onClick={()=>{ setMenuOpen(false); onChangeHotel?.("own"); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>🏨 I've booked a hotel</button>
+                        <button onClick={()=>{ setMenuOpen(false); onChangeHotel?.("suggest"); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>✨ Suggest a different hotel</button>
+                        <button onClick={()=>{ setMenuOpen(false); onRemove?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:"#e53e3e",cursor:"pointer"}}>Remove</button>
+                      </> : <>
+                        <button onClick={()=>{ setMenuOpen(false); onSuggestAlternatives?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>✨ Suggest alternatives</button>
+                        <button onClick={()=>{ setMenuOpen(false); onReplace?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>🔄 Replace item</button>
+                        <button onClick={()=>{ setMenuOpen(false); setEditing(true); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>✎ Edit item</button>
+                        <button onClick={()=>{ setMenuOpen(false); onRemove?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:"#e53e3e",cursor:"pointer"}}>Remove</button>
+                      </>}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -1726,7 +1744,7 @@ function WishlistSection({ items, city }) {
   );
 }
 
-function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, flags = {}, flagCounts = {}, onFlag }) {
+function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, flags = {}, flagCounts = {}, onFlag }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
 
@@ -1812,7 +1830,13 @@ function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, arr
         const samePackageAsHotel = act.package && act.package === endHotelActivity?.package;
         return (
           <div key={act.id}>
-            <ActivityCard activity={act} city={day.city} onEdit={(updated)=>onEditActivity(day.id, updated)} flag={flags[act.id] ?? null} counts={flagCounts[act.id] ?? null} onFlag={onFlag}/>
+            <ActivityCard activity={act} city={day.city}
+              onEdit={(updated)=>onEditActivity(day.id, updated)}
+              onRemove={()=>onRemoveActivity?.(day.id, act.id)}
+              onReplace={()=>onReplaceActivity?.(act)}
+              onSuggestAlternatives={()=>onSuggestAlternatives?.(act)}
+              onChangeHotel={(mode)=>onChangeHotel?.(day.id, act, mode)}
+              flag={flags[act.id] ?? null} counts={flagCounts[act.id] ?? null} onFlag={onFlag}/>
             {!lastAct && !samePackageAsNext && (
               <TransitionRow
                 from={act.type === "transit" && act.geocode_end ? { ...act, geocode: act.geocode_end } : act}
@@ -1867,6 +1891,142 @@ function DaySection({ day, dayIndex = 0, onEditActivity, arrivalTime = null, arr
   );
 }
 
+/* ─── SUGGESTION CARD ────────────────────────────────────────────────── */
+function SuggestionCard({ suggestion, onSelect }) {
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    _fetchPhoto(suggestion.geocode || suggestion.title, null, suggestion.type).then(url => {
+      setPhotoUrl(url);
+      setLoaded(true);
+    });
+  }, [suggestion.geocode]);
+  return (
+    <div onClick={onSelect} style={{
+      flexShrink:0, width:140, borderRadius:12, overflow:"hidden",
+      border:`1px solid ${T.sand}`, background:T.chalk, cursor:"pointer",
+      boxShadow:"0 2px 8px rgba(15,25,35,0.08)", transition:"transform 0.15s",
+    }}
+      onMouseEnter={e=>e.currentTarget.style.transform="scale(1.02)"}
+      onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
+    >
+      <div style={{height:90, background:T.sand, overflow:"hidden", position:"relative"}}>
+        {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+        {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={suggestion.title} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+        {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>{suggestion.icon}</div>}
+      </div>
+      <div style={{padding:"8px 10px"}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:12,color:T.ink,lineHeight:1.3,marginBottom:3}}>{suggestion.title}</div>
+        {suggestion.note && <div style={{fontFamily:"Georgia,serif",fontSize:10,color:T.mist,lineHeight:1.3}}>{suggestion.note}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ─── DATE RANGE PICKER ──────────────────────────────────────────────── */
+function DateRangePicker({ startDate, endDate, onChange }) {
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const initDate = startDate || todayISO;
+  const [viewYear, setViewYear] = useState(() => parseInt(initDate.slice(0, 4)));
+  const [viewMonth, setViewMonth] = useState(() => parseInt(initDate.slice(5, 7)) - 1);
+
+  const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const DAY_HEADERS = ["Su","Mo","Tu","We","Th","Fr","Sa"];
+
+  const toISO = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const fmtShort = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+  const firstDow = new Date(viewYear, viewMonth, 1).getDay();
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const cells = [...Array(firstDow).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => toISO(viewYear, viewMonth, i + 1))];
+
+  const prevMonth = () => { if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); } else setViewMonth(m => m - 1); };
+  const nextMonth = () => { if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); } else setViewMonth(m => m + 1); };
+
+  const handleDay = (iso) => {
+    if (!startDate || (startDate && endDate)) {
+      onChange(iso, "");
+    } else {
+      if (iso === startDate) { onChange("", ""); }
+      else if (iso > startDate) { onChange(startDate, iso); }
+      else { onChange(iso, ""); }
+    }
+  };
+
+  const phase = !startDate || (startDate && endDate) ? "start" : "end";
+  const numDays = startDate && endDate ? Math.round((new Date(endDate) - new Date(startDate)) / 864e5) + 1 : null;
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      {/* Selected range display */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 12 }}>
+        <span style={{ padding: "6px 14px", borderRadius: 20, background: startDate ? T.ocean : T.sand, color: startDate ? "white" : T.mist, fontFamily: "Georgia,serif", fontSize: 13 }}>
+          {startDate ? fmtShort(startDate) : "Arrival"}
+        </span>
+        <span style={{ color: T.mist, fontSize: 16 }}>→</span>
+        <span style={{ padding: "6px 14px", borderRadius: 20, background: endDate ? T.ocean : T.sand, color: endDate ? "white" : T.mist, fontFamily: "Georgia,serif", fontSize: 13 }}>
+          {endDate ? fmtShort(endDate) : "Departure"}
+        </span>
+        {numDays && <span style={{ fontFamily: "Georgia,serif", fontSize: 12, color: T.mist }}>{numDays} days</span>}
+      </div>
+
+      {/* Hint */}
+      <div style={{ fontFamily: "Georgia,serif", fontSize: 12, color: T.mist, textAlign: "center", marginBottom: 10 }}>
+        {phase === "start" ? "Tap arrival date" : "Tap departure date"}
+      </div>
+
+      {/* Month nav */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <button onClick={prevMonth} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: T.mist, padding: "4px 10px", lineHeight: 1 }}>‹</button>
+        <span style={{ fontFamily: "Georgia,serif", fontSize: 15, color: T.ink, fontWeight: 600 }}>{MONTHS[viewMonth]} {viewYear}</span>
+        <button onClick={nextMonth} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: T.mist, padding: "4px 10px", lineHeight: 1 }}>›</button>
+      </div>
+
+      {/* Day headers */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", marginBottom: 2 }}>
+        {DAY_HEADERS.map(d => <div key={d} style={{ textAlign: "center", fontFamily: "Georgia,serif", fontSize: 11, color: T.mist, padding: "2px 0" }}>{d}</div>)}
+      </div>
+
+      {/* Calendar grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
+        {cells.map((iso, i) => {
+          if (!iso) return <div key={i} />;
+          const isStart = iso === startDate;
+          const isEnd = iso === endDate;
+          const inRange = startDate && endDate && iso > startDate && iso < endDate;
+          const isToday = iso === todayISO;
+          const isPast = iso < todayISO;
+          const isBeforeStart = phase === "end" && startDate && iso < startDate;
+
+          let bg = "transparent", color = (isPast || isBeforeStart) ? T.sand : T.ink, radius = "8px";
+          if (isStart || isEnd) { bg = T.ocean; color = "white"; }
+          else if (inRange) { bg = "rgba(37,99,168,0.12)"; radius = "0"; }
+
+          // Extend range bg to edges for start/end
+          const startEdge = isStart && endDate ? { borderRadius: "8px 0 0 8px" } : {};
+          const endEdge = isEnd && startDate ? { borderRadius: "0 8px 8px 0" } : {};
+          const rangeStyle = inRange ? { borderRadius: 0 } : {};
+
+          return (
+            <div key={iso} onClick={() => handleDay(iso)} style={{
+              textAlign: "center", padding: "9px 0", cursor: "pointer",
+              fontFamily: "Georgia,serif", fontSize: 13, fontWeight: isToday ? 700 : 400,
+              color, background: bg, borderRadius: radius,
+              ...(isStart && endDate ? { borderRadius: "8px 0 0 8px" } : {}),
+              ...(isEnd ? { borderRadius: "0 8px 8px 0" } : {}),
+              ...(inRange ? { borderRadius: 0 } : {}),
+              userSelect: "none",
+            }}>
+              {iso.slice(8).replace(/^0/, "")}
+              {isToday && !isStart && !isEnd && <div style={{ width: 3, height: 3, borderRadius: "50%", background: T.ocean, margin: "1px auto 0" }} />}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* ─── SETUP FORM ─────────────────────────────────────────────────────── */
 
 function SetupForm({ onGenerate, initialTrip, onStepChange }) {
@@ -1889,18 +2049,20 @@ function SetupForm({ onGenerate, initialTrip, onStepChange }) {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
   const prefill = initialTrip ? {
-    destinations: initialTrip.destination ? initialTrip.destination.split(" → ") : [],
-    startDate:    initialTrip.start_date || "",
-    endDate:      initialTrip.end_date || "",
-    arrivalTime:  initialTrip.arrival_time   ? initialTrip.arrival_time.slice(11,16)   : "",
-    departureTime:initialTrip.departure_time ? initialTrip.departure_time.slice(11,16) : "",
-    notes:        initialTrip.notes || "",
+    destinations:  initialTrip.destination ? initialTrip.destination.split(" → ") : [],
+    startDate:     initialTrip.start_date || "",
+    endDate:       initialTrip.end_date || "",
+    arrivalTime:   initialTrip.arrival_time   ? initialTrip.arrival_time.slice(11,16)   : "",
+    departureTime: initialTrip.departure_time ? initialTrip.departure_time.slice(11,16) : "",
+    arrivalCity:   initialTrip.arrival_city   || "",
+    departureCity: initialTrip.departure_city || "",
+    notes:         initialTrip.notes || "",
   } : {};
   const _today = new Date();
   const _defaultStart = new Date(_today); _defaultStart.setDate(_today.getDate() + 15);
   const _defaultEnd   = new Date(_today); _defaultEnd.setDate(_today.getDate() + 20);
   const _fmt = (d) => d.toISOString().slice(0, 10);
-  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", notes:"", ...prefill });
+  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", notes:"", arrivalCity:"", departureCity:"", ...prefill });
   const [destInput, setDestInput] = useState("");
   const [destError, setDestError] = useState("");
   const [suggestions, setSuggestions] = useState([]);
@@ -2021,25 +2183,11 @@ function SetupForm({ onGenerate, initialTrip, onStepChange }) {
     <div key={1} style={{animation:"fadeUp 0.3s ease"}}>
       <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>📅</div>
       <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:20}}>Trip details</div>
-      <div style={{display:"flex",gap:12,marginBottom:22}}>
-        <div style={{flex:1}}>
-          <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.mist,marginBottom:6}}>Start date</div>
-          <input type="date" value={form.startDate} onChange={e=>{ set("startDate",e.target.value); if(form.endDate && e.target.value && form.endDate < e.target.value) set("endDate",""); }}
-            style={{width:"100%",padding:"12px 14px",borderRadius:12,border:`2px solid ${form.startDate?T.ocean:T.sand}`,
-              fontFamily:"Georgia,serif",fontSize:14,color:T.ink,background:T.chalk,outline:"none",boxSizing:"border-box"}}/>
-        </div>
-        <div style={{flex:1}}>
-          <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.mist,marginBottom:6}}>End date</div>
-          <input type="date" value={form.endDate} min={form.startDate || undefined} onChange={e=>{ if(!form.startDate || e.target.value >= form.startDate) set("endDate",e.target.value); }}
-            style={{width:"100%",padding:"12px 14px",borderRadius:12,border:`2px solid ${form.endDate?T.ocean:T.sand}`,
-              fontFamily:"Georgia,serif",fontSize:14,color:T.ink,background:T.chalk,outline:"none",boxSizing:"border-box",opacity:form.startDate?1:0.5,cursor:form.startDate?"auto":"not-allowed"}}/>
-        </div>
-      </div>
-      {form.startDate && form.endDate && (
-        <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.mist,marginBottom:18,textAlign:"center"}}>
-          {Math.round((new Date(form.endDate)-new Date(form.startDate))/(1000*60*60*24))+1} days
-        </div>
-      )}
+      <DateRangePicker
+        startDate={form.startDate}
+        endDate={form.endDate}
+        onChange={(start, end) => { set("startDate", start); set("endDate", end); }}
+      />
       <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.mist,marginBottom:10}}>Travelers</div>
       <div style={{display:"flex",alignItems:"center",gap:18}}>
         <button onClick={()=>set("travelers",String(Math.max(1,+form.travelers-1)))} style={{width:42,height:42,borderRadius:"50%",border:`2px solid ${T.sand}`,background:T.chalk,fontSize:22,cursor:"pointer"}}>−</button>
@@ -2053,11 +2201,11 @@ function SetupForm({ onGenerate, initialTrip, onStepChange }) {
     <div key={2} style={{animation:"fadeUp 0.3s ease"}}>
       <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>🎒</div>
       <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:4}}>Trip style</div>
-      <div style={{fontSize:13,color:T.mist,textAlign:"center",marginBottom:18,fontFamily:"Georgia,serif"}}>Pick up to 3</div>
+      <div style={{fontSize:13,color:T.mist,textAlign:"center",marginBottom:18,fontFamily:"Georgia,serif"}}>Pick up to 5</div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:24}}>
         {styles.map(s=>{
           const sel = form.styles.includes(s);
-          const maxed = !sel && form.styles.length >= 3;
+          const maxed = !sel && form.styles.length >= 5;
           return (
             <button key={s} onClick={()=>{ if (maxed) return; set("styles", sel ? form.styles.filter(x=>x!==s) : [...form.styles, s]); }} style={{
               padding:"11px 12px",borderRadius:12,cursor:maxed?"default":"pointer",textAlign:"left",
@@ -2118,46 +2266,54 @@ function SetupForm({ onGenerate, initialTrip, onStepChange }) {
         })}
       </div>
 
-      {/* Anything else */}
-      <div style={{marginTop:20}}>
-        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:4}}>Anything else we should know?</div>
-        <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:10}}>e.g. travelling with a toddler, vegetarian only, avoid crowded places, celebrating an anniversary</div>
-        <textarea value={form.notes} onChange={e=>set("notes",e.target.value)}
-          placeholder="Optional — the more context you give, the better the itinerary"
-          rows={3}
-          style={{width:"100%",padding:"10px 12px",borderRadius:12,border:`1.5px solid ${form.notes?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",resize:"none",boxSizing:"border-box",background:T.chalk}}/>
+      {/* Budget */}
+      <div style={{marginTop:24}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:10}}>Budget range</div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {budgets.map(b=>(
+            <button key={b.key} onClick={()=>set("budget",b.key)} style={{
+              padding:"12px 16px",borderRadius:12,cursor:"pointer",textAlign:"left",
+              border:`2px solid ${form.budget===b.key?T.terra:T.sand}`,
+              background:form.budget===b.key?"#FFF4EE":T.chalk,
+              transition:"all 0.2s",
+            }}>
+              <div style={{fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:form.budget===b.key?700:400}}>{b.label}</div>
+              <div style={{fontFamily:"Georgia,serif",fontSize:12,color:T.mist,marginTop:2}}>{b.sub}</div>
+            </button>
+          ))}
+        </div>
       </div>
     </div>,
 
-    /* 3 – budget + generate */
+    /* 3 – cities + notes + generate */
     <div key={3} style={{animation:"fadeUp 0.3s ease"}}>
-      <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>💰</div>
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:4}}>Budget range</div>
-      <div style={{fontSize:13,color:T.mist,textAlign:"center",marginBottom:18,fontFamily:"Georgia,serif"}}>Helps tailor accommodation & dining</div>
-      <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:22}}>
-        {budgets.map(b=>(
-          <button key={b.key} onClick={()=>set("budget",b.key)} style={{
-            padding:"14px 18px",borderRadius:14,cursor:"pointer",textAlign:"left",
-            border:`2px solid ${form.budget===b.key?T.terra:T.sand}`,
-            background:form.budget===b.key?"#FFF4EE":T.chalk,
-            transition:"all 0.2s",
-          }}>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink}}>{b.label}</div>
-            <div style={{fontFamily:"Georgia,serif",fontSize:12,color:T.mist,marginTop:2}}>{b.sub}</div>
-          </button>
-        ))}
+      <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>🛫</div>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:20}}>A few more details</div>
+
+      <div style={{display:"flex",gap:12,marginBottom:18}}>
+        <div style={{flex:1}}>
+          <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,marginBottom:6}}>Start city <span style={{color:T.mist,fontWeight:400}}>· if you know</span></div>
+          <input value={form.arrivalCity} onChange={e=>set("arrivalCity",e.target.value)}
+            placeholder="e.g. London"
+            style={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.arrivalCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,marginBottom:6}}>End city <span style={{color:T.mist,fontWeight:400}}>· if you know</span></div>
+          <input value={form.departureCity} onChange={e=>set("departureCity",e.target.value)}
+            placeholder="e.g. Paris"
+            style={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.departureCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
+        </div>
       </div>
-      {/* Summary card */}
-      <div style={{background:T.sand,borderRadius:14,padding:16,marginBottom:20}}>
-        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:T.ink,marginBottom:10}}>✈️ Your trip</div>
-        {[["Destinations",form.destinations.length>0?form.destinations.join(" → "):"—"],["Dates",form.startDate&&form.endDate?`${form.startDate} → ${form.endDate}`:"—"],["Travelers",form.travelers],["Style",form.styles.length>0?form.styles.join(", "):"—"],["Budget",budgets.find(b=>b.key===form.budget)?.label]].map(([k,v])=>(
-          <div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:13,fontFamily:"Georgia,serif",marginBottom:4}}>
-            <span style={{color:T.mist}}>{k}</span>
-            <span style={{color:T.ink,fontWeight:700}}>{v}</span>
-          </div>
-        ))}
+
+      <div style={{marginBottom:22}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:4}}>Anything else we should know?</div>
+        <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:10}}>The more you share, the better we can tailor it</div>
+        <textarea value={form.notes} onChange={e=>set("notes",e.target.value)}
+          placeholder=""
+          rows={3}
+          style={{width:"100%",padding:"10px 12px",borderRadius:12,border:`1.5px solid ${form.notes?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",resize:"none",boxSizing:"border-box",background:T.chalk}}/>
       </div>
-      <button onClick={handleGenerate} disabled={generating} style={{
+<button onClick={handleGenerate} disabled={generating} style={{
         width:"100%",padding:16,borderRadius:16,border:"none",
         cursor:generating?"default":"pointer",
         background:generating?T.sand:`linear-gradient(135deg,${T.ocean},${T.dusk})`,
@@ -2165,7 +2321,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange }) {
         fontFamily:"'DM Serif Display',serif",fontSize:18,
         boxShadow:generating?"none":"0 6px 22px rgba(37,99,168,0.4)",
         transition:"all 0.3s",marginTop:8,
-      }}>{generating?"✨ Generating your itinerary…":"Generate Itinerary ✨"}</button>
+      }}>{generating?"✨ Generating your itinerary…":"Start Planning ✨"}</button>
     </div>,
   ];
 
@@ -2678,10 +2834,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     }
   };
   const [activeBottomTab, setActiveBottomTab] = useState("itinerary");
+  const [chatUnread, setChatUnread] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput,   setChatInput]   = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const chatBottomRef = useRef(null);
+  const chatInputRef  = useRef(null);
   const [chatFilter, setChatFilter] = useState("all");
   const [mentionSearch, setMentionSearch] = useState(null);
   useEffect(() => {
@@ -2729,6 +2887,43 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
   const editActivity = (dayId, updated) => {
     setDays(prev=>prev.map(d=>d.id===dayId?{...d,activities:d.activities.map(a=>a.id===updated.id?updated:a)}:d));
+  };
+
+  const removeActivity = async (dayId, activityId) => {
+    // Snapshot the activity before removing for undo
+    const daySnap = days.find(d => d.id === dayId);
+    const actSnap = daySnap?.activities.find(a => a.id === activityId);
+    await supabase.from("activities").delete().eq("id", activityId);
+    setDays(prev=>prev.map(d=>d.id===dayId?{...d,activities:d.activities.filter(a=>a.id!==activityId)}:d));
+    if (actSnap) {
+      const undoMsg = {
+        role: "system-undo",
+        content: `"${actSnap.title}" was removed.`,
+        undoData: { dayId, actSnap },
+        id: `undo-${Date.now()}`,
+      };
+      setChatMessages(prev => [...prev, undoMsg]);
+      setChatUnread(true);
+    }
+  };
+
+  const undoRemoveActivity = async (dayId, actSnap) => {
+    const { data: inserted } = await supabase.from("activities").insert({
+      day_id: dayId, time: actSnap.time, title: actSnap.title, geocode: actSnap.geocode || null,
+      geocode_end: actSnap.geocode_end || null, type: actSnap.type, duration: actSnap.duration,
+      note: actSnap.note, confirmed: actSnap.confirmed ?? false, icon: actSnap.icon,
+      package: actSnap.package || null, position: actSnap.position, photo_url: actSnap.photo_url || null,
+      added_by: session.user.id,
+    }).select().single();
+    if (inserted) {
+      setDays(prev => prev.map(d => {
+        if (d.id !== dayId) return d;
+        const acts = [...d.activities, { ...actSnap, id: inserted.id }]
+          .sort((a, b) => a.position - b.position);
+        return { ...d, activities: acts };
+      }));
+      setChatMessages(prev => prev.filter(m => !(m.role === "system-undo" && m.undoData?.actSnap?.id === actSnap.id)));
+    }
   };
 
 
@@ -2811,7 +3006,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             "Content-Type": "application/json",
             "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
-          body: JSON.stringify({ destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null }),
+          body: JSON.stringify({ destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null }),
         }
       );
       clearTimeout(timeout);
@@ -2960,8 +3155,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       generation_completed_at: generationCompletedAt,
       ig_request: igRequest,
       ig_response: itinerary,
-      ...(itinerary.summary  && { summary: itinerary.summary }),
-      ...(form.notes         && { notes: form.notes }),
+      ...(itinerary.summary    && { summary: itinerary.summary }),
+      ...(form.notes           && { notes: form.notes }),
+      ...(form.arrivalCity     && { arrival_city: form.arrivalCity }),
+      ...(form.departureCity   && { departure_city: form.departureCity }),
     };
     const { error: tripErr } = await supabase.from("trips").insert(tripPayload);
 
@@ -3210,10 +3407,36 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   };
 
   const filteredMessages = chatMessages.filter(m => {
+    if (m.role === "system-undo") return true; // always show undo toasts
     if (chatFilter === "group") return m.role === "user";
     if (chatFilter === "ai") return m.role === "assistant";
     return true;
   });
+
+  const sendChatDirect = async (message) => {
+    if (!message.trim() || chatLoading) return;
+    const userMsg = { role: "user", content: message.trim(), user_id: session.user.id };
+    const history = chatMessages;
+    setChatMessages(prev => [...prev, userMsg, { role: "assistant", content: "", streaming: true }]);
+    setChatLoading(true);
+    supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "user", content: userMsg.content });
+    let finalContent = "Sorry, something went wrong. Try again.";
+    let suggestions = null;
+    try {
+      const data = await callChatTrip(userMsg.content, trip, days, history, (accumulated) => {
+        const partial = extractPartialMessage(accumulated);
+        if (partial !== null) {
+          setChatMessages(prev => { const updated = [...prev]; updated[updated.length - 1] = { role: "assistant", content: partial, streaming: true }; return updated; });
+        }
+      });
+      finalContent = data.message || "Done.";
+      suggestions = data.suggestions || null;
+    } catch { /* use default error message */ }
+    setChatMessages(prev => { const updated = [...prev]; updated[updated.length - 1] = { role: "assistant", content: finalContent, suggestions }; return updated; });
+    setChatLoading(false);
+    setChatUnread(true);
+    supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "assistant", content: finalContent });
+  };
 
   const sendChatMessage = async () => {
     if (!chatInput.trim() || chatLoading) return;
@@ -3227,6 +3450,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "user", content: userMsg.content });
 
     let finalContent = "Sorry, something went wrong. Try again.";
+    let suggestions = null;
     try {
       const data = await callChatTrip(userMsg.content, trip, days, history, (accumulated) => {
         const partial = extractPartialMessage(accumulated);
@@ -3239,11 +3463,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         }
       });
       finalContent = data.message || "Done.";
+      suggestions = data.suggestions || null;
     } catch { /* use default error message */ }
 
     setChatMessages(prev => {
       const updated = [...prev];
-      updated[updated.length - 1] = { role: "assistant", content: finalContent };
+      updated[updated.length - 1] = { role: "assistant", content: finalContent, suggestions };
       return updated;
     });
     // Persist assistant message
@@ -3439,6 +3664,29 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                       day={day}
                       dayIndex={i}
                       onEditActivity={editActivity}
+                      onRemoveActivity={removeActivity}
+                      onReplaceActivity={(act) => {
+                        setChatInput(`Replace "${act.title}" with `);
+                        setActiveBottomTab("chat");
+                        setChatUnread(false);
+                        setTimeout(() => chatInputRef.current?.focus(), 50);
+                      }}
+                      onSuggestAlternatives={(act) => {
+                        sendChatDirect(`Suggest 2-3 alternatives to "${act.title}" for the same time slot, without making any changes yet`);
+                      }}
+                      onChangeHotel={(dayId, act, mode) => {
+                        const dayLabel = days.find(d => d.id === dayId)?.label || "this day";
+                        if (mode === "own") {
+                          setChatInput(`I've booked my own hotel for ${dayLabel} — please remove the "${act.title}" suggestion`);
+                          setActiveBottomTab("chat");
+                          setChatUnread(false);
+                          setTimeout(() => chatInputRef.current?.focus(), 50);
+                        } else {
+                          setActiveBottomTab("chat");
+                          setChatUnread(false);
+                          sendChatDirect(`Suggest a different hotel for ${dayLabel} instead of "${act.title}"`);
+                        }
+                      }}
                       arrivalTime={i === 0 ? (trip.arrival_time || (trip.start_date ? `${trip.start_date}T12:00:00` : null)) : null}
                       arrivalMode={i === 0 ? (trip.arrival_mode || "flight") : null}
                       arrivalCity={i === 0 ? trip.arrival_city : null}
@@ -3545,6 +3793,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                   </div>
                 )}
                 {filteredMessages.map((m,i)=>{
+                  if (m.role === "system-undo") {
+                    return (
+                      <div key={m.id || i} style={{display:"flex",justifyContent:"center",margin:"6px 0"}}>
+                        <div style={{background:T.sand,borderRadius:12,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.mist,display:"flex",alignItems:"center",gap:10}}>
+                          <span>{m.content}</span>
+                          <button onClick={()=>undoRemoveActivity(m.undoData.dayId, m.undoData.actSnap)} style={{background:"none",border:`1px solid ${T.mist}`,borderRadius:8,padding:"2px 10px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer"}}>Undo</button>
+                        </div>
+                      </div>
+                    );
+                  }
                   const isOwn = m.role==="user" && m.user_id===session.user.id;
                   const isAI = m.role==="assistant";
                   const isOther = m.role==="user" && m.user_id!==session.user.id;
@@ -3568,6 +3826,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                         {m.streaming && !m.content ? <span style={{color:T.mist,letterSpacing:2}}>···</span> : renderMentions(m.content||"")}
                         {m.streaming && m.content && <span style={{display:"inline-block",width:2,height:"1em",background:T.ink,marginLeft:2,verticalAlign:"text-bottom",animation:"blink 1s step-end infinite"}}/>}
                       </div>
+                      {isAI && m.suggestions?.length > 0 && (
+                        <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginTop:6,maxWidth:"90vw"}}>
+                          {m.suggestions.map((s, si) => (
+                            <SuggestionCard key={si} suggestion={s} onSelect={() => {
+                              setChatInput(`Use "${s.title}"`);
+                              setTimeout(() => chatInputRef.current?.focus(), 50);
+                            }}/>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -3586,6 +3854,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               {/* Input */}
               <div style={{padding:"8px 12px",paddingBottom:"calc(8px + env(safe-area-inset-bottom, 0px))",background:T.chalk,borderTop:`1px solid ${T.sand}`,display:"flex",gap:8,flexShrink:0}}>
                 <input
+                  ref={chatInputRef}
                   value={chatInput}
                   onChange={e=>{
                     setChatInput(e.target.value);
@@ -3639,7 +3908,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             ].map(({ key, icon, label }) => {
               const active = activeBottomTab === key;
               return (
-                <button key={key} onClick={()=>setActiveBottomTab(key)} style={{
+                <button key={key} onClick={()=>{ setActiveBottomTab(key); if (key === "chat") setChatUnread(false); }} style={{
                   flex:1,
                   display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
                   gap:3,
@@ -3652,7 +3921,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                   position:"relative",
                 }}>
                   {active && <div style={{position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:32,height:2.5,borderRadius:"0 0 2px 2px",background:T.ocean}}/>}
-                  <span style={{fontSize:20}}>{icon}</span>
+                  <span style={{fontSize:20,position:"relative"}}>
+                    {icon}
+                    {key === "chat" && chatUnread && !active && <span style={{position:"absolute",top:-2,right:-4,width:8,height:8,borderRadius:"50%",background:T.terra,border:`1.5px solid white`}}/>}
+                  </span>
                   <span style={{fontSize:10,fontFamily:"'Inter','Segoe UI',sans-serif",fontWeight: active ? 600 : 400,letterSpacing:0.3}}>{label}</span>
                 </button>
               );

@@ -46,6 +46,7 @@ RULES:
 - If asking a clarifying question (no change made), omit "updatedDays".
 - Each activity: time, title, geocode, type (sight/food/shop/transit/hotel), duration, note (short, no apostrophes), icon (emoji).
 - geocode field: shortest plain name to find this place on a map (e.g. title "Colaba Causeway Street Market" → geocode "Colaba Causeway"; title "Lunch at Trishna" → geocode "Trishna"). Strip descriptors, just the place name.
+- SUGGESTIONS: When the user asks to see alternatives or suggestions without committing to a change (e.g. "suggest alternatives", "suggest a different hotel"), do NOT modify the itinerary. Instead include a "suggestions" array of 2-4 options. Each suggestion: title, geocode (shortest plain name for Maps), note (max 10 words, no quotes), icon (emoji), type (sight/food/hotel/etc). Omit "updatedDays". The message should introduce the options briefly.
 - WISHLIST: When you change a day's activities, also return an updated "wishlist" array for that day — 3 to 5 low-commitment local gems near that day's area (a cafe, rooftop bar, bookshop, etc.) that are NOT already in the day's activities. Each item: title, geocode, note (max 9 words), icon.
 
 CRITICAL: Each day in "updatedDays" MUST have a "label" field matching EXACTLY the label from the itinerary above (e.g. "Day 1", "Day 3"). Do not rename or omit the label.
