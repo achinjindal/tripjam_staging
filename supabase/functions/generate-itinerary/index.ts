@@ -17,7 +17,8 @@ Rules:
 - RESTAURANTS: Only suggest a restaurant if you are certain it is actually located in that neighbourhood. If unsure, suggest a food street, market, or well-known dining area instead (e.g. Bandra food stalls near Hill Road, Chowpatty Beach chaat).
 - DINING ALTERNATIVES: For every food/dining activity, include an "alternatives" array with exactly 1 backup restaurant in the same neighbourhood — different style or price point from the primary. Same fields as the activity: title, geocode, note, icon. This is a fallback in case the primary cannot be verified.
 - RELIABILITY: Strongly prefer venues established for many years — well-known institutions unlikely to have closed. Favour decades-old Irani cafes, heritage dhabas, long-running seafood spots over newer fashionable options.
-- DAY-TRIP TRANSIT: Includes return if it is a single activity — do not add a separate Return activity if possible.
+- DAY-TRIP TRANSIT: When a day trip is represented as a single transit activity that returns to the starting base the same day, OMIT the geocodeEnd field entirely. The day-trip activity's geocode should be the base city (where the day starts and ends). This prevents the UI from computing phantom drive time between the day-trip destination and the next local activity. The duration should cover the whole round-trip (travel + time at destination + return). Do NOT add a separate "Return" activity.
+- NO TIMING GAPS: After a day-trip transit, the NEXT activity must start within 1 hour of the day-trip's end (start + duration). Do not leave a 3+ hour gap. Fill the afternoon with local activities in the base city. A common failure: day trip ends at 13:00 and the next item is dinner at 19:00 — this is wrong; insert lunch, a local walk, a café, or a sight between them.
 - PACKAGE: When multiple activities are part of the same booked experience where the traveler does not move independently between them (e.g. overnight cruise, guided full-day tour, cooking class with multiple components), set a "package" field to a short kebab-case identifier on ALL of them (e.g. "halong-cruise", "hoian-cooking-class"). Every activity in the group MUST have the same package value — including the hotel check-in activity for that experience. This suppresses transit rows, duplicate map pins, and duplicate photos between them. A Ha Long Bay overnight cruise is a mandatory example — the cruise hotel check-in AND all aboard activities must share the same package value.
 - NOTE: Max 10 words; use commas where natural. No quotes.
 - CITY FIELD: Use the most specific meaningful place name for that day — a neighbourhood, area, or town (e.g. "Colaba", "Seminyak", "Ubud"), never a country or region. For day trips, use the day-trip destination. Never append the country or region (e.g. "Seminyak" not "Seminyak, Bali").
@@ -27,7 +28,7 @@ Rules:
   - FLIGHT: use airport code or name — "Mumbai Airport" → "Delhi Airport", "BOM" → "DEL".
   - BOAT/FERRY: use the pier — "Sathon Pier Bangkok" → "Wat Arun Pier".
   - ROAD / PRIVATE CAR: city name is acceptable — "Colombo" → "Mirissa".
-  Day-trip ferries returning to same pier: omit geocodeEnd. Non-transit: omit geocodeEnd.
+  Day-trip round-trips (traveler returns to same base same day): OMIT geocodeEnd entirely — geocode should be the base city. This rule covers day-trip buses, minibuses, boats, car trips — not just ferries. Non-transit: omit geocodeEnd.
 - MULTI-DESTINATION: Transit activity on first day of each new city.
 - MEALS: Walking distance from current sightseeing zone. Bias towards legendary long-established places.
 - GEOGRAPHY: Cover an area fully in one visit — avoid backtracking. Traveler should not need to return to the same area again in the same trip.
@@ -115,12 +116,56 @@ serve(async (req) => {
       if (upvotedRegions.length) {
         const r = upvotedRegions[0]; // usually exactly one
         const routeCities = (r.city || "").split(",").map((c: string) => c.trim()).filter(Boolean);
-        const routeDays = r.days || [];
-        routeConstraint = `SELECTED ROUTE (HARD CONSTRAINT): The traveler chose the "${r.title}" route. The itinerary MUST follow this route exactly:
-- Cities in travel order: ${routeCities.join(" → ")}
+        const routeDays = (r.days || []).map((d: any) => typeof d === "string" ? d : (d?.description || d?.day || ""));
+        // Infer overnight bases from the day template: per day, find which city the traveler SLEEPS in.
+        // Look for explicit "return to X", "overnight in X", "back to X for overnight" phrasing; else assume
+        // the day's primary city is the overnight base.
+        const bases: string[] = [];
+        for (let i = 0; i < routeDays.length; i++) {
+          const dayText = routeDays[i].toLowerCase();
+          let base = "";
+          // Pattern 1: explicit return/overnight
+          const m = dayText.match(/(?:return to|overnight in|back to|based in|stay in|sleep in)\s+([a-z][a-z\s\-]+?)(?:$|[,.]|\s+for\s+overnight)/i);
+          if (m) base = m[1].trim();
+          // Pattern 2: day trip pattern implies return to previous base
+          else if (dayText.includes("day trip") && bases[i - 1]) base = bases[i - 1];
+          // Pattern 3: transit pattern "X → Y" → base is Y (destination)
+          else {
+            const transit = routeDays[i].match(/→\s*([A-Z][a-z\-]+)/);
+            if (transit) base = transit[1];
+          }
+          // Fallback: use first city mentioned in the line
+          if (!base) {
+            const cityHit = routeCities.find((c: string) => dayText.includes(c.toLowerCase()));
+            if (cityHit) base = cityHit;
+          }
+          // Final fallback: previous base (if any)
+          if (!base && bases[i - 1]) base = bases[i - 1];
+          bases.push(base || routeCities[0] || "");
+        }
+        // Compute night-by-night summary — nights = days - 1 (last day usually ends in departure, no overnight)
+        const nightsSummary = bases.slice(0, Math.max(0, bases.length - 1)).map((b, i) => `  Night ${i + 1} (after Day ${i + 1}): sleep in ${b}`).join("\n");
+
+        routeConstraint = `SELECTED ROUTE (ABSOLUTE HARD CONSTRAINT — highest priority):
+The traveler explicitly chose the "${r.title}" route. The itinerary MUST follow this route exactly:
+
+CITIES IN TRAVEL ORDER: ${routeCities.join(" → ")}
 - Do NOT add cities outside this list.
 - Do NOT replace any of these cities with alternatives.
-- The base / overnight stops must match this route; only the fine-grain activities may be refined.${routeDays.length ? `\n\nDAY-BY-DAY TEMPLATE (the traveler has agreed to this flow — refine each day with specific named activities, but keep the same place and theme):\n${routeDays.map((d: any, i: number) => `  Day ${i + 1}: ${typeof d === "string" ? d : (d?.description || d?.day || "")}`).join("\n")}` : ""}${r.points?.length ? `\n\nKey characteristics of this route the traveler values:\n${(r.points || []).filter((p: any) => p.good !== false).map((p: any) => `  • ${p.text}`).join("\n")}` : ""}`;
+
+OVERNIGHT BASES (derived from the day template — THESE ARE NON-NEGOTIABLE):
+${nightsSummary}
+
+Interpretation rules (VERY IMPORTANT — read carefully):
+- NOT every city in the city list is an overnight stop. Some are day-trip destinations visited and returned from the same day.
+- The "Night N" lines above tell you exactly where the traveler sleeps each night. Hotel check-in/check-out MUST follow this schedule.
+- If Night N and Night N+1 are the SAME city, the traveler stays at the same hotel (no new check-in).
+- A "day trip" in the day template means the traveler goes to that place and RETURNS to the base the SAME day. Do NOT schedule an overnight there.
+- If the day template says "day trip to X, back to Y for overnight", the base stays Y — do NOT move the base to X.
+
+DAY-BY-DAY TEMPLATE (the traveler agreed to this flow — refine activities, keep the place/theme/base structure):
+${routeDays.map((d: string, i: number) => `  Day ${i + 1}: ${d}`).join("\n")}
+${r.points?.length ? `\nKey characteristics of this route the traveler values:\n${(r.points || []).filter((p: any) => p.good !== false).map((p: any) => `  • ${p.text}`).join("\n")}` : ""}`;
       }
       const prefParts: string[] = [];
       if (upvotedExp.length) prefParts.push(`Experiences the traveler wants included: ${upvotedExp.map((e: any) => e.title).join(", ")}`);
