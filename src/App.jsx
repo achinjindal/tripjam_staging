@@ -3610,7 +3610,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     setStreamingDays(0);
     setAllDaysPlanned(false);
     setScreen("generating");
-    const generatingScreenStart = Date.now();
 
     const numDays = Math.max(1, Math.round((new Date(form.endDate) - new Date(form.startDate)) / (1000*60*60*24)) + 1);
     setStreamingTotal(numDays);
@@ -3631,7 +3630,24 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             "Content-Type": "application/json",
             "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
-          body: JSON.stringify({ destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null, votedItems: votedItems || null }),
+          body: JSON.stringify({
+            // Use route cities as effective destinations if user picked a route; fall back to form input.
+            destinations: (() => {
+              const chosenRoute = (votedItems || []).find(it => it.tier === 1 && it.vote === 1);
+              if (chosenRoute?.city) {
+                const cities = chosenRoute.city.split(",").map(c => c.trim()).filter(Boolean);
+                if (cities.length) return cities;
+              }
+              return form.destinations;
+            })(),
+            numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null,
+            // Default arrival/departure times if not explicitly set — AI uses these to constrain Day 1 start and last day end.
+            arrivalTime: form.arrivalTime || "09:00",
+            departureTime: form.departureTime || "22:00",
+            arrivalMode: form.arrivalMode || "flight",
+            departureMode: form.departureMode || "flight",
+            votedItems: votedItems || null,
+          }),
         }
       );
       clearTimeout(timeout);
@@ -3784,6 +3800,33 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       }
     } catch (e) { console.warn("Hotel options validation failed, proceeding without:", e.message); }
 
+    // Validate wishlist items — drop any that don't resolve (catches hallucinated "Surfers Cemetery" type items)
+    try {
+      const allWishlist = itinerary.days.flatMap((day, di) =>
+        (day.wishlist || []).map((w, wi) => ({ di, wi, title: w.geocode || w.title, city: day.city }))
+      );
+      if (allWishlist.length) {
+        const res = await fetch(`${PLACES_PROXY}?action=validate`, {
+          method: "POST", headers: PLACES_HEADERS,
+          body: JSON.stringify({ activities: allWishlist.map(({ title, city }) => ({ title, city })) }),
+        });
+        const { results } = await res.json();
+        const verifiedByDay = {};
+        allWishlist.forEach(({ di, wi }, idx) => {
+          const r = results[idx];
+          const ok = r?.exists && r.businessStatus !== "CLOSED_PERMANENTLY" && r.businessStatus !== "CLOSED_TEMPORARILY";
+          if (ok) {
+            if (!verifiedByDay[di]) verifiedByDay[di] = [];
+            verifiedByDay[di].push(itinerary.days[di].wishlist[wi]);
+          }
+        });
+        itinerary.days.forEach((day, di) => {
+          if (!day.wishlist) return;
+          day.wishlist = verifiedByDay[di] || [];
+        });
+      }
+    } catch (e) { console.warn("Wishlist validation failed, proceeding without:", e.message); }
+
     const generationCompletedAt = new Date().toISOString();
 
     const isEditing = !!editingTrip?.id;
@@ -3919,9 +3962,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     });
     setDays(savedDays);
     setActiveDay(0);
-    // Ensure generating screen shows for at least 4s so carousel/counter are visible
-    const elapsed = Date.now() - generatingScreenStart;
-    if (elapsed < 4000) await new Promise(r => setTimeout(r, 4000 - elapsed));
     playDoneChime();
     setChatUnread(true);
     setEditingTrip(null);
@@ -4553,7 +4593,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                           sendChatDirect(`I want to consider other hotel options for ${dayLabel}. Currently at "${act.title}"${dayCity ? ` in ${dayCity}` : ""}.`);
                         }
                       }}
-                      arrivalTime={i === 0 ? (trip.arrival_time || (trip.start_date ? `${trip.start_date}T12:00:00` : null)) : null}
+                      arrivalTime={i === 0 ? (trip.arrival_time || (trip.start_date ? `${trip.start_date}T09:00:00` : null)) : null}
                       arrivalMode={i === 0 ? (trip.arrival_mode || "flight") : null}
                       arrivalCity={i === 0 ? trip.arrival_city : null}
                       onEditFlight={i === 0 ? () => {
@@ -4561,7 +4601,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                           scrollRef.current.scrollTop = logisticsRef.current.offsetTop;
                         }
                       } : undefined}
-                      departureTime={i === days.length - 1 ? (trip.departure_time || (trip.end_date ? `${trip.end_date}T19:00:00` : null)) : null}
+                      departureTime={i === days.length - 1 ? (trip.departure_time || (trip.end_date ? `${trip.end_date}T22:00:00` : null)) : null}
                       departureMode={i === days.length - 1 ? (trip.departure_mode || "flight") : null}
                       departureCity={i === days.length - 1 ? (trip.departure_city || null) : null}
                       onEditDeparture={i === days.length - 1 ? () => {

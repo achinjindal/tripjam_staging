@@ -11,8 +11,8 @@ const SYSTEM_PROMPT = `You are a travel expert who generates travel itineraries 
 Rules:
 - HOTEL SELECTION: Choose a hotel that is (1) well-located — good connectivity, pleasant part of town; (2) reliable and well-reviewed, confirmed to be open; (3) if budget calls for a hostel, pick one known for its community; otherwise prefer a hotel with a pool, good food, and a great location. Specific named property only. Never invent or guess a hotel name.
 - HOTEL HOPS: Minimise hotel changes — average stay should be 2+ nights. Avoid single-night stops unless unavoidable.
-- CHECK-IN: Include a hotel check-in activity (type: hotel, icon: 🏨) on the first day in each city — mandatory, never skip. For Day 1: place check-in after the ready time from the DAY 1 CONSTRAINT. For subsequent cities: if transit arrives before 12:30, check in at 12:30 (brief activities before check-in are fine); if 12:30–18:00, check in right after transit; if after 18:00, check in first.
-- RETURNING TO A CITY: Every arrival day requires a hotel check-in — even if the city was visited earlier in the trip.
+- CHECK-IN: Include a hotel check-in activity (type: hotel, icon: 🏨) on the first day in each city WHERE THE TRAVELER SPENDS AT LEAST ONE NIGHT. If a city is only a transit point (they arrive and leave the same day without sleeping there), do NOT include a hotel check-in — go straight from arrival to the onward transit. This matters for arrival airports: if the traveler lands in Colombo and drives onward to Galle the same day, there is NO hotel check-in in Colombo. For cities where they do spend the night: on Day 1 place check-in after the ready time from the DAY 1 CONSTRAINT. For subsequent cities: if transit arrives before 12:30, check in at 12:30 (brief activities before check-in are fine); if 12:30–18:00, check in right after transit; if after 18:00, check in first.
+- RETURNING TO A CITY: An arrival day requires a hotel check-in ONLY if the traveler stays the night there. Same-day pass-through cities get no check-in.
 - TITLES: Use REAL specific place names — e.g. Trishna, Leopold Cafe, Juhu Beach, Khao San Road street food. Never use generic titles like Lunch, Dinner, City Park, Local Restaurant. Never prefix or suffix the city name in a title (e.g. "Check in at La Siesta Classic Ma May" not "Check in at Hanoi La Siesta Classic Ma May").
 - RESTAURANTS: Only suggest a restaurant if you are certain it is actually located in that neighbourhood. If unsure, suggest a food street, market, or well-known dining area instead (e.g. Bandra food stalls near Hill Road, Chowpatty Beach chaat).
 - DINING ALTERNATIVES: For every food/dining activity, include an "alternatives" array with exactly 1 backup restaurant in the same neighbourhood — different style or price point from the primary. Same fields as the activity: title, geocode, note, icon. This is a fallback in case the primary cannot be verified.
@@ -43,7 +43,7 @@ Rules:
 - STYLE — RELAXATION & WELLNESS: If this style is selected, include spas, hammams, onsen, yoga studios, or wellness centres. Reduce daily activity count. Prefer scenic walks and beach time over packed sightseeing. Include healthy cafes and juice bars alongside restaurants.
 - STYLE — ADVENTURE & THRILL: If this style is selected, prioritise physically engaging activities — trekking, white-water rafting, diving, bungee jumping, rollercoasters — prefer what is special for that destination. Accept early starts for these as exceptions. Include necessary logistics (guide, gear rental) in the note field.
 - STYLE — HISTORY & CULTURE: If this style is selected, include historic sites, local eateries, and authentic local experiences.
-- WISHLIST: For each day include a "wishlist" array of 2–3 low-commitment local gems near that day's area — specific named places only (a chocolate shop, a rooftop bar, a quiet temple, a street food stall, a bookshop). These are things worth knowing about if the traveller has a spare moment, not planned activities. Each item: title, geocode (shortest plain name for Maps), note (max 9 words, commas allowed, no quotes), icon. Exclude anything already appearing in any day's activities across the entire itinerary. Each gem must be within 15 minutes walk from the day's activity points. RELIABILITY applies here too — only suggest wishlist items you are confident actually exist. No invented or uncertain venues; if unsure, suggest a well-known street, market, or area instead.
+- WISHLIST: For each day include a "wishlist" array of 2–3 low-commitment local gems near that day's area — specific named places only (a chocolate shop, a rooftop bar, a quiet temple, a street food stall, a bookshop). These are things worth knowing about if the traveller has a spare moment, not planned activities. Each item: title, geocode (shortest plain name for Maps), note (max 9 words, commas allowed, no quotes), icon. Exclude anything already appearing in any day's activities across the entire itinerary. Each gem must be within 15 minutes walk from the day's activity points. RELIABILITY — WISHLIST ITEMS ARE AUTOMATICALLY VALIDATED VIA GOOGLE PLACES API AFTER GENERATION. Any item that doesn't resolve as an operating place will be SILENTLY DROPPED from the output. Therefore: only include items you are CERTAIN exist with the exact name and location you're giving. Do NOT guess quirky-sounding names ("Surfers Cemetery", "Whispering Garden", "The Purple Door") unless you have specific knowledge this venue exists. When in doubt, use: a well-known street/market/area that's certain to exist, or a chain/franchise location, or omit the item. An empty or short wishlist is better than invented entries.
 - SUMMARY: Include a top-level "summary" string — 2 sentences max. First sentence: what the trip covers (destinations, character, travel style). Second sentence: a warm nudge to use the chat assistant to tweak anything — activities, pace, restaurants, days.
 
 Return ONLY a raw JSON object. No markdown, no code fences, no explanation. Start your response with { and end with }. Example structure:
@@ -84,7 +84,7 @@ serve(async (req) => {
       const readyMM = String(readyMins % 60).padStart(2, "0");
       const arrivalLoc = arrivalCity || destinations[0];
       const portSuffix = arrivalPort ? ` ${arrivalPort}` : "";
-      day1Note = `DAY 1 CONSTRAINT: Traveler ${arrivalVerb} at ${arrivalTime} in ${arrivalLoc}${portSuffix}. They will be ready to start sightseeing at ${readyHH}:${readyMM}. NOTHING may be scheduled before ${readyHH}:${readyMM} on Day 1 — no morning sightseeing, no breakfast, no hotel check-in before this time. All Day 1 activities MUST be in ${arrivalLoc}.`;
+      day1Note = `DAY 1 CONSTRAINT (ABSOLUTE HARD RULE): Traveler ${arrivalVerb} at ${arrivalTime} in ${arrivalLoc}${portSuffix}. They will be ready to start sightseeing at ${readyHH}:${readyMM}. Day 1's FIRST activity MUST start at or after ${readyHH}:${readyMM} — NOT EARLIER. No transit, no sightseeing, no breakfast, no hotel check-in before ${readyHH}:${readyMM} on Day 1. This includes any onward road/train transit to a different city — that ALSO must wait until after ${readyHH}:${readyMM}. All Day 1 activities MUST be in ${arrivalLoc} or start from ${arrivalLoc}. If you plan morning transit to a next city, that transit's time field MUST be >= ${readyHH}:${readyMM}.`;
     }
 
     const departureBuffer = departureBuffers[departureMode ?? "flight"] ?? 150;
@@ -97,38 +97,44 @@ serve(async (req) => {
       const cutoffMins = h * 60 + m - departureBuffer;
       const cutHH = String(Math.floor(cutoffMins / 60) % 24).padStart(2, "0");
       const cutMM = String(cutoffMins % 60).padStart(2, "0");
-      lastDayNote = `LAST DAY CONSTRAINT: ${departureDesc.charAt(0).toUpperCase() + departureDesc.slice(1)} at ${departureTime} from ${departureCity || destinations[destinations.length - 1]}. All activities on the last day must end by ${cutHH}:${cutMM} to allow time to ${departurePortDesc}.`;
+      lastDayNote = `LAST DAY CONSTRAINT (ABSOLUTE HARD RULE): ${departureDesc.charAt(0).toUpperCase() + departureDesc.slice(1)} at ${departureTime} from ${departureCity || destinations[destinations.length - 1]}. Every activity on the last day MUST end by ${cutHH}:${cutMM} (this means start_time + duration <= ${cutHH}:${cutMM}). No activity may start or run past ${cutHH}:${cutMM}. The traveler needs ${departureBuffer} minutes to ${departurePortDesc}.`;
     }
 
     const notesNote = notes ? `TRAVELER NOTES: ${notes}. Factor this into every day of the itinerary.` : "";
     const carNote = hasCar ? "CAR: Travelers have a private car for the entire trip. For inter-city legs, suggest driving with approximate drive time instead of train or bus. Within cities, they can drive to attractions but prefer walking or local transport where natural." : "";
     const travelMonth = startDate ? new Date(startDate).toLocaleString("en-US", { month: "long" }) : null;
 
-    let brainstormNote = "";
+    // Build route-constraint block ABOVE the main prompt so it takes precedence
+    let routeConstraint = "";
+    let extraPrefs = "";
     if (votedItems && votedItems.length > 0) {
       const upvotedRegions = votedItems.filter((it: any) => it.tier === 1 && it.vote === 1);
       const upvotedExp = votedItems.filter((it: any) => (it.tier || 2) === 2 && it.vote === 1);
       const downvotedExp = votedItems.filter((it: any) => (it.tier || 2) === 2 && it.vote === -1);
-      const parts: string[] = [];
       if (upvotedRegions.length) {
-        const routeCities = upvotedRegions.flatMap((r: any) => (r.city || "").split(",").map((c: string) => c.trim()).filter(Boolean));
-        const routeDays = upvotedRegions.flatMap((r: any) => r.days || []);
-        parts.push(`SELECTED ROUTE: "${upvotedRegions.map((r: any) => r.title).join(", ")}". The itinerary MUST stay within these cities/towns in travel order: ${routeCities.join(" → ")}. Do not add other cities outside this route.`);
-        if (routeDays.length) parts.push(`Day-by-day outline from the traveler's chosen route (use as a guide, refine with specific activities):\n${routeDays.map((d: string, i: number) => `  Day ${i + 1}: ${d}`).join("\n")}`);
+        const r = upvotedRegions[0]; // usually exactly one
+        const routeCities = (r.city || "").split(",").map((c: string) => c.trim()).filter(Boolean);
+        const routeDays = r.days || [];
+        routeConstraint = `SELECTED ROUTE (HARD CONSTRAINT): The traveler chose the "${r.title}" route. The itinerary MUST follow this route exactly:
+- Cities in travel order: ${routeCities.join(" → ")}
+- Do NOT add cities outside this list.
+- Do NOT replace any of these cities with alternatives.
+- The base / overnight stops must match this route; only the fine-grain activities may be refined.${routeDays.length ? `\n\nDAY-BY-DAY TEMPLATE (the traveler has agreed to this flow — refine each day with specific named activities, but keep the same place and theme):\n${routeDays.map((d: any, i: number) => `  Day ${i + 1}: ${typeof d === "string" ? d : (d?.description || d?.day || "")}`).join("\n")}` : ""}${r.points?.length ? `\n\nKey characteristics of this route the traveler values:\n${(r.points || []).filter((p: any) => p.good !== false).map((p: any) => `  • ${p.text}`).join("\n")}` : ""}`;
       }
-      if (upvotedExp.length) parts.push(`Experiences the traveler wants included: ${upvotedExp.map((e: any) => e.title).join(", ")}`);
-      if (downvotedExp.length) parts.push(`Experiences to avoid: ${downvotedExp.map((e: any) => e.title).join(", ")}`);
-      if (parts.length) brainstormNote = `\n\nTRAVELER PREFERENCES (from brainstorm vote):\n${parts.join("\n")}`;
+      const prefParts: string[] = [];
+      if (upvotedExp.length) prefParts.push(`Experiences the traveler wants included: ${upvotedExp.map((e: any) => e.title).join(", ")}`);
+      if (downvotedExp.length) prefParts.push(`Experiences to avoid: ${downvotedExp.map((e: any) => e.title).join(", ")}`);
+      if (prefParts.length) extraPrefs = `\n\n${prefParts.join("\n")}`;
     }
 
     console.log("day1Note:", day1Note);
 
-    const userMessage = `Generate a ${numDays}-day itinerary for: ${destinations.join(" → ")}.
+    const userMessage = `${routeConstraint ? routeConstraint + "\n\n────\n\n" : ""}Generate a ${numDays}-day itinerary for: ${destinations.join(" → ")}.
 
 Trip: ${travelers} travelers, ${stylesText} style, ${budgetLabel} budget.${travelMonth ? ` Travel dates: ${travelMonth}.` : ""}
 
 ${paceNote}
-${morningNote}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDayNote}` : ""}${carNote ? `\n\n${carNote}` : ""}${notesNote ? `\n${notesNote}` : ""}${brainstormNote}`;
+${morningNote}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDayNote}` : ""}${carNote ? `\n\n${carNote}` : ""}${notesNote ? `\n${notesNote}` : ""}${extraPrefs}`;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
