@@ -1464,7 +1464,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
 
           {!isPretripMode && (
             <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", marginTop: 4 }}>
-              A quick overview of where you're going and what you're doing
+              Destinations on this trip and what makes each one special
             </div>
           )}
         </div>
@@ -1518,7 +1518,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
           )}
         </>)}
 
-        {/* ── IN-TRIP: Destinations overview ── */}
+        {/* ── IN-TRIP: Destinations cards ── */}
         {!isPretripMode && (() => {
           // Group days by city
           const cityGroups = {};
@@ -1529,50 +1529,68 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
             cityGroups[city].push(d);
           }
           return (
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
               {cityOrder.map(city => {
                 const cityDays = cityGroups[city];
-                // Collect all activities across the city's days
                 const allActs = cityDays.flatMap(d => d.activities || []);
-                // Unique localities from geocodes (non-transit, non-hotel)
-                const localities = [...new Set(
-                  allActs.filter(a => a.type !== "transit" && a.geocode)
-                    .map(a => a.geocode.split(",")[0].trim())
-                )].slice(0, 6);
-                // Key activities (sights, food, experiences — not hotel/transit)
-                const keyActs = allActs.filter(a => a.type !== "transit" && a.type !== "hotel").slice(0, 8);
+                // Write-up: prefer top-level cities[].writeup from IG response; fall back to day descriptions
+                const cityEntry = (trip?.ig_response?.cities || []).find(c => (c.name || "").toLowerCase() === city.toLowerCase());
+                const writeup = cityEntry?.writeup || cityDays
+                  .map(d => (d.description || "").trim())
+                  .filter(Boolean)
+                  .join(" ");
+                // Highlights: prefer sight/experience/culture/nature types; fall back to notable food
+                const preferredTypes = new Set(["sight", "experience", "culture", "nature"]);
+                let highlights = allActs.filter(a => preferredTypes.has(a.type));
+                if (highlights.length < 3) {
+                  const extra = allActs.filter(a => !preferredTypes.has(a.type) && a.type !== "transit" && a.type !== "hotel").slice(0, 4);
+                  highlights = [...highlights, ...extra];
+                }
+                highlights = highlights.slice(0, 6);
+
                 return (
-                  <div key={city} style={{ background: T.chalk, borderRadius: 16, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
+                  <div key={city} style={{ background: T.chalk, borderRadius: 18, padding: "16px 16px 14px", border: `1px solid ${T.sand}`, boxShadow: "0 2px 10px rgba(15,25,35,0.04)" }}>
                     {/* City header */}
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                      <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink }}>{city}</div>
-                      <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: T.sand, borderRadius: 20, padding: "2px 9px" }}>
-                        {cityDays.length} day{cityDays.length > 1 ? "s" : ""} · {cityDays.map(d => d.label).join(", ")}
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                        <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 22, color: T.ink, lineHeight: 1.15 }}>{city}</div>
+                        <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}>
+                          {cityDays.length} day{cityDays.length > 1 ? "s" : ""} · {cityDays.map(d => d.label).join(", ")}
+                        </div>
                       </div>
+                      {writeup && (
+                        <div style={{ fontSize: 13, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.55, marginTop: 6 }}>
+                          {writeup}
+                        </div>
+                      )}
                     </div>
-                    {/* Localities */}
-                    {localities.length > 0 && (
-                      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10 }}>
-                        {localities.map((loc, i) => (
-                          <span key={i} style={{ fontSize: 10, color: T.ocean, background: "#EBF3FD", borderRadius: 20, padding: "2px 8px", fontFamily: "Georgia,serif" }}>
-                            📍 {loc}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {/* Key activities */}
-                    {keyActs.length > 0 && (
-                      <div style={{ borderTop: `1px solid ${T.sand}`, paddingTop: 8 }}>
-                        {keyActs.map((act, i) => (
-                          <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: i < keyActs.length - 1 ? 6 : 0 }}>
-                            <span style={{ fontSize: 14, flexShrink: 0, marginTop: 1 }}>{act.icon}</span>
-                            <div>
-                              <div style={{ fontSize: 12, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.3 }}>{act.title}</div>
-                              {act.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>{act.note}</div>}
+
+                    {/* Highlights — horizontal scroll of mini cards */}
+                    {highlights.length > 0 && (
+                      <>
+                        <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 8 }}>
+                          Highlights
+                        </div>
+                        <div className="no-scrollbar" style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4, margin: "0 -16px", padding: "0 16px 4px" }}>
+                          {highlights.map((act, i) => (
+                            <div key={i} style={{
+                              flexShrink: 0, width: 160, borderRadius: 12, overflow: "hidden",
+                              border: `1px solid ${T.sand}`, background: T.warm,
+                            }}>
+                              <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
+                                {act.photo_url
+                                  ? <img src={act.photo_url} alt={act.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>
+                                  : <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32 }}>{act.icon || "📍"}</div>
+                                }
+                              </div>
+                              <div style={{ padding: "8px 10px 10px" }}>
+                                <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.25, marginBottom: 4 }}>{act.title}</div>
+                                {act.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic", lineHeight: 1.35 }}>{act.note}</div>}
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
+                          ))}
+                        </div>
+                      </>
                     )}
                   </div>
                 );
@@ -4419,7 +4437,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         {/* Bottom nav — pre-trip */}
         <div style={{flexShrink:0, background:T.chalk, borderTop:`1px solid ${T.sand}`, display:"flex", paddingBottom:"env(safe-area-inset-bottom, 0px)"}}>
           {[
-            { key:"brainstorm", icon:"💡", label:"Brainstorm" },
+            { key:"brainstorm", icon:"🛣️", label:"Route" },
             { key:"itinerary",  icon:"🗓", label:"Itinerary" },
             { key:"map",        icon:"🗺", label:"Map" },
             { key:"board",      icon:"📋", label:"Board" },
