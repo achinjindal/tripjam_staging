@@ -36,12 +36,18 @@ function formatDateRange(startDate, endDate) {
   return `${s} – ${e}`;
 }
 
+function fmtTs(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) {
   const [profile, setProfile] = useState(null);
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showMenu, setShowMenu] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [infoOpenId, setInfoOpenId] = useState(null);
 
   async function deleteTrip(e, tripId) {
     e.stopPropagation();
@@ -302,6 +308,32 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
                   </div>
 
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {/* Info tooltip */}
+                    <div style={{ position: "relative" }}>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setInfoOpenId(infoOpenId === trip.id ? null : trip.id); }}
+                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#CCC", padding: "4px", lineHeight: 1 }}
+                        title="Trip info"
+                      >ⓘ</button>
+                      {infoOpenId === trip.id && (
+                        <>
+                          <div onClick={(e) => { e.stopPropagation(); setInfoOpenId(null); }} style={{ position: "fixed", inset: 0, zIndex: 99 }} />
+                          <div style={{
+                            position: "absolute", right: 0, top: 28, zIndex: 100,
+                            background: T.chalk, borderRadius: 10, boxShadow: "0 4px 20px rgba(0,0,0,0.13)",
+                            border: "1px solid #E8EAF0", padding: "10px 14px", minWidth: 210, whiteSpace: "nowrap",
+                          }}>
+                            <div style={{ fontSize: 11, color: T.mist, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Trip info</div>
+                            <div style={{ fontSize: 12, color: T.ink, marginBottom: 4 }}>
+                              <span style={{ color: T.mist }}>Generated </span>{fmtTs(trip.created_at)}
+                            </div>
+                            <div style={{ fontSize: 12, color: T.ink }}>
+                              <span style={{ color: T.mist }}>Modified </span>{fmtTs(trip.updated_at)}
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
                     {trip.myRole === "edit" && (
                       <>
                         <button

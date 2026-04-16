@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect, createContext, useContext } from "react";
+import { useState, useRef, useEffect, createContext, useContext, Fragment } from "react";
 import { supabase } from "./supabase";
 import html2canvas from "html2canvas";
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -389,13 +389,21 @@ async function _fetchPhoto(geocode, city, type) {
   }
   // Mark in-flight to prevent concurrent duplicate fetches
   _photoCache[cacheKey] = null;
+  // Strip leading/trailing city from geocode to avoid doubled query (e.g. "Hanoi La Siesta Classic Ma May" + city "Hanoi")
+  const geocodeQ = city ? (() => {
+    const esc = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return geocode
+      .replace(new RegExp(`^${esc}\\s+`, "i"), "")
+      .replace(new RegExp(`\\s+${esc}\\s*$`, "i"), "")
+      .trim() || geocode;
+  })() : geocode;
 
   // Hotels: skip Wikipedia entirely, go straight to Google Places for accurate property photos
   if (type === "hotel") {
     try {
       const res = await fetch(`${PLACES_PROXY}?action=photo`, {
         method: "POST", headers: PLACES_HEADERS,
-        body: JSON.stringify({ q: geocode, city }),
+        body: JSON.stringify({ q: geocodeQ, city }),
       });
       const { url: placesUrl } = await res.json();
       if (good(placesUrl)) { _usedPhotoUrls.add(placesUrl); _photoCache[cacheKey] = placesUrl; return placesUrl; }
@@ -418,6 +426,16 @@ async function _fetchPhoto(geocode, city, type) {
     const t = (pageTitle || "").toLowerCase();
     return relevanceTokens.some(w => t.includes(w));
   };
+  // Check that the photo filename itself isn't clearly unrelated to the geocode.
+  // e.g. "Old_Quarter_Street_Scene_Hanoi.jpg" should not match "Hoan Kiem Lake & Ngoc Son Temple"
+  const photoFilenameRelevant = (url) => {
+    const filename = decodeURIComponent((url || "").split("/").pop() || "")
+      .replace(/\.\w+$/, "").toLowerCase();
+    const fileWords = filename.split(/[\s_\-()]+/)
+      .filter(w => w.length > 3 && !STOPWORDS.has(w) && !/^\d+$/.test(w));
+    if (fileWords.length <= 2) return true; // short or numeric filenames: no strong signal, allow
+    return relevanceTokens.some(rt => fileWords.some(fw => fw.includes(rt) || rt.includes(fw)));
+  };
 
   // Tier 1: Wikipedia exact title lookup
   const data1 = await wikiQueuedFetch(
@@ -425,7 +443,7 @@ async function _fetchPhoto(geocode, city, type) {
   );
   const page1 = Object.values(data1?.query?.pages || {})[0];
   const src = page1?.thumbnail?.source;
-  if (good(src) && pageRelevant(page1?.title)) { _usedPhotoUrls.add(src); _photoCache[cacheKey] = src; return src; }
+  if (good(src) && pageRelevant(page1?.title) && photoFilenameRelevant(src)) { _usedPhotoUrls.add(src); _photoCache[cacheKey] = src; return src; }
   else if (src) console.log(`[photo] T1 filtered: "${page1?.title}" / ${src.split("/").pop()} for "${geocode}"`);
 
   // Tier 2: Wikipedia exact lookup with city stripped (geocode often has city appended)
@@ -437,7 +455,7 @@ async function _fetchPhoto(geocode, city, type) {
       );
       const page2 = Object.values(data2?.query?.pages || {})[0];
       const src2 = page2?.thumbnail?.source;
-      if (good(src2) && pageRelevant(page2?.title)) { _usedPhotoUrls.add(src2); _photoCache[cacheKey] = src2; return src2; }
+      if (good(src2) && pageRelevant(page2?.title) && photoFilenameRelevant(src2)) { _usedPhotoUrls.add(src2); _photoCache[cacheKey] = src2; return src2; }
       else if (src2) console.log(`[photo] T2 filtered: "${page2?.title}" / ${src2.split("/").pop()} for "${stripped}"`);
     }
   }
@@ -451,7 +469,7 @@ async function _fetchPhoto(geocode, city, type) {
   for (const page of results3) {
     if (!pageRelevant(page.title)) { console.log(`[photo] T3 skipped irrelevant: "${page.title}" for "${geocode}"`); continue; }
     const src3 = page?.thumbnail?.source;
-    if (good(src3)) { _usedPhotoUrls.add(src3); _photoCache[cacheKey] = src3; return src3; }
+    if (good(src3) && photoFilenameRelevant(src3)) { _usedPhotoUrls.add(src3); _photoCache[cacheKey] = src3; return src3; }
     else if (src3) console.log(`[photo] T3 filtered: ${src3.split("/").pop()} for "${geocode}"`);
   }
 
@@ -460,7 +478,7 @@ async function _fetchPhoto(geocode, city, type) {
     try {
       const res = await fetch(`${PLACES_PROXY}?action=photo`, {
         method: "POST", headers: PLACES_HEADERS,
-        body: JSON.stringify({ q: geocode, city }),
+        body: JSON.stringify({ q: geocodeQ, city }),
       });
       const { url: placesUrl } = await res.json();
       if (good(placesUrl)) { _usedPhotoUrls.add(placesUrl); _photoCache[cacheKey] = placesUrl; return placesUrl; }
@@ -641,6 +659,144 @@ function MapView({ days }) {
               </Popup>
             </Marker>
           ))}
+        </MapContainer>
+      )}
+    </div>
+  );
+}
+
+/* ─── ROUTE MAP VIEW (pre-trip brainstorm) ──────────────────────────── */
+function RouteMapView({ routes, selectedId, onSelectRoute }) {
+  const [pinsByRoute, setPinsByRoute] = useState({}); // { routeId: [{ lat, lng, city }, ...] }
+  const [resolving, setResolving] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setResolving(true);
+      const result = {};
+      await Promise.all((routes || []).map(async (route) => {
+        const cities = (route.city || "").split(",").map(s => s.trim()).filter(Boolean);
+        const coords = await Promise.all(cities.map(async (c) => {
+          const pt = await geocodePlace(c, null, c);
+          return pt ? { ...pt, city: c } : null;
+        }));
+        result[route.id] = coords.filter(Boolean);
+      }));
+      if (!cancelled) { setPinsByRoute(result); setResolving(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [routes?.length, routes?.map(r => r.id).join("|")]);
+
+  const visibleRoutes = selectedId
+    ? (routes || []).filter(r => r.id === selectedId)
+    : (routes || []);
+
+  const allVisiblePins = visibleRoutes.flatMap(r => pinsByRoute[r.id] || []);
+  const center = allVisiblePins.length ? [allVisiblePins[0].lat, allVisiblePins[0].lng] : [20, 0];
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }}>
+      {/* Header */}
+      <div style={{ background: T.chalk, borderBottom: `1px solid ${T.sand}`, flexShrink: 0 }}>
+        <div style={{ padding: "10px 14px 6px" }}>
+          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: T.ink, marginBottom: 2 }}>🗺 Routes on the map</div>
+          <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}>
+            {resolving ? "Plotting your route options…" : selectedId ? (routes || []).find(r => r.id === selectedId)?.title : "Tap a route to focus"}
+          </div>
+        </div>
+        {/* Route picker pills */}
+        <div className="no-scrollbar" style={{ display: "flex", gap: 6, padding: "2px 14px 10px", overflowX: "auto" }}>
+          <button onClick={() => onSelectRoute?.(null)} style={{
+            flexShrink: 0, padding: "4px 12px", borderRadius: 20,
+            border: `1.5px solid ${!selectedId ? T.ocean : T.sand}`,
+            background: !selectedId ? T.ocean : T.chalk,
+            color: !selectedId ? "white" : T.mist,
+            fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer",
+            fontWeight: !selectedId ? 700 : 400,
+          }}>All routes</button>
+          {(routes || []).map((r, i) => {
+            const active = selectedId === r.id;
+            const color = DAY_COLORS[i % DAY_COLORS.length];
+            return (
+              <button key={r.id} onClick={() => onSelectRoute?.(r.id)} style={{
+                display: "flex", alignItems: "center", gap: 5, flexShrink: 0,
+                padding: "4px 11px", borderRadius: 20,
+                border: `1.5px solid ${active ? color : T.sand}`,
+                background: active ? color : T.chalk,
+                color: active ? "white" : T.mist,
+                fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer",
+                fontWeight: active ? 700 : 400,
+              }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: active ? "rgba(255,255,255,0.8)" : color, flexShrink: 0 }} />
+                {r.icon} {r.title}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Skeleton while resolving — shimmer block + animated pins */}
+      {resolving && (
+        <div style={{ flex: 1, position: "relative", background: "#E8EEF3", overflow: "hidden" }}>
+          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(110deg, rgba(255,255,255,0) 20%, rgba(255,255,255,0.6) 50%, rgba(255,255,255,0) 80%)", animation: "shimmer 1.5s ease-in-out infinite" }}/>
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, pointerEvents: "none" }}>
+            <div style={{ display: "flex", gap: 10 }}>
+              {[0, 1, 2, 3].map(i => (
+                <div key={i} style={{
+                  width: 14, height: 14, borderRadius: "50%",
+                  background: DAY_COLORS[i % DAY_COLORS.length],
+                  opacity: 0.7,
+                  animation: `pulse 1.2s ease-in-out ${i * 0.15}s infinite`,
+                }}/>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>
+              Plotting routes…
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!resolving && allVisiblePins.length === 0 && (
+        <div style={{ position: "absolute", inset: 0, top: 80, display: "flex", alignItems: "center", justifyContent: "center", color: T.mist, fontFamily: "Georgia,serif", fontSize: 14, zIndex: 500, pointerEvents: "none" }}>
+          No locations found
+        </div>
+      )}
+
+      {!resolving && (
+        <MapContainer center={center} zoom={6} style={{ flex: 1 }}>
+          <TileLayer
+            url={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}@2x?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}`}
+            attribution='&copy; <a href="https://www.mapbox.com/about/maps/">Mapbox</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          />
+          <FitBounds pins={allVisiblePins} fallback={center} />
+          {visibleRoutes.map((route, i) => {
+            const pins = pinsByRoute[route.id] || [];
+            const color = DAY_COLORS[(routes.findIndex(r => r.id === route.id)) % DAY_COLORS.length];
+            return (
+              <Fragment key={route.id}>
+                {pins.length > 1 && (
+                  <Polyline positions={pins.map(p => [p.lat, p.lng])} pathOptions={{ color, weight: 3, opacity: 0.6, dashArray: "6 6" }} />
+                )}
+                {pins.map((pin, j) => (
+                  <Marker key={j} position={[pin.lat, pin.lng]} icon={makeDayIcon(color)}>
+                    <Popup>
+                      <div style={{ fontFamily: "Georgia,serif", fontSize: 13, lineHeight: 1.5 }}>
+                        <div style={{ fontWeight: 700, marginBottom: 2 }}>📍 {pin.city}</div>
+                        <div style={{ color: "#666", fontSize: 12 }}>Stop {j + 1} · {route.title}</div>
+                        <a href={`https://maps.google.com/?q=${encodeURIComponent(pin.city)}`}
+                          target="_blank" rel="noreferrer"
+                          style={{ fontSize: 12, color: "#2563A8", display: "block", marginTop: 6 }}>
+                          Open in Google Maps ↗
+                        </a>
+                      </div>
+                    </Popup>
+                  </Marker>
+                ))}
+              </Fragment>
+            );
+          })}
         </MapContainer>
       )}
     </div>
@@ -904,21 +1060,159 @@ function TodoView({ trip, onBack }) {
 const BRAINSTORM_CATEGORIES = ["All", "Sightseeing", "Dining", "Experiences", "Nightlife", "Nature", "Culture", "Shopping", "Day Trip"];
 const BRAINSTORM_CATEGORY_ICONS = { Sightseeing:"🏛️", Dining:"🍜", Experiences:"🎭", Nightlife:"🍸", Nature:"🌿", Culture:"🎨", Shopping:"🛍️", "Day Trip":"🚌" };
 
-function BrainstormView({ trip, session }) {
+function RouteCard({ item, vs, onVote, interactive }) {
+  // In read-only mode, prefer the persisted `selected` flag; in interactive mode, use the vote state.
+  const selected = interactive ? vs.mine === 1 : (item.selected === true || vs.mine === 1);
+  return (
+    <div onClick={interactive ? onVote : undefined} style={{
+      background: selected ? `linear-gradient(135deg, ${T.ocean}12, ${T.dusk}08)` : T.chalk,
+      borderRadius: 16, padding: "14px 16px",
+      border: `2px solid ${selected ? T.ocean : T.sand}`,
+      cursor: interactive ? "pointer" : "default",
+      position: "relative",
+    }}>
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
+        <div style={{ fontSize: 24, flexShrink: 0, marginTop: 1 }}>{item.icon}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 2 }}>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, lineHeight: 1.2 }}>{item.title}</div>
+            {item.recommended && (
+              <span style={{ fontSize: 10, fontFamily: "Georgia,serif", fontWeight: 600, color: "#92400E", background: "#FEF3C7", borderRadius: 20, padding: "1px 7px", flexShrink: 0 }}>
+                ★ Recommended
+              </span>
+            )}
+          </div>
+          {item.tagline && <div style={{ fontSize: 12, color: T.ocean, fontFamily: "Georgia,serif" }}>{item.tagline}</div>}
+        </div>
+        {interactive ? (
+          <div style={{
+            width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
+            border: `2px solid ${selected ? T.ocean : T.sand}`,
+            background: selected ? T.ocean : "transparent",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            color: "white", fontSize: 11, fontWeight: 700,
+          }}>{selected && "✓"}</div>
+        ) : selected ? (
+          <span style={{ fontSize: 11, color: T.ocean, background: "#EBF3FD", borderRadius: 20, padding: "2px 9px", fontFamily: "Georgia,serif", fontWeight: 600, flexShrink: 0 }}>
+            Selected
+          </span>
+        ) : null}
+      </div>
+      {/* Day-by-day outline */}
+      {item.days?.length > 0 && (
+        <div style={{ marginBottom: 10, paddingLeft: 4 }}>
+          {item.days.map((d, i) => {
+            // Guard: AI has sometimes returned days as {day, description} objects. Coerce to string.
+            const text = typeof d === "string" ? d : (d?.description || d?.text || d?.day || d?.title || "");
+            if (!text) return null;
+            return (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 4 }}>
+                <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", fontWeight: 600, minWidth: 38, marginTop: 1 }}>Day {i + 1}</div>
+                <div style={{ fontSize: 12, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.4 }}>{text}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {/* Salient points */}
+      {item.points?.length > 0 && (
+        <div style={{ marginBottom: 10, borderTop: `1px solid ${selected ? T.ocean + "33" : T.sand}`, paddingTop: 8 }}>
+          {item.points.map((pt, i) => {
+            let text = typeof pt === "string" ? pt : (typeof pt?.text === "string" ? pt.text : JSON.stringify(pt));
+            // Strip leading ✓/✗/•/- that some AI responses include — the UI renders those already
+            text = text.replace(/^[\s]*[✓✗•\-—]+[\s]*/, "").trim();
+            const good = typeof pt === "object" ? pt.good : true;
+            return (
+              <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 3 }}>
+                <span style={{ fontSize: 10, color: good === false ? "#92400E" : T.ocean, marginTop: 2, flexShrink: 0 }}>
+                  {good === false ? "✗" : "✓"}
+                </span>
+                <span style={{ fontSize: 11, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.4 }}>{text}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {/* Footer badges */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {item.bestFor && (
+          <span style={{ fontSize: 11, color: "#16A34A", fontFamily: "Georgia,serif", background: "#DCFCE7", borderRadius: 20, padding: "2px 9px" }}>
+            ✓ {item.bestFor}
+          </span>
+        )}
+        {item.warning && (
+          <span style={{ fontSize: 11, color: "#92400E", fontFamily: "Georgia,serif", background: "#FEF3C7", borderRadius: 20, padding: "2px 9px" }}>
+            ⚠ {item.warning}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onBack, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null }) {
   const [items, setItems] = useState(null); // null = loading, [] = empty, [...] = loaded
-  const [votes, setVotes] = useState({}); // { [item_id]: { up: n, down: n, mine: 1|-1|0 } }
+  const [votes, setVotes] = useState({}); // { [item_id]: { up: n, down: n, mine: 1|-1|0 } } — DB votes
+  const [localVotes, setLocalVotes] = useState({}); // { [tempId]: 1|-1|0 } — pre-trip mode votes
   const [generating, setGenerating] = useState(false);
   const [activeCategory, setActiveCategory] = useState("All");
   const [genError, setGenError] = useState(null);
+  const [ideaCount, setIdeaCount] = useState(12);
 
-  const igReq = trip?.ig_request || {};
+  // Fun counter: climbs from 12 to an absurd number while generating
+  useEffect(() => {
+    if (!generating) { setIdeaCount(12); return; }
+    const id = setInterval(() => {
+      setIdeaCount(prev => Math.round(prev * (1.2 + Math.random() * 0.18)));
+    }, 280);
+    return () => clearInterval(id);
+  }, [generating]);
+
+  const isPretripMode = !trip?.id;
+  const igReq = pendingForm || trip?.ig_request || {};
   const destinations = igReq.destinations?.length
     ? igReq.destinations
     : (trip?.destination || "").split(" → ").map(s => s.trim()).filter(Boolean);
 
   useEffect(() => {
-    loadItems();
-  }, [trip?.id]);
+    if (editTripId) {
+      // Edit flow: load the previously-saved route options for this trip
+      loadSavedBrainstorm(editTripId);
+    } else if (autoGenerate) {
+      if (destinations.length) generate();
+    } else {
+      loadItems();
+    }
+  }, [trip?.id, editTripId]);
+
+  async function loadSavedBrainstorm(tripId) {
+    const { data } = await supabase
+      .from("brainstorm_items")
+      .select("*")
+      .eq("trip_id", tripId)
+      .order("position");
+    const flattened = (data || []).map(row => {
+      const merged = { ...row, ...(row.data || {}) };
+      // Normalize days — coerce {day, description} or other object shapes back to plain strings
+      if (Array.isArray(merged.days)) {
+        merged.days = merged.days.map(d => typeof d === "string" ? d : (d?.description || d?.text || d?.day || "")).filter(Boolean);
+      }
+      // Normalize points — ensure each has {text, good}
+      if (Array.isArray(merged.points)) {
+        merged.points = merged.points.map(p => ({
+          text: typeof p === "string" ? p : (typeof p?.text === "string" ? p.text : ""),
+          good: typeof p === "object" ? p.good : true,
+        })).filter(p => p.text);
+      }
+      return merged;
+    });
+    setItems(flattened);
+    const previouslySelected = flattened.find(it => it.tier === 1 && it.selected);
+    if (previouslySelected) {
+      setLocalVotes({ [previouslySelected.id]: 1 });
+    }
+  }
 
   async function loadItems() {
     if (!trip?.id) return;
@@ -927,8 +1221,10 @@ function BrainstormView({ trip, session }) {
       .select("*")
       .eq("trip_id", trip.id)
       .order("position");
-    setItems(data || []);
-    if (data?.length) loadVotes(data.map(i => i.id));
+    // Flatten the jsonb data field back into the item for rendering
+    const flattened = (data || []).map(row => ({ ...row, ...(row.data || {}) }));
+    setItems(flattened);
+    if (flattened.length) loadVotes(flattened.map(i => i.id));
   }
 
   async function loadVotes(itemIds) {
@@ -952,12 +1248,16 @@ function BrainstormView({ trip, session }) {
     setGenerating(true);
     setGenError(null);
     setItems([]);
+    setLocalVotes({});
     try {
       const travelMonth = igReq.startDate ? new Date(igReq.startDate).toLocaleString("en-US", { month: "long" }) : null;
+      const numDays = (igReq.startDate && igReq.endDate)
+        ? Math.max(1, Math.round((new Date(igReq.endDate) - new Date(igReq.startDate)) / (1000*60*60*24)) + 1)
+        : null;
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-brainstorm`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-        body: JSON.stringify({ destinations, styles: igReq.styles, budget: igReq.budget, travelMonth }),
+        body: JSON.stringify({ destinations, styles: igReq.styles, budget: igReq.budget, travelMonth, numDays, arrivalCity: igReq.arrivalCity || null, departureCity: igReq.departureCity || null, notes: igReq.notes || null }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -970,9 +1270,9 @@ function BrainstormView({ trip, session }) {
       let inString = false;
       let escape = false;
       const streamedItems = [];
+      let tempIdCounter = 0;
 
       const tryParseItem = (chunk) => {
-        // Track characters to find complete {...} objects at depth 1
         for (const ch of chunk) {
           jsonBuffer += ch;
           if (escape) { escape = false; continue; }
@@ -983,9 +1283,6 @@ function BrainstormView({ trip, session }) {
           if (ch === "}") {
             depth--;
             if (depth === 0) {
-              // Extract the last complete object from jsonBuffer
-              const start = jsonBuffer.lastIndexOf("{", jsonBuffer.length - 1);
-              // Find the matching { by scanning backwards for depth=0
               let d = 0, objStart = -1;
               for (let i = jsonBuffer.length - 1; i >= 0; i--) {
                 if (jsonBuffer[i] === "}") d++;
@@ -997,7 +1294,8 @@ function BrainstormView({ trip, session }) {
                 try {
                   const item = JSON.parse(objStr);
                   if (item.title && item.category) {
-                    streamedItems.push(item);
+                    const itemWithId = isPretripMode ? { ...item, id: `temp_${tempIdCounter++}` } : item;
+                    streamedItems.push(itemWithId);
                     setItems([...streamedItems]);
                   }
                 } catch { /* partial object, skip */ }
@@ -1023,13 +1321,18 @@ function BrainstormView({ trip, session }) {
 
       if (!streamedItems.length) throw new Error("No items received");
 
-      // Clear old items and persist all at once
-      await supabase.from("brainstorm_items").delete().eq("trip_id", trip.id);
-      const rows = streamedItems.map((item, i) => ({ ...item, trip_id: trip.id, position: i }));
-      const { data, error: insertErr } = await supabase.from("brainstorm_items").insert(rows).select();
-      if (insertErr) throw new Error(`Insert error: ${insertErr.message}`);
-      setItems(data || streamedItems);
-      setVotes({});
+      if (isPretripMode) {
+        // Pre-trip mode: items already set with temp IDs, no DB persistence
+        setItems([...streamedItems]);
+      } else {
+        // Existing trip: persist to DB
+        await supabase.from("brainstorm_items").delete().eq("trip_id", trip.id);
+        const rows = streamedItems.map((item, i) => ({ ...item, trip_id: trip.id, position: i }));
+        const { data, error: insertErr } = await supabase.from("brainstorm_items").insert(rows).select();
+        if (insertErr) throw new Error(`Insert error: ${insertErr.message}`);
+        setItems(data || streamedItems);
+        setVotes({});
+      }
     } catch (e) {
       console.error("Brainstorm generate error:", e);
       setGenError(e.message);
@@ -1038,6 +1341,21 @@ function BrainstormView({ trip, session }) {
   }
 
   async function castVote(itemId, value) {
+    if (isPretripMode) {
+      const item = (items || []).find(it => it.id === itemId);
+      if (item?.tier === 1) {
+        // Route cards: single-select — selecting one deselects all others
+        setLocalVotes(prev => {
+          const next = { ...prev };
+          tier1Items.forEach(it => { next[it.id] = 0; });
+          next[itemId] = prev[itemId] === 1 ? 0 : 1;
+          return next;
+        });
+      } else {
+        setLocalVotes(prev => ({ ...prev, [itemId]: prev[itemId] === value ? 0 : value }));
+      }
+      return;
+    }
     const current = votes[itemId]?.mine || 0;
     const newVote = current === value ? 0 : value; // toggle off if same
 
@@ -1059,152 +1377,239 @@ function BrainstormView({ trip, session }) {
     }
   }
 
-  const visibleItems = (items || []).filter(it => activeCategory === "All" || it.category === activeCategory);
+  const getVoteState = (itemId) => {
+    if (isPretripMode) {
+      const mine = localVotes[itemId] || 0;
+      return { up: mine === 1 ? 1 : 0, down: mine === -1 ? 1 : 0, mine };
+    }
+    return votes[itemId] || { up: 0, down: 0, mine: 0 };
+  };
+
+  const handleBuild = () => {
+    if (!onBuild) return;
+    const voted = (items || []).map(item => ({
+      ...item,
+      vote: isPretripMode ? (localVotes[item.id] || 0) : (votes[item.id]?.mine || 0),
+    }));
+    onBuild(voted);
+  };
+
+  const tier1Items = (items || []).filter(it => it.tier === 1);
+  const tier2Items = (items || []).filter(it => (it.tier || 2) === 2);
+  const visibleTier2 = tier2Items.filter(it => activeCategory === "All" || it.category === activeCategory);
+
+  // Notify parent when tier 1 routes change (for external map / chat consumers)
+  useEffect(() => { onItemsChange?.(tier1Items); }, [tier1Items.length, tier1Items.map(it => it.id).join("|")]);
+  // Notify parent of selected route id (derived from localVotes in pre-trip mode)
+  useEffect(() => {
+    if (!isPretripMode) return;
+    const selected = tier1Items.find(it => (localVotes[it.id] || 0) === 1);
+    onSelectionChange?.(selected?.id || null);
+  }, [localVotes, tier1Items.length]);
+  // Sync back: when external routes change (e.g. chat mutation), merge into items by id
+  const lastExternalRoutesSigRef = useRef(null);
+  useEffect(() => {
+    if (!externalRoutes || externalRoutes.length === 0) return;
+    const sig = externalRoutes.map(r => `${r.id}|${r.title || ""}|${r.tagline || ""}|${r.city || ""}|${r.bestFor || ""}|${r.warning || ""}|${r.recommended ? 1 : 0}|${(r.days || []).map(d => typeof d === "string" ? d : JSON.stringify(d)).join("~")}|${(r.points || []).map(p => `${p.text || ""}:${p.good}`).join("~")}`).join(",");
+    if (sig === lastExternalRoutesSigRef.current) return;
+    lastExternalRoutesSigRef.current = sig;
+    setItems(prev => (prev || []).map(it => {
+      if (it.tier !== 1) return it;
+      const match = externalRoutes.find(er => er.id === it.id);
+      return match ? { ...it, ...match } : it;
+    }));
+  }, [externalRoutes]);
+  // Sync back: when external selection changes (e.g. user picks a route on the map), update localVotes.
+  // IMPORTANT: only sync when external is a non-null id — never use external=null to CLEAR local,
+  // because otherwise this ping-pongs with onSelectionChange during mount/load.
+  useEffect(() => {
+    if (!isPretripMode) return;
+    if (externalSelectedId === undefined || externalSelectedId === null) return;
+    const currentSelected = tier1Items.find(it => (localVotes[it.id] || 0) === 1)?.id || null;
+    if (externalSelectedId === currentSelected) return;
+    setLocalVotes(prev => {
+      const next = { ...prev };
+      tier1Items.forEach(it => { next[it.id] = 0; });
+      next[externalSelectedId] = 1;
+      return next;
+    });
+  }, [externalSelectedId, tier1Items.length]);
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", background: T.warm }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", background: T.warm, position: "relative", overflow: "hidden" }}>
       {/* Header */}
-      <div style={{ padding: "20px 16px 12px", background: T.chalk, borderBottom: `1px solid ${T.sand}`, flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <div>
-            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 20, color: T.ink }}>Brainstorm</div>
-            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", marginTop: 2 }}>
-              {generating
-                ? items?.length ? `Found ${items.length} ideas so far…` : "Curating ideas…"
-                : items?.length ? `${items.length} ideas · vote to shape your itinerary` : "Generate ideas for the group to vote on"}
+      <div style={{ background: T.chalk, borderBottom: `1px solid ${T.sand}`, flexShrink: 0 }}>
+        <div style={{ padding: "20px 16px 12px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: isPretripMode ? 0 : 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {onBack && (
+                <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: T.mist, padding: "0 4px 0 0", lineHeight: 1 }}>←</button>
+              )}
+              <div>
+                <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 20, color: T.ink }}>
+                  {isPretripMode ? "Shape your trip" : "Trip Insights"}
+                </div>
+                {isPretripMode && (
+                  <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", marginTop: 2 }}>
+                    {generating
+                      ? items?.length
+                        ? `Shortlisting from ${ideaCount.toLocaleString("en-US")} ideas…`
+                        : ""
+                      : items?.length ? "Pick your route, then build your itinerary" : "Generating ideas…"}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-          <button
-            onClick={generate}
-            disabled={generating || !destinations.length}
-            style={{
-              padding: "8px 16px", borderRadius: 20, border: "none", cursor: generating ? "default" : "pointer",
-              background: generating ? T.sand : T.ocean, color: "white",
-              fontFamily: "Georgia,serif", fontSize: 13, fontWeight: 600, opacity: generating ? 0.7 : 1,
-            }}
-          >
-            {generating ? "Generating…" : items?.length ? "Regenerate" : "Generate"}
-          </button>
+
+          {!isPretripMode && (
+            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", marginTop: 4 }}>
+              A quick overview of where you're going and what you're doing
+            </div>
+          )}
         </div>
 
-        {/* Category filter pills */}
-        {items?.length > 0 && (
-          <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
-            {BRAINSTORM_CATEGORIES.filter(c => c === "All" || items.some(it => it.category === c)).map(cat => (
-              <button
-                key={cat}
-                onClick={() => setActiveCategory(cat)}
-                style={{
-                  flexShrink: 0, padding: "5px 12px", borderRadius: 20, border: "none", cursor: "pointer",
-                  background: activeCategory === cat ? T.ocean : T.sand,
-                  color: activeCategory === cat ? "white" : T.mist,
-                  fontFamily: "Georgia,serif", fontSize: 12, fontWeight: activeCategory === cat ? 600 : 400,
-                }}
-              >
-                {cat === "All" ? "All" : `${BRAINSTORM_CATEGORY_ICONS[cat] || ""} ${cat}`}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
-      {/* Content */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px 80px" }}>
-        {items === null && (
-          <div style={{ textAlign: "center", padding: "60px 20px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 14 }}>
-            Loading…
-          </div>
-        )}
+      {/* Scrollable content */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", paddingBottom: isPretripMode ? 100 : 24 }}>
 
-        {genError && (
-          <div style={{margin:"12px 0",padding:"10px 14px",borderRadius:10,background:"#FEE2E2",border:"1px solid #FECACA",fontSize:12,color:"#DC2626",fontFamily:"monospace",wordBreak:"break-all"}}>
-            ⚠️ {genError}
-          </div>
-        )}
-
-        {items?.length === 0 && !generating && (
-          <div style={{ textAlign: "center", padding: "60px 20px" }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>🗺️</div>
-            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink, marginBottom: 8 }}>No ideas yet</div>
-            <div style={{ fontFamily: "Georgia,serif", fontSize: 13, color: T.mist, lineHeight: 1.5 }}>
-              Hit Generate to get a list of things to do,<br/>see and eat — then vote with your group.
+        {/* ── PRE-TRIP: route cards ── */}
+        {isPretripMode && (<>
+          {genError && (
+            <div style={{ margin: "12px 0", padding: "12px 16px", borderRadius: 12, background: "#FFF0F0", border: "1.5px solid #FECACA", fontSize: 13, color: "#c53030", fontFamily: "Georgia,serif", lineHeight: 1.5 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Couldn't load ideas</div>
+              <div style={{ fontSize: 11, color: "#e53e3e", fontFamily: "monospace", wordBreak: "break-all", marginBottom: 10 }}>{genError}</div>
+              <button onClick={generate} style={{ background: T.ocean, color: "white", border: "none", borderRadius: 8, padding: "7px 14px", fontFamily: "Georgia,serif", fontSize: 12, cursor: "pointer" }}>Try again</button>
             </div>
+          )}
+          {items?.length === 0 && !generating && !genError && (
+            <div style={{ textAlign: "center", padding: "60px 20px" }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>🗺️</div>
+              <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink, marginBottom: 8 }}>Nothing came back</div>
+              <div style={{ fontFamily: "Georgia,serif", fontSize: 13, color: T.mist }}>Try again.</div>
+            </div>
+          )}
+          {generating && items?.length === 0 && (
+            <div style={{ textAlign: "center", padding: "60px 20px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 14 }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>⚡</div>Ideating…
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>
+            {tier1Items.length > 0 ? (editTripId ? "Your saved routes" : "Choose your route") : ""}
           </div>
-        )}
-
-        {generating && items?.length === 0 && (
-          <div style={{ textAlign: "center", padding: "60px 20px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 14 }}>
-            <div style={{ fontSize: 32, marginBottom: 12 }}>✨</div>
-            Curating ideas…
-          </div>
-        )}
-
-        {visibleItems.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {visibleItems.map(item => {
-              const v = votes[item.id] || { up: 0, down: 0, mine: 0 };
-              return (
-                <div key={item.id} style={{
-                  background: T.chalk, borderRadius: 14, padding: "12px 14px",
-                  border: `1.5px solid ${T.sand}`, display: "flex", alignItems: "center", gap: 12,
-                }}>
-                  {/* Icon */}
-                  <div style={{ fontSize: 24, flexShrink: 0, width: 36, textAlign: "center" }}>{item.icon}</div>
-
-                  {/* Text */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, flexWrap: "wrap" }}>
-                      <span style={{ fontFamily: "'DM Serif Display',serif", fontSize: 14, color: T.ink, lineHeight: 1.3 }}>{item.title}</span>
-                      <span style={{
-                        fontSize: 10, borderRadius: 20, padding: "1px 7px", fontFamily: "Georgia,serif", fontWeight: 600, flexShrink: 0,
-                        background: "#EBF3FD", color: T.ocean,
-                      }}>{item.category}</span>
-                    </div>
-                    {item.city && (
-                      <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", marginBottom: 2 }}>📍 {item.city}</div>
-                    )}
-                    {item.note && (
-                      <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>{item.note}</div>
-                    )}
-                  </div>
-
-                  {/* Vote buttons */}
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                    <button
-                      onClick={() => castVote(item.id, 1)}
-                      style={{
-                        width: 34, height: 34, borderRadius: "50%", border: "none", cursor: "pointer", fontSize: 16,
-                        background: v.mine === 1 ? "#DCFCE7" : T.sand,
-                        color: v.mine === 1 ? "#16A34A" : T.mist,
-                        display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 0,
-                        transition: "background 0.15s",
-                      }}
-                    >
-                      👍
-                    </button>
-                    {v.up > 0 && <span style={{ fontSize: 10, color: "#16A34A", fontFamily: "Georgia,serif", fontWeight: 600 }}>{v.up}</span>}
-
-                    <button
-                      onClick={() => castVote(item.id, -1)}
-                      style={{
-                        width: 34, height: 34, borderRadius: "50%", border: "none", cursor: "pointer", fontSize: 16,
-                        background: v.mine === -1 ? "#FEE2E2" : T.sand,
-                        color: v.mine === -1 ? "#DC2626" : T.mist,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        transition: "background 0.15s",
-                        marginTop: v.up > 0 ? 0 : 4,
-                      }}
-                    >
-                      👎
-                    </button>
-                    {v.down > 0 && <span style={{ fontSize: 10, color: "#DC2626", fontFamily: "Georgia,serif", fontWeight: 600 }}>{v.down}</span>}
-                  </div>
-                </div>
-              );
-            })}
+            {tier1Items.map(item => <RouteCard key={item.id} item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} />)}
           </div>
-        )}
+          {/* Generate new options — only when we're showing saved routes (edit flow) */}
+          {tier1Items.length > 0 && !generating && (
+            <button
+              onClick={generate}
+              style={{
+                marginTop: 14, width: "100%",
+                padding: "11px 14px", borderRadius: 12,
+                background: T.chalk, border: `1.5px dashed ${T.sand}`, color: T.ocean,
+                fontFamily: "Georgia,serif", fontSize: 13, fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              ✨ Generate new options
+            </button>
+          )}
+        </>)}
+
+        {/* ── IN-TRIP: Destinations overview ── */}
+        {!isPretripMode && (() => {
+          // Group days by city
+          const cityGroups = {};
+          const cityOrder = [];
+          for (const d of days) {
+            const city = d.city || "Unknown";
+            if (!cityGroups[city]) { cityGroups[city] = []; cityOrder.push(city); }
+            cityGroups[city].push(d);
+          }
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {cityOrder.map(city => {
+                const cityDays = cityGroups[city];
+                // Collect all activities across the city's days
+                const allActs = cityDays.flatMap(d => d.activities || []);
+                // Unique localities from geocodes (non-transit, non-hotel)
+                const localities = [...new Set(
+                  allActs.filter(a => a.type !== "transit" && a.geocode)
+                    .map(a => a.geocode.split(",")[0].trim())
+                )].slice(0, 6);
+                // Key activities (sights, food, experiences — not hotel/transit)
+                const keyActs = allActs.filter(a => a.type !== "transit" && a.type !== "hotel").slice(0, 8);
+                return (
+                  <div key={city} style={{ background: T.chalk, borderRadius: 16, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
+                    {/* City header */}
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                      <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink }}>{city}</div>
+                      <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: T.sand, borderRadius: 20, padding: "2px 9px" }}>
+                        {cityDays.length} day{cityDays.length > 1 ? "s" : ""} · {cityDays.map(d => d.label).join(", ")}
+                      </div>
+                    </div>
+                    {/* Localities */}
+                    {localities.length > 0 && (
+                      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10 }}>
+                        {localities.map((loc, i) => (
+                          <span key={i} style={{ fontSize: 10, color: T.ocean, background: "#EBF3FD", borderRadius: 20, padding: "2px 8px", fontFamily: "Georgia,serif" }}>
+                            📍 {loc}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {/* Key activities */}
+                    {keyActs.length > 0 && (
+                      <div style={{ borderTop: `1px solid ${T.sand}`, paddingTop: 8 }}>
+                        {keyActs.map((act, i) => (
+                          <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: i < keyActs.length - 1 ? 6 : 0 }}>
+                            <span style={{ fontSize: 14, flexShrink: 0, marginTop: 1 }}>{act.icon}</span>
+                            <div>
+                              <div style={{ fontSize: 12, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.3 }}>{act.title}</div>
+                              {act.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>{act.note}</div>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+
       </div>
+
+      {/* Build button — pre-trip mode only */}
+      {isPretripMode && (() => {
+        const hasSelection = tier1Items.some(it => (localVotes[it.id] || 0) === 1);
+        const disabled = generating || (tier1Items.length > 0 && !hasSelection);
+        return (
+          <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "12px 16px 24px", background: `linear-gradient(to bottom, transparent, ${T.warm} 30%)`, pointerEvents: "none" }}>
+            <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", textAlign: "center", marginBottom: 8, fontStyle: "italic", pointerEvents: "all" }}>
+              💡 You can switch or edit routes later — this is reversible
+            </div>
+            <button
+              onClick={disabled ? undefined : handleBuild}
+              disabled={disabled}
+              style={{
+                width: "100%", padding: "15px 0", borderRadius: 16, border: "none",
+                background: disabled ? T.sand : `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
+                color: disabled ? T.mist : "white",
+                fontFamily: "'DM Serif Display',serif", fontSize: 17,
+                cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.7 : 1,
+                boxShadow: disabled ? "none" : "0 4px 20px rgba(15,25,35,0.2)",
+                pointerEvents: "all",
+              }}
+            >
+              {generating ? "Generating ideas…" : !hasSelection && tier1Items.length > 0 ? "Select a route to continue" : "Build My Itinerary →"}
+            </button>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1333,6 +1738,14 @@ async function geocodePlace(title, city, geocodeHint) {
   const place = geocodeHint || extractPlace(title);
   const cacheKey = `${place}|${city}`;
   if (_geocodeCache.has(cacheKey)) return _geocodeCache.get(cacheKey);
+  // Strip leading/trailing city from geocode to avoid doubled query (e.g. "Hanoi La Siesta Classic Ma May" + city "Hanoi")
+  const placeQ = city ? (() => {
+    const esc = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return place
+      .replace(new RegExp(`^${esc}\\s+`, "i"), "")
+      .replace(new RegExp(`\\s+${esc}\\s*$`, "i"), "")
+      .trim() || place;
+  })() : place;
 
   // Google Places primary — reliable city-aware geocoding
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -1342,7 +1755,7 @@ async function geocodePlace(title, city, geocodeHint) {
       const tid = setTimeout(() => ctrl.abort(), 8000);
       const res = await fetch(`${PLACES_PROXY}?action=geocode`, {
         method: "POST", headers: PLACES_HEADERS,
-        body: JSON.stringify({ q: place, city }),
+        body: JSON.stringify({ q: placeQ, city }),
         signal: ctrl.signal,
       });
       clearTimeout(tid);
@@ -1459,15 +1872,18 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
 }
 
 /* ─── ACTIVITY CARD ──────────────────────────────────────────────────── */
-function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAlternatives, onChangeHotel, flag = null, counts = null, onFlag }) {
+function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAlternatives, onChangeHotel, flag = null, counts = null, onFlag, transitMapsUrl }) {
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [draft, setDraft] = useState({ ...activity });
   const ts = typeStyle[draft.type] || typeStyle.sight;
-  const mapsUrl = activity.geocode_end
-    ? `https://www.google.com/maps/dir/${encodeURIComponent(activity.geocode || activity.title)}/${encodeURIComponent(activity.geocode_end)}`
-    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${activity.geocode || activity.title} ${city}`)}`;
+  const transitOrigin = (activity.geocode && activity.geocode !== activity.geocode_end)
+    ? activity.geocode : city;
+  const mapsUrl = transitMapsUrl ||
+    (activity.geocode_end
+      ? `https://www.google.com/maps/dir/${encodeURIComponent(transitOrigin)}/${encodeURIComponent(activity.geocode_end)}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${activity.geocode || activity.title} ${city}`)}`);
 
 
   const saveEdit = () => { onEdit(draft); setEditing(false); };
@@ -1626,6 +2042,11 @@ function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAl
   );
 }
 
+/* ─── LOADING HINT ───────────────────────────────────────────────────── */
+function LoadingHint() {
+  return <div style={{fontSize:13,color:T.mist,fontFamily:"Georgia,serif",textAlign:"center"}}>Getting the engine started…</div>;
+}
+
 /* ─── ARRIVAL TIMELINE ───────────────────────────────────────────────── */
 const TRANSPORT_ICONS = ["✈️","🚂","⛵","🚗","🛺","🚢","🚁","🛸","🚤","🚀","🚲","🛵"];
 function TransportCarousel() {
@@ -1744,7 +2165,7 @@ function WishlistSection({ items, city }) {
   );
 }
 
-function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, flags = {}, flagCounts = {}, onFlag }) {
+function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, flags = {}, flagCounts = {}, onFlag, onSelectHotel }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
 
@@ -1819,6 +2240,16 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
         />
       )}
 
+      {/* Hotel carousel — shown when day has hotel_options and no hotel already selected */}
+      {day.hotel_options?.length > 0 && !day.activities.some(a => a.type === "hotel") && (
+        <HotelCarousel
+          options={day.hotel_options}
+          checkInTime={day.hotel_check_in_time}
+          selectedTitle={null}
+          onSelect={onSelectHotel}
+        />
+      )}
+
       {/* Activities */}
       {(() => {
         const seenPkgs = new Set();
@@ -1828,6 +2259,17 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
         const nextAct = day.activities[i + 1];
         const samePackageAsNext = (act.package && act.package === nextAct?.package) || (act.type === "hotel" && nextAct?.package);
         const samePackageAsHotel = act.package && act.package === endHotelActivity?.package;
+        // For transit activities, build a hotel-to-hotel Maps URL
+        const transitMapsUrl = (() => {
+          if (act.type !== "transit" || !act.geocode_end) return null;
+          const originGeocode = hotelActivity?.geocode || null;
+          const destHotel = day.activities.slice(i + 1).find(a => a.type === "hotel");
+          const destGeocode = destHotel?.geocode || null;
+          if (!originGeocode && !destGeocode) return null;
+          const o = encodeURIComponent(originGeocode || act.geocode || day.city);
+          const d = encodeURIComponent(destGeocode || act.geocode_end);
+          return `https://www.google.com/maps/dir/${o}/${d}`;
+        })();
         return (
           <div key={act.id}>
             <ActivityCard activity={act} city={day.city}
@@ -1836,7 +2278,8 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
               onReplace={()=>onReplaceActivity?.(act)}
               onSuggestAlternatives={()=>onSuggestAlternatives?.(act)}
               onChangeHotel={(mode)=>onChangeHotel?.(day.id, act, mode)}
-              flag={flags[act.id] ?? null} counts={flagCounts[act.id] ?? null} onFlag={onFlag}/>
+              flag={flags[act.id] ?? null} counts={flagCounts[act.id] ?? null} onFlag={onFlag}
+              transitMapsUrl={transitMapsUrl}/>
             {!lastAct && !samePackageAsNext && (
               <TransitionRow
                 from={act.type === "transit" && act.geocode_end ? { ...act, geocode: act.geocode_end } : act}
@@ -1892,7 +2335,7 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
 }
 
 /* ─── SUGGESTION CARD ────────────────────────────────────────────────── */
-function SuggestionCard({ suggestion, onSelect }) {
+function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
@@ -1902,22 +2345,117 @@ function SuggestionCard({ suggestion, onSelect }) {
     });
   }, [suggestion.geocode]);
   return (
-    <div onClick={onSelect} style={{
-      flexShrink:0, width:140, borderRadius:12, overflow:"hidden",
-      border:`1px solid ${T.sand}`, background:T.chalk, cursor:"pointer",
-      boxShadow:"0 2px 8px rgba(15,25,35,0.08)", transition:"transform 0.15s",
-    }}
-      onMouseEnter={e=>e.currentTarget.style.transform="scale(1.02)"}
-      onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
-    >
-      <div style={{height:90, background:T.sand, overflow:"hidden", position:"relative"}}>
+    <div style={{
+      flexShrink:0, width:148, borderRadius:12, overflow:"hidden",
+      border:`1px solid ${T.sand}`, background:T.chalk,
+      boxShadow:"0 2px 8px rgba(15,25,35,0.08)",
+    }}>
+      <div onClick={onSelect} style={{cursor:"pointer"}}>
+        <div style={{height:90, background:T.sand, overflow:"hidden", position:"relative"}}>
+          {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+          {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={suggestion.title} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+          {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>{suggestion.icon}</div>}
+        </div>
+        <div style={{padding:"8px 10px 6px"}}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:12,color:T.ink,lineHeight:1.3,marginBottom:3}}>{suggestion.title}</div>
+          {suggestion.note && <div style={{fontFamily:"Georgia,serif",fontSize:10,color:T.mist,lineHeight:1.3}}>{suggestion.note}</div>}
+        </div>
+      </div>
+      <div style={{padding:"0 8px 8px",display:"flex",gap:5}}>
+        <button onClick={onKnowMore} style={{flex:1,padding:"5px 0",borderRadius:8,border:`1px solid ${T.sand}`,background:"transparent",fontFamily:"Georgia,serif",fontSize:10,color:T.mist,cursor:"pointer"}}>Know more</button>
+        <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(suggestion.geocode || suggestion.title)}`} target="_blank" rel="noopener noreferrer"
+          style={{display:"flex",alignItems:"center",justifyContent:"center",width:26,borderRadius:8,border:`1px solid ${T.sand}`,textDecoration:"none",flexShrink:0}}>
+          <img src="/google-maps-icon.png" alt="Maps" style={{width:13,height:13,objectFit:"contain"}}/>
+        </a>
+      </div>
+    </div>
+  );
+}
+
+/* ─── HOTEL SUGGESTION CARD (chat) ──────────────────────────────────── */
+function HotelSuggestionCard({ suggestion, onSelect, onKnowMore }) {
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    _fetchPhoto(suggestion.geocode || suggestion.title, null, "hotel").then(url => { setPhotoUrl(url); setLoaded(true); });
+  }, [suggestion.geocode]);
+  const priceLen = (suggestion.price || "").length;
+  const priceColor = priceLen >= 4 ? "#7C3AED" : priceLen === 3 ? "#92400E" : "#166534";
+  const priceBg   = priceLen >= 4 ? "#EDE9FE"  : priceLen === 3 ? "#FEF3C7"  : "#DCFCE7";
+  return (
+    <div style={{ flexShrink:0, width:186, borderRadius:12, overflow:"hidden", border:`1px solid ${T.sand}`, background:T.chalk, boxShadow:"0 2px 8px rgba(15,25,35,0.08)" }}>
+      <div style={{ height:90, background:T.sand, overflow:"hidden", position:"relative" }}>
         {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
         {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={suggestion.title} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
-        {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>{suggestion.icon}</div>}
+        {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>🏨</div>}
+        {suggestion.price && (
+          <div style={{position:"absolute",bottom:6,right:6,background:priceBg,color:priceColor,fontSize:10,fontFamily:"Georgia,serif",fontWeight:600,padding:"2px 7px",borderRadius:6,letterSpacing:0.3}}>
+            {suggestion.price}
+          </div>
+        )}
       </div>
-      <div style={{padding:"8px 10px"}}>
+      <div style={{padding:"8px 10px 4px"}}>
         <div style={{fontFamily:"'DM Serif Display',serif",fontSize:12,color:T.ink,lineHeight:1.3,marginBottom:3}}>{suggestion.title}</div>
-        {suggestion.note && <div style={{fontFamily:"Georgia,serif",fontSize:10,color:T.mist,lineHeight:1.3}}>{suggestion.note}</div>}
+        {suggestion.area && <div style={{fontSize:10,color:T.ocean,fontFamily:"Georgia,serif",marginBottom:5}}>📍 {suggestion.area}</div>}
+        {suggestion.bullets?.length > 0 && (
+          <ul style={{margin:0,paddingLeft:13,marginBottom:2}}>
+            {suggestion.bullets.slice(0,3).map((b, i) => (
+              <li key={i} style={{fontFamily:"Georgia,serif",fontSize:10,color:T.mist,lineHeight:1.5}}>{b}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div style={{padding:"6px 8px 8px",display:"flex",gap:5}}>
+        <button onClick={onSelect} style={{flex:1,padding:"5px 0",borderRadius:8,border:`1px solid ${T.ocean}`,background:T.ocean,fontFamily:"Georgia,serif",fontSize:10,color:"#fff",cursor:"pointer"}}>Use this</button>
+        <button onClick={onKnowMore} style={{flex:1,padding:"5px 0",borderRadius:8,border:`1px solid ${T.sand}`,background:"transparent",fontFamily:"Georgia,serif",fontSize:10,color:T.mist,cursor:"pointer"}}>Know more</button>
+        <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(suggestion.geocode || suggestion.title)}`} target="_blank" rel="noopener noreferrer"
+          style={{display:"flex",alignItems:"center",justifyContent:"center",width:26,borderRadius:8,border:`1px solid ${T.sand}`,textDecoration:"none",flexShrink:0}}>
+          <img src="/google-maps-icon.png" alt="Maps" style={{width:13,height:13,objectFit:"contain"}}/>
+        </a>
+      </div>
+    </div>
+  );
+}
+
+/* ─── HOTEL CAROUSEL ─────────────────────────────────────────────────── */
+function HotelCard({ hotel, selected, onSelect }) {
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    _fetchPhoto(hotel.geocode || hotel.title, null, "hotel").then(url => { setPhotoUrl(url); setLoaded(true); });
+  }, [hotel.geocode]);
+  return (
+    <div onClick={onSelect} style={{
+      flexShrink:0, width:150, borderRadius:14, overflow:"hidden",
+      border:`2px solid ${selected ? T.ocean : T.sand}`,
+      background:T.chalk, cursor:"pointer",
+      boxShadow: selected ? `0 0 0 3px ${T.ocean}33` : "0 2px 8px rgba(15,25,35,0.08)",
+      transition:"all 0.15s",
+    }}>
+      <div style={{height:95, background:T.sand, overflow:"hidden", position:"relative"}}>
+        {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+        {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={hotel.title} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+        {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:30}}>🏨</div>}
+        {selected && <div style={{position:"absolute",top:6,right:6,background:T.ocean,borderRadius:"50%",width:20,height:20,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"white"}}>✓</div>}
+      </div>
+      <div style={{padding:"8px 10px 10px"}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:12,color:T.ink,lineHeight:1.3,marginBottom:3}}>{hotel.title}</div>
+        {hotel.note && <div style={{fontFamily:"Georgia,serif",fontSize:10,color:T.mist,lineHeight:1.3}}>{hotel.note}</div>}
+      </div>
+    </div>
+  );
+}
+
+function HotelCarousel({ options, checkInTime, selectedTitle, onSelect }) {
+  return (
+    <div style={{padding:"12px 20px 4px"}}>
+      <div style={{fontFamily:"Georgia,serif",fontSize:11,color:T.mist,marginBottom:10,letterSpacing:0.3}}>
+        🏨 PICK YOUR HOTEL · check-in {checkInTime || ""}
+      </div>
+      <div style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:4,scrollbarWidth:"none"}}>
+        {options.map((h, i) => (
+          <HotelCard key={i} hotel={h} selected={selectedTitle === h.title} onSelect={() => onSelect(h)} />
+        ))}
       </div>
     </div>
   );
@@ -2029,16 +2567,25 @@ function DateRangePicker({ startDate, endDate, onChange }) {
 
 /* ─── SETUP FORM ─────────────────────────────────────────────────────── */
 
-function SetupForm({ onGenerate, initialTrip, onStepChange }) {
-  const [step, setStep]           = useState(0);
+function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, initialStep = 0 }) {
+  const [step, setStep]           = useState(initialStep);
   const [generating, setGen]      = useState(false);
+
+  // If prefillForm arrives (e.g. returning from brainstorm), merge its fields into form state.
+  // Using a ref-based guard to only apply it on mount or when the object reference actually changes.
+  const prefillAppliedRef = useRef(false);
 
   // Notify parent of step changes
   useEffect(() => { onStepChange?.(step); }, [step]);
 
-  // Sync browser history with form steps so back button works
+  // Sync browser history with form steps so back button works.
+  // When returning from brainstorm (initialStep > 0), push entries for all prior steps so
+  // the user can navigate back through earlier form sections.
   useEffect(() => {
     window.history.replaceState({ step: 0 }, "");
+    for (let s = 1; s <= initialStep; s++) {
+      window.history.pushState({ step: s }, "");
+    }
   }, []);
   useEffect(() => {
     const onPop = (e) => {
@@ -2048,6 +2595,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange }) {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+  const igReq = initialTrip?.ig_request || {};
   const prefill = initialTrip ? {
     destinations:  initialTrip.destination ? initialTrip.destination.split(" → ") : [],
     startDate:     initialTrip.start_date || "",
@@ -2057,12 +2605,26 @@ function SetupForm({ onGenerate, initialTrip, onStepChange }) {
     arrivalCity:   initialTrip.arrival_city   || "",
     departureCity: initialTrip.departure_city || "",
     notes:         initialTrip.notes || "",
+    ...(igReq.travelers    ? { travelers: String(igReq.travelers) } : {}),
+    ...(igReq.styles       ? { styles: igReq.styles } : {}),
+    ...(igReq.budget       ? { budget: igReq.budget } : {}),
+    ...(igReq.pace         ? { pace: igReq.pace } : {}),
+    ...(igReq.morningStart ? { morningStart: igReq.morningStart } : {}),
   } : {};
   const _today = new Date();
   const _defaultStart = new Date(_today); _defaultStart.setDate(_today.getDate() + 15);
   const _defaultEnd   = new Date(_today); _defaultEnd.setDate(_today.getDate() + 20);
   const _fmt = (d) => d.toISOString().slice(0, 10);
-  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", notes:"", arrivalCity:"", departureCity:"", ...prefill });
+  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", notes:"", arrivalCity:"", departureCity:"", ...prefill, ...(prefillForm || {}) });
+
+  // Re-apply prefillForm on any change (handles returning from brainstorm)
+  useEffect(() => {
+    if (prefillForm && !prefillAppliedRef.current) {
+      setForm(prev => ({ ...prev, ...prefillForm }));
+      setStep(initialStep);
+      prefillAppliedRef.current = true;
+    }
+  }, [prefillForm, initialStep]);
   const [destInput, setDestInput] = useState("");
   const [destError, setDestError] = useState("");
   const [suggestions, setSuggestions] = useState([]);
@@ -2293,15 +2855,15 @@ function SetupForm({ onGenerate, initialTrip, onStepChange }) {
       <div style={{display:"flex",gap:12,marginBottom:18}}>
         <div style={{flex:1}}>
           <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,marginBottom:6}}>Start city <span style={{color:T.mist,fontWeight:400}}>· if you know</span></div>
-          <input value={form.arrivalCity} onChange={e=>set("arrivalCity",e.target.value)}
+          <CityInput value={form.arrivalCity} onChange={v=>set("arrivalCity",v)}
             placeholder="e.g. London"
-            style={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.arrivalCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
+            inputStyle={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.arrivalCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
         </div>
         <div style={{flex:1}}>
           <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,marginBottom:6}}>End city <span style={{color:T.mist,fontWeight:400}}>· if you know</span></div>
-          <input value={form.departureCity} onChange={e=>set("departureCity",e.target.value)}
+          <CityInput value={form.departureCity} onChange={v=>set("departureCity",v)}
             placeholder="e.g. Paris"
-            style={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.departureCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
+            inputStyle={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.departureCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
         </div>
       </div>
 
@@ -2750,6 +3312,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [generateError, setGenerateError] = useState("");
   const [streamingDays, setStreamingDays] = useState(0);
   const [streamingTotal, setStreamingTotal] = useState(0);
+  const [allDaysPlanned, setAllDaysPlanned] = useState(false);
 
   const [myFlags,    setMyFlags]    = useState({}); // { [activityId]: 'love'|'skip'|'discuss' }
   const [flagCounts, setFlagCounts] = useState({}); // { [activityId]: { love:N, skip:N, discuss:N } }
@@ -2836,6 +3399,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     }
   };
   const [activeBottomTab, setActiveBottomTab] = useState("itinerary");
+  const [pretripTab, setPretripTab] = useState("brainstorm"); // pre-trip bottom nav tab
+  const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
+  const [pretripRoutes, setPretripRoutes] = useState([]); // tier 1 routes for pre-trip map
+  const [pretripSelectedRouteId, setPretripSelectedRouteId] = useState(null);
   const [chatUnread, setChatUnread] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput,   setChatInput]   = useState("");
@@ -2857,7 +3424,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       .eq("trip_id", trip.id)
       .order("created_at")
       .then(({ data }) => {
-        setChatMessages((data || []).map(m => ({ id: m.id, role: m.role, content: m.content, user_id: m.user_id })));
+        const loaded = (data || []).map(m => ({ id: m.id, role: m.role, content: m.content, user_id: m.user_id }));
+        setChatMessages(prev => {
+          // If the user already sent messages while we were loading (e.g. right after IG),
+          // and the DB returned nothing, keep the local state rather than wiping it.
+          if (loaded.length === 0 && prev.length > 0) return prev;
+          return loaded;
+        });
       });
 
     // Real-time: show messages from other users as they arrive
@@ -2874,6 +3447,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   }, [trip?.id]);
   const [setupModal,  setSetupModal]  = useState(null);
   const [editingTrip, setEditingTrip] = useState(null);
+  const [pendingForm, setPendingForm] = useState(null);
   const [showShare,   setShowShare]   = useState(false);
   const shareCardRef = useRef(null);
   const [flightsForm, setFlightsForm] = useState({ arrivalTime:"", departureTime:"" });
@@ -2889,6 +3463,34 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
   const editActivity = (dayId, updated) => {
     setDays(prev=>prev.map(d=>d.id===dayId?{...d,activities:d.activities.map(a=>a.id===updated.id?updated:a)}:d));
+  };
+
+  const selectHotel = async (dayId, hotel) => {
+    const day = days.find(d => d.id === dayId);
+    if (!day) return;
+    const checkInTime = day.hotel_check_in_time || "14:00";
+    // Remove any existing hotel activity on this day
+    const existingHotel = day.activities.find(a => a.type === "hotel");
+    if (existingHotel) {
+      await supabase.from("activities").delete().eq("id", existingHotel.id);
+    }
+    // Insert new hotel activity
+    const position = day.activities.filter(a => a.time <= checkInTime).length;
+    const { data: newAct } = await supabase.from("activities").insert({
+      day_id: dayId, time: checkInTime,
+      title: `Check in at ${hotel.title}`, geocode: hotel.geocode || hotel.title,
+      type: "hotel", duration: "0.5h", note: hotel.note, icon: "🏨",
+      confirmed: false, position, added_by: session.user.id,
+    }).select().single();
+    // Clear hotel_options from day once a hotel is selected
+    await supabase.from("days").update({ hotel_options: null, hotel_check_in_time: null }).eq("id", dayId);
+    setDays(prev => prev.map(d => {
+      if (d.id !== dayId) return d;
+      const acts = d.activities.filter(a => a.type !== "hotel");
+      const inserted = newAct || { id: `tmp-${Date.now()}`, time: checkInTime, title: `Check in at ${hotel.title}`, geocode: hotel.geocode, type: "hotel", duration: "0.5h", note: hotel.note, icon: "🏨", confirmed: false, position };
+      acts.splice(position, 0, inserted);
+      return { ...d, activities: acts, hotel_options: null, hotel_check_in_time: null };
+    }));
   };
 
   const removeActivity = async (dayId, activityId) => {
@@ -2983,9 +3585,30 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
 
 
-  const handleGenerate = async (form) => {
+  const handleSetupComplete = (form) => {
+    // Both new trips and edits go through brainstorm so the user can (re-)pick a route
+    setPendingForm(form);
+    setPretripTab("brainstorm");
+    setScreen("brainstorm");
+  };
+
+  const handleBuildFromBrainstorm = (votedItems) => {
+    if (!pendingForm) return;
+    // Tier 1 items in votedItems may be stale if chat-brainstorm just mutated routes —
+    // pretripRoutes is authoritative. Merge latest route content by id before sending to IG.
+    const freshenedItems = (votedItems || []).map(item => {
+      if (item.tier !== 1) return item;
+      const latest = pretripRoutes.find(r => r.id === item.id);
+      return latest ? { ...item, ...latest, vote: item.vote } : item;
+    });
+    // Do NOT override the user's form destinations. Route info flows into IG via votedItems.
+    handleGenerate(pendingForm, freshenedItems);
+  };
+
+  const handleGenerate = async (form, votedItems = null) => {
     setGenerateError("");
     setStreamingDays(0);
+    setAllDaysPlanned(false);
     setScreen("generating");
     const generatingScreenStart = Date.now();
 
@@ -3008,7 +3631,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             "Content-Type": "application/json",
             "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
-          body: JSON.stringify({ destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null }),
+          body: JSON.stringify({ destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null, votedItems: votedItems || null }),
         }
       );
       clearTimeout(timeout);
@@ -3033,6 +3656,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             accumulated += JSON.parse(raw);
             const daysPlanned = (accumulated.match(/"label"\s*:/g) || []).length;
             if (daysPlanned > 0) setStreamingDays(daysPlanned);
+            // Only flip to "Hold your breath…" after the final day's content is substantially complete
+            // (heuristic: we've seen wishlist or summary sections, or stream has accumulated well past labels)
+            if (daysPlanned >= numDays && (/"summary"\s*:/.test(accumulated) || /"wishlist"\s*:\s*\[[\s\S]*?\][\s\S]{200,}/.test(accumulated))) {
+              setAllDaysPlanned(true);
+            }
           } catch { /* skip malformed chunk */ }
         }
       }
@@ -3128,27 +3756,63 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       }
     } catch (e) { console.warn("Dining validation failed, proceeding without:", e.message); }
 
+    // Validate hotelOptions — keep top 3 verified per day
+    try {
+      const allCandidates = itinerary.days.flatMap((day, di) =>
+        (day.hotelOptions || []).map((opt, oi) => ({ di, oi, title: opt.geocode || opt.title, city: day.city }))
+      );
+      if (allCandidates.length) {
+        const res = await fetch(`${PLACES_PROXY}?action=validate`, {
+          method: "POST", headers: PLACES_HEADERS,
+          body: JSON.stringify({ activities: allCandidates.map(({ title, city }) => ({ title, city })) }),
+        });
+        const { results } = await res.json();
+        // Group by day, filter to verified, cap at 3
+        const byDay = {};
+        allCandidates.forEach(({ di, oi }, idx) => {
+          if (!byDay[di]) byDay[di] = [];
+          const r = results[idx];
+          const verified = r?.exists && r.businessStatus !== "CLOSED_PERMANENTLY" && r.businessStatus !== "CLOSED_TEMPORARILY";
+          if (verified) byDay[di].push(itinerary.days[di].hotelOptions[oi]);
+        });
+        itinerary.days.forEach((day, di) => {
+          if (!day.hotelOptions) return;
+          const verified = (byDay[di] || []).slice(0, 3);
+          // If none passed validation, keep original options rather than showing nothing
+          day.hotelOptions = verified.length > 0 ? verified : day.hotelOptions.slice(0, 3);
+        });
+      }
+    } catch (e) { console.warn("Hotel options validation failed, proceeding without:", e.message); }
+
     const generationCompletedAt = new Date().toISOString();
 
-    // 1. Insert trip — generate ID client-side to avoid .select() RLS issues
-    const tripId = crypto.randomUUID();
+    const isEditing = !!editingTrip?.id;
+
+    const abort = (msg, err) => {
+      console.error(msg, err);
+      setGenerateError(`${msg}${err?.message ? `: ${err.message}` : ""}`);
+      setScreen("setup");
+    };
+
+    // 1. Persist trip (update if editing, insert if new)
+    const tripId = isEditing ? editingTrip.id : crypto.randomUUID();
     const igRequest = { destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null };
+    const tripName = isEditing ? editingTrip.name : (() => {
+      const suffix = Math.random().toString(36).slice(2, 5).toUpperCase();
+      if (form.startDate && form.endDate) {
+        const start = new Date(form.startDate + "T12:00:00");
+        const end = new Date(form.endDate + "T12:00:00");
+        const startStr = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        const endStr = start.getMonth() === end.getMonth()
+          ? end.getDate()
+          : end.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        return `${itinerary.name} · ${startStr}–${endStr} ${suffix}`;
+      }
+      return `${itinerary.name} · ${suffix}`;
+    })();
     const tripPayload = {
       id: tripId,
-      name: (() => {
-        const fmt = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
-        const suffix = Math.random().toString(36).slice(2, 5).toUpperCase();
-        if (form.startDate && form.endDate) {
-          const start = new Date(form.startDate + "T12:00:00");
-          const end = new Date(form.endDate + "T12:00:00");
-          const startStr = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-          const endStr = start.getMonth() === end.getMonth()
-            ? end.getDate()
-            : end.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-          return `${itinerary.name} · ${startStr}–${endStr} ${suffix}`;
-        }
-        return `${itinerary.name} · ${suffix}`;
-      })(),
+      name: tripName,
       destination: form.destinations.join(" → "),
       start_date: form.startDate,
       end_date: form.endDate,
@@ -3162,24 +3826,57 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       ...(form.arrivalCity     && { arrival_city: form.arrivalCity }),
       ...(form.departureCity   && { departure_city: form.departureCity }),
     };
-    const { error: tripErr } = await supabase.from("trips").insert(tripPayload);
 
-    const abort = (msg, err) => {
-      console.error(msg, err);
-      setGenerateError(`${msg}${err?.message ? `: ${err.message}` : ""}`);
-      setScreen("setup");
-    };
-
-    if (tripErr) { abort("Failed to save trip", tripErr); return; }
+    if (isEditing) {
+      // Update trip row in place
+      const { error: updateErr } = await supabase.from("trips").update(tripPayload).eq("id", tripId);
+      if (updateErr) { abort("Failed to update trip", updateErr); return; }
+      // Wipe existing days (activities cascade via FK). Brainstorm items also cleared.
+      const { data: existingDays } = await supabase.from("days").select("id").eq("trip_id", tripId);
+      const existingDayIds = (existingDays || []).map(d => d.id);
+      if (existingDayIds.length) {
+        await supabase.from("activities").delete().in("day_id", existingDayIds);
+      }
+      await supabase.from("days").delete().eq("trip_id", tripId);
+      await supabase.from("brainstorm_items").delete().eq("trip_id", tripId);
+    } else {
+      const { error: tripErr } = await supabase.from("trips").insert(tripPayload);
+      if (tripErr) { abort("Failed to save trip", tripErr); return; }
+      // Add creator as organizer (only for new trips)
+      const { error: memberErr } = await supabase.from("trip_members").insert({
+        trip_id: tripId,
+        user_id: session.user.id,
+        role: "edit",
+      });
+      if (memberErr) { abort("Failed to add you as trip member", memberErr); return; }
+    }
     const tripData = tripPayload;
 
-    // 2. Add creator as organizer
-    const { error: memberErr } = await supabase.from("trip_members").insert({
-      trip_id: tripData.id,
-      user_id: session.user.id,
-      role: "edit",
-    });
-    if (memberErr) { abort("Failed to add you as trip member", memberErr); return; }
+    // 2b. Persist pre-trip brainstorm items (route options) so the user can refer to them later
+    if (votedItems && votedItems.length) {
+      const rows = votedItems.map((it, i) => ({
+        trip_id: tripData.id,
+        title: it.title,
+        city: it.city || null,
+        category: it.category || "Route",
+        note: it.tagline || null,
+        icon: it.icon || null,
+        geocode: it.geocode || null,
+        position: i,
+        tier: it.tier || 2,
+        selected: it.vote === 1,
+        data: {
+          tagline: it.tagline || null,
+          days: it.days || null,
+          bestFor: it.bestFor || null,
+          warning: it.warning || null,
+          recommended: !!it.recommended,
+          points: it.points || null,
+        },
+      }));
+      const { error: brainErr } = await supabase.from("brainstorm_items").insert(rows);
+      if (brainErr) console.warn("Failed to save brainstorm items:", brainErr);
+    }
 
     // 3. Insert days + activities (all days in parallel)
     const start = new Date(form.startDate);
@@ -3191,7 +3888,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
         const { data: dayData, error: dayErr } = await supabase
           .from("days")
-          .insert({ trip_id: tripData.id, label: day.label, date: isoDate, city: day.city, position: i, description: day.description || null, wishlist: day.wishlist?.length ? day.wishlist : null })
+          .insert({ trip_id: tripData.id, label: day.label, date: isoDate, city: day.city, position: i, description: day.description || null, wishlist: day.wishlist?.length ? day.wishlist : null, hotel_options: day.hotelOptions?.length ? day.hotelOptions : null, hotel_check_in_time: day.hotelCheckInTime || null })
           .select()
           .single();
 
@@ -3226,6 +3923,9 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     const elapsed = Date.now() - generatingScreenStart;
     if (elapsed < 4000) await new Promise(r => setTimeout(r, 4000 - elapsed));
     playDoneChime();
+    setChatUnread(true);
+    setEditingTrip(null);
+    setPendingForm(null);
     setScreen("itinerary");
 
     // Fetch and persist photos in background — staggered to avoid Wikimedia rate limits
@@ -3340,10 +4040,20 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         const dayId = existingDay.id;
 
         // Delete all existing activities for this day
-        const { error: deleteError } = await supabase.from("activities").delete().eq("day_id", dayId);
+        const existingCount = existingDay.activities?.length ?? 0;
+        const { error: deleteError, count: deletedCount } = await supabase
+          .from("activities")
+          .delete({ count: "exact" })
+          .eq("day_id", dayId);
         if (deleteError) {
-          console.error("[TMT] delete failed for day", dayId, deleteError);
-          continue; // don't insert if delete failed — avoids duplicates
+          console.error("[TMT] delete error for day", dayId, deleteError);
+          continue;
+        }
+        // If existing activities weren't deleted (count 0 or null when there were rows),
+        // RLS is blocking — inserting would duplicate rows, so skip.
+        if (existingCount > 0 && (deletedCount === null || deletedCount === 0)) {
+          console.warn("[TMT] delete blocked for day", dayId, "— expected", existingCount, "deleted, got", deletedCount, "— skipping insert");
+          continue;
         }
 
         // Reuse existing photos where geocode matches
@@ -3400,7 +4110,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   };
 
   const getMemberName = (userId) => {
-    const m = (trip.trip_members || []).find(mem => mem.user_id === userId);
+    const m = (trip?.trip_members || []).find(mem => mem.user_id === userId);
     return m?.profiles?.username || "Traveler";
   };
 
@@ -3416,7 +4126,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     });
   };
 
-  const chatMembers = (trip.trip_members || [])
+  const chatMembers = (trip?.trip_members || [])
     .filter(m => m.user_id !== session.user.id && m.profiles?.username)
     .map(m => ({ name: m.profiles.username, icon: m.profiles.face_icon || "👤" }));
 
@@ -3446,6 +4156,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "user", content: userMsg.content });
     let finalContent = "Sorry, something went wrong. Try again.";
     let suggestions = null;
+    let hasChanges = false;
     try {
       const data = await callChatTrip(userMsg.content, trip, daysRef.current, history, (accumulated) => {
         const partial = extractPartialMessage(accumulated);
@@ -3455,8 +4166,9 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       });
       finalContent = data.message || "Done.";
       suggestions = data.suggestions || null;
+      hasChanges = (data.updatedDays?.length || 0) > 0;
     } catch { /* use default error message */ }
-    setChatMessages(prev => { const updated = [...prev]; updated[updated.length - 1] = { role: "assistant", content: finalContent, suggestions }; return updated; });
+    setChatMessages(prev => { const updated = [...prev]; updated[updated.length - 1] = { role: "assistant", content: finalContent, suggestions, hasChanges, streaming: false }; return updated; });
     setChatLoading(false);
     setChatUnread(true);
     supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "assistant", content: finalContent });
@@ -3468,36 +4180,76 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     const history = chatMessages.filter(m => m.role !== "system-undo");
     setChatMessages(prev => [...prev, userMsg, { role: "assistant", content: "", streaming: true }]);
     setChatInput("");
+    if (chatInputRef.current) { chatInputRef.current.style.height = "auto"; }
     setChatLoading(true);
 
-    // Persist user message
-    supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "user", content: userMsg.content });
+    // Persist user message (in-trip only)
+    if (trip?.id) {
+      supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "user", content: userMsg.content });
+    }
 
     let finalContent = "Sorry, something went wrong. Try again.";
     let suggestions = null;
+    let hasChanges = false;
     try {
-      const data = await callChatTrip(userMsg.content, trip, daysRef.current, history, (accumulated) => {
-        const partial = extractPartialMessage(accumulated);
-        if (partial !== null) {
-          setChatMessages(prev => {
-            const updated = [...prev];
-            updated[updated.length - 1] = { role: "assistant", content: partial, streaming: true };
-            return updated;
-          });
+      if (trip?.id) {
+        const data = await callChatTrip(userMsg.content, trip, daysRef.current, history, (accumulated) => {
+          const partial = extractPartialMessage(accumulated);
+          if (partial !== null) {
+            setChatMessages(prev => {
+              const updated = [...prev];
+              updated[updated.length - 1] = { role: "assistant", content: partial, streaming: true };
+              return updated;
+            });
+          }
+        });
+        finalContent = data.message || "Done.";
+        suggestions = data.suggestions || null;
+        hasChanges = (data.updatedDays?.length || 0) > 0;
+      } else {
+        // Pre-trip: call chat-brainstorm with routes context
+        const data = await callChatBrainstorm(userMsg.content, history);
+        finalContent = data.message || "Done.";
+        if (data.updatedRoutes?.length) {
+          setPretripRoutes(prev => prev.map(r => {
+            const upd = data.updatedRoutes.find(u => u.id === r.id);
+            return upd ? { ...r, ...upd } : r;
+          }));
+          hasChanges = true;
         }
-      });
-      finalContent = data.message || "Done.";
-      suggestions = data.suggestions || null;
-    } catch { /* use default error message */ }
+      }
+    } catch (err) {
+      console.warn("Chat error:", err);
+      finalContent = `Sorry, something went wrong. (${err?.message || "unknown error"}) Try again.`;
+    }
 
     setChatMessages(prev => {
       const updated = [...prev];
-      updated[updated.length - 1] = { role: "assistant", content: finalContent, suggestions };
+      updated[updated.length - 1] = { role: "assistant", content: finalContent, suggestions, hasChanges };
       return updated;
     });
-    // Persist assistant message
-    supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "assistant", content: finalContent });
+    if (trip?.id) {
+      supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "assistant", content: finalContent });
+    }
     setChatLoading(false);
+  };
+
+  const callChatBrainstorm = async (message, history = []) => {
+    const res = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-brainstorm`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({
+          routes: pretripRoutes,
+          form: pendingForm || {},
+          message,
+          history: history.map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })),
+        }),
+      }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
   };
 
   return (
@@ -3525,11 +4277,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             ? <div style={{padding:"12px 16px",borderRadius:12,background:"#FFF0F0",border:"1.5px solid #e53e3e",fontSize:13,color:"#c53030",fontFamily:"Georgia,serif",textAlign:"center",maxWidth:300}}>
                 ⚠️ {generateError}
               </div>
-            : streamingDays > 0 && streamingTotal > 0 && streamingDays >= streamingTotal
+            : allDaysPlanned
             ? <div style={{fontSize:13,color:T.terra,fontFamily:"Georgia,serif",textAlign:"center",fontStyle:"italic"}}>Hold your breath…</div>
             : streamingDays > 0
             ? <div style={{fontSize:13,color:T.moss,fontFamily:"Georgia,serif",textAlign:"center",fontWeight:600}}>Day {streamingDays}{streamingTotal > 0 ? ` of ${streamingTotal}` : ""} planned ✓</div>
-            : <div style={{fontSize:13,color:T.mist,fontFamily:"Georgia,serif",textAlign:"center"}}>Claude is planning real activities for your trip</div>
+            : <LoadingHint />
           }
         </div>
       )}
@@ -3556,10 +4308,97 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 {generateError}
               </div>
             )}
-            <SetupForm onGenerate={handleGenerate} initialTrip={editingTrip || (initialScreen==="setup" && initialTrip?.destination ? initialTrip : null)} onStepChange={setSetupStep}/>
+            <SetupForm
+              key={pendingForm ? "resume" : "fresh"}
+              onGenerate={handleSetupComplete}
+              initialTrip={editingTrip || (initialScreen==="setup" && initialTrip?.destination ? initialTrip : null)}
+              onStepChange={setSetupStep}
+              prefillForm={pendingForm}
+              initialStep={pendingForm ? 3 : 0}
+            />
           </div>
         </div>
       )}
+
+      {/* ── BRAINSTORM (pre-trip) — full layout with bottom nav ── */}
+      {screen==="brainstorm" && (<>
+        {/* Content area per active tab */}
+        {/* BrainstormView always mounted to preserve items + selection, but hidden when not active */}
+        <div style={{flex: pretripTab === "brainstorm" ? 1 : 0, display: pretripTab === "brainstorm" ? "flex" : "none", flexDirection:"column", overflow: "hidden"}}>
+          <BrainstormView
+            trip={null}
+            session={session}
+            pendingForm={pendingForm}
+            autoGenerate={!editingTrip}
+            editTripId={editingTrip?.id || null}
+            onBuild={handleBuildFromBrainstorm}
+            onBack={() => setScreen("setup")}
+            onItemsChange={setPretripRoutes}
+            onSelectionChange={setPretripSelectedRouteId}
+            externalSelectedId={pretripSelectedRouteId}
+            externalRoutes={pretripRoutes}
+          />
+        </div>
+
+        {/* RouteMapView mounted eagerly (hidden when not active) so geocoding starts in background */}
+        <div style={{flex: pretripTab === "map" ? 1 : 0, display: pretripTab === "map" ? "flex" : "none", flexDirection:"column", overflow:"hidden"}}>
+          <RouteMapView
+            routes={pretripRoutes}
+            selectedId={pretripSelectedRouteId}
+            onSelectRoute={setPretripSelectedRouteId}
+          />
+        </div>
+
+        {pretripTab !== "brainstorm" && pretripTab !== "map" && (
+          <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"40px 28px",textAlign:"center",background:T.warm}}>
+            <div style={{fontSize:52,marginBottom:18,opacity:0.6}}>
+              {pretripTab === "itinerary" ? "🗓" : pretripTab === "chat" ? "💬" : "📋"}
+            </div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:10}}>
+              {pretripTab === "itinerary" ? "No itinerary yet" :
+               pretripTab === "chat"      ? "Chat unlocks with your itinerary" :
+                                            "Board unlocks with your itinerary"}
+            </div>
+            <div style={{fontSize:13,color:T.mist,fontFamily:"Georgia,serif",lineHeight:1.5,maxWidth:280,marginBottom:22}}>
+              Waiting for route selection. Head back to Brainstorm, pick a route, and hit <em>Build My Itinerary</em>.
+            </div>
+            <button
+              onClick={() => setPretripTab("brainstorm")}
+              style={{
+                padding:"10px 22px", borderRadius:12, border:"none",
+                background:`linear-gradient(135deg,${T.ocean},${T.dusk})`, color:"white",
+                fontFamily:"Georgia,serif", fontSize:13, fontWeight:600, cursor:"pointer",
+                boxShadow:"0 2px 10px rgba(15,25,35,0.18)",
+              }}
+            >
+              ← Back to Brainstorm
+            </button>
+          </div>
+        )}
+
+        {/* Bottom nav — pre-trip */}
+        <div style={{flexShrink:0, background:T.chalk, borderTop:`1px solid ${T.sand}`, display:"flex", paddingBottom:"env(safe-area-inset-bottom, 0px)"}}>
+          {[
+            { key:"brainstorm", icon:"💡", label:"Brainstorm" },
+            { key:"itinerary",  icon:"🗓", label:"Itinerary" },
+            { key:"map",        icon:"🗺", label:"Map" },
+            { key:"board",      icon:"📋", label:"Board" },
+          ].map(({ key, icon, label }) => {
+            const active = pretripTab === key;
+            return (
+              <button key={key} onClick={()=>setPretripTab(key)} style={{
+                flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:3,
+                padding:"10px 0 8px", border:"none", background:"none", cursor:"pointer",
+                color: active ? T.ocean : T.mist, transition:"color 0.15s", position:"relative",
+              }}>
+                {active && <div style={{position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:32,height:2.5,borderRadius:"0 0 2px 2px",background:T.ocean}}/>}
+                <span style={{fontSize:20}}>{icon}</span>
+                <span style={{fontSize:10,fontFamily:"'Inter','Segoe UI',sans-serif",fontWeight: active ? 600 : 400,letterSpacing:0.3}}>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </>)}
 
       {/* ── ITINERARY ── */}
       {screen==="itinerary" && loading && (
@@ -3691,24 +4530,27 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                       onRemoveActivity={removeActivity}
                       onReplaceActivity={(act) => {
                         setChatInput(`Replace "${act.title}" with `);
-                        setActiveBottomTab("chat");
+                        setChatOpen(true);
                         setChatUnread(false);
                         setTimeout(() => chatInputRef.current?.focus(), 50);
                       }}
                       onSuggestAlternatives={(act) => {
+                        setChatOpen(true);
+                        setChatUnread(false);
                         sendChatDirect(`Suggest 2-3 alternatives to "${act.title}" for the same time slot, without making any changes yet`);
                       }}
                       onChangeHotel={(dayId, act, mode) => {
                         const dayLabel = days.find(d => d.id === dayId)?.label || "this day";
                         if (mode === "own") {
-                          setChatInput(`I've booked my own hotel for ${dayLabel} — please remove the "${act.title}" suggestion`);
-                          setActiveBottomTab("chat");
+                          setChatInput(`I've booked my own hotel for ${dayLabel} — please replace the "${act.title}" with`);
+                          setChatOpen(true);
                           setChatUnread(false);
                           setTimeout(() => chatInputRef.current?.focus(), 50);
                         } else {
-                          setActiveBottomTab("chat");
+                          setChatOpen(true);
                           setChatUnread(false);
-                          sendChatDirect(`Suggest a different hotel for ${dayLabel} instead of "${act.title}"`);
+                          const dayCity = days.find(d => d.id === dayId)?.city || "";
+                          sendChatDirect(`I want to consider other hotel options for ${dayLabel}. Currently at "${act.title}"${dayCity ? ` in ${dayCity}` : ""}.`);
                         }
                       }}
                       arrivalTime={i === 0 ? (trip.arrival_time || (trip.start_date ? `${trip.start_date}T12:00:00` : null)) : null}
@@ -3743,6 +4585,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                       flags={myFlags}
                       flagCounts={flagCounts}
                       onFlag={handleFlag}
+                      onSelectHotel={(hotel) => selectHotel(day.id, hotel)}
                     />
                   </div>
                 );
@@ -3773,130 +4616,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
           {/* ── BRAINSTORM TAB ── */}
           {activeBottomTab === "brainstorm" && import.meta.env.VITE_BRAINSTORM_ENABLED && (
-            <BrainstormView trip={trip} session={session} />
+            <BrainstormView trip={trip} session={session} days={days} />
           )}
 
-          {/* ── CHAT TAB ── */}
-          {activeBottomTab === "chat" && (
-            <div style={{flex:1,display:"flex",flexDirection:"column",background:T.warm,overflow:"hidden"}}>
-              {/* Chat header */}
-              <div style={{background:`linear-gradient(135deg,${T.dusk},${T.ocean})`,padding:"14px 20px 12px",color:"white",flexShrink:0}}>
-                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,marginBottom:2}}>Chat</div>
-                <div style={{fontSize:12,opacity:0.75,fontFamily:"Georgia,serif"}}>{trip.name}</div>
-              </div>
-              {/* Filter pills */}
-              <div style={{display:"flex",gap:6,padding:"8px 16px",background:T.chalk,borderBottom:`1px solid ${T.sand}`,flexShrink:0}}>
-                {[["all","All"],["group","Group"],["ai","AI ✨"]].map(([f,label])=>(
-                  <button key={f} onClick={()=>setChatFilter(f)} style={{
-                    padding:"4px 14px",borderRadius:20,border:"none",cursor:"pointer",
-                    background:chatFilter===f?T.ocean:T.sand,
-                    color:chatFilter===f?"white":T.mist,
-                    fontSize:12,fontFamily:"Georgia,serif",transition:"background 0.15s",
-                  }}>{label}</button>
-                ))}
-              </div>
-              {/* Messages */}
-              <div style={{flex:1,overflowY:"auto",padding:"16px 16px 8px",display:"flex",flexDirection:"column",gap:10}}>
-                {filteredMessages.length === 0 && chatFilter !== "group" && (
-                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                    {trip.summary && (
-                      <div style={{display:"flex",justifyContent:"flex-start"}}>
-                        <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>{trip.summary}</div>
-                      </div>
-                    )}
-                    <div style={{display:"flex",flexDirection:"column",gap:8,padding:"4px 0"}}>
-                      {["Make day 2 more food-focused","Add a beach day","Replace morning activities with something relaxing"].map(s=>(
-                        <button key={s} onClick={()=>setChatInput(s)} style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:20,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer",textAlign:"left"}}>"{s}"</button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {filteredMessages.length === 0 && chatFilter === "group" && (
-                  <div style={{textAlign:"center",color:T.mist,fontFamily:"Georgia,serif",fontSize:13,paddingTop:40}}>
-                    No group messages yet
-                  </div>
-                )}
-                {filteredMessages.map((m,i)=>{
-                  if (m.role === "system-undo") {
-                    return (
-                      <div key={m.id || i} style={{display:"flex",justifyContent:"center",margin:"6px 0"}}>
-                        <div style={{background:T.sand,borderRadius:12,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.mist,display:"flex",alignItems:"center",gap:10}}>
-                          <span>{m.content}</span>
-                          <button onClick={()=>undoRemoveActivity(m.undoData.dayId, m.undoData.actSnap)} style={{background:"none",border:`1px solid ${T.mist}`,borderRadius:8,padding:"2px 10px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer"}}>Undo</button>
-                        </div>
-                      </div>
-                    );
-                  }
-                  const isOwn = m.role==="user" && m.user_id===session.user.id;
-                  const isAI = m.role==="assistant";
-                  const isOther = m.role==="user" && m.user_id!==session.user.id;
-                  return (
-                    <div key={i} style={{display:"flex",flexDirection:"column",alignItems:isOwn?"flex-end":"flex-start"}}>
-                      {isAI && (
-                        <div style={{fontSize:11,color:T.ocean,fontFamily:"Georgia,serif",marginBottom:2,paddingLeft:4,fontWeight:600}}>✨ AI</div>
-                      )}
-                      {isOther && (
-                        <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:2,paddingLeft:4}}>{getMemberName(m.user_id)}</div>
-                      )}
-                      <div style={{
-                        maxWidth:"80%",
-                        background: isOwn ? T.ocean : isAI ? T.chalk : "#F0F4F0",
-                        color: isOwn ? "white" : T.ink,
-                        borderRadius: isOwn ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
-                        padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.5,
-                        boxShadow:"0 1px 4px rgba(0,0,0,0.06)",
-                        borderLeft: isAI ? `3px solid ${T.ocean}` : "none",
-                      }}>
-                        {m.streaming && !m.content ? <span style={{color:T.mist,letterSpacing:2}}>···</span> : renderMentions(m.content||"")}
-                        {m.streaming && m.content && <span style={{display:"inline-block",width:2,height:"1em",background:T.ink,marginLeft:2,verticalAlign:"text-bottom",animation:"blink 1s step-end infinite"}}/>}
-                      </div>
-                      {isAI && m.suggestions?.length > 0 && (
-                        <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginTop:6,maxWidth:"90vw"}}>
-                          {m.suggestions.map((s, si) => (
-                            <SuggestionCard key={si} suggestion={s} onSelect={() => {
-                              setChatInput(`Use "${s.title}"`);
-                              setTimeout(() => chatInputRef.current?.focus(), 50);
-                            }}/>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                <div ref={chatBottomRef} />
-              </div>
-              {/* Mention picker */}
-              {mentionSearch !== null && mentionOptions.length > 0 && (
-                <div style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:12,margin:"0 12px 4px",overflow:"hidden",flexShrink:0,maxHeight:160,overflowY:"auto"}}>
-                  {mentionOptions.map(opt=>(
-                    <div key={opt.name} onMouseDown={e=>{e.preventDefault();selectMention(opt.name);}} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 14px",cursor:"pointer",borderBottom:`1px solid ${T.sand}`,fontSize:13,fontFamily:"Georgia,serif",color:T.ink}}>
-                      <span>{opt.icon}</span><span style={{color:T.ocean,fontWeight:600}}>@{opt.name}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {/* Input */}
-              <div style={{padding:"8px 12px",paddingBottom:"calc(8px + env(safe-area-inset-bottom, 0px))",background:T.chalk,borderTop:`1px solid ${T.sand}`,display:"flex",gap:8,flexShrink:0}}>
-                <input
-                  ref={chatInputRef}
-                  value={chatInput}
-                  onChange={e=>{
-                    setChatInput(e.target.value);
-                    const match = e.target.value.match(/@(\w*)$/);
-                    setMentionSearch(match ? match[1].toLowerCase() : null);
-                  }}
-                  onKeyDown={e=>{
-                    if (e.key==="Escape") { setMentionSearch(null); return; }
-                    if (e.key==="Enter" && mentionSearch===null) sendChatMessage();
-                  }}
-                  placeholder="Message… type @ to mention"
-                  style={{flex:1,padding:"11px 14px",borderRadius:24,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",background:T.warm}}
-                />
-                <button onClick={sendChatMessage} disabled={chatLoading||!chatInput.trim()} style={{width:44,height:44,borderRadius:"50%",background:chatInput.trim()?T.ocean:T.sand,color:"white",border:"none",fontSize:18,cursor:chatInput.trim()?"pointer":"default"}}>↑</button>
-              </div>
-            </div>
-          )}
-
+          {/* Chat sheet is rendered at App root */}
           {/* ── MAP TAB ── */}
           {activeBottomTab === "map" && (
             <MapView days={days} />
@@ -3926,13 +4649,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             {[
               ...(import.meta.env.VITE_BRAINSTORM_ENABLED ? [{ key:"brainstorm", icon:"💡", label:"Brainstorm" }] : []),
               { key:"itinerary", icon:"🗓", label:"Itinerary" },
-              { key:"chat",      icon:"💬", label:"Chat" },
               { key:"map",       icon:"🗺", label:"Map" },
               { key:"board",     icon:"📋", label:"Board" },
             ].map(({ key, icon, label }) => {
               const active = activeBottomTab === key;
               return (
-                <button key={key} onClick={()=>{ setActiveBottomTab(key); if (key === "chat") setChatUnread(false); }} style={{
+                <button key={key} onClick={()=>setActiveBottomTab(key)} style={{
                   flex:1,
                   display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
                   gap:3,
@@ -3945,10 +4667,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                   position:"relative",
                 }}>
                   {active && <div style={{position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:32,height:2.5,borderRadius:"0 0 2px 2px",background:T.ocean}}/>}
-                  <span style={{fontSize:20,position:"relative"}}>
-                    {icon}
-                    {key === "chat" && chatUnread && !active && <span style={{position:"absolute",top:-2,right:-4,width:8,height:8,borderRadius:"50%",background:T.terra,border:`1.5px solid white`}}/>}
-                  </span>
+                  <span style={{fontSize:20}}>{icon}</span>
                   <span style={{fontSize:10,fontFamily:"'Inter','Segoe UI',sans-serif",fontWeight: active ? 600 : 400,letterSpacing:0.3}}>{label}</span>
                 </button>
               );
@@ -4070,6 +4789,201 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         </></DebugContext.Provider>
       )}
 
+
+      {/* ── CHAT FAB (visible on trip and pre-trip screens) ── */}
+      {!chatOpen && (screen === "itinerary" || screen === "brainstorm") && (
+        <button
+          onClick={() => { setChatOpen(true); setChatUnread(false); }}
+          style={{
+            position: "absolute", bottom: "calc(76px + env(safe-area-inset-bottom, 0px))", right: 16,
+            width: 58, height: 58, borderRadius: "50%",
+            background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
+            color: "white", border: "none",
+            cursor: "pointer", zIndex: 900,
+            boxShadow: "0 4px 18px rgba(37,99,168,0.45), 0 0 0 1px rgba(255,255,255,0.1) inset",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+          aria-label="Open chat"
+        >
+          {/* Paper airplane SVG — "send a message" + travel in one mark */}
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{transform:"translate(-1px, 1px)"}}>
+            <path d="M22 2L11 13" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="rgba(255,255,255,0.18)"/>
+          </svg>
+          {/* Sparkle hint — signals AI + adds personality */}
+          <span style={{position:"absolute",top:8,left:10,fontSize:10,opacity:0.85}}>✦</span>
+          {chatUnread && (
+            <span style={{
+              position: "absolute", top: 4, right: 4,
+              width: 12, height: 12, borderRadius: "50%",
+              background: T.terra, border: "2px solid white",
+            }}/>
+          )}
+        </button>
+      )}
+
+      {/* ── CHAT SHEET (floating bottom sheet, rendered globally) ── */}
+      {chatOpen && (screen === "itinerary" || screen === "brainstorm") && (
+        <div style={{position:"fixed",inset:0,zIndex:1500,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",pointerEvents:"none"}}>
+          {/* Scrim */}
+          <div onClick={()=>setChatOpen(false)} style={{position:"absolute",inset:0,background:"rgba(15,25,35,0.45)",animation:"fadeUp 0.2s ease",pointerEvents:"all"}}/>
+          {/* Sheet */}
+          <div style={{position:"relative",width:"100%",maxWidth:430,height:"85dvh",background:T.warm,borderRadius:"18px 18px 0 0",boxShadow:"0 -8px 30px rgba(0,0,0,0.22)",display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideUp 0.25s ease",pointerEvents:"all"}}>
+            {/* Drag handle */}
+            <div style={{padding:"8px 0 4px",display:"flex",justifyContent:"center",flexShrink:0,background:`linear-gradient(135deg,${T.dusk},${T.ocean})`}}>
+              <div style={{width:38,height:4,borderRadius:4,background:"rgba(255,255,255,0.4)"}}/>
+            </div>
+            {/* Chat header */}
+            <div style={{background:`linear-gradient(135deg,${T.dusk},${T.ocean})`,padding:"6px 20px 12px",color:"white",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,marginBottom:2}}>Chat</div>
+                <div style={{fontSize:12,opacity:0.75,fontFamily:"Georgia,serif"}}>{screen === "brainstorm" ? "Shape your trip" : (trip?.name || "")}</div>
+              </div>
+              <button onClick={()=>setChatOpen(false)} style={{background:"rgba(255,255,255,0.15)",border:"none",color:"white",width:32,height:32,borderRadius:"50%",fontSize:16,cursor:"pointer"}}>✕</button>
+            </div>
+            {/* Filter pills — only in-trip */}
+            {trip && (
+              <div style={{display:"flex",gap:6,padding:"8px 16px",background:T.chalk,borderBottom:`1px solid ${T.sand}`,flexShrink:0}}>
+                {[["all","All"],["group","Group"],["ai","AI ✨"]].map(([f,label])=>(
+                  <button key={f} onClick={()=>setChatFilter(f)} style={{
+                    padding:"4px 14px",borderRadius:20,border:"none",cursor:"pointer",
+                    background:chatFilter===f?T.ocean:T.sand,
+                    color:chatFilter===f?"white":T.mist,
+                    fontSize:12,fontFamily:"Georgia,serif",transition:"background 0.15s",
+                  }}>{label}</button>
+                ))}
+              </div>
+            )}
+            {/* Messages */}
+            <div style={{flex:1,overflowY:"auto",padding:"16px 16px 8px",display:"flex",flexDirection:"column",gap:10}}>
+              {filteredMessages.length === 0 && chatFilter !== "group" && (
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  {trip?.summary && (
+                    <div style={{display:"flex",justifyContent:"flex-start"}}>
+                      <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>{trip.summary}</div>
+                    </div>
+                  )}
+                  <div style={{display:"flex",flexDirection:"column",gap:8,padding:"4px 0"}}>
+                    {(trip
+                      ? ["Make day 2 more food-focused","Add a beach day","Replace morning activities with something relaxing"]
+                      : ["Which route has the best scuba?","Add a day in Ella to the hills route","Make the recommended route a bit slower"]
+                    ).map(s=>(
+                      <button key={s} onClick={()=>setChatInput(s)} style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:20,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer",textAlign:"left"}}>"{s}"</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {filteredMessages.length === 0 && chatFilter === "group" && (
+                <div style={{textAlign:"center",color:T.mist,fontFamily:"Georgia,serif",fontSize:13,paddingTop:40}}>
+                  No group messages yet
+                </div>
+              )}
+              {filteredMessages.map((m,i)=>{
+                if (m.role === "system-undo") {
+                  return (
+                    <div key={m.id || i} style={{display:"flex",justifyContent:"center",margin:"6px 0"}}>
+                      <div style={{background:T.sand,borderRadius:12,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.mist,display:"flex",alignItems:"center",gap:10}}>
+                        <span>{m.content}</span>
+                        <button onClick={()=>undoRemoveActivity(m.undoData.dayId, m.undoData.actSnap)} style={{background:"none",border:`1px solid ${T.mist}`,borderRadius:8,padding:"2px 10px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer"}}>Undo</button>
+                      </div>
+                    </div>
+                  );
+                }
+                const isOwn = m.role==="user" && m.user_id===session.user.id;
+                const isAI = m.role==="assistant";
+                const isOther = m.role==="user" && m.user_id!==session.user.id;
+                return (
+                  <div key={i} style={{display:"flex",flexDirection:"column",alignItems:isOwn?"flex-end":"flex-start"}}>
+                    {isAI && (
+                      <div style={{fontSize:11,color:T.ocean,fontFamily:"Georgia,serif",marginBottom:2,paddingLeft:4,fontWeight:600}}>✨ AI</div>
+                    )}
+                    {isOther && (
+                      <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:2,paddingLeft:4}}>{getMemberName(m.user_id)}</div>
+                    )}
+                    <div style={{
+                      maxWidth:"80%",
+                      background: isOwn ? T.ocean : isAI ? T.chalk : "#F0F4F0",
+                      color: isOwn ? "white" : T.ink,
+                      borderRadius: isOwn ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+                      padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.5,
+                      boxShadow:"0 1px 4px rgba(0,0,0,0.06)",
+                      borderLeft: isAI ? `3px solid ${T.ocean}` : "none",
+                    }}>
+                      {m.streaming && !m.content ? <span style={{color:T.mist,letterSpacing:2}}>···</span> : renderMentions(m.content||"")}
+                      {m.streaming && m.content && <span style={{display:"inline-block",width:2,height:"1em",background:T.ink,marginLeft:2,verticalAlign:"text-bottom",animation:"blink 1s step-end infinite"}}/>}
+                    </div>
+                    {isAI && m.suggestions?.length > 0 && (
+                      <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginTop:6,maxWidth:"90vw"}}>
+                        {m.suggestions.map((s, si) => (
+                          s.type === "hotel"
+                            ? <HotelSuggestionCard key={si} suggestion={s}
+                                onSelect={() => { setChatInput(`Use "${s.title}"`); setTimeout(() => chatInputRef.current?.focus(), 50); }}
+                                onKnowMore={() => sendChatDirect(`Tell me more about ${s.title} — location, vibe, and what makes it stand out`)}
+                              />
+                            : <SuggestionCard key={si} suggestion={s}
+                                onSelect={() => { setChatInput(`Use "${s.title}"`); setTimeout(() => chatInputRef.current?.focus(), 50); }}
+                                onKnowMore={() => sendChatDirect(`Tell me more about ${s.title} — how would it fit into the itinerary, what's special about it, and what else is there to do nearby?`)}
+                              />
+                        ))}
+                      </div>
+                    )}
+                    {isAI && m.hasChanges && !m.streaming && (
+                      <button
+                        onClick={() => { setChatOpen(false); if (trip) setActiveBottomTab("itinerary"); else setPretripTab("brainstorm"); }}
+                        style={{
+                          marginTop: 8, display: "flex", alignItems: "center", gap: 6,
+                          background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
+                          color: "white", border: "none", borderRadius: 10,
+                          padding: "8px 14px", fontFamily: "Georgia,serif", fontSize: 12,
+                          cursor: "pointer", fontWeight: 600,
+                          boxShadow: "0 2px 8px rgba(15,25,35,0.15)",
+                        }}
+                      >
+                        {trip ? "🗺️ View Updated Itinerary" : "💡 View Updated Routes"}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              <div ref={chatBottomRef} />
+            </div>
+            {/* Mention picker — only in-trip */}
+            {trip && mentionSearch !== null && mentionOptions.length > 0 && (
+              <div style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:12,margin:"0 12px 4px",overflow:"hidden",flexShrink:0,maxHeight:160,overflowY:"auto"}}>
+                {mentionOptions.map(opt=>(
+                  <div key={opt.name} onMouseDown={e=>{e.preventDefault();selectMention(opt.name);}} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 14px",cursor:"pointer",borderBottom:`1px solid ${T.sand}`,fontSize:13,fontFamily:"Georgia,serif",color:T.ink}}>
+                    <span>{opt.icon}</span><span style={{color:T.ocean,fontWeight:600}}>@{opt.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* Input */}
+            <div style={{padding:"8px 12px",paddingBottom:"calc(8px + env(safe-area-inset-bottom, 0px))",background:T.chalk,borderTop:`1px solid ${T.sand}`,display:"flex",gap:8,alignItems:"flex-end",flexShrink:0}}>
+              <textarea
+                ref={chatInputRef}
+                value={chatInput}
+                rows={1}
+                onChange={e=>{
+                  setChatInput(e.target.value);
+                  if (trip) {
+                    const match = e.target.value.match(/@(\w*)$/);
+                    setMentionSearch(match ? match[1].toLowerCase() : null);
+                  }
+                  e.target.style.height = "auto";
+                  e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
+                }}
+                onKeyDown={e=>{
+                  if (e.key==="Escape") { setMentionSearch(null); return; }
+                  if (e.key==="Enter" && !e.shiftKey && mentionSearch===null) { e.preventDefault(); sendChatMessage(); }
+                }}
+                placeholder={trip ? "Message… type @ to mention" : "Ask about the routes or request a change…"}
+                style={{flex:1,padding:"11px 14px",borderRadius:18,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",background:T.warm,resize:"none",lineHeight:1.4,overflow:"hidden",display:"block"}}
+              />
+              <button onClick={sendChatMessage} disabled={chatLoading||!chatInput.trim()} style={{width:44,height:44,borderRadius:"50%",background:chatInput.trim()?T.ocean:T.sand,color:"white",border:"none",fontSize:18,cursor:chatInput.trim()?"pointer":"default",flexShrink:0}}>↑</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── SETUP MODALS ── */}
       {setupModal && (

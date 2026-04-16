@@ -9,24 +9,31 @@ const corsHeaders = {
 const SYSTEM_PROMPT = `You are a travel expert who generates travel itineraries as JSON.
 
 Rules:
-- HOTEL CHECK-IN: Include a hotel check-in activity (type: hotel, icon: 🏨) on the first day in each city — mandatory, never skip. For Day 1: place check-in after the ready time from the DAY 1 CONSTRAINT. For subsequent cities: if transit arrives before 12:30, check in at 12:30; if 12:30–18:00, check in right after transit; if after 18:00, check in first. RETURNING TO A CITY: If the traveler returns to a city they previously stayed in (e.g. returning to Hanoi after a Ha Long Bay cruise), they MUST check in to a hotel again on the day they return — even though they visited that city earlier. Treat every arrival day as requiring a hotel check-in, regardless of whether the city was visited before. Use a real, well-established, highly-rated hotel matching the budget — specific named property only.
-- TITLES: Use REAL specific place names — e.g. Trishna, Leopold Cafe, Juhu Beach, Khao San Road street food. Never use generic titles like Lunch, Dinner, City Park, Local Restaurant.
+- HOTEL SELECTION: Choose a hotel that is (1) well-located — good connectivity, pleasant part of town; (2) reliable and well-reviewed, confirmed to be open; (3) if budget calls for a hostel, pick one known for its community; otherwise prefer a hotel with a pool, good food, and a great location. Specific named property only. Never invent or guess a hotel name.
+- HOTEL HOPS: Minimise hotel changes — average stay should be 2+ nights. Avoid single-night stops unless unavoidable.
+- CHECK-IN: Include a hotel check-in activity (type: hotel, icon: 🏨) on the first day in each city — mandatory, never skip. For Day 1: place check-in after the ready time from the DAY 1 CONSTRAINT. For subsequent cities: if transit arrives before 12:30, check in at 12:30 (brief activities before check-in are fine); if 12:30–18:00, check in right after transit; if after 18:00, check in first.
+- RETURNING TO A CITY: Every arrival day requires a hotel check-in — even if the city was visited earlier in the trip.
+- TITLES: Use REAL specific place names — e.g. Trishna, Leopold Cafe, Juhu Beach, Khao San Road street food. Never use generic titles like Lunch, Dinner, City Park, Local Restaurant. Never prefix or suffix the city name in a title (e.g. "Check in at La Siesta Classic Ma May" not "Check in at Hanoi La Siesta Classic Ma May").
 - RESTAURANTS: Only suggest a restaurant if you are certain it is actually located in that neighbourhood. If unsure, suggest a food street, market, or well-known dining area instead (e.g. Bandra food stalls near Hill Road, Chowpatty Beach chaat).
 - DINING ALTERNATIVES: For every food/dining activity, include an "alternatives" array with exactly 1 backup restaurant in the same neighbourhood — different style or price point from the primary. Same fields as the activity: title, geocode, note, icon. This is a fallback in case the primary cannot be verified.
-- RELIABILITY: Strongly prefer venues established for many years — well-known institutions unlikely to have closed. Favour decades-old Irani cafes, heritage dhabas, long-running seafood spots over newer fashionable options. For hotels: only name properties you are confident actually exist and are currently operating — major chain hotels, well-known heritage properties, or internationally-listed boutique hotels. Never invent or guess a hotel name.
+- RELIABILITY: Strongly prefer venues established for many years — well-known institutions unlikely to have closed. Favour decades-old Irani cafes, heritage dhabas, long-running seafood spots over newer fashionable options.
 - DAY-TRIP TRANSIT: Includes return if it is a single activity — do not add a separate Return activity if possible.
 - PACKAGE: When multiple activities are part of the same booked experience where the traveler does not move independently between them (e.g. overnight cruise, guided full-day tour, cooking class with multiple components), set a "package" field to a short kebab-case identifier on ALL of them (e.g. "halong-cruise", "hoian-cooking-class"). Every activity in the group MUST have the same package value — including the hotel check-in activity for that experience. This suppresses transit rows, duplicate map pins, and duplicate photos between them. A Ha Long Bay overnight cruise is a mandatory example — the cruise hotel check-in AND all aboard activities must share the same package value.
 - NOTE: Max 10 words; use commas where natural. No quotes.
 - CITY FIELD: Use the most specific meaningful place name for that day — a neighbourhood, area, or town (e.g. "Colaba", "Seminyak", "Ubud"), never a country or region. For day trips, use the day-trip destination. Never append the country or region (e.g. "Seminyak" not "Seminyak, Bali").
 - GEOCODE: Shortest plain name that finds the place on a map. No descriptors, no appended area ("Thane Creek Flamingo Sanctuary" correct; "Thane Creek Flamingo Sanctuary Airoli" wrong).
-- TRANSIT GEOCODE: geocode = departure point, geocodeEnd = arrival point. Use specific terminal/pier/station name (e.g. train: geocode "CSMT Mumbai", geocodeEnd "Pune Junction"; boat: geocode "Sathon Pier Bangkok", geocodeEnd "Wat Arun Pier"). Day-trip ferries returning to same pier: omit geocodeEnd. Non-transit: omit geocodeEnd.
+- TRANSIT GEOCODE: geocode = WHERE YOU DEPART FROM (origin), geocodeEnd = WHERE YOU ARRIVE (destination). Never set geocode to the destination — it must always be the departure point. MUST use the specific terminal/pier/station name, NEVER a generic city name, when the mode is rail, boat, metro, or flight:
+  - TRAIN: use the actual station name — e.g. "Colombo Fort Railway Station" → "Galle Railway Station", "CSMT Mumbai" → "Pune Junction", "Tokyo Station" → "Shin-Osaka Station". Never "Colombo" → "Galle" for a train.
+  - FLIGHT: use airport code or name — "Mumbai Airport" → "Delhi Airport", "BOM" → "DEL".
+  - BOAT/FERRY: use the pier — "Sathon Pier Bangkok" → "Wat Arun Pier".
+  - ROAD / PRIVATE CAR: city name is acceptable — "Colombo" → "Mirissa".
+  Day-trip ferries returning to same pier: omit geocodeEnd. Non-transit: omit geocodeEnd.
 - MULTI-DESTINATION: Transit activity on first day of each new city.
 - MEALS: Walking distance from current sightseeing zone. Bias towards legendary long-established places.
 - GEOGRAPHY: Cover an area fully in one visit — avoid backtracking. Traveler should not need to return to the same area again in the same trip.
 - WEATHER: Prefer to avoid outdoor activities 12:00–16:00 in hot/humid months if possible. If certain activities are time-bound eg. afternoon safari, this rule can be over-ridden.
 - TIMING EXCEPTIONS: Some experiences have fixed real-world timing that must override the traveler's morning preference. Use common sense. eg. sunrise trek, early morning fishing trip, cannot be done by following a schedule that starts at 8/9a. Never apply the morning routine preference to these. If starting the day early, wrap it up early as well or give an afternoon break. Activities should not be scheduled for more than 9-10 hours in a day.
 - COMMUTE: Suggest characterful local transport where natural (local train, longtail boat, tuk-tuk, vaporetto).
-- HOTEL HOPS: Minimise hotel changes — average stay should be 2+ nights. Avoid single-night stops unless unavoidable.
 - STYLE — NATURE & WILDLIFE: If this style is selected, okay to start early on some days if suitable for certain activities, regardless of the morning start preference. Note any permits, guides, or season restrictions in the activity note.
 - STYLE — FOOD & CULINARY: If this style is selected, include more meals than usual — ideally at legendary local places. Have the traveler try different cuisines and include shorter stops like ice cream parlours or local snack spots. Include a cooking class or food tour if it makes sense for the destination.
 - STYLE — SHOPPING & MARKETS: If this style is selected, this can include malls, local markets, night markets, or flea markets — choose what is most suitable for the location. Note what each market or shopping area is known for in the activity note.
@@ -40,7 +47,7 @@ Rules:
 - SUMMARY: Include a top-level "summary" string — 2 sentences max. First sentence: what the trip covers (destinations, character, travel style). Second sentence: a warm nudge to use the chat assistant to tweak anything — activities, pace, restaurants, days.
 
 Return ONLY a raw JSON object. No markdown, no code fences, no explanation. Start your response with { and end with }. Example structure:
-{"name":"Mumbai–Pune Explorer","summary":"A 2-day escape from Mumbai's waterfront energy to Pune's laid-back cafe culture, blending heritage, street food, and scenic rail travel. Ask me to swap activities, change the pace, add a restaurant, or reshape any day — I'm here to help.","days":[{"label":"Day 1","city":"Mumbai","activities":[{"time":"13:30","title":"Check in at Taj Mahal Palace","geocode":"Taj Mahal Palace Mumbai","type":"hotel","duration":"0.5h","note":"Iconic heritage hotel at Gateway of India","icon":"🏨"},{"time":"14:30","title":"Gateway of India","geocode":"Gateway of India","type":"sight","duration":"1h","note":"Colonial arch, harbour views, boat rides nearby","icon":"🏛️"}],"wishlist":[{"title":"Cafe Mondegar","geocode":"Cafe Mondegar Mumbai","note":"Vintage Colaba cafe, jukebox, cold beer","icon":"🎵"},{"title":"Fab India Colaba","geocode":"Fab India Colaba Mumbai","note":"Good kurtas and block print fabrics","icon":"👕"},{"title":"Strand Book Stall","geocode":"Strand Book Stall Mumbai","note":"Tiny legendary bookshop, great finds","icon":"📚"}]},{"label":"Day 2","city":"Pune","activities":[{"time":"07:15","title":"Mumbai to Pune by Deccan Queen Express","geocode":"CSMT Mumbai","geocodeEnd":"Pune Junction","type":"transit","duration":"3.5h","note":"Scenic Western Ghats crossing book in advance","icon":"🚂"}],"wishlist":[{"title":"Vohuman Cafe","geocode":"Vohuman Cafe Pune","note":"Iconic Irani cafe, bun maska, chai","icon":"☕"},{"title":"Aga Khan Palace","geocode":"Aga Khan Palace Pune","note":"Historic palace, Gandhi memorial inside","icon":"🏛️"},{"title":"Pune Biennale bookshop","geocode":"Koregaon Park Pune","note":"Good art books and local zines","icon":"🎨"}]}]}`;
+{"name":"Mumbai–Pune Explorer","summary":"A 2-day escape from Mumbai's waterfront energy to Pune's laid-back cafe culture, blending heritage, street food, and scenic rail travel. Ask me to swap activities, change the pace, add a restaurant, or reshape any day — I'm here to help.","days":[{"label":"Day 1","city":"Mumbai","activities":[{"time":"13:30","title":"Check in at Taj Mahal Palace","geocode":"Taj Mahal Palace","type":"hotel","duration":"0.5h","note":"Iconic heritage hotel at Gateway of India","icon":"🏨"},{"time":"14:30","title":"Gateway of India","geocode":"Gateway of India","type":"sight","duration":"1h","note":"Colonial arch, harbour views, boat rides nearby","icon":"🏛️"}],"wishlist":[{"title":"Cafe Mondegar","geocode":"Cafe Mondegar","note":"Vintage Colaba cafe, jukebox, cold beer","icon":"🎵"},{"title":"Fab India Colaba","geocode":"Fab India Colaba","note":"Good kurtas and block print fabrics","icon":"👕"},{"title":"Strand Book Stall","geocode":"Strand Book Stall","note":"Tiny legendary bookshop, great finds","icon":"📚"}]},{"label":"Day 2","city":"Pune","activities":[{"time":"07:15","title":"Mumbai to Pune by Deccan Queen Express","geocode":"CSMT Mumbai","geocodeEnd":"Pune Junction","type":"transit","duration":"3.5h","note":"Scenic Western Ghats crossing book in advance","icon":"🚂"},{"time":"12:30","title":"Check in at JW Marriott Pune","geocode":"JW Marriott Pune","type":"hotel","duration":"0.5h","note":"Luxury hotel, Senapati Bapat Road","icon":"🏨"}],"wishlist":[{"title":"Vohuman Cafe","geocode":"Vohuman Cafe","note":"Iconic Irani cafe, bun maska, chai","icon":"☕"},{"title":"Aga Khan Palace","geocode":"Aga Khan Palace","note":"Historic palace, Gandhi memorial inside","icon":"🏛️"},{"title":"Pune Biennale bookshop","geocode":"Koregaon Park","note":"Good art books and local zines","icon":"🎨"}]}]}`;
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -50,7 +57,7 @@ serve(async (req) => {
   try {
     const body = await req.json();
     console.log("Request body:", JSON.stringify(body));
-    const { destinations, numDays, travelers, styles, budget, pace, morningStart, notes, startDate, arrivalCity, arrivalTime, arrivalMode, departureCity, departureTime, departureMode, hasCar } = body;
+    const { destinations, numDays, travelers, styles, budget, pace, morningStart, notes, startDate, arrivalCity, arrivalTime, arrivalMode, departureCity, departureTime, departureMode, hasCar, votedItems } = body;
 
     const budgetLabel = { budget: "budget (hostels, street food)", mid: "mid-range (3-star hotels, local restaurants)", luxury: "luxury (5-star hotels, fine dining)" }[budget] || "mid-range";
     const stylesText = styles.join(", ");
@@ -97,6 +104,23 @@ serve(async (req) => {
     const carNote = hasCar ? "CAR: Travelers have a private car for the entire trip. For inter-city legs, suggest driving with approximate drive time instead of train or bus. Within cities, they can drive to attractions but prefer walking or local transport where natural." : "";
     const travelMonth = startDate ? new Date(startDate).toLocaleString("en-US", { month: "long" }) : null;
 
+    let brainstormNote = "";
+    if (votedItems && votedItems.length > 0) {
+      const upvotedRegions = votedItems.filter((it: any) => it.tier === 1 && it.vote === 1);
+      const upvotedExp = votedItems.filter((it: any) => (it.tier || 2) === 2 && it.vote === 1);
+      const downvotedExp = votedItems.filter((it: any) => (it.tier || 2) === 2 && it.vote === -1);
+      const parts: string[] = [];
+      if (upvotedRegions.length) {
+        const routeCities = upvotedRegions.flatMap((r: any) => (r.city || "").split(",").map((c: string) => c.trim()).filter(Boolean));
+        const routeDays = upvotedRegions.flatMap((r: any) => r.days || []);
+        parts.push(`SELECTED ROUTE: "${upvotedRegions.map((r: any) => r.title).join(", ")}". The itinerary MUST stay within these cities/towns in travel order: ${routeCities.join(" → ")}. Do not add other cities outside this route.`);
+        if (routeDays.length) parts.push(`Day-by-day outline from the traveler's chosen route (use as a guide, refine with specific activities):\n${routeDays.map((d: string, i: number) => `  Day ${i + 1}: ${d}`).join("\n")}`);
+      }
+      if (upvotedExp.length) parts.push(`Experiences the traveler wants included: ${upvotedExp.map((e: any) => e.title).join(", ")}`);
+      if (downvotedExp.length) parts.push(`Experiences to avoid: ${downvotedExp.map((e: any) => e.title).join(", ")}`);
+      if (parts.length) brainstormNote = `\n\nTRAVELER PREFERENCES (from brainstorm vote):\n${parts.join("\n")}`;
+    }
+
     console.log("day1Note:", day1Note);
 
     const userMessage = `Generate a ${numDays}-day itinerary for: ${destinations.join(" → ")}.
@@ -104,7 +128,7 @@ serve(async (req) => {
 Trip: ${travelers} travelers, ${stylesText} style, ${budgetLabel} budget.${travelMonth ? ` Travel dates: ${travelMonth}.` : ""}
 
 ${paceNote}
-${morningNote}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDayNote}` : ""}${carNote ? `\n\n${carNote}` : ""}${notesNote ? `\n${notesNote}` : ""}`;
+${morningNote}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDayNote}` : ""}${carNote ? `\n\n${carNote}` : ""}${notesNote ? `\n${notesNote}` : ""}${brainstormNote}`;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

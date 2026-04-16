@@ -5,7 +5,14 @@
       "Bash(npx vite:*)",
       "WebFetch(domain:developers.google.com)",
       "WebSearch",
-      "Bash(supabase db:*)"
+      "Bash(supabase db:*)",
+      "Bash(npm run:*)",
+      "Bash(npx vercel:*)",
+      "Read(//Users/achinjindal/**)",
+      "Bash(supabase functions:*)",
+      "Bash(npm install:*)",
+      "WebFetch(domain:www.hostelworld.com)",
+      "WebFetch(domain:www.booking.com)"
     ]
   }
 }
