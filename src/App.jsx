@@ -1580,6 +1580,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
         {/* ── IN-TRIP: City Deep Dive (full-tab view) ── */}
         {!isPretripMode && deepDiveCity && (() => {
           const dd = deepDiveCache[deepDiveCity];
+          const ddItinTitles = new Set((days || []).flatMap(d => (d.activities || []).map(a => (a.title || "").toLowerCase())));
           const cityDays = (days || []).filter(d => (d.city || "").toLowerCase() === deepDiveCity.toLowerCase());
           const allActs = cityDays.flatMap(d => d.activities || []);
           const cityEntry = (trip?.ig_response?.cities || []).find(c => (c.name || "").toLowerCase() === deepDiveCity.toLowerCase());
@@ -1628,17 +1629,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                   <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Highlights</div>
                   <div className="no-scrollbar" style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4, margin: "0 -16px", padding: "0 16px 4px" }}>
                     {highlights.map((act, i) => (
-                      <div key={i} style={{ flexShrink: 0, width: 160, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.sand}`, background: T.chalk }}>
-                        <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
-                          {act.photo_url
-                            ? <img src={act.photo_url} alt={act.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>
-                            : <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32 }}>{act.icon || "📍"}</div>}
-                        </div>
-                        <div style={{ padding: "8px 10px 10px" }}>
-                          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.25, marginBottom: 4 }}>{act.title}</div>
-                          {act.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic", lineHeight: 1.35 }}>{act.note}</div>}
-                        </div>
-                      </div>
+                      <MagazineHighlightCard key={i} item={act} city={deepDiveCity} inItinerary={ddItinTitles.has((act.title || "").toLowerCase())} />
                     ))}
                   </div>
                 </div>
@@ -1724,19 +1715,13 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                 </div>
               )}
 
-              {/* More to see */}
+              {/* More to discover */}
               {data?.moreSights?.length > 0 && (
-                <div style={{ background: T.chalk, borderRadius: 14, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
-                  <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>🧭 More to discover</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>🧭 More to discover</div>
+                  <div className="no-scrollbar" style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4, margin: "0 -16px", padding: "0 16px 4px" }}>
                     {data.moreSights.map((s, i) => (
-                      <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                        <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>{s.icon || "📍"}</span>
-                        <div>
-                          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.3 }}>{s.title}</div>
-                          {s.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", lineHeight: 1.4 }}>{s.note}</div>}
-                        </div>
-                      </div>
+                      <MagazineHighlightCard key={i} item={s} city={deepDiveCity} inItinerary={ddItinTitles.has((s.title || "").toLowerCase())} />
                     ))}
                   </div>
                 </div>
@@ -1832,30 +1817,9 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                           Highlights
                         </div>
                         <div className="no-scrollbar" style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4, margin: "0 -16px", padding: "0 16px 4px" }}>
-                          {highlights.map((act, i) => {
-                            const inItinerary = itineraryTitles.has((act.title || "").toLowerCase());
-                            return (
-                              <div key={i} style={{
-                                flexShrink: 0, width: 160, borderRadius: 12, overflow: "hidden",
-                                border: `1px solid ${inItinerary ? T.ocean + "44" : T.sand}`, background: T.warm,
-                                position: "relative",
-                              }}>
-                                {inItinerary && (
-                                  <div style={{position:"absolute",top:6,right:6,zIndex:2,background:T.ocean,borderRadius:"50%",width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"white",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}>✓</div>
-                                )}
-                                <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
-                                  {act.photo_url
-                                    ? <img src={act.photo_url} alt={act.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>
-                                    : <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32 }}>{act.icon || "📍"}</div>
-                                  }
-                                </div>
-                                <div style={{ padding: "8px 10px 10px" }}>
-                                  <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.25, marginBottom: 4 }}>{act.title}</div>
-                                  {act.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic", lineHeight: 1.35 }}>{act.note}</div>}
-                                </div>
-                              </div>
-                            );
-                          })}
+                          {highlights.map((act, i) => (
+                            <MagazineHighlightCard key={i} item={act} city={city} inItinerary={itineraryTitles.has((act.title || "").toLowerCase())} />
+                          ))}
                         </div>
                       </>
                     )}
@@ -2722,6 +2686,48 @@ function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
           <img src="/google-maps-icon.png" alt="Maps" style={{width:13,height:13,objectFit:"contain"}}/>
         </a>
       </div>
+    </div>
+  );
+}
+
+/* ─── MAGAZINE HIGHLIGHT CARD ────────────────────────────────────────── */
+function MagazineHighlightCard({ item, city, inItinerary = false }) {
+  const searchKey = item.geocode || item.title || "";
+  const [photoUrl, setPhotoUrl] = useState(item.photo_url || null);
+  const [loaded, setLoaded] = useState(!!item.photo_url);
+  useEffect(() => {
+    if (photoUrl) { setLoaded(true); return; }
+    // Pass city as context so Wikipedia search scopes correctly (e.g. "Amber Fort" + "Jaipur")
+    _fetchPhoto(searchKey, city, item.type || "sight").then(url => {
+      setPhotoUrl(url);
+      setLoaded(true);
+    });
+  }, [searchKey, city]);
+  const mapsQuery = encodeURIComponent((item.geocode || item.title) + (city ? `, ${city}` : ""));
+  return (
+    <div style={{
+      flexShrink: 0, width: 160, borderRadius: 12, overflow: "hidden",
+      border: `1px solid ${inItinerary ? T.ocean + "44" : T.sand}`, background: T.warm,
+      position: "relative",
+    }}>
+      {inItinerary && (
+        <div style={{position:"absolute",top:6,right:6,zIndex:2,background:T.ocean,borderRadius:"50%",width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"white",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}>✓</div>
+      )}
+      <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
+        {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+        {photoUrl
+          ? <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={item.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>
+          : loaded && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32 }}>{item.icon || "📍"}</div>
+        }
+      </div>
+      <div style={{ padding: "8px 10px 6px" }}>
+        <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.25, marginBottom: 3 }}>{item.title}</div>
+        {item.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic", lineHeight: 1.35 }}>{item.note}</div>}
+      </div>
+      <a href={`https://www.google.com/maps/search/?api=1&query=${mapsQuery}`} target="_blank" rel="noopener noreferrer"
+        style={{ position: "absolute", bottom: 6, right: 6, display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 6, border: `1px solid ${T.sand}`, background: T.chalk, textDecoration: "none" }}>
+        <img src="/google-maps-icon.png" alt="Maps" style={{ width: 13, height: 13, objectFit: "contain" }}/>
+      </a>
     </div>
   );
 }
@@ -3653,10 +3659,7 @@ function CollabTab({ trip, session, inviteRole, setInviteRole, inviteLink, setIn
 
 /* ─── ROOT ───────────────────────────────────────────────────────────── */
 export default function App({ session, initialTrip, initialScreen = "setup", onHome }) {
-  // Check for a saved draft (user left brainstorm without Building)
-  const savedDraft = (() => { try { return JSON.parse(localStorage.getItem("tj_draft_form") || "null"); } catch { return null; } })();
-  const resumeDraft = !initialTrip && initialScreen === "setup" && !!savedDraft;
-  const [screen,    setScreen]    = useState(resumeDraft ? "brainstorm" : initialScreen);
+  const [screen,    setScreen]    = useState(initialScreen);
   const [setupStep, setSetupStep] = useState(0);
   const [trip,      setTrip]      = useState(initialTrip || SAMPLE_TRIP);
   const [days,      setDays]      = useState([]);
@@ -3854,7 +3857,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   }, [trip?.id]);
   const [setupModal,  setSetupModal]  = useState(null);
   const [editingTrip, setEditingTrip] = useState(null);
-  const [pendingForm, setPendingForm] = useState(resumeDraft ? savedDraft : null);
+  const [pendingForm, setPendingForm] = useState(null);
   const [formEdited, setFormEdited] = useState(false); // true when user commits setup form during edit → triggers route regen
   const [showShare,   setShowShare]   = useState(false);
   const shareCardRef = useRef(null);
@@ -3993,16 +3996,37 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
 
 
-  const handleSetupComplete = (form) => {
-    // Both new trips and edits go through brainstorm so the user can (re-)pick a route
+  const handleSetupComplete = async (form) => {
     setPendingForm(form);
     setFormEdited(true);
     setPretripTab("brainstorm");
     setScreen("brainstorm");
-    // Persist draft so user can resume if they navigate away before Building
+
+    // Create or update draft trip in DB so it shows on the home page
     if (!editingTrip) {
-      try { localStorage.setItem("tj_draft_form", JSON.stringify(form)); } catch {}
-    }
+      const draftId = crypto.randomUUID();
+      const fmtD = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const dateRange = (form.startDate && form.endDate) ? ` · ${fmtD(form.startDate)}–${fmtD(form.endDate)}` : "";
+      const draftName = `${form.destinations.join(" → ")}${dateRange}`;
+      const igRequest = { destinations: form.destinations, numDays: form.startDate && form.endDate ? Math.max(1, Math.round((new Date(form.endDate) - new Date(form.startDate)) / 864e5) + 1) : null, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null };
+      const { error } = await supabase.from("trips").insert({
+        id: draftId,
+        name: draftName,
+        destination: form.destinations.join(" → "),
+        start_date: form.startDate,
+        end_date: form.endDate,
+        created_by: session.user.id,
+        ig_request: igRequest,
+        // ig_response is NULL → signals this is a draft (RG only, no IG yet)
+        ...(form.notes && { notes: form.notes }),
+        ...(form.arrivalCity && { arrival_city: form.arrivalCity }),
+        ...(form.departureCity && { departure_city: form.departureCity }),
+      });
+      if (!error) {
+        await supabase.from("trip_members").insert({ trip_id: draftId, user_id: session.user.id, role: "edit" });
+        setEditingTrip({ id: draftId, name: draftName, destination: form.destinations.join(" → "), start_date: form.startDate, end_date: form.endDate, ig_request: igRequest });
+      }
+      }
   };
 
   const handleBuildFromBrainstorm = (votedItems) => {
@@ -4251,18 +4275,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     // 1. Persist trip (update if editing, insert if new)
     const tripId = isEditing ? editingTrip.id : crypto.randomUUID();
     const igRequest = { destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null };
-    const tripName = isEditing ? editingTrip.name : (() => {
-      const suffix = Math.random().toString(36).slice(2, 5).toUpperCase();
-      if (form.startDate && form.endDate) {
-        const start = new Date(form.startDate + "T12:00:00");
-        const end = new Date(form.endDate + "T12:00:00");
-        const startStr = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-        const endStr = start.getMonth() === end.getMonth()
-          ? end.getDate()
-          : end.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-        return `${itinerary.name} · ${startStr}–${endStr} ${suffix}`;
-      }
-      return `${itinerary.name} · ${suffix}`;
+    const tripName = (() => {
+      const fmtD = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const dateRange = (form.startDate && form.endDate) ? ` · ${fmtD(form.startDate)}–${fmtD(form.endDate)}` : "";
+      // Use AI-generated name if available, otherwise keep existing name (edit) or use destination
+      if (isEditing && !itinerary.name) return editingTrip.name;
+      return `${itinerary.name || form.destinations.join(" → ")}${dateRange}`;
     })();
     const tripPayload = {
       id: tripId,
@@ -4378,7 +4396,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     setEditingTrip(null);
     setPendingForm(null);
     setScreen("itinerary");
-    try { localStorage.removeItem("tj_draft_form"); } catch {}
 
     // Fetch and persist photos in background — staggered to avoid Wikimedia rate limits
     (async () => {
@@ -4854,15 +4871,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                           <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginTop:8,marginBottom:8}}>Things to see</div>
                           <div className="no-scrollbar" style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:4,margin:"0 -16px",padding:"0 16px 4px"}}>
                             {data.moreSights.map((s, i) => (
-                              <div key={i} style={{flexShrink:0,width:150,borderRadius:12,overflow:"hidden",border:`1px solid ${T.sand}`,background:T.warm}}>
-                                <div style={{height:60,background:`linear-gradient(135deg,${T.ocean}12,${T.dusk}08)`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                                  <span style={{fontSize:24}}>{s.icon || "📍"}</span>
-                                </div>
-                                <div style={{padding:"8px 10px 10px"}}>
-                                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:12,color:T.ink,lineHeight:1.25,marginBottom:3}}>{s.title}</div>
-                                  {s.note && <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.35}}>{s.note}</div>}
-                                </div>
-                              </div>
+                              <MagazineHighlightCard key={i} item={s} city={city} />
                             ))}
                           </div>
                         </>

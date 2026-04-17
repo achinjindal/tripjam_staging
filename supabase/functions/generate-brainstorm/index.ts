@@ -46,7 +46,15 @@ Rules:
 - tier: 2
 - If traveler notes mention specific interests, bias the tier 2 items to include relevant experiences (e.g. scuba dive sites, cooking schools).
 
-If destination is already a specific city (e.g. "Tokyo", "Galle"), skip tier 1 entirely and only generate tier 2 items.
+CITY-LEVEL DESTINATIONS (e.g. "Tokyo", "Mumbai", "Barcelona"):
+When the destination is a specific city rather than a country/region, STILL generate exactly 4 tier 1 route options — but adapt them to be NEIGHBOURHOOD ROUTES. Each route is a different way to spend the trip days across the city's neighbourhoods and surroundings.
+- title: a thematic name (e.g. "Classic Tokyo", "East Side Explorer", "Fashion & Food Trail")
+- city: comma-separated NEIGHBOURHOODS/AREAS in visit order (e.g. "Asakusa, Ueno, Shibuya, Shinjuku" — NOT "Tokyo, Tokyo, Tokyo")
+- days: describe which neighbourhood and what you do there each day
+- At least one route should include a day trip to a nearby town (e.g. Kamakura from Tokyo, Sintra from Lisbon, Nara from Osaka)
+- Routes should represent genuinely different styles: one heritage-heavy, one food-focused, one off-the-beaten-path, one with a day trip, etc.
+- All the same fields apply (tagline, bestFor, warning, recommended, points)
+- The "city" field must use neighbourhood/area names, NOT repeat the city name
 
 Return ONLY a raw JSON array. No markdown, no code fences. Start with [ and end with ].
 

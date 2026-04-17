@@ -15,7 +15,9 @@ const T = {
   gold:  "#D4A847",
 };
 
-function tripStatus(startDate, endDate) {
+function tripStatus(startDate, endDate, igResponse) {
+  // Draft = RG done but no IG yet (ig_response is null)
+  if (!igResponse) return { label: "Planning", color: T.gold };
   const now = new Date();
   const start = new Date(startDate);
   const end = new Date(endDate);
@@ -254,42 +256,17 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
           </div>
         )}
 
-        {/* Resume draft banner */}
-        {!loading && (() => {
-          try {
-            const draft = JSON.parse(localStorage.getItem("tj_draft_form") || "null");
-            if (!draft) return null;
-            const dest = (draft.destinations || []).join(" → ") || "a new trip";
-            return (
-              <div
-                onClick={() => { onCreateTrip(); }}
-                style={{
-                  background: "linear-gradient(135deg, #EBF3FD, #F0F4FF)",
-                  border: `1.5px solid ${T.ocean}33`,
-                  borderRadius: 14, padding: "14px 18px",
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
-                  cursor: "pointer", marginBottom: 16,
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: T.ink, marginBottom: 2 }}>✈️ Resume planning {dest}</div>
-                  <div style={{ fontSize: 12, color: T.mist }}>You have unsaved route options — pick up where you left off</div>
-                </div>
-                <span style={{ fontSize: 18, color: T.ocean }}>→</span>
-              </div>
-            );
-          } catch { return null; }
-        })()}
+
 
         {/* Trip cards */}
         {!loading && trips.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {trips.map((trip) => {
-              const status = tripStatus(trip.start_date, trip.end_date);
+              const status = tripStatus(trip.start_date, trip.end_date, trip.ig_response);
               const days = daysBetween(trip.start_date, trip.end_date);
               const members = trip.trip_members || [];
               return (
-                <div key={trip.id} onClick={() => onOpenTrip(trip)} style={{
+                <div key={trip.id} onClick={() => status.label === "Planning" ? onEditTrip(trip) : onOpenTrip(trip)} style={{
                   background: T.chalk,
                   borderRadius: 14,
                   border: "1px solid #E8EAF0",
