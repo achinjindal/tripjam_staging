@@ -28,6 +28,7 @@ ROUTE RULES:
 - MINIMISE HOTEL HOPS: Average stay should be 2+ nights per base. Avoid single-night stops unless genuinely unavoidable (e.g. an overnight train stopover). Flag in "warning" or "points" if any stop is single-night.
 - MINIMISE LOGISTICS: Avoid back-to-back long driving days — travellers should not spend half the trip in transit. Prefer routes where daily drives feel manageable given the destination's road conditions (a 3h drive in Sri Lanka is slow and tiring; a 3h drive on a European highway is easy). Use judgement. Some leeway only if the traveler notes mention a road trip, scenic drive, or similar. If any route is transit-heavy, call that out honestly in "points" with good: false.
 - If arrival and departure city are the same (a loop), routes should return to that city.
+- DEFAULT START/END: If no arrival or departure city is specified, assume the traveler flies into and out of the largest city / main airport WITHIN the destination region — NOT a gateway city outside the region. For example: Rajasthan → assume Jaipur (not Delhi); Sri Lanka → assume Colombo; Kerala → assume Kochi; Bali → assume Denpasar. Only use an external gateway city if the traveler explicitly names it.
 - All 4 routes must be genuinely different from each other (different themes, different cities, different pace).
 - If a travel month is given, factor in seasonal conditions (e.g. east coast Sri Lanka is best April–September).
 - Keep drives honest: Sri Lanka drives are slow. Colombo–Galle ~2.5h, Colombo–Kandy ~3h, Galle–Yala ~3h.

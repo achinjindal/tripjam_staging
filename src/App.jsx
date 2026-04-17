@@ -1060,7 +1060,7 @@ function TodoView({ trip, onBack }) {
 const BRAINSTORM_CATEGORIES = ["All", "Sightseeing", "Dining", "Experiences", "Nightlife", "Nature", "Culture", "Shopping", "Day Trip"];
 const BRAINSTORM_CATEGORY_ICONS = { Sightseeing:"🏛️", Dining:"🍜", Experiences:"🎭", Nightlife:"🍸", Nature:"🌿", Culture:"🎨", Shopping:"🛍️", "Day Trip":"🚌" };
 
-function RouteCard({ item, vs, onVote, interactive }) {
+function RouteCard({ item, vs, onVote, interactive, showRecommended = true }) {
   // In read-only mode, prefer the persisted `selected` flag; in interactive mode, use the vote state.
   const selected = interactive ? vs.mine === 1 : (item.selected === true || vs.mine === 1);
   return (
@@ -1077,7 +1077,7 @@ function RouteCard({ item, vs, onVote, interactive }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 2 }}>
             <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, lineHeight: 1.2 }}>{item.title}</div>
-            {item.recommended && (
+            {item.recommended && showRecommended && (
               <span style={{ fontSize: 10, fontFamily: "Georgia,serif", fontWeight: 600, color: "#92400E", background: "#FEF3C7", borderRadius: 20, padding: "1px 7px", flexShrink: 0 }}>
                 ★ Recommended
               </span>
@@ -1438,19 +1438,6 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
   // Notify parent when tier 1 routes change (for external map / chat consumers)
   useEffect(() => { onItemsChange?.(tier1Items); }, [tier1Items.length, tier1Items.map(it => it.id).join("|")]);
 
-  // Background-load city-deep-dive for all cities across all routes (so Magazine is ready)
-  useEffect(() => {
-    if (tier1Items.length === 0) return;
-    const allCities = new Set();
-    for (const route of tier1Items) {
-      for (const c of (route.city || "").split(",").map(s => s.trim()).filter(Boolean)) {
-        allCities.add(c);
-      }
-    }
-    for (const city of allCities) {
-      if (!deepDiveCache[city]) loadCityDeepDive(city);
-    }
-  }, [tier1Items.length]);
   // Notify parent of selected route id (derived from localVotes in pre-trip mode)
   useEffect(() => {
     if (!isPretripMode) return;
@@ -1569,7 +1556,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {tier1Items.map(item => (
               <div key={item.id} ref={el => { if (el) routeCardRefs.current[item.id] = el; }}>
-                <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} />
+                <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} showRecommended={routesReady} />
               </div>
             ))}
           </div>
@@ -1952,7 +1939,8 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
       {/* Build button — pre-trip mode only */}
       {isPretripMode && (() => {
         const hasSelection = tier1Items.some(it => (localVotes[it.id] || 0) === 1);
-        const disabled = generating || (tier1Items.length > 0 && !hasSelection);
+        // Enable as soon as routes are ready + user has selected, even if stream is still open
+        const disabled = (!routesReady && generating) || (tier1Items.length > 0 && !hasSelection);
         return (
           <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "12px 16px 24px", background: `linear-gradient(to bottom, transparent, ${T.warm} 30%)`, pointerEvents: "none" }}>
             <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", textAlign: "center", marginBottom: 8, fontStyle: "italic", pointerEvents: "all" }}>
@@ -3778,6 +3766,50 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
   const [pretripRoutes, setPretripRoutes] = useState([]); // tier 1 routes for pre-trip map
   const [pretripSelectedRouteId, setPretripSelectedRouteId] = useState(null);
+  const [deepDiveCacheApp, setDeepDiveCacheApp] = useState({}); // App-level city deep-dive cache
+
+  const loadCityDeepDiveApp = async (city) => {
+    if (!city) return;
+    const existing = deepDiveCacheApp[city];
+    if (existing && existing !== "error") return;
+    setDeepDiveCacheApp(prev => ({ ...prev, [city]: "loading" }));
+    try {
+      const travelMonth = (trip?.start_date || pendingForm?.startDate) ? new Date(trip?.start_date || pendingForm?.startDate).toLocaleString("en-US", { month: "long" }) : null;
+      const igReq = trip?.ig_request || pendingForm || {};
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/city-deep-dive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({
+          city,
+          country: trip?.destination || (pendingForm?.destinations || []).join(", ") || null,
+          travelMonth,
+          styles: igReq.styles,
+          budget: igReq.budget,
+          notes: igReq.notes || trip?.notes || null,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setDeepDiveCacheApp(prev => ({ ...prev, [city]: data }));
+    } catch (e) {
+      console.warn("city-deep-dive failed:", e.message);
+      setDeepDiveCacheApp(prev => ({ ...prev, [city]: "error" }));
+    }
+  };
+  // Background-load city-deep-dive for Magazine — fully independent from Route tab
+  useEffect(() => {
+    if (pretripRoutes.length === 0) return;
+    const allCities = new Set();
+    for (const route of pretripRoutes) {
+      for (const c of (route.city || "").split(",").map(s => s.trim()).filter(Boolean)) {
+        allCities.add(c);
+      }
+    }
+    for (const city of allCities) {
+      if (!deepDiveCacheApp[city]) loadCityDeepDiveApp(city);
+    }
+  }, [pretripRoutes.length]);
+
   const [chatUnread, setChatUnread] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput,   setChatInput]   = useState("");
@@ -4806,7 +4838,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                   return <div style={{textAlign:"center",padding:"40px 0",color:T.mist,fontFamily:"Georgia,serif",fontSize:13}}>Routes are still loading — cities will appear here shortly</div>;
                 }
                 return allCities.map(({ city, fromRoute }) => {
-                  const dd = deepDiveCache[city];
+                  const dd = deepDiveCacheApp[city];
                   const data = (dd && typeof dd === "object") ? dd : null;
                   const loading = dd === "loading";
                   return (
@@ -4835,13 +4867,19 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                           </div>
                         </>
                       )}
-                      {/* Deep dive CTA */}
-                      <button
-                        onClick={() => { setDeepDiveCity(city); setPretripTab("brainstorm"); }}
-                        style={{marginTop:12,display:"flex",alignItems:"center",justifyContent:"center",gap:6,width:"100%",padding:"9px 14px",borderRadius:10,background:"transparent",border:`1.5px solid ${T.ocean}33`,color:T.ocean,fontFamily:"Georgia,serif",fontSize:12,fontWeight:600,cursor:"pointer"}}
-                      >
-                        🔍 Deep dive into {city} →
-                      </button>
+                      {/* Food specialties preview */}
+                      {data?.foodSpecialties?.length > 0 && (
+                        <div style={{marginTop:10}}>
+                          <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>🍜 Must try</div>
+                          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                            {data.foodSpecialties.slice(0,3).map((f,i) => (
+                              <span key={i} style={{fontSize:11,background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:20,padding:"3px 9px",fontFamily:"Georgia,serif",color:T.ink}}>
+                                {f.icon} {f.name}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 });

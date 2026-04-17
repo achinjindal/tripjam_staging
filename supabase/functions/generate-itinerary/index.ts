@@ -30,6 +30,7 @@ Rules:
   - ROAD / PRIVATE CAR: city name is acceptable — "Colombo" → "Mirissa".
   Day-trip round-trips (traveler returns to same base same day): OMIT geocodeEnd entirely — geocode should be the base city. This rule covers day-trip buses, minibuses, boats, car trips — not just ferries. Non-transit: omit geocodeEnd.
 - MULTI-DESTINATION: Transit activity on first day of each new city.
+- DEFAULT START/END: If no arrival or departure city is given in the constraints below, assume the traveler flies into and out of the largest city / main airport WITHIN the destination region — NOT a gateway city outside it. Rajasthan → Jaipur, Sri Lanka → Colombo, Kerala → Kochi, Bali → Denpasar. Only use an external gateway if the traveler explicitly named one.
 - MEALS: Walking distance from current sightseeing zone. Bias towards legendary long-established places.
 - GEOGRAPHY: Cover an area fully in one visit — avoid backtracking. Traveler should not need to return to the same area again in the same trip.
 - WEATHER: Prefer to avoid outdoor activities 12:00–16:00 in hot/humid months if possible. If certain activities are time-bound eg. afternoon safari, this rule can be over-ridden.

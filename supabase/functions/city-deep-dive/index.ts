@@ -52,6 +52,7 @@ ${notes ? `Traveler notes: ${notes}` : ""}`;
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 2048,
+        stream: true,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userMessage }],
       }),
@@ -62,15 +63,37 @@ ${notes ? `Traveler notes: ${notes}` : ""}`;
       throw new Error(`Anthropic error: ${err}`);
     }
 
-    const result = await response.json();
-    const text = result.content?.[0]?.text || "{}";
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
+    // Stream-accumulate to avoid Supabase EarlyDrop timeout on long responses
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let accumulated = "";
+    let lineBuffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      lineBuffer += decoder.decode(value, { stream: true });
+      const lines = lineBuffer.split("\n");
+      lineBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const raw = line.slice(6).trim();
+        if (raw === "[DONE]") continue;
+        try {
+          const event = JSON.parse(raw);
+          if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+            accumulated += event.delta.text;
+          }
+        } catch { /* skip */ }
+      }
+    }
+
+    const start = accumulated.indexOf("{");
+    const end = accumulated.lastIndexOf("}");
     let data: any = {};
     try {
-      data = JSON.parse(text.slice(start, end + 1));
+      data = JSON.parse(accumulated.slice(start, end + 1));
     } catch {
-      data = { error: "parse_failed", raw: text };
+      data = { error: "parse_failed", raw: accumulated };
     }
 
     return new Response(JSON.stringify(data), {
