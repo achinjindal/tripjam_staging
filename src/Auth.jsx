@@ -23,13 +23,11 @@ export default function Auth() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const fakeEmail = (u) => `${u.toLowerCase().trim()}@tripjam.app`;
+  const fakeEmail = (u) => `${u.toLowerCase().trim().replace(/[^a-z0-9._-]/g, "")}@tripjam.app`;
 
   async function handleSignUp() {
     setError("");
     if (!username.trim() || !password) return setError("Username and password are required.");
-    if (username.trim().length < 3) return setError("Username must be at least 3 characters.");
-    if (password.length < 6) return setError("Password must be at least 6 characters.");
 
     setLoading(true);
     const { data, error: signUpError } = await supabase.auth.signUp({

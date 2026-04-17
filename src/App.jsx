@@ -5394,13 +5394,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           }}
           aria-label="Open chat"
         >
-          {/* Paper airplane SVG — "send a message" + travel in one mark */}
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{transform:"translate(-1px, 1px)"}}>
-            <path d="M22 2L11 13" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="rgba(255,255,255,0.18)"/>
+          {/* Humanoid AI assistant icon */}
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="8" r="4" stroke="white" strokeWidth="2" fill="rgba(255,255,255,0.15)"/>
+            <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="white" strokeWidth="2" strokeLinecap="round" fill="rgba(255,255,255,0.08)"/>
+            <circle cx="18" cy="5" r="3" fill="white" opacity="0.9"/>
+            <text x="18" y="7" textAnchor="middle" fontSize="5" fill="#2563A8" fontWeight="700">AI</text>
           </svg>
-          {/* Sparkle hint — signals AI + adds personality */}
-          <span style={{position:"absolute",top:8,left:10,fontSize:10,opacity:0.85}}>✦</span>
           {chatUnread && (
             <span style={{
               position: "absolute", top: 4, right: 4,
@@ -5447,9 +5447,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             <div style={{flex:1,overflowY:"auto",padding:"16px 16px 8px",display:"flex",flexDirection:"column",gap:10}}>
               {filteredMessages.length === 0 && chatFilter !== "group" && (
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  {trip?.summary && (
+                  {trip && (
                     <div style={{display:"flex",justifyContent:"flex-start"}}>
-                      <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>{trip.summary}</div>
+                      <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",borderLeft:`3px solid ${T.ocean}`}}>
+                        Here's a first draft of your plan! Let's tweak it together — swap activities, change the pace, or try a different hotel. Just ask.
+                      </div>
                     </div>
                   )}
                   <div style={{display:"flex",flexDirection:"column",gap:8,padding:"4px 0"}}>

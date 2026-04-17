@@ -197,7 +197,7 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
       {/* Main content */}
       <div style={{ maxWidth: 720, margin: "0 auto", padding: "32px 24px" }}>
 
-        {/* Page title + new trip button */}
+        {/* Page title + new trip button (hidden in empty state — CTA is in the empty card) */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28 }}>
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 700, color: T.ink, margin: 0 }}>Your Trips</h1>
@@ -205,21 +205,23 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
               <p style={{ fontSize: 13, color: T.mist, margin: "4px 0 0" }}>{trips.length} trip{trips.length !== 1 ? "s" : ""}</p>
             )}
           </div>
-          <button onClick={onCreateTrip} style={{
-            background: T.ocean,
-            color: T.chalk,
-            border: "none",
-            borderRadius: 10,
-            padding: "10px 18px",
-            fontSize: 14,
-            fontWeight: 600,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-          }}>
-            <span style={{ fontSize: 16 }}>+</span> New Trip
-          </button>
+          {trips.length > 0 && (
+            <button onClick={onCreateTrip} style={{
+              background: T.ocean,
+              color: T.chalk,
+              border: "none",
+              borderRadius: 10,
+              padding: "10px 18px",
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}>
+              <span style={{ fontSize: 16 }}>+</span> New Trip
+            </button>
+          )}
         </div>
 
         {/* Loading */}
