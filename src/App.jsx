@@ -1738,6 +1738,25 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
           );
         })()}
 
+        {/* ── IN-TRIP: Destination intro ── */}
+        {!isPretripMode && !deepDiveCity && (() => {
+          const dest = trip?.destination;
+          const dd = dest ? deepDiveCache[dest] : null;
+          const data = (dd && typeof dd === "object") ? dd : null;
+          // Trigger load if not cached
+          if (dest && !deepDiveCache[dest]) loadCityDeepDive(dest);
+          if (!data?.writeup) return null;
+          return (
+            <div style={{background:`linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,borderRadius:16,padding:"16px 18px",border:`1px solid ${T.ocean}15`,marginBottom:4}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:8}}>{dest}</div>
+              <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.6}}>{data.writeup}</div>
+              {data?.didYouKnow && (
+                <div style={{marginTop:10,fontSize:12,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.5}}>💡 {data.didYouKnow}</div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* ── IN-TRIP: Destinations cards ── */}
         {!isPretripMode && !deepDiveCity && (() => {
           // Build set of itinerary activity titles for ✓ tick matching in Magazine
@@ -3802,6 +3821,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   // Background-load city-deep-dive for Magazine — fully independent from Route tab
   useEffect(() => {
     if (pretripRoutes.length === 0) return;
+    // Also load destination-level intro (e.g. "Sri Lanka" or "Rajasthan")
+    const destination = (pendingForm?.destinations || []).join(", ") || trip?.destination;
+    if (destination && !deepDiveCacheApp[destination]) loadCityDeepDiveApp(destination);
+
     const allCities = new Set();
     for (const route of pretripRoutes) {
       for (const c of (route.city || "").split(",").map(s => s.trim()).filter(Boolean)) {
@@ -4842,6 +4865,22 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               </div>
             </div>
             <div style={{padding:"12px 16px 24px",display:"flex",flexDirection:"column",gap:16}}>
+              {/* Destination-level intro */}
+              {(() => {
+                const dest = (pendingForm?.destinations || []).join(", ");
+                const dd = dest ? deepDiveCacheApp[dest] : null;
+                const data = (dd && typeof dd === "object") ? dd : null;
+                if (!data?.writeup) return null;
+                return (
+                  <div style={{background:`linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,borderRadius:16,padding:"16px 18px",border:`1px solid ${T.ocean}15`}}>
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:8}}>{dest}</div>
+                    <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.6}}>{data.writeup}</div>
+                    {data?.didYouKnow && (
+                      <div style={{marginTop:10,fontSize:12,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.5}}>💡 {data.didYouKnow}</div>
+                    )}
+                  </div>
+                );
+              })()}
               {(() => {
                 // Collect all unique cities across all routes
                 const allCities = [];
