@@ -1162,6 +1162,8 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
   const [deepDiveCity, setDeepDiveCity] = useState(null); // city name when deep dive is open
   const [deepDiveCache, setDeepDiveCache] = useState({}); // { [city]: { foodSpecialties, weather, ... } | "loading" | "error" }
   const routeCardRefs = useRef({}); // { [routeId]: HTMLElement } for scroll-into-view
+  const editTripIdRef = useRef(editTripId); // track latest for async generate()
+  editTripIdRef.current = editTripId;
 
   // Fun counter: climbs from 12 to an absurd number while generating.
   // Stops once the routes are visibly present even if the stream hasn't formally closed.
@@ -1244,6 +1246,10 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
       }
       return merged;
     });
+    if (flattened.length === 0) {
+      // No saved routes yet — generate fresh ones
+      if (destinations.length) { generate(); return; }
+    }
     setItems(flattened);
     const previouslySelected = flattened.find(it => it.tier === 1 && it.selected);
     if (previouslySelected) {
@@ -1358,17 +1364,26 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
 
       if (!streamedItems.length) throw new Error("No items received");
 
-      if (isPretripMode) {
-        // Pre-trip mode: items already set with temp IDs, no DB persistence
-        setItems([...streamedItems]);
-      } else {
-        // Existing trip: persist to DB
-        await supabase.from("brainstorm_items").delete().eq("trip_id", trip.id);
-        const rows = streamedItems.map((item, i) => ({ ...item, trip_id: trip.id, position: i }));
+      // Persist to DB if we have a trip ID (draft or existing trip)
+      const targetTripId = trip?.id || editTripIdRef.current;
+      if (targetTripId) {
+        await supabase.from("brainstorm_items").delete().eq("trip_id", targetTripId);
+        const rows = streamedItems.map((item, i) => ({
+          trip_id: targetTripId, title: item.title, city: item.city || null,
+          category: item.category || "Route", note: item.tagline || null,
+          icon: item.icon || null, geocode: item.geocode || null,
+          position: i, tier: item.tier || 2,
+          data: { tagline: item.tagline, days: item.days, bestFor: item.bestFor, warning: item.warning, recommended: !!item.recommended, points: item.points },
+        }));
         const { data, error: insertErr } = await supabase.from("brainstorm_items").insert(rows).select();
-        if (insertErr) throw new Error(`Insert error: ${insertErr.message}`);
-        setItems(data || streamedItems);
+        if (insertErr) console.warn("Failed to save brainstorm items:", insertErr);
+        // Use DB rows (with real UUIDs) if insert succeeded
+        const saved = (data || []).map(row => ({ ...row, ...(row.data || {}) }));
+        setItems(saved.length ? saved : streamedItems);
         setVotes({});
+      } else {
+        // No trip ID yet — keep temp IDs in memory only
+        setItems([...streamedItems]);
       }
     } catch (e) {
       console.error("Brainstorm generate error:", e);
