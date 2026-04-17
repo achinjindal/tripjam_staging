@@ -5107,8 +5107,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             )}
           </div>
 
-          {/* ── BRAINSTORM TAB ── */}
-          {activeBottomTab === "brainstorm" && import.meta.env.VITE_BRAINSTORM_ENABLED && (
+          {/* ── MAGAZINE TAB ── */}
+          {activeBottomTab === "brainstorm" && (
             <BrainstormView trip={trip} session={session} days={days} />
           )}
 
@@ -5140,7 +5140,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             paddingBottom:"env(safe-area-inset-bottom, 0px)",
           }}>
             {[
-              ...(import.meta.env.VITE_BRAINSTORM_ENABLED ? [{ key:"brainstorm", icon:"📖", label:"Magazine" }] : []),
+              { key:"brainstorm", icon:"📖", label:"Magazine" },
               { key:"itinerary", icon:"🗓", label:"Itinerary" },
               { key:"map",       icon:"🗺", label:"Map" },
               { key:"board",     icon:"📋", label:"Board" },
