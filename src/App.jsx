@@ -3803,6 +3803,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [activeBottomTab, setActiveBottomTab] = useState("itinerary");
   const [pretripTab, setPretripTab] = useState("brainstorm"); // pre-trip bottom nav tab
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
+  const [fabPos, setFabPos] = useState({ right: 0, bottom: 140 }); // draggable FAB position, flush right
+  const fabDragRef = useRef({ dragging: false, startX: 0, startY: 0, startRight: 0, startBottom: 0 });
   const [pretripRoutes, setPretripRoutes] = useState([]); // tier 1 routes for pre-trip map
   const [pretripSelectedRouteId, setPretripSelectedRouteId] = useState(null);
   const [deepDiveCacheApp, setDeepDiveCacheApp] = useState({}); // App-level city deep-dive cache
@@ -5411,22 +5413,74 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       )}
 
 
-      {/* ── CHAT FAB (visible on trip and pre-trip screens) ── */}
+      {/* ── CHAT FAB (visible on trip and pre-trip screens, draggable) ── */}
       {!chatOpen && (screen === "itinerary" || screen === "brainstorm") && (
-        <button
-          onClick={() => { setChatOpen(true); setChatUnread(false); }}
+        <div
+          onTouchStart={(e) => {
+            const t = e.touches[0];
+            fabDragRef.current = { dragging: false, startX: t.clientX, startY: t.clientY, startRight: fabPos.right, startBottom: fabPos.bottom };
+          }}
+          onTouchMove={(e) => {
+            const t = e.touches[0];
+            const dx = fabDragRef.current.startX - t.clientX;
+            const dy = fabDragRef.current.startY - t.clientY;
+            if (Math.abs(dx) > 5 || Math.abs(dy) > 5) fabDragRef.current.dragging = true;
+            if (fabDragRef.current.dragging) {
+              setFabPos({
+                right: Math.max(8, Math.min(window.innerWidth - 66, fabDragRef.current.startRight + dx)),
+                bottom: Math.max(80, Math.min(window.innerHeight - 80, fabDragRef.current.startBottom + dy)),
+              });
+            }
+          }}
+          onTouchEnd={() => {
+            if (!fabDragRef.current.dragging) { setChatOpen(true); setChatUnread(false); }
+            else {
+              // Snap to nearest edge
+              const midpoint = (window.innerWidth - 58) / 2;
+              setFabPos(prev => ({ ...prev, right: prev.right > midpoint ? window.innerWidth - 58 : 0 }));
+            }
+            fabDragRef.current.dragging = false;
+          }}
+          onMouseDown={(e) => {
+            fabDragRef.current = { dragging: false, startX: e.clientX, startY: e.clientY, startRight: fabPos.right, startBottom: fabPos.bottom };
+            const onMove = (ev) => {
+              const dx = fabDragRef.current.startX - ev.clientX;
+              const dy = fabDragRef.current.startY - ev.clientY;
+              if (Math.abs(dx) > 5 || Math.abs(dy) > 5) fabDragRef.current.dragging = true;
+              if (fabDragRef.current.dragging) {
+                setFabPos({
+                  right: Math.max(8, Math.min(window.innerWidth - 66, fabDragRef.current.startRight + dx)),
+                  bottom: Math.max(80, Math.min(window.innerHeight - 80, fabDragRef.current.startBottom + dy)),
+                });
+              }
+            };
+            const onUp = () => {
+              if (!fabDragRef.current.dragging) { setChatOpen(true); setChatUnread(false); }
+              else {
+                // Snap to nearest edge
+                const midpoint = (window.innerWidth - 58) / 2;
+                setFabPos(prev => ({ ...prev, right: prev.right > midpoint ? window.innerWidth - 58 : 0 }));
+              }
+              fabDragRef.current.dragging = false;
+              window.removeEventListener("mousemove", onMove);
+              window.removeEventListener("mouseup", onUp);
+            };
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+          }}
           style={{
-            position: "absolute", bottom: "calc(76px + env(safe-area-inset-bottom, 0px))", right: 16,
+            position: "absolute", bottom: fabPos.bottom, right: fabPos.right,
             width: 58, height: 58, borderRadius: "50%",
             background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
-            color: "white", border: "none",
-            cursor: "pointer", zIndex: 900,
+            color: "white", border: `2px solid ${T.ocean}`,
+            cursor: "grab", zIndex: 900,
             boxShadow: "0 4px 18px rgba(37,99,168,0.45), 0 0 0 1px rgba(255,255,255,0.1) inset",
             display: "flex", alignItems: "center", justifyContent: "center",
+            overflow: "hidden", touchAction: "none", userSelect: "none",
           }}
           aria-label="Open chat"
         >
-          <img src="/mascot.png" alt="TripJam" style={{width:38,height:38,borderRadius:"50%",objectFit:"cover",objectPosition:"top"}}/>
+          <img src="/mascot.png?v=5" alt="TripJam" style={{width:90,height:90,objectFit:"cover",objectPosition:"50% 35%",flexShrink:0,pointerEvents:"none"}}/>
           {chatUnread && (
             <span style={{
               position: "absolute", top: 4, right: 4,
@@ -5434,7 +5488,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               background: T.terra, border: "2px solid white",
             }}/>
           )}
-        </button>
+        </div>
       )}
 
       {/* ── CHAT SHEET (floating bottom sheet, rendered globally) ── */}
@@ -5449,10 +5503,15 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               <div style={{width:38,height:4,borderRadius:4,background:"rgba(255,255,255,0.4)"}}/>
             </div>
             {/* Chat header */}
-            <div style={{background:`linear-gradient(135deg,${T.dusk},${T.ocean})`,padding:"6px 20px 12px",color:"white",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-              <div>
-                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,marginBottom:2}}>Chat</div>
-                <div style={{fontSize:12,opacity:0.75,fontFamily:"Georgia,serif"}}>{screen === "brainstorm" ? "Shape your trip" : (trip?.name || "")}</div>
+            <div style={{background:`linear-gradient(135deg,${T.dusk},${T.ocean})`,padding:"6px 16px 12px",color:"white",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:44,height:44,borderRadius:"50%",overflow:"hidden",border:"2px solid rgba(255,255,255,0.3)",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <img src="/mascot.png?v=5" alt="TripJam" style={{width:56,height:56,objectFit:"cover",objectPosition:"50% 35%",pointerEvents:"none"}}/>
+                </div>
+                <div>
+                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,marginBottom:1}}>TripChat</div>
+                  <div style={{fontSize:11,opacity:0.75,fontFamily:"Georgia,serif"}}>{screen === "brainstorm" ? "Shape your trip" : (trip?.name || "")}</div>
+                </div>
               </div>
               <button onClick={()=>setChatOpen(false)} style={{background:"rgba(255,255,255,0.15)",border:"none",color:"white",width:32,height:32,borderRadius:"50%",fontSize:16,cursor:"pointer"}}>✕</button>
             </div>
