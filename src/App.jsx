@@ -3694,7 +3694,7 @@ function CollabTab({ trip, session, inviteRole, setInviteRole, inviteLink, setIn
 /* ─── ROOT ───────────────────────────────────────────────────────────── */
 export default function App({ session, initialTrip, initialScreen = "setup", onHome }) {
   // Draft trip (RG done, no IG yet) → go straight to routes, not setup form
-  const isDraft = initialTrip && !initialTrip.ig_response && initialScreen === "setup";
+  const isDraft = initialTrip && !initialTrip.ig_response;
   const [screen,    setScreen]    = useState(isDraft ? "brainstorm" : initialScreen);
   const [setupStep, setSetupStep] = useState(0);
   const [trip,      setTrip]      = useState(initialTrip || SAMPLE_TRIP);
@@ -5426,13 +5426,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           }}
           aria-label="Open chat"
         >
-          {/* Humanoid AI assistant icon */}
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="12" cy="8" r="4" stroke="white" strokeWidth="2" fill="rgba(255,255,255,0.15)"/>
-            <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="white" strokeWidth="2" strokeLinecap="round" fill="rgba(255,255,255,0.08)"/>
-            <circle cx="18" cy="5" r="3" fill="white" opacity="0.9"/>
-            <text x="18" y="7" textAnchor="middle" fontSize="5" fill="#2563A8" fontWeight="700">AI</text>
-          </svg>
+          <img src="/mascot.png" alt="TripJam" style={{width:38,height:38,borderRadius:"50%",objectFit:"cover",objectPosition:"top"}}/>
           {chatUnread && (
             <span style={{
               position: "absolute", top: 4, right: 4,
