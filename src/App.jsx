@@ -1161,6 +1161,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
   const [ideaCount, setIdeaCount] = useState(12);
   const [deepDiveCity, setDeepDiveCity] = useState(null); // city name when deep dive is open
   const [deepDiveCache, setDeepDiveCache] = useState({}); // { [city]: { foodSpecialties, weather, ... } | "loading" | "error" }
+  const routeCardRefs = useRef({}); // { [routeId]: HTMLElement } for scroll-into-view
 
   // Fun counter: climbs from 12 to an absurd number while generating.
   // Stops once the routes are visibly present even if the stream hasn't formally closed.
@@ -1436,12 +1437,36 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
 
   // Notify parent when tier 1 routes change (for external map / chat consumers)
   useEffect(() => { onItemsChange?.(tier1Items); }, [tier1Items.length, tier1Items.map(it => it.id).join("|")]);
+
+  // Background-load city-deep-dive for all cities across all routes (so Magazine is ready)
+  useEffect(() => {
+    if (tier1Items.length === 0) return;
+    const allCities = new Set();
+    for (const route of tier1Items) {
+      for (const c of (route.city || "").split(",").map(s => s.trim()).filter(Boolean)) {
+        allCities.add(c);
+      }
+    }
+    for (const city of allCities) {
+      if (!deepDiveCache[city]) loadCityDeepDive(city);
+    }
+  }, [tier1Items.length]);
   // Notify parent of selected route id (derived from localVotes in pre-trip mode)
   useEffect(() => {
     if (!isPretripMode) return;
     const selected = tier1Items.find(it => (localVotes[it.id] || 0) === 1);
     onSelectionChange?.(selected?.id || null);
   }, [localVotes, tier1Items.length]);
+  // Scroll the selected route card into view when external selection changes (e.g. after chat mutation)
+  useEffect(() => {
+    if (!externalSelectedId) return;
+    // Small delay so the DOM has rendered with the updated selection
+    setTimeout(() => {
+      const el = routeCardRefs.current[externalSelectedId];
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 150);
+  }, [externalSelectedId]);
+
   // Sync back: when external routes change (e.g. chat mutation), merge into items by id
   const lastExternalRoutesSigRef = useRef(null);
   useEffect(() => {
@@ -1485,7 +1510,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
               )}
               <div>
                 <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 20, color: T.ink }}>
-                  {isPretripMode ? "Shape your trip" : "Trip Insights"}
+                  {isPretripMode ? "Shape your trip" : "Magazine"}
                 </div>
                 {isPretripMode && (
                   <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", marginTop: 2 }}>
@@ -1507,7 +1532,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
 
           {!isPretripMode && (
             <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", marginTop: 4 }}>
-              Destinations on this trip and what makes each one special
+              Your destination guide — highlights, local tips, and what makes each place special
             </div>
           )}
         </div>
@@ -1542,7 +1567,11 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
             {tier1Items.length > 0 ? (editTripId ? "Your saved routes" : "Choose your route") : ""}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {tier1Items.map(item => <RouteCard key={item.id} item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} />)}
+            {tier1Items.map(item => (
+              <div key={item.id} ref={el => { if (el) routeCardRefs.current[item.id] = el; }}>
+                <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} />
+              </div>
+            ))}
           </div>
           {/* Generate new options — only when we're showing saved routes (edit flow) */}
           {tier1Items.length > 0 && !generating && (
@@ -1708,6 +1737,24 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                 </div>
               )}
 
+              {/* More to see */}
+              {data?.moreSights?.length > 0 && (
+                <div style={{ background: T.chalk, borderRadius: 14, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
+                  <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>🧭 More to discover</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {data.moreSights.map((s, i) => (
+                      <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                        <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>{s.icon || "📍"}</span>
+                        <div>
+                          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.3 }}>{s.title}</div>
+                          {s.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", lineHeight: 1.4 }}>{s.note}</div>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Did you know */}
               {data?.didYouKnow && (
                 <div style={{ background: `linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`, borderRadius: 14, padding: "14px 16px", border: `1px solid ${T.ocean}22` }}>
@@ -1721,6 +1768,10 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
 
         {/* ── IN-TRIP: Destinations cards ── */}
         {!isPretripMode && !deepDiveCity && (() => {
+          // Build set of itinerary activity titles for ✓ tick matching in Magazine
+          const itineraryTitles = new Set(
+            (days || []).flatMap(d => (d.activities || []).map(a => (a.title || "").toLowerCase()))
+          );
           // Group days by city
           const cityGroups = {};
           const cityOrder = [];
@@ -1740,14 +1791,35 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                   .map(d => (d.description || "").trim())
                   .filter(Boolean)
                   .join(" ");
-                // Highlights: prefer sight/experience/culture/nature types; fall back to notable food
-                const preferredTypes = new Set(["sight", "experience", "culture", "nature"]);
-                let highlights = allActs.filter(a => preferredTypes.has(a.type));
-                if (highlights.length < 3) {
-                  const extra = allActs.filter(a => !preferredTypes.has(a.type) && a.type !== "transit" && a.type !== "hotel").slice(0, 4);
-                  highlights = [...highlights, ...extra];
+                // Highlights: all non-transit/non-hotel activities + wishlist items, deduped by title
+                const seenTitles = new Set();
+                const highlights = [];
+                // First: itinerary activities (sights, food, experiences, etc.)
+                for (const a of allActs) {
+                  if (a.type === "transit" || a.type === "hotel") continue;
+                  const key = (a.title || "").toLowerCase();
+                  if (seenTitles.has(key)) continue;
+                  seenTitles.add(key);
+                  highlights.push(a);
                 }
-                highlights = highlights.slice(0, 6);
+                // Then: wishlist items from this city's days (hidden gems the user might explore)
+                for (const d of cityDays) {
+                  for (const w of (d.wishlist || [])) {
+                    const key = (w.title || "").toLowerCase();
+                    if (seenTitles.has(key)) continue;
+                    seenTitles.add(key);
+                    highlights.push({ ...w, type: "wishlist" });
+                  }
+                }
+                // Then: brainstorm tier 2 items tagged to this city
+                for (const bi of (items || [])) {
+                  if ((bi.tier || 2) !== 2) continue;
+                  if (!(bi.city || "").toLowerCase().includes(city.toLowerCase())) continue;
+                  const key = (bi.title || "").toLowerCase();
+                  if (seenTitles.has(key)) continue;
+                  seenTitles.add(key);
+                  highlights.push({ title: bi.title, note: bi.note, icon: bi.icon, type: bi.category?.toLowerCase() || "sight" });
+                }
 
                 return (
                   <div key={city} style={{ background: T.chalk, borderRadius: 18, padding: "16px 16px 14px", border: `1px solid ${T.sand}`, boxShadow: "0 2px 10px rgba(15,25,35,0.04)" }}>
@@ -1773,23 +1845,30 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                           Highlights
                         </div>
                         <div className="no-scrollbar" style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4, margin: "0 -16px", padding: "0 16px 4px" }}>
-                          {highlights.map((act, i) => (
-                            <div key={i} style={{
-                              flexShrink: 0, width: 160, borderRadius: 12, overflow: "hidden",
-                              border: `1px solid ${T.sand}`, background: T.warm,
-                            }}>
-                              <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
-                                {act.photo_url
-                                  ? <img src={act.photo_url} alt={act.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>
-                                  : <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32 }}>{act.icon || "📍"}</div>
-                                }
+                          {highlights.map((act, i) => {
+                            const inItinerary = itineraryTitles.has((act.title || "").toLowerCase());
+                            return (
+                              <div key={i} style={{
+                                flexShrink: 0, width: 160, borderRadius: 12, overflow: "hidden",
+                                border: `1px solid ${inItinerary ? T.ocean + "44" : T.sand}`, background: T.warm,
+                                position: "relative",
+                              }}>
+                                {inItinerary && (
+                                  <div style={{position:"absolute",top:6,right:6,zIndex:2,background:T.ocean,borderRadius:"50%",width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"white",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}>✓</div>
+                                )}
+                                <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
+                                  {act.photo_url
+                                    ? <img src={act.photo_url} alt={act.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>
+                                    : <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32 }}>{act.icon || "📍"}</div>
+                                  }
+                                </div>
+                                <div style={{ padding: "8px 10px 10px" }}>
+                                  <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.25, marginBottom: 4 }}>{act.title}</div>
+                                  {act.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic", lineHeight: 1.35 }}>{act.note}</div>}
+                                </div>
                               </div>
-                              <div style={{ padding: "8px 10px 10px" }}>
-                                <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.25, marginBottom: 4 }}>{act.title}</div>
-                                {act.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic", lineHeight: 1.35 }}>{act.note}</div>}
-                              </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </>
                     )}
@@ -1809,6 +1888,61 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                   </div>
                 );
               })}
+            </div>
+          );
+        })()}
+
+        {/* ── IN-TRIP: "Also in [country]" — cities from unselected routes ── */}
+        {!isPretripMode && (() => {
+          // Gather cities already on the itinerary
+          const itineraryCities = new Set((days || []).map(d => (d.city || "").toLowerCase()));
+          // Gather cities from unselected routes (tier 1, not selected)
+          const unselectedRoutes = (items || []).filter(it => it.tier === 1 && !it.selected);
+          const otherCitiesMap = new Map(); // city → { city, fromRoute }
+          for (const route of unselectedRoutes) {
+            const cities = (route.city || "").split(",").map(s => s.trim()).filter(Boolean);
+            for (const c of cities) {
+              if (!itineraryCities.has(c.toLowerCase()) && !otherCitiesMap.has(c.toLowerCase())) {
+                otherCitiesMap.set(c.toLowerCase(), { city: c, fromRoute: route.title, tagline: route.tagline });
+              }
+            }
+          }
+          const otherCities = [...otherCitiesMap.values()];
+          if (otherCities.length === 0) return null;
+
+          const country = (trip?.destination || "").split("→")[0].trim();
+
+          return (
+            <div style={{ marginTop: 24 }}>
+              <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                Also in {country || "the region"}
+              </div>
+              <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", marginBottom: 14 }}>
+                Places you didn't pick this time — worth exploring on a future visit
+              </div>
+              <div className="no-scrollbar" style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4, margin: "0 -16px", padding: "0 16px 4px" }}>
+                {otherCities.map((item, i) => (
+                  <div
+                    key={i}
+                    onClick={() => { setDeepDiveCity(item.city); loadCityDeepDive(item.city); }}
+                    style={{
+                      flexShrink: 0, width: 150, borderRadius: 14, overflow: "hidden",
+                      border: `1px solid ${T.sand}`, background: T.chalk, cursor: "pointer",
+                      boxShadow: "0 2px 8px rgba(15,25,35,0.04)",
+                    }}
+                  >
+                    <div style={{ height: 70, background: `linear-gradient(135deg, ${T.ocean}15, ${T.dusk}10)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <span style={{ fontSize: 28 }}>🧭</span>
+                    </div>
+                    <div style={{ padding: "10px 12px" }}>
+                      <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 14, color: T.ink, lineHeight: 1.2, marginBottom: 4 }}>{item.city}</div>
+                      <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", lineHeight: 1.35, fontStyle: "italic" }}>
+                        From: {item.fromRoute}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           );
         })()}
@@ -3531,7 +3665,10 @@ function CollabTab({ trip, session, inviteRole, setInviteRole, inviteLink, setIn
 
 /* ─── ROOT ───────────────────────────────────────────────────────────── */
 export default function App({ session, initialTrip, initialScreen = "setup", onHome }) {
-  const [screen,    setScreen]    = useState(initialScreen);
+  // Check for a saved draft (user left brainstorm without Building)
+  const savedDraft = (() => { try { return JSON.parse(localStorage.getItem("tj_draft_form") || "null"); } catch { return null; } })();
+  const resumeDraft = !initialTrip && initialScreen === "setup" && !!savedDraft;
+  const [screen,    setScreen]    = useState(resumeDraft ? "brainstorm" : initialScreen);
   const [setupStep, setSetupStep] = useState(0);
   const [trip,      setTrip]      = useState(initialTrip || SAMPLE_TRIP);
   const [days,      setDays]      = useState([]);
@@ -3685,7 +3822,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   }, [trip?.id]);
   const [setupModal,  setSetupModal]  = useState(null);
   const [editingTrip, setEditingTrip] = useState(null);
-  const [pendingForm, setPendingForm] = useState(null);
+  const [pendingForm, setPendingForm] = useState(resumeDraft ? savedDraft : null);
   const [formEdited, setFormEdited] = useState(false); // true when user commits setup form during edit → triggers route regen
   const [showShare,   setShowShare]   = useState(false);
   const shareCardRef = useRef(null);
@@ -3827,9 +3964,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const handleSetupComplete = (form) => {
     // Both new trips and edits go through brainstorm so the user can (re-)pick a route
     setPendingForm(form);
-    setFormEdited(true); // user committed form → regenerate routes on return to brainstorm
+    setFormEdited(true);
     setPretripTab("brainstorm");
     setScreen("brainstorm");
+    // Persist draft so user can resume if they navigate away before Building
+    if (!editingTrip) {
+      try { localStorage.setItem("tj_draft_form", JSON.stringify(form)); } catch {}
+    }
   };
 
   const handleBuildFromBrainstorm = (votedItems) => {
@@ -4205,6 +4346,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     setEditingTrip(null);
     setPendingForm(null);
     setScreen("itinerary");
+    try { localStorage.removeItem("tj_draft_form"); } catch {}
 
     // Fetch and persist photos in background — staggered to avoid Wikimedia rate limits
     (async () => {
@@ -4492,11 +4634,20 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           setPretripRoutes(prev => prev.map(r => {
             const upd = data.updatedRoutes.find(u => u.id === r.id);
             if (!upd) return r;
-            // Defensive merge: AI sometimes returns incomplete objects or wrong-type fields.
-            // Preserve structural fields (id, tier) from the original so the route doesn't drop out of filters.
             return { ...r, ...upd, id: r.id, tier: r.tier };
           }));
           setPretripSelectedRouteId(data.updatedRoutes[0].id);
+          // If AI signals a duration change (user explicitly asked to add/remove days),
+          // update pendingForm's end date to match the new day count.
+          const durChange = data.updatedRoutes.find(u => u.durationChanged);
+          if (durChange?.durationChanged && pendingForm?.startDate) {
+            const newDays = durChange.durationChanged;
+            const start = new Date(pendingForm.startDate + "T12:00:00");
+            const newEnd = new Date(start);
+            newEnd.setDate(start.getDate() + newDays - 1);
+            const newEndStr = newEnd.toISOString().split("T")[0];
+            setPendingForm(prev => ({ ...prev, endDate: newEndStr }));
+          }
           hasChanges = true;
         }
       }
@@ -4632,40 +4783,79 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           />
         </div>
 
-        {pretripTab !== "brainstorm" && pretripTab !== "map" && (
-          <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"40px 28px",textAlign:"center",background:T.warm}}>
-            <div style={{fontSize:52,marginBottom:18,opacity:0.6}}>
-              {pretripTab === "itinerary" ? "🗓" : pretripTab === "chat" ? "💬" : "📋"}
+        {/* Pre-IG Magazine tab */}
+        {pretripTab === "magazine" && (
+          <div style={{flex:1,overflowY:"auto",background:T.warm}}>
+            <div style={{padding:"20px 16px 12px",background:T.chalk,borderBottom:`1px solid ${T.sand}`}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink}}>Magazine</div>
+              <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginTop:4}}>
+                Explore the destinations across your route options
+              </div>
             </div>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:10}}>
-              {pretripTab === "itinerary" ? "No itinerary yet" :
-               pretripTab === "chat"      ? "Chat unlocks with your itinerary" :
-                                            "Board unlocks with your itinerary"}
+            <div style={{padding:"12px 16px 24px",display:"flex",flexDirection:"column",gap:16}}>
+              {(() => {
+                // Collect all unique cities across all routes
+                const allCities = [];
+                const seen = new Set();
+                for (const route of pretripRoutes) {
+                  for (const c of (route.city || "").split(",").map(s => s.trim()).filter(Boolean)) {
+                    if (!seen.has(c.toLowerCase())) { seen.add(c.toLowerCase()); allCities.push({ city: c, fromRoute: route.title }); }
+                  }
+                }
+                if (allCities.length === 0) {
+                  return <div style={{textAlign:"center",padding:"40px 0",color:T.mist,fontFamily:"Georgia,serif",fontSize:13}}>Routes are still loading — cities will appear here shortly</div>;
+                }
+                return allCities.map(({ city, fromRoute }) => {
+                  const dd = deepDiveCache[city];
+                  const data = (dd && typeof dd === "object") ? dd : null;
+                  const loading = dd === "loading";
+                  return (
+                    <div key={city} style={{background:T.chalk,borderRadius:18,padding:"16px 16px 14px",border:`1px solid ${T.sand}`,boxShadow:"0 2px 10px rgba(15,25,35,0.04)"}}>
+                      <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap",marginBottom:4}}>
+                        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:T.ink,lineHeight:1.15}}>{city}</div>
+                      </div>
+                      {loading && <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",fontStyle:"italic",marginBottom:8,animation:"shimmer 1.5s ease-in-out infinite"}}>Loading…</div>}
+                      {data?.writeup && <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.55,marginTop:6,marginBottom:8}}>{data.writeup}</div>}
+                      {/* Highlights from moreSights */}
+                      {data?.moreSights?.length > 0 && (
+                        <>
+                          <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginTop:8,marginBottom:8}}>Things to see</div>
+                          <div className="no-scrollbar" style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:4,margin:"0 -16px",padding:"0 16px 4px"}}>
+                            {data.moreSights.map((s, i) => (
+                              <div key={i} style={{flexShrink:0,width:150,borderRadius:12,overflow:"hidden",border:`1px solid ${T.sand}`,background:T.warm}}>
+                                <div style={{height:60,background:`linear-gradient(135deg,${T.ocean}12,${T.dusk}08)`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                                  <span style={{fontSize:24}}>{s.icon || "📍"}</span>
+                                </div>
+                                <div style={{padding:"8px 10px 10px"}}>
+                                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:12,color:T.ink,lineHeight:1.25,marginBottom:3}}>{s.title}</div>
+                                  {s.note && <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.35}}>{s.note}</div>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                      {/* Deep dive CTA */}
+                      <button
+                        onClick={() => { setDeepDiveCity(city); setPretripTab("brainstorm"); }}
+                        style={{marginTop:12,display:"flex",alignItems:"center",justifyContent:"center",gap:6,width:"100%",padding:"9px 14px",borderRadius:10,background:"transparent",border:`1.5px solid ${T.ocean}33`,color:T.ocean,fontFamily:"Georgia,serif",fontSize:12,fontWeight:600,cursor:"pointer"}}
+                      >
+                        🔍 Deep dive into {city} →
+                      </button>
+                    </div>
+                  );
+                });
+              })()}
             </div>
-            <div style={{fontSize:13,color:T.mist,fontFamily:"Georgia,serif",lineHeight:1.5,maxWidth:280,marginBottom:22}}>
-              Waiting for route selection. Head back to Brainstorm, pick a route, and hit <em>Build My Itinerary</em>.
-            </div>
-            <button
-              onClick={() => setPretripTab("brainstorm")}
-              style={{
-                padding:"10px 22px", borderRadius:12, border:"none",
-                background:`linear-gradient(135deg,${T.ocean},${T.dusk})`, color:"white",
-                fontFamily:"Georgia,serif", fontSize:13, fontWeight:600, cursor:"pointer",
-                boxShadow:"0 2px 10px rgba(15,25,35,0.18)",
-              }}
-            >
-              ← Back to Brainstorm
-            </button>
           </div>
         )}
 
         {/* Bottom nav — pre-trip */}
         <div style={{flexShrink:0, background:T.chalk, borderTop:`1px solid ${T.sand}`, display:"flex", paddingBottom:"env(safe-area-inset-bottom, 0px)"}}>
           {[
+            { key:"magazine",   icon:"📖", label:"Magazine" },
             { key:"brainstorm", icon:"🛣️", label:"Route" },
-            { key:"itinerary",  icon:"🗓", label:"Itinerary" },
             { key:"map",        icon:"🗺", label:"Map" },
-            { key:"board",      icon:"📋", label:"Board" },
           ].map(({ key, icon, label }) => {
             const active = pretripTab === key;
             return (
@@ -4950,7 +5140,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             paddingBottom:"env(safe-area-inset-bottom, 0px)",
           }}>
             {[
-              ...(import.meta.env.VITE_BRAINSTORM_ENABLED ? [{ key:"brainstorm", icon:"💡", label:"Brainstorm" }] : []),
+              ...(import.meta.env.VITE_BRAINSTORM_ENABLED ? [{ key:"brainstorm", icon:"📖", label:"Magazine" }] : []),
               { key:"itinerary", icon:"🗓", label:"Itinerary" },
               { key:"map",       icon:"🗺", label:"Map" },
               { key:"board",     icon:"📋", label:"Board" },

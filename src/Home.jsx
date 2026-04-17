@@ -254,6 +254,33 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
           </div>
         )}
 
+        {/* Resume draft banner */}
+        {!loading && (() => {
+          try {
+            const draft = JSON.parse(localStorage.getItem("tj_draft_form") || "null");
+            if (!draft) return null;
+            const dest = (draft.destinations || []).join(" → ") || "a new trip";
+            return (
+              <div
+                onClick={() => { onCreateTrip(); }}
+                style={{
+                  background: "linear-gradient(135deg, #EBF3FD, #F0F4FF)",
+                  border: `1.5px solid ${T.ocean}33`,
+                  borderRadius: 14, padding: "14px 18px",
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  cursor: "pointer", marginBottom: 16,
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: T.ink, marginBottom: 2 }}>✈️ Resume planning {dest}</div>
+                  <div style={{ fontSize: 12, color: T.mist }}>You have unsaved route options — pick up where you left off</div>
+                </div>
+                <span style={{ fontSize: 18, color: T.ocean }}>→</span>
+              </div>
+            );
+          } catch { return null; }
+        })()}
+
         {/* Trip cards */}
         {!loading && trips.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

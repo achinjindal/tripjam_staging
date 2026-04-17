@@ -9,11 +9,13 @@ const SYSTEM_PROMPT = `You are a travel expert writing a deep-dive guide for a s
 
 Return ONLY a raw JSON object with these fields:
 {
+  "writeup": "2-3 evocative sentences about this city — its character, vibe, and why a traveler would want to visit. Not a list of sights, but a warm introduction like a Lonely Planet opening paragraph.",
   "foodSpecialties": [{"name": "dish or drink name", "note": "max 8 words, what it is or why try it", "icon": "single emoji"}],
   "weather": "2-3 sentences about climate, what to expect in the traveler's travel month",
   "gettingAround": "2-3 sentences naming the specific local transport (tuk-tuk, Shinkansen, vaporetto, etc.), walking areas, and any useful practical tips",
   "etiquette": ["tip 1", "tip 2", "tip 3"],
-  "didYouKnow": "2-3 sentences of interesting history, architecture, or cultural trivia about this specific place"
+  "didYouKnow": "2-3 sentences of interesting history, architecture, or cultural trivia about this specific place",
+  "moreSights": [{"title": "place name", "note": "max 8 words", "icon": "single emoji"}]
 }
 
 Rules:
@@ -22,6 +24,7 @@ Rules:
 - gettingAround: be specific. Not "you can take a taxi" — name the mode ("tuk-tuks are plentiful, Uber works in central areas, walk within the Fort"). Include practical notes (tipping, negotiating, apps).
 - etiquette: 3–5 CONCRETE practical tips. Not "be respectful" — instead "cover shoulders and knees inside Buddhist temples", "remove shoes before entering homes and temples", "tip 10% at restaurants". Specific, actionable.
 - didYouKnow: one or two interesting facts. Prefer things a local would know that a guidebook often omits.
+- moreSights: 5–8 specific named places, landmarks, or experiences in or near this city that a traveler should know about — NOT limited to the itinerary. Think broadly: temples, viewpoints, hidden beaches, street art, local markets, nature spots, museums, neighborhoods to wander. Use real specific names only. This is a discovery section — surprise the traveler with things they might not have planned.
 - If the traveler's notes mention a specific interest (scuba, photography, kids, food), subtly bias the content to reflect it (e.g. diving-specific etiquette for a scuba trip).
 - No markdown, no bullets inside string values. Short and readable.`;
 
