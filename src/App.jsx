@@ -4858,7 +4858,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             autoGenerate={!editingTrip || formEdited}
             editTripId={editingTrip?.id || null}
             onBuild={handleBuildFromBrainstorm}
-            onBack={editingTrip ? () => { setEditingTrip(null); setPendingForm(null); setFormEdited(false); setScreen("itinerary"); } : () => setScreen("setup")}
+            onBack={editingTrip
+              ? () => {
+                  setEditingTrip(null); setPendingForm(null); setFormEdited(false);
+                  // Draft trip (no IG done) → go home; complete trip → go to itinerary
+                  if (editingTrip.ig_response) { setScreen("itinerary"); } else if (onHome) { onHome(); }
+                }
+              : () => setScreen("setup")}
             onEditForm={editingTrip ? () => setScreen("setup") : null}
             onItemsChange={setPretripRoutes}
             onSelectionChange={setPretripSelectedRouteId}
