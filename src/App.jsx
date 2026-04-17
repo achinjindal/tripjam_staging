@@ -3058,10 +3058,6 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
   const budgets = [{key:"budget",label:"Budget 🏕️",sub:"Hostels, street food"},{key:"mid",label:"Mid-range 🏨",sub:"3★ hotels, restaurants"},{key:"luxury",label:"Luxury 🏰",sub:"5★ & fine dining"}];
 
   const handleGenerate = async () => {
-    if (!(form.notes || "").trim()) {
-      setDestError("Please share a few words about what you're hoping for — this helps tailor the trip.");
-      return;
-    }
     setGen(true);
     onGenerate(form);
   };
@@ -3256,23 +3252,23 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
 
       <div style={{marginBottom:22}}>
         <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:4}}>
-          Anything else we should know? <span style={{color:"#e53e3e",fontSize:14}}>*</span>
+          Anything else we should know?
         </div>
-        <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:10}}>Required — the more you share, the better we can tailor it</div>
-        <textarea value={form.notes} onChange={e=>{set("notes",e.target.value); if (destError && e.target.value.trim()) setDestError("");}}
+        <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:10}}>The more you share, the better we can tailor it</div>
+        <textarea value={form.notes} onChange={e=>set("notes",e.target.value)}
           placeholder="e.g. we want to do scuba diving, prefer boutique hotels, travelling with two kids under 10, no long drives…"
           rows={4}
           style={{width:"100%",padding:"10px 12px",borderRadius:12,border:`1.5px solid ${form.notes?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",resize:"none",boxSizing:"border-box",background:T.chalk}}/>
       </div>
-<button onClick={handleGenerate} disabled={generating || !(form.notes || "").trim()} style={{
+<button onClick={handleGenerate} disabled={generating} style={{
         width:"100%",padding:16,borderRadius:16,border:"none",
-        cursor:(generating || !(form.notes || "").trim())?"not-allowed":"pointer",
-        background:(generating || !(form.notes || "").trim())?T.sand:`linear-gradient(135deg,${T.ocean},${T.dusk})`,
-        color:(generating || !(form.notes || "").trim())?T.mist:"white",
+        cursor:generating?"not-allowed":"pointer",
+        background:generating?T.sand:`linear-gradient(135deg,${T.ocean},${T.dusk})`,
+        color:generating?T.mist:"white",
         fontFamily:"'DM Serif Display',serif",fontSize:18,
-        boxShadow:(generating || !(form.notes || "").trim())?"none":"0 6px 22px rgba(37,99,168,0.4)",
+        boxShadow:generating?"none":"0 6px 22px rgba(37,99,168,0.4)",
         transition:"all 0.3s",marginTop:8,
-      }}>{generating?"✨ Generating your itinerary…":!(form.notes || "").trim()?"Share a few words above ↑":"Start Planning ✨"}</button>
+      }}>{generating?"✨ Generating your itinerary…":"Start Planning ✨"}</button>
     </div>,
   ];
 
@@ -3682,7 +3678,9 @@ function CollabTab({ trip, session, inviteRole, setInviteRole, inviteLink, setIn
 
 /* ─── ROOT ───────────────────────────────────────────────────────────── */
 export default function App({ session, initialTrip, initialScreen = "setup", onHome }) {
-  const [screen,    setScreen]    = useState(initialScreen);
+  // Draft trip (RG done, no IG yet) → go straight to routes, not setup form
+  const isDraft = initialTrip && !initialTrip.ig_response && initialScreen === "setup";
+  const [screen,    setScreen]    = useState(isDraft ? "brainstorm" : initialScreen);
   const [setupStep, setSetupStep] = useState(0);
   const [trip,      setTrip]      = useState(initialTrip || SAMPLE_TRIP);
   const [days,      setDays]      = useState([]);
@@ -3883,9 +3881,22 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     return () => supabase.removeChannel(channel);
   }, [trip?.id]);
   const [setupModal,  setSetupModal]  = useState(null);
-  const [editingTrip, setEditingTrip] = useState(null);
-  const [pendingForm, setPendingForm] = useState(null);
-  const [formEdited, setFormEdited] = useState(false); // true when user commits setup form during edit → triggers route regen
+  const [editingTrip, setEditingTrip] = useState(() => isDraft ? initialTrip : null);
+  const [pendingForm, setPendingForm] = useState(() => {
+    if (!isDraft) return null;
+    const igReq = initialTrip.ig_request || {};
+    return {
+      destinations: (initialTrip.destination || "").split(" → ").map(s => s.trim()).filter(Boolean),
+      startDate: initialTrip.start_date || "", endDate: initialTrip.end_date || "",
+      travelers: String(igReq.travelers || "2"), styles: igReq.styles || [],
+      budget: igReq.budget || "mid", pace: igReq.pace || "active",
+      morningStart: igReq.morningStart || "early",
+      notes: initialTrip.notes || igReq.notes || "",
+      arrivalCity: initialTrip.arrival_city || "", departureCity: initialTrip.departure_city || "",
+      arrivalTime: igReq.arrivalTime || "", departureTime: igReq.departureTime || "",
+    };
+  });
+  const [formEdited, setFormEdited] = useState(false);
   const [showShare,   setShowShare]   = useState(false);
   const shareCardRef = useRef(null);
   const [flightsForm, setFlightsForm] = useState({ arrivalTime:"", departureTime:"" });
