@@ -2989,6 +2989,10 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
     ...(igReq.budget       ? { budget: igReq.budget } : {}),
     ...(igReq.pace         ? { pace: igReq.pace } : {}),
     ...(igReq.morningStart ? { morningStart: igReq.morningStart } : {}),
+    ...(igReq.arrivalTime  ? { arrivalTime: igReq.arrivalTime } : {}),
+    ...(igReq.departureTime? { departureTime: igReq.departureTime } : {}),
+    ...(igReq.arrivalMode  ? { arrivalMode: igReq.arrivalMode } : {}),
+    ...(igReq.departureMode? { departureMode: igReq.departureMode } : {}),
   } : {};
   const _today = new Date();
   const _defaultStart = new Date(_today); _defaultStart.setDate(_today.getDate() + 15);
@@ -4031,7 +4035,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       const fmtD = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const dateRange = (form.startDate && form.endDate) ? ` · ${fmtD(form.startDate)}–${fmtD(form.endDate)}` : "";
       const draftName = `${form.destinations.join(" → ")}${dateRange}`;
-      const igRequest = { destinations: form.destinations, numDays: form.startDate && form.endDate ? Math.max(1, Math.round((new Date(form.endDate) - new Date(form.startDate)) / 864e5) + 1) : null, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null };
+      const igRequest = { destinations: form.destinations, numDays: form.startDate && form.endDate ? Math.max(1, Math.round((new Date(form.endDate) - new Date(form.startDate)) / 864e5) + 1) : null, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, endDate: form.endDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null, arrivalTime: form.arrivalTime || null, departureTime: form.departureTime || null, arrivalMode: form.arrivalMode || null, departureMode: form.departureMode || null };
       const { error } = await supabase.from("trips").insert({
         id: draftId,
         name: draftName,
@@ -4040,10 +4044,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         end_date: form.endDate,
         created_by: session.user.id,
         ig_request: igRequest,
-        // ig_response is NULL → signals this is a draft (RG only, no IG yet)
         ...(form.notes && { notes: form.notes }),
         ...(form.arrivalCity && { arrival_city: form.arrivalCity }),
         ...(form.departureCity && { departure_city: form.departureCity }),
+        ...(form.arrivalTime && { arrival_time: `${form.startDate}T${form.arrivalTime}:00` }),
+        ...(form.departureTime && { departure_time: `${form.endDate}T${form.departureTime}:00` }),
+        ...(form.arrivalMode && { arrival_mode: form.arrivalMode }),
+        ...(form.departureMode && { departure_mode: form.departureMode }),
       });
       if (!error) {
         await supabase.from("trip_members").insert({ trip_id: draftId, user_id: session.user.id, role: "edit" });
@@ -4297,11 +4304,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
     // 1. Persist trip (update if editing, insert if new)
     const tripId = isEditing ? editingTrip.id : crypto.randomUUID();
-    const igRequest = { destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null };
+    const igRequest = { destinations: form.destinations, numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, endDate: form.endDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null, arrivalTime: form.arrivalTime || null, departureTime: form.departureTime || null, arrivalMode: form.arrivalMode || null, departureMode: form.departureMode || null };
     const tripName = (() => {
       const fmtD = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const dateRange = (form.startDate && form.endDate) ? ` · ${fmtD(form.startDate)}–${fmtD(form.endDate)}` : "";
-      // Use AI-generated name if available, otherwise keep existing name (edit) or use destination
       if (isEditing && !itinerary.name) return editingTrip.name;
       return `${itinerary.name || form.destinations.join(" → ")}${dateRange}`;
     })();
@@ -4320,6 +4326,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       ...(form.notes           && { notes: form.notes }),
       ...(form.arrivalCity     && { arrival_city: form.arrivalCity }),
       ...(form.departureCity   && { departure_city: form.departureCity }),
+      ...(form.arrivalTime     && { arrival_time: `${form.startDate}T${form.arrivalTime}:00` }),
+      ...(form.departureTime   && { departure_time: `${form.endDate}T${form.departureTime}:00` }),
+      ...(form.arrivalMode     && { arrival_mode: form.arrivalMode }),
+      ...(form.departureMode   && { departure_mode: form.departureMode }),
     };
 
     if (isEditing) {

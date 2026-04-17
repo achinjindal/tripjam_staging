@@ -193,7 +193,7 @@ ${morningNote}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDay
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: Math.min(16000, numDays * 1000 + 2000),
+        max_tokens: Math.min(32000, numDays * 2500 + 3000),
         temperature: 0.8,
         stream: true,
         system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
