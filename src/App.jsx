@@ -352,16 +352,15 @@ function playDoneChime() {
 // Global serialized queues — separate delays for geocoding vs Wikimedia photo API
 const _geocodeCache = new Map();
 
-function makeQueue(delayMs) {
+function makeQueue(delayMs, concurrency = 1) {
   const q = [];
-  let running = false;
+  let active = 0;
   const run = () => {
-    if (running || q.length === 0) return;
-    running = true;
-    (async () => {
-      while (q.length > 0) { q.shift()(); await new Promise(r => setTimeout(r, delayMs)); }
-      running = false;
-    })();
+    while (active < concurrency && q.length > 0) {
+      active++;
+      const task = q.shift();
+      task().finally(() => { active--; run(); });
+    }
   };
   return (url) => new Promise(resolve => {
     q.push(async () => {
@@ -372,12 +371,13 @@ function makeQueue(delayMs) {
         clearTimeout(tid);
         resolve(res.ok ? await res.json() : null);
       } catch { resolve(null); }
+      if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
     });
     run();
   });
 }
 
-const wikiQueuedFetch = makeQueue(800); // Wikimedia — conservative to avoid rate limits
+const wikiQueuedFetch = makeQueue(200, 3); // Wikimedia — 3 concurrent, 200ms stagger
 
 async function _fetchPhoto(geocode, city, type, hotelOpts) {
   const BAD_PATTERNS = /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive/i;
@@ -1579,26 +1579,9 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
               <div style={{ fontFamily: "Georgia,serif", fontSize: 13, color: T.mist }}>Try again.</div>
             </div>
           )}
-          {generating && items?.length === 0 && (
-            <div style={{ textAlign: "center", padding: "60px 20px" }}>
-              <div style={{ fontSize: 32, marginBottom: 16 }}>⚡</div>
-              <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink, marginBottom: 8 }}>Finding the best routes…</div>
-              <div style={{ fontFamily: "Georgia,serif", fontSize: 13, color: T.mist, marginBottom: 20 }}>Exploring {destinations.join(", ")}</div>
-              <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-                {[0,1,2].map(i => (
-                  <div key={i} style={{ width: "100%", maxWidth: 160, height: 120, borderRadius: 14, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite", animationDelay: `${i * 0.3}s` }} />
-                ))}
-              </div>
-            </div>
-          )}
-          {!generating && items === null && (
-            <div style={{ textAlign: "center", padding: "60px 20px" }}>
-              <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-                {[0,1,2].map(i => (
-                  <div key={i} style={{ width: "100%", maxWidth: 160, height: 120, borderRadius: 14, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite", animationDelay: `${i * 0.3}s` }} />
-                ))}
-              </div>
-              <div style={{ fontFamily: "Georgia,serif", fontSize: 13, color: T.mist, marginTop: 16 }}>Loading your routes…</div>
+          {(generating || items === null) && (
+            <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(247,248,250,0.55)", pointerEvents: "none" }}>
+              <div style={{ width: 36, height: 36, border: `3px solid ${T.sand}`, borderTopColor: T.ocean, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
             </div>
           )}
           <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>
@@ -4450,7 +4433,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     pill?.scrollIntoView({ behavior:"smooth", block:"nearest", inline:"center" });
     const containerTop = scrollRef.current.getBoundingClientRect().top;
     const elTop        = el.getBoundingClientRect().top;
-    scrollRef.current.scrollBy({ top: elTop - containerTop - 52, behavior:"smooth" });
+    scrollRef.current.scrollBy({ top: elTop - containerTop - 8, behavior:"smooth" });
     setTimeout(() => { isJumping.current = false; }, 700);
   };
 
@@ -4800,6 +4783,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         @keyframes shimmer{0%,100%{opacity:0.45;}50%{opacity:0.75;}}
         @keyframes blink{0%,100%{opacity:1;}50%{opacity:0;}}
         @keyframes slideIn{0%{opacity:0;transform:translateX(40px) scale(0.7);}20%{opacity:1;transform:translateX(0) scale(1);}80%{opacity:1;transform:translateX(0) scale(1);}100%{opacity:0;transform:translateX(-40px) scale(0.7);}}
+        @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
         .no-scrollbar::-webkit-scrollbar{display:none;}
         .no-scrollbar{-ms-overflow-style:none;scrollbar-width:none;}
       `}</style>
@@ -4807,15 +4791,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       {/* ── GENERATING ── */}
       {screen==="generating" && (
         <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-          {/* Top half: selected route */}
+          {/* Route + progress — scrollable together */}
+          <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column"}}>
           {generatingRoute && (
-            <div style={{flex:"0 0 auto",overflowY:"auto",padding:"20px 16px 12px",maxHeight:"55%"}}>
+            <div style={{padding:"20px 16px 12px"}}>
               <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Detailing your route</div>
               <RouteCard item={generatingRoute} vs={{mine:1}} interactive={false} showRecommended={false} />
             </div>
           )}
-          {/* Bottom half: progress */}
-          <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:"20px 40px 40px"}}>
+          {/* Progress */}
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:"20px 40px 40px",flex:generatingRoute?0:1,minHeight:generatingRoute?undefined:"100%"}}>
             <TransportCarousel />
             <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,textAlign:"center"}}>Building your itinerary…</div>
             {generateError
@@ -4828,6 +4813,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               ? <div style={{fontSize:13,color:T.moss,fontFamily:"Georgia,serif",textAlign:"center",fontWeight:600}}>Day {streamingDays}{streamingTotal > 0 ? ` of ${streamingTotal}` : ""} planned ✓</div>
               : <LoadingHint />
             }
+          </div>
           </div>
         </div>
       )}
@@ -5143,7 +5129,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 const startHotelCity = cityChanged ? prevHotel?.city : hotelPerDay[i]?.city;
 
                 // End-of-day hotel: use current day's hotel (or carried-forward)
-                const endHotel = !lastIsHotel && day.activities.length > 0
+                // Skip on last day if user has a departure (they're leaving, no hotel needed)
+                const isLastDay = i === days.length - 1;
+                const hasDeparture = isLastDay && (trip.departure_time || trip.departure_city);
+                const endHotel = !lastIsHotel && day.activities.length > 0 && !hasDeparture
                   ? hotelPerDay[i]?.hotel || null
                   : null;
 

@@ -22,7 +22,7 @@ const STYLE_RULES: Record<string, string> = {
 const SYSTEM_PROMPT = `You are a travel expert who generates travel itineraries as JSON.
 
 Rules:
-- HOTELS: Choose a well-located, reliable, confirmed-open hotel. Specific named property only. Minimise hotel changes (2+ nights per base). Include check-in (type:hotel, icon:🏨) ONLY in cities where the traveler sleeps overnight — skip same-day transit cities. Day 1: check in after ready time. Later cities: before 12:30 → check in at 12:30; 12:30–18:00 → right after transit; after 18:00 → check in first.
+- HOTELS: Choose a well-located, reliable, confirmed-open hotel. Title MUST be "Check in at [SPECIFIC HOTEL NAME]" (e.g. "Check in at Hotel Gracery Shinjuku", "Check in at Rambagh Palace"). NEVER use generic titles like "Hotel check in" or "Check in at hotel". Minimise hotel changes (2+ nights per base). Include check-in (type:hotel, icon:🏨) ONLY in cities where the traveler sleeps overnight — skip same-day transit cities. Day 1: check in after ready time. Later cities: before 12:30 → check in at 12:30; 12:30–18:00 → right after transit; after 18:00 → check in first.
 - TITLES: Real specific place names only (Trishna, Leopold Cafe). Never generic (Lunch, Dinner). Don't prefix city name.
 - RESTAURANTS: Only suggest if certain it's in that neighbourhood. If unsure, use a food street or market.
 - RELIABILITY: Prefer long-established venues unlikely to have closed.
@@ -98,7 +98,9 @@ serve(async (req) => {
       const cutoffMins = h * 60 + m - departureBuffer;
       const cutHH = String(Math.floor(cutoffMins / 60) % 24).padStart(2, "0");
       const cutMM = String(cutoffMins % 60).padStart(2, "0");
-      lastDayNote = `LAST DAY CONSTRAINT (ABSOLUTE HARD RULE): ${departureDesc.charAt(0).toUpperCase() + departureDesc.slice(1)} at ${departureTime} from ${departureCity || destinations[destinations.length - 1]}. Every activity on the last day MUST end by ${cutHH}:${cutMM} (this means start_time + duration <= ${cutHH}:${cutMM}). No activity may start or run past ${cutHH}:${cutMM}. The traveler needs ${departureBuffer} minutes to ${departurePortDesc}.`;
+      const depCity = departureCity || destinations[destinations.length - 1];
+      const depPort = { flight: "airport", train: "train station", bus: "bus station", road: "" }[departureMode ?? "flight"] ?? "";
+      lastDayNote = `LAST DAY CONSTRAINT (ABSOLUTE HARD RULE): ${departureDesc.charAt(0).toUpperCase() + departureDesc.slice(1)} at ${departureTime} from ${depCity}. Every sightseeing/food activity on the last day MUST end by ${cutHH}:${cutMM}. The LAST activity of the last day MUST be a transit activity (type:"transit") to the ${depPort || "departure point"} — e.g. title "Transit to ${depCity}${depPort ? " " + depPort : ""}", time "${cutHH}:${cutMM}", duration "${departureBuffer}min". This departure transit is MANDATORY — the itinerary must end with it. No hotel check-in on the last day.`;
     }
 
     const notesNote = notes ? `TRAVELER NOTES: ${notes}. Factor this into every day of the itinerary.` : "";
