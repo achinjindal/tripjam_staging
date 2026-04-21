@@ -28,7 +28,8 @@ const PLACES_HEADERS = { "Authorization": `Bearer ${import.meta.env.VITE_SUPABAS
 
 /* ─── PHOTO HOOK ─────────────────────────────────────────────────────── */
 const _photoCache = {};
-const _usedPhotoUrls = new Set(); // prevent same photo showing on multiple activities
+const _usedPhotoUrls = new Set();
+let _activeTripId = null; // set when a trip is opened, used for hotel photo rate limits // prevent same photo showing on multiple activities
 
 // Returns true if the URL looks like a person portrait or otherwise unsuitable place photo
 function _isPortrait(url) {
@@ -41,13 +42,14 @@ function PhotoStrip({ activity, city }) {
   const stored = activity?.photo_url;
   const geocode = activity?.geocode || activity?.title;
   const [liveUrl, setLiveUrl] = useState(stored ? null : undefined);
+  const [broken, setBroken] = useState(false);
   const [coords, setCoords] = useState(null);
   const [visible, setVisible] = useState(false);
   const ref = useRef(null);
 
   // Only fetch when the card scrolls into view
   useEffect(() => {
-    if (stored) return;
+    if (stored && !broken) return;
     const el = ref.current;
     if (!el) return;
     const obs = new IntersectionObserver(([entry]) => {
@@ -55,16 +57,16 @@ function PhotoStrip({ activity, city }) {
     }, { rootMargin: "200px" });
     obs.observe(el);
     return () => obs.disconnect();
-  }, [stored]);
+  }, [stored, broken]);
 
   useEffect(() => {
-    if (stored || !visible) return;
+    if ((stored && !broken) || !visible) return;
     if (!geocode) { setLiveUrl(null); return; }
     const key = `${geocode}||${city || ""}`;
     if (_photoCache[key] !== undefined) {
       const cached = _photoCache[key];
-      if (cached && _usedPhotoUrls.has(cached)) { setLiveUrl(null); return; } // already shown by another activity
-      if (cached) _usedPhotoUrls.add(cached); // claim it
+      if (cached && _usedPhotoUrls.has(cached)) { setLiveUrl(null); return; }
+      if (cached) _usedPhotoUrls.add(cached);
       setLiveUrl(cached);
       return;
     }
@@ -76,14 +78,14 @@ function PhotoStrip({ activity, city }) {
       _photoCache[key] = src ?? null;
       setLiveUrl(src ?? null);
     });
-  }, [stored, visible, geocode, city]);
+  }, [stored, broken, visible, geocode, city]);
 
   useEffect(() => {
     if (!debugMode || !geocode) return;
     geocodePlace(geocode, city, activity?.geocode).then(c => setCoords(c));
   }, [debugMode, geocode, city]);
 
-  const url = stored || liveUrl;
+  const url = (!broken && stored) || liveUrl;
   if (url === undefined) return (
     <div ref={ref} style={{marginTop:10,height:130,borderRadius:10,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
   );
@@ -97,7 +99,7 @@ function PhotoStrip({ activity, city }) {
   }
   return (
     <div style={{marginTop:10,borderRadius:10,overflow:"hidden",height:130,background:T.sand,position:"relative"}}>
-      <img src={url} alt={geocode} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+      <img src={url} alt={geocode} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} onError={() => { if (!broken) { setBroken(true); setLiveUrl(undefined); } }}/>
       {debugMode && (
         <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(0,0,0,0.55)",color:"#fff",fontSize:10,fontFamily:"monospace",padding:"3px 6px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
           {coords ? `📍 ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : "📍 …"}
@@ -377,8 +379,8 @@ function makeQueue(delayMs) {
 
 const wikiQueuedFetch = makeQueue(800); // Wikimedia — conservative to avoid rate limits
 
-async function _fetchPhoto(geocode, city, type) {
-  const BAD_PATTERNS = /\.(svg)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial/i;
+async function _fetchPhoto(geocode, city, type, hotelOpts) {
+  const BAD_PATTERNS = /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive/i;
   const good = (url) => url && !_isPortrait(url) && !_usedPhotoUrls.has(url) && !BAD_PATTERNS.test(url);
 
   // Deduplicate: return cached result immediately if already fetched
@@ -398,16 +400,16 @@ async function _fetchPhoto(geocode, city, type) {
       .trim() || geocode;
   })() : geocode;
 
-  // Hotels: skip Wikipedia entirely, go straight to Google Places for accurate property photos
+  // Hotels: TripAdvisor primary (via server), Google fallback, Wikipedia last
   if (type === "hotel") {
     try {
-      const res = await fetch(`${PLACES_PROXY}?action=photo`, {
+      const res = await fetch(`${PLACES_PROXY}?action=hotel-photo`, {
         method: "POST", headers: PLACES_HEADERS,
-        body: JSON.stringify({ q: geocodeQ, city }),
+        body: JSON.stringify({ q: geocodeQ, city, tripId: hotelOpts?.tripId || _activeTripId, context: hotelOpts?.context || "itinerary" }),
       });
-      const { url: placesUrl } = await res.json();
-      if (good(placesUrl)) { _usedPhotoUrls.add(placesUrl); _photoCache[cacheKey] = placesUrl; return placesUrl; }
-    } catch { /* Places proxy unavailable */ }
+      const { url: photoUrl } = await res.json();
+      if (good(photoUrl)) { _usedPhotoUrls.add(photoUrl); _photoCache[cacheKey] = photoUrl; return photoUrl; }
+    } catch { /* hotel-photo endpoint unavailable */ }
     _photoCache[cacheKey] = null;
     return null;
   }
@@ -466,27 +468,33 @@ async function _fetchPhoto(geocode, city, type) {
     `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages&pithumbsize=700&format=json&origin=*`
   );
   const results3 = Object.values(data3?.query?.pages || {});
-  for (const page of results3) {
-    if (!pageRelevant(page.title)) { console.log(`[photo] T3 skipped irrelevant: "${page.title}" for "${geocode}"`); continue; }
+  for (let ri = 0; ri < results3.length; ri++) {
+    const page = results3[ri];
+    // Accept top 2 results without strict title relevance, but still check filename
+    const relaxed = ri < 2;
+    if (!relaxed && !pageRelevant(page.title)) { console.log(`[photo] T3 skipped irrelevant: "${page.title}" for "${geocode}"`); continue; }
     const src3 = page?.thumbnail?.source;
     if (good(src3) && photoFilenameRelevant(src3)) { _usedPhotoUrls.add(src3); _photoCache[cacheKey] = src3; return src3; }
     else if (src3) console.log(`[photo] T3 filtered: ${src3.split("/").pop()} for "${geocode}"`);
   }
 
-  // Tier 4: Google Places fallback
-  {
-    try {
-      const res = await fetch(`${PLACES_PROXY}?action=photo`, {
-        method: "POST", headers: PLACES_HEADERS,
-        body: JSON.stringify({ q: geocodeQ, city }),
-      });
-      const { url: placesUrl } = await res.json();
-      if (good(placesUrl)) { _usedPhotoUrls.add(placesUrl); _photoCache[cacheKey] = placesUrl; return placesUrl; }
-      else if (placesUrl) console.log(`[photo] T4 filtered: ${placesUrl.split("/").pop()} for "${geocode}"`);
-    } catch { /* Places proxy unavailable, skip */ }
+  // Tier 4: Wikimedia Commons file search — much larger photo pool than Wikipedia articles
+  const commonsSearchQ = city ? `${geocode} ${city}` : geocode;
+  const data4 = await wikiQueuedFetch(
+    `https://commons.wikimedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(commonsSearchQ)}&srnamespace=6&srlimit=3&format=json&origin=*`
+  );
+  const commonsResults = data4?.query?.search || [];
+  for (const cr of commonsResults) {
+    const title = cr.title;
+    if (!title || /\.svg|logo|flag|icon|map|category/i.test(title)) continue;
+    const data4b = await wikiQueuedFetch(
+      `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=imageinfo&iiprop=url&iiurlwidth=700&format=json&origin=*`
+    );
+    const page4 = Object.values(data4b?.query?.pages || {})[0];
+    const src4 = page4?.imageinfo?.[0]?.thumburl;
+    if (good(src4)) { _usedPhotoUrls.add(src4); _photoCache[cacheKey] = src4; return src4; }
   }
 
-  console.log(`[photo] no photo found for "${geocode}" (${city})`);
   _photoCache[cacheKey] = null;
   return null;
 }
@@ -1060,19 +1068,24 @@ function TodoView({ trip, onBack }) {
 const BRAINSTORM_CATEGORIES = ["All", "Sightseeing", "Dining", "Experiences", "Nightlife", "Nature", "Culture", "Shopping", "Day Trip"];
 const BRAINSTORM_CATEGORY_ICONS = { Sightseeing:"🏛️", Dining:"🍜", Experiences:"🎭", Nightlife:"🍸", Nature:"🌿", Culture:"🎨", Shopping:"🛍️", "Day Trip":"🚌" };
 
-function RouteCard({ item, vs, onVote, interactive, showRecommended = true }) {
-  // In read-only mode, prefer the persisted `selected` flag; in interactive mode, use the vote state.
+function RouteCard({ item, vs, onVote, interactive, showRecommended = true, routeLabel = null }) {
   const selected = interactive ? vs.mine === 1 : (item.selected === true || vs.mine === 1);
+  const hasError = !!item._error;
   return (
     <div onClick={interactive ? onVote : undefined} style={{
-      background: selected ? `linear-gradient(135deg, ${T.ocean}12, ${T.dusk}08)` : T.chalk,
+      background: hasError ? "#FFF0F0" : selected ? `linear-gradient(135deg, ${T.ocean}12, ${T.dusk}08)` : T.chalk,
       borderRadius: 16, padding: "14px 16px",
-      border: `2px solid ${selected ? T.ocean : T.sand}`,
+      border: `2px solid ${hasError ? "#e53e3e" : selected ? T.ocean : T.sand}`,
       cursor: interactive ? "pointer" : "default",
       position: "relative",
     }}>
+      {routeLabel && (
+        <div style={{position:"absolute",top:10,left:12,background:T.dusk,color:"white",fontSize:10,fontFamily:"Georgia,serif",fontWeight:700,borderRadius:6,padding:"2px 7px",letterSpacing:0.5}}>
+          {routeLabel}
+        </div>
+      )}
       {/* Header row */}
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 10, marginTop: routeLabel ? 20 : 0 }}>
         <div style={{ fontSize: 24, flexShrink: 0, marginTop: 1 }}>{item.icon}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 2 }}>
@@ -1147,6 +1160,12 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true }) {
           </span>
         )}
       </div>
+      {/* Error banner */}
+      {hasError && (
+        <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: "#FEE2E2", border: "1px solid #FECACA", fontSize: 12, color: "#c53030", fontFamily: "Georgia,serif" }}>
+          ⚠ {item._error} — try editing this route again in chat
+        </div>
+      )}
     </div>
   );
 }
@@ -1561,17 +1580,34 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
             </div>
           )}
           {generating && items?.length === 0 && (
-            <div style={{ textAlign: "center", padding: "60px 20px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 14 }}>
-              <div style={{ fontSize: 32, marginBottom: 12 }}>⚡</div>Ideating…
+            <div style={{ textAlign: "center", padding: "60px 20px" }}>
+              <div style={{ fontSize: 32, marginBottom: 16 }}>⚡</div>
+              <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink, marginBottom: 8 }}>Finding the best routes…</div>
+              <div style={{ fontFamily: "Georgia,serif", fontSize: 13, color: T.mist, marginBottom: 20 }}>Exploring {destinations.join(", ")}</div>
+              <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                {[0,1,2].map(i => (
+                  <div key={i} style={{ width: "100%", maxWidth: 160, height: 120, borderRadius: 14, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite", animationDelay: `${i * 0.3}s` }} />
+                ))}
+              </div>
+            </div>
+          )}
+          {!generating && items === null && (
+            <div style={{ textAlign: "center", padding: "60px 20px" }}>
+              <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                {[0,1,2].map(i => (
+                  <div key={i} style={{ width: "100%", maxWidth: 160, height: 120, borderRadius: 14, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite", animationDelay: `${i * 0.3}s` }} />
+                ))}
+              </div>
+              <div style={{ fontFamily: "Georgia,serif", fontSize: 13, color: T.mist, marginTop: 16 }}>Loading your routes…</div>
             </div>
           )}
           <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>
             {tier1Items.length > 0 ? (editTripId ? "Your saved routes" : "Choose your route") : ""}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {tier1Items.map(item => (
+            {tier1Items.map((item, idx) => (
               <div key={item.id} ref={el => { if (el) routeCardRefs.current[item.id] = el; }}>
-                <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} showRecommended={routesReady} />
+                <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} showRecommended={routesReady} routeLabel={`R${idx + 1}`} />
               </div>
             ))}
           </div>
@@ -2703,11 +2739,12 @@ function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
       boxShadow:"0 2px 8px rgba(15,25,35,0.08)",
     }}>
       <div onClick={onSelect} style={{cursor:"pointer"}}>
-        <div style={{height:90, background:T.sand, overflow:"hidden", position:"relative"}}>
-          {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
-          {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={suggestion.title} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
-          {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>{suggestion.icon}</div>}
-        </div>
+        {(!loaded || photoUrl) && (
+          <div style={{height:90, background:T.sand, overflow:"hidden", position:"relative"}}>
+            {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+            {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={suggestion.title} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+          </div>
+        )}
         <div style={{padding:"8px 10px 6px"}}>
           <div style={{fontFamily:"'DM Serif Display',serif",fontSize:12,color:T.ink,lineHeight:1.3,marginBottom:3}}>{suggestion.title}</div>
           {suggestion.note && <div style={{fontFamily:"Georgia,serif",fontSize:10,color:T.mist,lineHeight:1.3}}>{suggestion.note}</div>}
@@ -2747,13 +2784,12 @@ function MagazineHighlightCard({ item, city, inItinerary = false }) {
       {inItinerary && (
         <div style={{position:"absolute",top:6,right:6,zIndex:2,background:T.ocean,borderRadius:"50%",width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"white",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}>✓</div>
       )}
-      <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
-        {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
-        {photoUrl
-          ? <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={item.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>
-          : loaded && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32 }}>{item.icon || "📍"}</div>
-        }
-      </div>
+      {(!loaded || photoUrl) && (
+        <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
+          {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+          {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={item.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>}
+        </div>
+      )}
       <div style={{ padding: "8px 10px 6px" }}>
         <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.25, marginBottom: 3 }}>{item.title}</div>
         {item.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic", lineHeight: 1.35 }}>{item.note}</div>}
@@ -2771,23 +2807,29 @@ function HotelSuggestionCard({ suggestion, onSelect, onKnowMore }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
-    _fetchPhoto(suggestion.geocode || suggestion.title, null, "hotel").then(url => { setPhotoUrl(url); setLoaded(true); });
+    _fetchPhoto(suggestion.geocode || suggestion.title, null, "hotel", { context: "chat" }).then(url => { setPhotoUrl(url); setLoaded(true); });
   }, [suggestion.geocode]);
   const priceLen = (suggestion.price || "").length;
   const priceColor = priceLen >= 4 ? "#7C3AED" : priceLen === 3 ? "#92400E" : "#166534";
   const priceBg   = priceLen >= 4 ? "#EDE9FE"  : priceLen === 3 ? "#FEF3C7"  : "#DCFCE7";
   return (
     <div style={{ flexShrink:0, width:186, borderRadius:12, overflow:"hidden", border:`1px solid ${T.sand}`, background:T.chalk, boxShadow:"0 2px 8px rgba(15,25,35,0.08)" }}>
-      <div style={{ height:90, background:T.sand, overflow:"hidden", position:"relative" }}>
-        {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
-        {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={suggestion.title} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
-        {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>🏨</div>}
-        {suggestion.price && (
-          <div style={{position:"absolute",bottom:6,right:6,background:priceBg,color:priceColor,fontSize:10,fontFamily:"Georgia,serif",fontWeight:600,padding:"2px 7px",borderRadius:6,letterSpacing:0.3}}>
-            {suggestion.price}
-          </div>
-        )}
-      </div>
+      {(!loaded || photoUrl) && (
+        <div style={{ height:90, background:T.sand, overflow:"hidden", position:"relative" }}>
+          {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+          {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={suggestion.title} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+          {suggestion.price && (
+            <div style={{position:"absolute",bottom:6,right:6,background:priceBg,color:priceColor,fontSize:10,fontFamily:"Georgia,serif",fontWeight:600,padding:"2px 7px",borderRadius:6,letterSpacing:0.3}}>
+              {suggestion.price}
+            </div>
+          )}
+        </div>
+      )}
+      {loaded && !photoUrl && suggestion.price && (
+        <div style={{padding:"6px 10px 0",textAlign:"right"}}>
+          <span style={{background:priceBg,color:priceColor,fontSize:10,fontFamily:"Georgia,serif",fontWeight:600,padding:"2px 7px",borderRadius:6,letterSpacing:0.3}}>{suggestion.price}</span>
+        </div>
+      )}
       <div style={{padding:"8px 10px 4px"}}>
         <div style={{fontFamily:"'DM Serif Display',serif",fontSize:12,color:T.ink,lineHeight:1.3,marginBottom:3}}>{suggestion.title}</div>
         {suggestion.area && <div style={{fontSize:10,color:T.ocean,fontFamily:"Georgia,serif",marginBottom:5}}>📍 {suggestion.area}</div>}
@@ -2816,7 +2858,7 @@ function HotelCard({ hotel, selected, onSelect }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
-    _fetchPhoto(hotel.geocode || hotel.title, null, "hotel").then(url => { setPhotoUrl(url); setLoaded(true); });
+    _fetchPhoto(hotel.geocode || hotel.title, null, "hotel", { context: "itinerary" }).then(url => { setPhotoUrl(url); setLoaded(true); });
   }, [hotel.geocode]);
   return (
     <div onClick={onSelect} style={{
@@ -2826,12 +2868,18 @@ function HotelCard({ hotel, selected, onSelect }) {
       boxShadow: selected ? `0 0 0 3px ${T.ocean}33` : "0 2px 8px rgba(15,25,35,0.08)",
       transition:"all 0.15s",
     }}>
-      <div style={{height:95, background:T.sand, overflow:"hidden", position:"relative"}}>
-        {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
-        {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={hotel.title} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
-        {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:30}}>🏨</div>}
-        {selected && <div style={{position:"absolute",top:6,right:6,background:T.ocean,borderRadius:"50%",width:20,height:20,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"white"}}>✓</div>}
-      </div>
+      {(!loaded || photoUrl) && (
+        <div style={{height:95, background:T.sand, overflow:"hidden", position:"relative"}}>
+          {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+          {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={hotel.title} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+          {selected && <div style={{position:"absolute",top:6,right:6,background:T.ocean,borderRadius:"50%",width:20,height:20,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"white"}}>✓</div>}
+        </div>
+      )}
+      {loaded && !photoUrl && selected && (
+        <div style={{padding:"6px 10px 0",textAlign:"right"}}>
+          <div style={{display:"inline-flex",background:T.ocean,borderRadius:"50%",width:20,height:20,alignItems:"center",justifyContent:"center",fontSize:11,color:"white"}}>✓</div>
+        </div>
+      )}
       <div style={{padding:"8px 10px 10px"}}>
         <div style={{fontFamily:"'DM Serif Display',serif",fontSize:12,color:T.ink,lineHeight:1.3,marginBottom:3}}>{hotel.title}</div>
         {hotel.note && <div style={{fontFamily:"Georgia,serif",fontSize:10,color:T.mist,lineHeight:1.3}}>{hotel.note}</div>}
@@ -3698,6 +3746,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [screen,    setScreen]    = useState(isDraft ? "brainstorm" : initialScreen);
   const [setupStep, setSetupStep] = useState(0);
   const [trip,      setTrip]      = useState(initialTrip || SAMPLE_TRIP);
+  useEffect(() => { _activeTripId = trip?.id || null; }, [trip?.id]);
   const [days,      setDays]      = useState([]);
   const daysRef = useRef(days);
   useEffect(() => { daysRef.current = days; }, [days]);
@@ -3715,6 +3764,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [streamingDays, setStreamingDays] = useState(0);
   const [streamingTotal, setStreamingTotal] = useState(0);
   const [allDaysPlanned, setAllDaysPlanned] = useState(false);
+  const [generatingRoute, setGeneratingRoute] = useState(null); // selected route shown during IG generation
 
   const [myFlags,    setMyFlags]    = useState({}); // { [activityId]: 'love'|'skip'|'discuss' }
   const [flagCounts, setFlagCounts] = useState({}); // { [activityId]: { love:N, skip:N, discuss:N } }
@@ -3898,7 +3948,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     return () => supabase.removeChannel(channel);
   }, [trip?.id]);
   const [setupModal,  setSetupModal]  = useState(null);
-  const [editingTrip, setEditingTrip] = useState(() => isDraft ? initialTrip : null);
+  const [editingTrip, setEditingTrip] = useState(() => (isDraft || (initialScreen === "setup" && initialTrip?.id)) ? initialTrip : null);
   const [pendingForm, setPendingForm] = useState(() => {
     if (!isDraft) return null;
     const igReq = initialTrip.ig_request || {};
@@ -4036,9 +4086,9 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       const newTitle = `Check in at ${h.name}`;
       await supabase.from("activities").update({ title: newTitle }).eq("id", hotelAct.id);
       try {
-        const res = await fetch(`${PLACES_PROXY}?action=photo`, {
+        const res = await fetch(`${PLACES_PROXY}?action=hotel-photo`, {
           method: "POST", headers: PLACES_HEADERS,
-          body: JSON.stringify({ q: h.name, city: h.city }),
+          body: JSON.stringify({ q: h.name, city: h.city, tripId: trip.id, context: "chat" }),
         });
         const { url } = await res.json();
         if (url) await supabase.from("activities").update({ photo_url: url }).eq("id", hotelAct.id);
@@ -4102,6 +4152,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     setGenerateError("");
     setStreamingDays(0);
     setAllDaysPlanned(false);
+    const chosenRoute = (votedItems || []).find(it => it.tier === 1 && it.vote === 1) || null;
+    setGeneratingRoute(chosenRoute);
     setScreen("generating");
 
     const numDays = Math.max(1, Math.round((new Date(form.endDate) - new Date(form.startDate)) / (1000*60*60*24)) + 1);
@@ -4228,98 +4280,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       setScreen("setup");
       return;
     }
-    // Validate dining activities — replace with alternatives if primary unverifiable
-    try {
-      const allFoodActs = itinerary.days.flatMap((day, di) =>
-        day.activities.flatMap((act, ai) => {
-          if (act.type !== "food") return [];
-          const candidates = [act, ...(act.alternatives || [])].map(c => ({ title: c.geocode || c.title, city: day.city }));
-          return candidates.map((c, ci) => ({ di, ai, ci, ...c }));
-        })
-      );
-      if (allFoodActs.length) {
-        const res = await fetch(`${PLACES_PROXY}?action=validate`, {
-          method: "POST", headers: PLACES_HEADERS,
-          body: JSON.stringify({ activities: allFoodActs.map(({ title, city }) => ({ title, city })) }),
-        });
-        const { results } = await res.json();
-        // Map results back by [di][ai] → array of exists booleans per candidate
-        const resultMap = {};
-        allFoodActs.forEach(({ di, ai, ci }, idx) => {
-          if (!resultMap[di]) resultMap[di] = {};
-          if (!resultMap[di][ai]) resultMap[di][ai] = [];
-          resultMap[di][ai][ci] = results[idx]?.exists ?? false;
-        });
-        itinerary.days.forEach((day, di) => {
-          day.activities = day.activities.map((act, ai) => {
-            if (act.type !== "food") return act;
-            const exists = resultMap[di]?.[ai] || [];
-            if (exists[0]) return { ...act, alternatives: undefined }; // primary verified
-            const alts = act.alternatives || [];
-            for (let ci = 0; ci < alts.length; ci++) {
-              if (exists[ci + 1]) return { ...act, ...alts[ci], alternatives: undefined }; // swap in alt
-            }
-            return { ...act, alternatives: undefined }; // all failed — keep primary as-is
-          });
-        });
-      }
-    } catch (e) { console.warn("Dining validation failed, proceeding without:", e.message); }
-
-    // Validate hotelOptions — keep top 3 verified per day
-    try {
-      const allCandidates = itinerary.days.flatMap((day, di) =>
-        (day.hotelOptions || []).map((opt, oi) => ({ di, oi, title: opt.geocode || opt.title, city: day.city }))
-      );
-      if (allCandidates.length) {
-        const res = await fetch(`${PLACES_PROXY}?action=validate`, {
-          method: "POST", headers: PLACES_HEADERS,
-          body: JSON.stringify({ activities: allCandidates.map(({ title, city }) => ({ title, city })) }),
-        });
-        const { results } = await res.json();
-        // Group by day, filter to verified, cap at 3
-        const byDay = {};
-        allCandidates.forEach(({ di, oi }, idx) => {
-          if (!byDay[di]) byDay[di] = [];
-          const r = results[idx];
-          const verified = r?.exists && r.businessStatus !== "CLOSED_PERMANENTLY" && r.businessStatus !== "CLOSED_TEMPORARILY";
-          if (verified) byDay[di].push(itinerary.days[di].hotelOptions[oi]);
-        });
-        itinerary.days.forEach((day, di) => {
-          if (!day.hotelOptions) return;
-          const verified = (byDay[di] || []).slice(0, 3);
-          // If none passed validation, keep original options rather than showing nothing
-          day.hotelOptions = verified.length > 0 ? verified : day.hotelOptions.slice(0, 3);
-        });
-      }
-    } catch (e) { console.warn("Hotel options validation failed, proceeding without:", e.message); }
-
-    // Validate wishlist items — drop any that don't resolve (catches hallucinated "Surfers Cemetery" type items)
-    try {
-      const allWishlist = itinerary.days.flatMap((day, di) =>
-        (day.wishlist || []).map((w, wi) => ({ di, wi, title: w.geocode || w.title, city: day.city }))
-      );
-      if (allWishlist.length) {
-        const res = await fetch(`${PLACES_PROXY}?action=validate`, {
-          method: "POST", headers: PLACES_HEADERS,
-          body: JSON.stringify({ activities: allWishlist.map(({ title, city }) => ({ title, city })) }),
-        });
-        const { results } = await res.json();
-        const verifiedByDay = {};
-        allWishlist.forEach(({ di, wi }, idx) => {
-          const r = results[idx];
-          const ok = r?.exists && r.businessStatus !== "CLOSED_PERMANENTLY" && r.businessStatus !== "CLOSED_TEMPORARILY";
-          if (ok) {
-            if (!verifiedByDay[di]) verifiedByDay[di] = [];
-            verifiedByDay[di].push(itinerary.days[di].wishlist[wi]);
-          }
-        });
-        itinerary.days.forEach((day, di) => {
-          if (!day.wishlist) return;
-          day.wishlist = verifiedByDay[di] || [];
-        });
-      }
-    } catch (e) { console.warn("Wishlist validation failed, proceeding without:", e.message); }
-
     const generationCompletedAt = new Date().toISOString();
 
     const isEditing = !!editingTrip?.id;
@@ -4368,9 +4328,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       const { data: existingDays } = await supabase.from("days").select("id").eq("trip_id", tripId);
       const existingDayIds = (existingDays || []).map(d => d.id);
       if (existingDayIds.length) {
-        await supabase.from("activities").delete().in("day_id", existingDayIds);
+        const { error: delActErr } = await supabase.from("activities").delete().in("day_id", existingDayIds);
+        if (delActErr) console.error("Failed to delete activities:", delActErr);
       }
-      await supabase.from("days").delete().eq("trip_id", tripId);
+      const { error: delDayErr } = await supabase.from("days").delete().eq("trip_id", tripId);
+      if (delDayErr) console.error("Failed to delete days:", delDayErr);
       await supabase.from("brainstorm_items").delete().eq("trip_id", tripId);
     } else {
       const { error: tripErr } = await supabase.from("trips").insert(tripPayload);
@@ -4741,14 +4703,45 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         const data = await callChatBrainstorm(userMsg.content, history);
         finalContent = data.message || "Done.";
         if (data.updatedRoutes?.length) {
-          setPretripRoutes(prev => prev.map(r => {
-            const upd = data.updatedRoutes.find(u => u.id === r.id);
-            if (!upd) return r;
-            return { ...r, ...upd, id: r.id, tier: r.tier };
-          }));
+          setPretripRoutes(prev => {
+            const merged = prev.map(r => {
+              const upd = data.updatedRoutes.find(u => u.id === r.id);
+              if (!upd) return r;
+              const result = { ...r, ...upd, id: r.id, tier: r.tier };
+              // Detect bad data and flag the route
+              const badDays = !Array.isArray(result.days) || result.days.length === 0 || result.days.some(d => typeof d !== "string" || d.trim().length < 5);
+              const badTitle = !result.title || result.title.trim().length === 0;
+              if (badDays || badTitle) {
+                result._error = badTitle ? "Route title is missing" : "Day descriptions are incomplete or corrupted";
+              } else {
+                delete result._error;
+              }
+              return result;
+            });
+            if (merged.filter(r => r.tier === 1).length < prev.filter(r => r.tier === 1).length) {
+              console.warn("[TripChat] Route count decreased after merge — keeping original routes");
+              return prev;
+            }
+            // Re-save to DB so edits persist across refreshes
+            const tripId = editingTrip?.id;
+            if (tripId) {
+              (async () => {
+                try {
+                  await supabase.from("brainstorm_items").delete().eq("trip_id", tripId);
+                  const rows = merged.map((it, i) => ({
+                    trip_id: tripId, title: it.title, city: it.city || null,
+                    category: it.category || "Route", note: it.tagline || null,
+                    icon: it.icon || null, geocode: it.geocode || null,
+                    position: i, tier: it.tier || 2, selected: !!it.selected,
+                    data: { tagline: it.tagline, days: it.days, bestFor: it.bestFor, warning: it.warning, recommended: !!it.recommended, points: it.points },
+                  }));
+                  await supabase.from("brainstorm_items").insert(rows);
+                } catch (e) { console.warn("Failed to persist chat route edits:", e); }
+              })();
+            }
+            return merged;
+          });
           setPretripSelectedRouteId(data.updatedRoutes[0].id);
-          // If AI signals a duration change (user explicitly asked to add/remove days),
-          // update pendingForm's end date to match the new day count.
           const durChange = data.updatedRoutes.find(u => u.durationChanged);
           if (durChange?.durationChanged && pendingForm?.startDate) {
             const newDays = durChange.durationChanged;
@@ -4813,19 +4806,29 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
       {/* ── GENERATING ── */}
       {screen==="generating" && (
-        <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:20,padding:40}}>
-          <TransportCarousel />
-          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:T.ink,textAlign:"center"}}>Building your itinerary…</div>
-          {generateError
-            ? <div style={{padding:"12px 16px",borderRadius:12,background:"#FFF0F0",border:"1.5px solid #e53e3e",fontSize:13,color:"#c53030",fontFamily:"Georgia,serif",textAlign:"center",maxWidth:300}}>
-                ⚠️ {generateError}
-              </div>
-            : allDaysPlanned
-            ? <div style={{fontSize:13,color:T.terra,fontFamily:"Georgia,serif",textAlign:"center",fontStyle:"italic"}}>Hold your breath…</div>
-            : streamingDays > 0
-            ? <div style={{fontSize:13,color:T.moss,fontFamily:"Georgia,serif",textAlign:"center",fontWeight:600}}>Day {streamingDays}{streamingTotal > 0 ? ` of ${streamingTotal}` : ""} planned ✓</div>
-            : <LoadingHint />
-          }
+        <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          {/* Top half: selected route */}
+          {generatingRoute && (
+            <div style={{flex:"0 0 auto",overflowY:"auto",padding:"20px 16px 12px",maxHeight:"55%"}}>
+              <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Detailing your route</div>
+              <RouteCard item={generatingRoute} vs={{mine:1}} interactive={false} showRecommended={false} />
+            </div>
+          )}
+          {/* Bottom half: progress */}
+          <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:"20px 40px 40px"}}>
+            <TransportCarousel />
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,textAlign:"center"}}>Building your itinerary…</div>
+            {generateError
+              ? <div style={{padding:"12px 16px",borderRadius:12,background:"#FFF0F0",border:"1.5px solid #e53e3e",fontSize:13,color:"#c53030",fontFamily:"Georgia,serif",textAlign:"center",maxWidth:300}}>
+                  ⚠️ {generateError}
+                </div>
+              : allDaysPlanned
+              ? <div style={{fontSize:13,color:T.terra,fontFamily:"Georgia,serif",textAlign:"center",fontStyle:"italic"}}>Hold your breath…</div>
+              : streamingDays > 0
+              ? <div style={{fontSize:13,color:T.moss,fontFamily:"Georgia,serif",textAlign:"center",fontWeight:600}}>Day {streamingDays}{streamingTotal > 0 ? ` of ${streamingTotal}` : ""} planned ✓</div>
+              : <LoadingHint />
+            }
+          </div>
         </div>
       )}
 
@@ -5532,17 +5535,18 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             <div style={{flex:1,overflowY:"auto",padding:"16px 16px 8px",display:"flex",flexDirection:"column",gap:10}}>
               {filteredMessages.length === 0 && chatFilter !== "group" && (
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  {trip && (
-                    <div style={{display:"flex",justifyContent:"flex-start"}}>
-                      <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",borderLeft:`3px solid ${T.ocean}`}}>
-                        Here's a first draft of your plan! Let's tweak it together — swap activities, change the pace, or try a different hotel. Just ask.
-                      </div>
+                  <div style={{display:"flex",justifyContent:"flex-start"}}>
+                    <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",borderLeft:`3px solid ${T.ocean}`}}>
+                      {screen === "brainstorm"
+                        ? "I've put together some route options for you. Ask me anything — compare routes, tweak a specific one, or tell me what matters most to you."
+                        : "Here's a first draft of your plan! Let's tweak it together — swap activities, change the pace, or try a different hotel. Just ask."
+                      }
                     </div>
-                  )}
+                  </div>
                   <div style={{display:"flex",flexDirection:"column",gap:8,padding:"4px 0"}}>
-                    {(trip
-                      ? ["Make day 2 more food-focused","Add a beach day","Replace morning activities with something relaxing"]
-                      : ["Which route has the best scuba?","Add a day in Ella to the hills route","Make the recommended route a bit slower"]
+                    {(screen === "brainstorm"
+                      ? ["What's the difference between R1 and R2?","Add a day trip to R3","Make R1 more relaxed"]
+                      : ["Make day 2 more food-focused","Add a beach day","Replace morning activities with something relaxing"]
                     ).map(s=>(
                       <button key={s} onClick={()=>setChatInput(s)} style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:20,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer",textAlign:"left"}}>"{s}"</button>
                     ))}

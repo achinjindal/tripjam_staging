@@ -16,7 +16,7 @@ serve(async (req) => {
     const routeSummary = (routes || []).map((r: any, i: number) => {
       const points = (r.points || []).map((p: any) => `  • ${p.good === false ? "✗" : "✓"} ${p.text}`).join("\n");
       const days = (r.days || []).map((d: string, di: number) => `    Day ${di + 1}: ${d}`).join("\n");
-      return `ROUTE id="${r.id}" [${i + 1}/${routes.length}] ${r.title}
+      return `ROUTE R${i + 1} (id="${r.id}") — ${r.title}
   Cities: ${r.city || ""}
   Tagline: ${r.tagline || ""}
   Best for: ${r.bestFor || ""}
@@ -43,8 +43,9 @@ CURRENT ROUTE OPTIONS:
 ${routeSummary}
 
 RULES:
-- INTENT: Answer questions about the routes OR modify them when the user requests a clear change. Keep "message" conversational, 2-3 sentences max.
-- MUTATION: When the user asks to change a route (e.g. "add Ella to the hills route", "make route 2 slower", "change the scuba route to include Yala instead"), include an "updatedRoutes" array with the modified route objects. Each must include the route's original id, plus whichever fields changed. Unchanged fields can be omitted, but it's safer to return the full route object.
+- ROUTE LABELS: Routes are labelled R1, R2, R3, R4 in the UI. Always refer to routes by their label (e.g. "R2" not "route 2" or the full title). When the user says "R2", they mean the route labelled R2 above.
+- INTENT: Answer questions about the routes OR modify them when the user requests a clear change. Keep "message" conversational, 2-3 sentences max. Always reference the route label (R1–R4) in your response.
+- MUTATION: When the user asks to change a route (e.g. "add Ella to R2", "make R3 slower"), include an "updatedRoutes" array with the modified route objects. Each must include the route's original id, plus whichever fields changed. Unchanged fields can be omitted, but it's safer to return the full route object.
 - NO MUTATION: For questions, comparisons, or informational answers, DO NOT include updatedRoutes. Respond conversationally.
 - Respect the existing 4-route structure. Don't add new routes. Don't remove routes.
 - PRESERVE TRIP DURATION: Each route's "days" array length MUST stay the same as the original UNLESS the user explicitly asks to add or remove days (e.g. "make it a 6-day trip", "can we add 2 more days?", "shorten to 3 days"). Reshuffling activities within the same number of days is fine. If the user DOES explicitly request a different duration, include a "durationChanged" field set to the new number of days (e.g. "durationChanged": 6) alongside the updated route — this tells the app to adjust the trip dates.
