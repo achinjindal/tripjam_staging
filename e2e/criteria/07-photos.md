@@ -28,3 +28,11 @@
 ## Non-Hotel Photo Sources
 18. Google Places `action=photo` endpoint is removed — never called for non-hotel photos
 19. Google Places `action=validate` endpoint is removed — never called
+
+## Success Rate (query DB to verify)
+20. place_cache: No geocode entries with source="miss" should exist for places in known travel destinations (query: `SELECT key FROM place_cache WHERE action='geocode' AND source='miss'`)
+21. place_cache: No geocode entries should have null lat/lng in result (query: `SELECT key FROM place_cache WHERE action='geocode' AND result->>'lat' IS NULL`)
+22. place_cache: No geocode entries should resolve to wrong continent — lat/lng should be within ~5 degrees of expected city coordinates
+23. Photon two-strategy search: first tries commas→spaces, then first-segment + city as fallback
+24. Geocode miss cache uses 1-day TTL (not permanent) — retries next day
+25. Client does not cache null geocode results in memory — always retries on next view

@@ -562,7 +562,7 @@ function MapView({ days }) {
       }));
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [days.length]);
 
   const toggleDay = (i) => {
     if (multiSelect) {
@@ -1637,11 +1637,16 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                 </div>
               )}
 
-              {/* Loading / error for AI sections */}
+              {/* Loading shimmer for AI sections */}
               {loading && (
-                <div style={{ padding: "30px 16px", textAlign: "center", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13 }}>
-                  <div style={{ fontSize: 22, marginBottom: 8 }}>⚡</div>
-                  Loading {deepDiveCity} details…
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "8px 0" }}>
+                  {[0,1,2].map(i => (
+                    <div key={i} style={{ background: T.chalk, borderRadius: 14, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
+                      <div style={{width:100,height:10,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:10,animationDelay:`${i*0.2}s`}}/>
+                      <div style={{width:"90%",height:12,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:6,animationDelay:`${i*0.2+0.1}s`}}/>
+                      <div style={{width:"70%",height:12,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",animationDelay:`${i*0.2+0.2}s`}}/>
+                    </div>
+                  ))}
                 </div>
               )}
               {errored && (
@@ -1727,15 +1732,26 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
           const dest = trip?.destination;
           const dd = dest ? deepDiveCache[dest] : null;
           const data = (dd && typeof dd === "object") ? dd : null;
+          const isLoading = dd === "loading";
           // Trigger load if not cached
           if (dest && !deepDiveCache[dest]) loadCityDeepDive(dest);
-          if (!data?.writeup) return null;
+          if (!data?.writeup && !isLoading) return null;
           return (
             <div style={{background:`linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,borderRadius:16,padding:"16px 18px",border:`1px solid ${T.ocean}15`,marginBottom:4}}>
-              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:8}}>{dest}</div>
-              <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.6}}>{data.writeup}</div>
-              {data?.didYouKnow && (
-                <div style={{marginTop:10,fontSize:12,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.5}}>💡 {data.didYouKnow}</div>
+              {isLoading ? (
+                <>
+                  <div style={{width:120,height:18,borderRadius:6,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:10}}/>
+                  <div style={{width:"100%",height:13,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:6}}/>
+                  <div style={{width:"80%",height:13,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
+                </>
+              ) : (
+                <>
+                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:8}}>{dest}</div>
+                  <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.6}}>{data.writeup}</div>
+                  {data?.didYouKnow && (
+                    <div style={{marginTop:10,fontSize:12,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.5}}>💡 {data.didYouKnow}</div>
+                  )}
+                </>
               )}
             </div>
           );
@@ -1797,21 +1813,8 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                 }
 
                 return (
-                  <div key={city} style={{ background: T.chalk, borderRadius: 18, padding: "16px 16px 14px", border: `1px solid ${T.sand}`, boxShadow: "0 2px 10px rgba(15,25,35,0.04)" }}>
-                    {/* City header */}
-                    <div style={{ marginBottom: 10 }}>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-                        <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 22, color: T.ink, lineHeight: 1.15 }}>{city}</div>
-                        <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}>
-                          {cityDays.length} day{cityDays.length > 1 ? "s" : ""} · {cityDays.map(d => d.label).join(", ")}
-                        </div>
-                      </div>
-                      {writeup && (
-                        <div style={{ fontSize: 13, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.55, marginTop: 6 }}>
-                          {writeup}
-                        </div>
-                      )}
-                    </div>
+                  <CityCard key={city} city={city} cityDays={cityDays} writeup={writeup} onDeepDive={() => { setDeepDiveCity(city); loadCityDeepDive(city); }}>
+                    {/* City header is rendered inside CityCard */}
 
                     {/* Highlights — horizontal scroll of mini cards */}
                     {highlights.length > 0 && (
@@ -1826,20 +1829,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                         </div>
                       </>
                     )}
-
-                    {/* Deep dive CTA */}
-                    <button
-                      onClick={() => { setDeepDiveCity(city); loadCityDeepDive(city); }}
-                      style={{
-                        marginTop: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                        width: "100%", padding: "9px 14px", borderRadius: 10,
-                        background: "transparent", border: `1.5px solid ${T.ocean}33`,
-                        color: T.ocean, fontFamily: "Georgia,serif", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                      }}
-                    >
-                      🔍 Deep dive into {city} →
-                    </button>
-                  </div>
+                  </CityCard>
                 );
               })}
             </div>
@@ -2068,12 +2058,12 @@ async function geocodePlace(title, city, geocodeHint) {
       .trim() || place;
   })() : place;
 
-  // Google Places primary — reliable city-aware geocoding
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // Geocode via places-proxy (Photon primary, cached in DB)
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 2000));
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
       const ctrl = new AbortController();
-      const tid = setTimeout(() => ctrl.abort(), 8000);
+      const tid = setTimeout(() => ctrl.abort(), 10000);
       const res = await fetch(`${PLACES_PROXY}?action=geocode`, {
         method: "POST", headers: PLACES_HEADERS,
         body: JSON.stringify({ q: placeQ, city }),
@@ -2089,7 +2079,7 @@ async function geocodePlace(title, city, geocodeHint) {
       break;
     } catch { /* timeout or network error — retry */ }
   }
-  _geocodeCache.set(cacheKey, null);
+  // Don't cache nulls — allow retry on next view (server caches misses with short TTL)
   return null;
 }
 
@@ -2652,6 +2642,54 @@ function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
 }
 
 /* ─── MAGAZINE HIGHLIGHT CARD ────────────────────────────────────────── */
+function CityCard({ city, cityDays, writeup, onDeepDive, children }) {
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [photoLoaded, setPhotoLoaded] = useState(false);
+  useEffect(() => {
+    _fetchPhoto(city, null, "sight").then(url => { setPhotoUrl(url); setPhotoLoaded(true); });
+  }, [city]);
+  return (
+    <div style={{ background: T.chalk, borderRadius: 18, overflow: "hidden", border: `1px solid ${T.sand}`, boxShadow: "0 2px 10px rgba(15,25,35,0.04)" }}>
+      {/* City photo */}
+      {(!photoLoaded || photoUrl) && (
+        <div style={{ height: 140, background: T.sand, overflow: "hidden", position: "relative" }}>
+          {!photoLoaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+          {photoUrl && <img src={photoUrl} alt={city} onLoad={() => setPhotoLoaded(true)} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+        </div>
+      )}
+      <div style={{ padding: "16px 16px 14px" }}>
+        {/* City header */}
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 22, color: T.ink, lineHeight: 1.15 }}>{city}</div>
+            <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}>
+              {cityDays.length} day{cityDays.length > 1 ? "s" : ""} · {cityDays.map(d => d.label).join(", ")}
+            </div>
+          </div>
+          {writeup && (
+            <div style={{ fontSize: 13, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.55, marginTop: 6 }}>
+              {writeup}
+            </div>
+          )}
+        </div>
+
+        {/* Highlights + Deep dive (passed as children) */}
+        {children}
+
+        {/* Deep dive CTA */}
+        <button onClick={onDeepDive} style={{
+          marginTop: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          width: "100%", padding: "9px 14px", borderRadius: 10,
+          background: "transparent", border: `1.5px solid ${T.ocean}33`,
+          color: T.ocean, fontFamily: "Georgia,serif", fontSize: 12, fontWeight: 600, cursor: "pointer",
+        }}>
+          🔍 Deep dive into {city} →
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MagazineHighlightCard({ item, city, inItinerary = false }) {
   const searchKey = item.geocode || item.title || "";
   const [photoUrl, setPhotoUrl] = useState(item.photo_url || null);
@@ -4055,6 +4093,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       generation_completed_at: generationCompletedAt,
       ig_request: igRequest,
       ig_response: itinerary,
+      ig_count: (editingTrip?.ig_count || 0) + 1,
       ...(itinerary.summary    && { summary: itinerary.summary }),
       ...(form.notes           && { notes: form.notes }),
       ...(form.arrivalCity     && { arrival_city: form.arrivalCity }),

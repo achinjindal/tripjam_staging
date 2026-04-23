@@ -226,54 +226,108 @@ async function handleHotelPhoto(req: Request): Promise<Response> {
   return Response.json({ url: null, source: null }, { headers: corsHeaders });
 }
 
+// Haversine distance in km between two lat/lng points
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371, toR = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toR, dLng = (lng2 - lng1) * toR;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*toR)*Math.cos(lat2*toR)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// Photon search with optional location bias
+async function photonSearch(q: string, biasLat?: number, biasLng?: number): Promise<{lat:number,lng:number}|null> {
+  const bias = (biasLat != null && biasLng != null) ? `&lat=${biasLat}&lon=${biasLng}` : "";
+  try {
+    const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1${bias}`);
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    const coords = data?.features?.[0]?.geometry?.coordinates;
+    if (coords && coords.length >= 2) return { lat: coords[1], lng: coords[0] };
+  } catch { /* Photon unavailable */ }
+  return null;
+}
+
 async function handleGeocode(req: Request): Promise<Response> {
   const { q, city } = await req.json();
   if (!q) return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
 
-  const query = city ? `${q} ${city}` : q;
+  // Only append city if it's not already in the query
+  const query = (city && !q.toLowerCase().includes(city.toLowerCase())) ? `${q} ${city}` : q;
   const cacheKey = `geocode:${query.toLowerCase()}`;
 
-  // 1. DB cache — permanent, never expires
+  // 1. DB cache — permanent for hits, 1-day TTL for misses
   const cached = await cacheGet(cacheKey);
   if (cached) {
     incrementUsage("geocode", "cache-hit", today()).catch(() => {});
     return Response.json(cached, { headers: corsHeaders });
   }
 
-  // 2. Photon (free, OpenStreetMap-based)
-  try {
-    const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=1`);
-    if (res.ok) {
-      const data: any = await res.json();
-      const coords = data?.features?.[0]?.geometry?.coordinates;
-      if (coords && coords.length >= 2) {
-        const result = { lat: coords[1], lng: coords[0] };
-        incrementUsage("geocode", "photon", today()).catch(() => {});
-        cacheSet(cacheKey, "geocode", result, "photon").catch(() => {});
-        return Response.json(result, { headers: corsHeaders });
+  // 2. Resolve city bias coordinates — extract the broadest place name from the query
+  //    e.g. "CCTV Tower, CBD, Chaoyang, Beijing" → try "Beijing" first (last segment), then full city param
+  let biasLat: number | undefined;
+  let biasLng: number | undefined;
+  if (city || q.includes(",")) {
+    // Try segments from the query in reverse order (broadest last — usually the country/city)
+    const segments = q.split(",").map((s: string) => s.trim()).filter(Boolean);
+    const biasAttempts = [
+      ...segments.slice(1).reverse(),  // from broadest (last) to narrowest, skip the place name itself
+      city || "",
+    ].filter(Boolean);
+    // Deduplicate
+    const tried = new Set<string>();
+    for (const attempt of biasAttempts) {
+      if (tried.has(attempt.toLowerCase())) continue;
+      tried.add(attempt.toLowerCase());
+      const biasCacheKey = `geocode:${attempt.toLowerCase()}`;
+      const biasCache = await cacheGet(biasCacheKey);
+      if (biasCache?.lat) {
+        biasLat = biasCache.lat;
+        biasLng = biasCache.lng;
+        break;
+      }
+      const coords = await photonSearch(attempt);
+      if (coords) {
+        biasLat = coords.lat;
+        biasLng = coords.lng;
+        cacheSet(biasCacheKey, "geocode", coords, "photon").catch(() => {});
+        break;
       }
     }
-  } catch { /* Photon unavailable */ }
+  }
 
-  // 3. Google Geocoding API fallback ($5/1k instead of Text Search $32/1k)
-  try {
-    const res = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${PLACES_KEY}`
-    );
-    if (res.ok) {
-      const data: any = await res.json();
-      const loc = data?.results?.[0]?.geometry?.location;
-      if (loc) {
-        const result = { lat: loc.lat, lng: loc.lng };
-        incrementUsage("geocode", "google", today()).catch(() => {});
-        cacheSet(cacheKey, "geocode", result, "google").catch(() => {});
-        return Response.json(result, { headers: corsHeaders });
+  // 3. Photon search — multiple strategies, validated against city bias
+  // Use wider radius if bias came from a country/region vs a specific city
+  const MAX_DISTANCE_KM = 1000; // wide enough for within-country, catches wrong-continent (8000km+)
+  const photonQueries = [
+    query.replace(/,/g, " ").replace(/\s+/g, " ").trim(),          // full query, commas→spaces
+    query.split(",")[0].trim() + (city ? ` ${city}` : ""),          // first segment + city
+    q.replace(/,/g, " ").replace(/\s+/g, " ").trim(),              // original q without appended city
+    q.split(",")[0].trim(),                                          // just the place name
+  ];
+  const seen = new Set<string>();
+  for (const pq of photonQueries) {
+    if (seen.has(pq.toLowerCase()) || !pq) continue;
+    seen.add(pq.toLowerCase());
+    const coords = await photonSearch(pq, biasLat, biasLng);
+    if (coords) {
+      // Validate: if we have city bias, check result is nearby
+      if (biasLat != null && biasLng != null) {
+        const dist = haversineKm(biasLat, biasLng, coords.lat, coords.lng);
+        if (dist > MAX_DISTANCE_KM) {
+          console.log(`[geocode] Photon result for "${pq}" is ${Math.round(dist)}km from ${city} — skipping`);
+          continue;
+        }
       }
+      const result = { lat: coords.lat, lng: coords.lng };
+      incrementUsage("geocode", "photon", today()).catch(() => {});
+      cacheSet(cacheKey, "geocode", result, "photon").catch(() => {});
+      return Response.json(result, { headers: corsHeaders });
     }
-  } catch { /* Google unavailable */ }
+  }
 
-  // 4. No result
+  // 4. No result — cache miss with 1-day TTL
   incrementUsage("geocode", "miss", today()).catch(() => {});
+  cacheSet(cacheKey, "geocode", { lat: null, lng: null }, "miss", 1).catch(() => {});
   return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
 }
 
