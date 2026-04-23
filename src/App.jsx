@@ -3898,8 +3898,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     setStreamingDays(0);
     setAllDaysPlanned(false);
     const chosenRoute = (votedItems || []).find(it => it.tier === 1 && it.vote === 1) || null;
-    console.log("[IG] votedItems tiers:", (votedItems || []).map(it => `${it.id}:tier=${it.tier}:vote=${it.vote}`));
-    console.log("[IG] chosenRoute:", chosenRoute ? chosenRoute.title : "NONE");
     setGeneratingRoute(chosenRoute);
     setScreen("generating");
 
