@@ -147,13 +147,18 @@ async function handleAutocomplete(req: Request): Promise<Response> {
   if (shouldCache) {
     const cacheKey = `autocomplete:${q.trim().toLowerCase()}:${types || ""}`;
     const cached = await cacheGet(cacheKey);
-    if (cached) return Response.json(cached, { headers: corsHeaders });
+    if (cached) {
+      incrementUsage("autocomplete", "cache-hit", today()).catch(() => {});
+      return Response.json(cached, { headers: corsHeaders });
+    }
     const data = await autocomplete(q, types);
+    incrementUsage("autocomplete", "google", today()).catch(() => {});
     cacheSet(cacheKey, "autocomplete", data, "google").catch(() => {});
     return Response.json(data, { headers: corsHeaders });
   }
 
   const data = await autocomplete(q, types);
+  incrementUsage("autocomplete", "google", today()).catch(() => {});
   return Response.json(data, { headers: corsHeaders });
 }
 
@@ -166,7 +171,10 @@ async function handleHotelPhoto(req: Request): Promise<Response> {
 
   // 1. Check DB cache
   const cached = await cacheGet(cacheKey);
-  if (cached) return Response.json({ url: cached.url, source: cached.source }, { headers: corsHeaders });
+  if (cached) {
+    incrementUsage("hotel-photo", "cache-hit", today()).catch(() => {});
+    return Response.json({ url: cached.url, source: cached.source }, { headers: corsHeaders });
+  }
 
   // 2. Try TripAdvisor (within rate limits: 1000/day, 4900/month — each hotel = 2 API calls)
   const dailyCount = await getUsage("tripadvisor", "daily", today());
@@ -227,7 +235,10 @@ async function handleGeocode(req: Request): Promise<Response> {
 
   // 1. DB cache — permanent, never expires
   const cached = await cacheGet(cacheKey);
-  if (cached) return Response.json(cached, { headers: corsHeaders });
+  if (cached) {
+    incrementUsage("geocode", "cache-hit", today()).catch(() => {});
+    return Response.json(cached, { headers: corsHeaders });
+  }
 
   // 2. Photon (free, OpenStreetMap-based)
   try {
@@ -237,6 +248,7 @@ async function handleGeocode(req: Request): Promise<Response> {
       const coords = data?.features?.[0]?.geometry?.coordinates;
       if (coords && coords.length >= 2) {
         const result = { lat: coords[1], lng: coords[0] };
+        incrementUsage("geocode", "photon", today()).catch(() => {});
         cacheSet(cacheKey, "geocode", result, "photon").catch(() => {});
         return Response.json(result, { headers: corsHeaders });
       }
@@ -253,6 +265,7 @@ async function handleGeocode(req: Request): Promise<Response> {
       const loc = data?.results?.[0]?.geometry?.location;
       if (loc) {
         const result = { lat: loc.lat, lng: loc.lng };
+        incrementUsage("geocode", "google", today()).catch(() => {});
         cacheSet(cacheKey, "geocode", result, "google").catch(() => {});
         return Response.json(result, { headers: corsHeaders });
       }
@@ -260,6 +273,7 @@ async function handleGeocode(req: Request): Promise<Response> {
   } catch { /* Google unavailable */ }
 
   // 4. No result
+  incrementUsage("geocode", "miss", today()).catch(() => {});
   return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
 }
 
