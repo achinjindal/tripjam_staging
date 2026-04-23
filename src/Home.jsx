@@ -61,7 +61,6 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
     );
     await supabase.from("days").delete().eq("trip_id", tripId);
     await supabase.from("trip_members").delete().eq("trip_id", tripId);
-    await supabase.from("invite_links").delete().eq("trip_id", tripId);
     await supabase.from("trips").delete().eq("id", tripId);
     setTrips(prev => prev.filter(t => t.id !== tripId));
     setDeletingId(null);
@@ -83,31 +82,12 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
       if (!myMemberships?.length) { setLoading(false); return; }
 
       const tripIds = myMemberships.map(m => m.trip_id);
-      const roleByTripId = Object.fromEntries(myMemberships.map(m => [m.trip_id, m.role]));
 
-      // 2. Fetch the trips + all members of those trips in parallel
-      const [{ data: tripsData }, { data: allMembers }] = await Promise.all([
-        supabase.from("trips").select("*").in("id", tripIds).order("created_at", { ascending: false }),
-        supabase.from("trip_members").select("trip_id, user_id").in("trip_id", tripIds),
-      ]);
+      // 2. Fetch the trips
+      const { data: tripsData } = await supabase
+        .from("trips").select("*").in("id", tripIds).order("created_at", { ascending: false });
 
-      // 3. Fetch profiles for every member user_id
-      const memberUserIds = [...new Set((allMembers || []).map(m => m.user_id))];
-      const { data: profiles } = await supabase
-        .from("profiles").select("id, username, face_icon").in("id", memberUserIds);
-
-      const profileById = Object.fromEntries((profiles || []).map(p => [p.id, p]));
-
-      // 4. Assemble
-      const assembled = (tripsData || []).map(trip => ({
-        ...trip,
-        myRole: roleByTripId[trip.id],
-        trip_members: (allMembers || [])
-          .filter(m => m.trip_id === trip.id)
-          .map(m => ({ ...m, profiles: profileById[m.user_id] || null })),
-      }));
-
-      setTrips(assembled);
+      setTrips(tripsData || []);
     } catch (err) {
       console.error("fetchData error:", err);
     } finally {
@@ -266,7 +246,6 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
             {trips.map((trip) => {
               const status = tripStatus(trip.start_date, trip.end_date, trip.ig_response);
               const days = daysBetween(trip.start_date, trip.end_date);
-              const members = trip.trip_members || [];
               return (
                 <div key={trip.id} onClick={() => status.label === "Planning" ? onEditTrip(trip) : onOpenTrip(trip)} style={{
                   background: T.chalk,
@@ -340,21 +319,17 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
                         </>
                       )}
                     </div>
-                    {trip.myRole === "edit" && (
-                      <>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onEditTrip(trip); }}
-                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#CCC", padding: "4px" }}
-                          title="Edit trip"
-                        >✏️</button>
-                        <button
-                          onClick={(e) => deleteTrip(e, trip.id)}
-                          disabled={deletingId === trip.id}
-                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#CCC", padding: "4px", opacity: deletingId === trip.id ? 0.4 : 1 }}
-                          title="Delete trip"
-                        >🗑️</button>
-                      </>
-                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onEditTrip(trip); }}
+                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#CCC", padding: "4px" }}
+                      title="Edit trip"
+                    >✏️</button>
+                    <button
+                      onClick={(e) => deleteTrip(e, trip.id)}
+                      disabled={deletingId === trip.id}
+                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#CCC", padding: "4px", opacity: deletingId === trip.id ? 0.4 : 1 }}
+                      title="Delete trip"
+                    >🗑️</button>
                   </div>
                 </div>
               );

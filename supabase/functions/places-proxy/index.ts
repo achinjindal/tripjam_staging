@@ -223,20 +223,44 @@ async function handleGeocode(req: Request): Promise<Response> {
   if (!q) return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
 
   const query = city ? `${q} ${city}` : q;
-  const res = await fetch(`${PLACES_BASE}/places:searchText`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": PLACES_KEY,
-      "X-Goog-FieldMask": "places.location,places.displayName",
-    },
-    body: JSON.stringify({ textQuery: query, languageCode: "en", maxResultCount: 1 }),
-  });
-  if (!res.ok) return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
-  const data: any = await res.json();
-  const loc = data?.places?.[0]?.location;
-  if (!loc) return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
-  return Response.json({ lat: loc.latitude, lng: loc.longitude }, { headers: corsHeaders });
+  const cacheKey = `geocode:${query.toLowerCase()}`;
+
+  // 1. DB cache — permanent, never expires
+  const cached = await cacheGet(cacheKey);
+  if (cached) return Response.json(cached, { headers: corsHeaders });
+
+  // 2. Photon (free, OpenStreetMap-based)
+  try {
+    const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=1`);
+    if (res.ok) {
+      const data: any = await res.json();
+      const coords = data?.features?.[0]?.geometry?.coordinates;
+      if (coords && coords.length >= 2) {
+        const result = { lat: coords[1], lng: coords[0] };
+        cacheSet(cacheKey, "geocode", result, "photon").catch(() => {});
+        return Response.json(result, { headers: corsHeaders });
+      }
+    }
+  } catch { /* Photon unavailable */ }
+
+  // 3. Google Geocoding API fallback ($5/1k instead of Text Search $32/1k)
+  try {
+    const res = await fetch(
+      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${PLACES_KEY}`
+    );
+    if (res.ok) {
+      const data: any = await res.json();
+      const loc = data?.results?.[0]?.geometry?.location;
+      if (loc) {
+        const result = { lat: loc.lat, lng: loc.lng };
+        cacheSet(cacheKey, "geocode", result, "google").catch(() => {});
+        return Response.json(result, { headers: corsHeaders });
+      }
+    }
+  } catch { /* Google unavailable */ }
+
+  // 4. No result
+  return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
 }
 
 // ── router ───────────────────────────────────────────────────────────────────

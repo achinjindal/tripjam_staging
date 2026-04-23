@@ -5,7 +5,6 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from "react-
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-const FACE_ICONS = ["👦","👧","🧑","👨","👩","🧔","👱","🧓","🥸","😎"];
 const DebugContext = createContext(false);
 
 /* ─── THEME ─────────────────────────────────────────────────────────── */
@@ -114,11 +113,6 @@ const SAMPLE_TRIP = {
   name: "Rajasthan Golden Trail",
   dates: "Apr 12 – Apr 19, 2026",
   travelers: 3,
-  collaborators: [
-    { name: "Priya", avatar: "P", color: T.terra },
-    { name: "Arjun", avatar: "A", color: T.moss },
-    { name: "You",   avatar: "Y", color: T.ocean },
-  ],
   days: [
     {
       id: 1, label: "Day 1", date: "Apr 12", city: "Jaipur",
@@ -1172,7 +1166,6 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
 
 function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onBack, onEditForm = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null }) {
   const [items, setItems] = useState(null); // null = loading, [] = empty, [...] = loaded
-  const [votes, setVotes] = useState({}); // { [item_id]: { up: n, down: n, mine: 1|-1|0 } } — DB votes
   const [localVotes, setLocalVotes] = useState({}); // { [tempId]: 1|-1|0 } — pre-trip mode votes
   const [generating, setGenerating] = useState(false);
   const [activeCategory, setActiveCategory] = useState("All");
@@ -1286,23 +1279,6 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
     // Flatten the jsonb data field back into the item for rendering
     const flattened = (data || []).map(row => ({ ...row, ...(row.data || {}) }));
     setItems(flattened);
-    if (flattened.length) loadVotes(flattened.map(i => i.id));
-  }
-
-  async function loadVotes(itemIds) {
-    if (!itemIds.length) return;
-    const { data } = await supabase
-      .from("brainstorm_votes")
-      .select("item_id, user_id, vote")
-      .in("item_id", itemIds);
-    const agg = {};
-    for (const id of itemIds) agg[id] = { up: 0, down: 0, mine: 0 };
-    for (const row of (data || [])) {
-      if (row.vote === 1)  agg[row.item_id].up++;
-      if (row.vote === -1) agg[row.item_id].down++;
-      if (row.user_id === session?.user?.id) agg[row.item_id].mine = row.vote;
-    }
-    setVotes(agg);
   }
 
   async function generate() {
@@ -1399,7 +1375,6 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
         // Use DB rows (with real UUIDs) if insert succeeded
         const saved = (data || []).map(row => ({ ...row, ...(row.data || {}) }));
         setItems(saved.length ? saved : streamedItems);
-        setVotes({});
       } else {
         // No trip ID yet — keep temp IDs in memory only
         setItems([...streamedItems]);
@@ -1411,56 +1386,31 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
     setGenerating(false);
   }
 
-  async function castVote(itemId, value) {
-    if (isPretripMode) {
-      const item = (items || []).find(it => it.id === itemId);
-      if (item?.tier === 1) {
-        // Route cards: single-select — selecting one deselects all others
-        setLocalVotes(prev => {
-          const next = { ...prev };
-          tier1Items.forEach(it => { next[it.id] = 0; });
-          next[itemId] = prev[itemId] === 1 ? 0 : 1;
-          return next;
-        });
-      } else {
-        setLocalVotes(prev => ({ ...prev, [itemId]: prev[itemId] === value ? 0 : value }));
-      }
-      return;
-    }
-    const current = votes[itemId]?.mine || 0;
-    const newVote = current === value ? 0 : value; // toggle off if same
-
-    // Optimistic update
-    setVotes(prev => {
-      const v = { ...(prev[itemId] || { up: 0, down: 0, mine: 0 }) };
-      if (current === 1)  v.up--;
-      if (current === -1) v.down--;
-      if (newVote === 1)  v.up++;
-      if (newVote === -1) v.down++;
-      v.mine = newVote;
-      return { ...prev, [itemId]: v };
-    });
-
-    if (newVote === 0) {
-      await supabase.from("brainstorm_votes").delete().eq("item_id", itemId).eq("user_id", session.user.id);
+  function castVote(itemId, value) {
+    const item = (items || []).find(it => it.id === itemId);
+    if (item?.tier === 1) {
+      // Route cards: single-select — selecting one deselects all others
+      setLocalVotes(prev => {
+        const next = { ...prev };
+        tier1Items.forEach(it => { next[it.id] = 0; });
+        next[itemId] = prev[itemId] === 1 ? 0 : 1;
+        return next;
+      });
     } else {
-      await supabase.from("brainstorm_votes").upsert({ item_id: itemId, user_id: session.user.id, vote: newVote }, { onConflict: "item_id,user_id" });
+      setLocalVotes(prev => ({ ...prev, [itemId]: prev[itemId] === value ? 0 : value }));
     }
   }
 
   const getVoteState = (itemId) => {
-    if (isPretripMode) {
-      const mine = localVotes[itemId] || 0;
-      return { up: mine === 1 ? 1 : 0, down: mine === -1 ? 1 : 0, mine };
-    }
-    return votes[itemId] || { up: 0, down: 0, mine: 0 };
+    const mine = localVotes[itemId] || 0;
+    return { up: mine === 1 ? 1 : 0, down: mine === -1 ? 1 : 0, mine };
   };
 
   const handleBuild = () => {
     if (!onBuild) return;
     const voted = (items || []).map(item => ({
       ...item,
-      vote: isPretripMode ? (localVotes[item.id] || 0) : (votes[item.id]?.mine || 0),
+      vote: localVotes[item.id] || 0,
     }));
     onBuild(voted);
   };
@@ -2243,10 +2193,9 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
 }
 
 /* ─── ACTIVITY CARD ──────────────────────────────────────────────────── */
-function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAlternatives, onChangeHotel, flag = null, counts = null, onFlag, transitMapsUrl }) {
+function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAlternatives, onChangeHotel, transitMapsUrl }) {
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [draft, setDraft] = useState({ ...activity });
   const ts = typeStyle[draft.type] || typeStyle.sight;
   const transitOrigin = (activity.geocode && activity.geocode !== activity.geocode_end)
@@ -2367,47 +2316,6 @@ function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAl
         {activity.type !== "transit" && (
           <PhotoStrip activity={activity} city={city}/>
         )}
-        {onFlag && (() => {
-          const FLAGS = [["love","❤️"],["skip","👎"],["discuss","🤔"]];
-          const activeCounts = FLAGS.filter(([t]) => counts?.[t] > 0);
-          return (
-            <div style={{display:"flex",gap:5,marginTop:8,alignItems:"center",flexWrap:"wrap"}}>
-              {/* Existing flag counts */}
-              {activeCounts.map(([type, emoji]) => (
-                <button key={type} onClick={()=>{ onFlag(activity.id, type); setPickerOpen(false); }} style={{
-                  display:"flex", alignItems:"center", gap:3,
-                  background: flag===type ? (type==="love"?"#FFF0F0":type==="skip"?"#F0F4FF":"#F0FFF4") : T.warm,
-                  border: `1px solid ${flag===type ? (type==="love"?"#FFAAAA":type==="skip"?"#AAAAEE":"#AADDBB") : T.sand}`,
-                  borderRadius:20, padding:"2px 8px", fontSize:12, cursor:"pointer", color:T.ink,
-                }}>
-                  <span>{emoji}</span>
-                  <span style={{fontSize:11,color:T.mist}}>{counts[type]}</span>
-                </button>
-              ))}
-              {/* Add / open picker */}
-              {!pickerOpen ? (
-                <button onClick={()=>setPickerOpen(true)} style={{
-                  background:"transparent", border:`1px solid ${T.sand}`,
-                  borderRadius:20, padding:"2px 8px", fontSize:11, cursor:"pointer", color:T.mist,
-                }}>＋</button>
-              ) : (
-                <>
-                  {FLAGS.map(([type, emoji]) => (
-                    <button key={type} onClick={()=>{ onFlag(activity.id, type); setPickerOpen(false); }} style={{
-                      background: flag===type ? (type==="love"?"#FFF0F0":type==="skip"?"#F0F4FF":"#F0FFF4") : T.chalk,
-                      border: `1px solid ${flag===type ? (type==="love"?"#FFAAAA":type==="skip"?"#AAAAEE":"#AADDBB") : T.sand}`,
-                      borderRadius:20, padding:"2px 9px", fontSize:13, cursor:"pointer",
-                    }}>{emoji}</button>
-                  ))}
-                  <button onClick={()=>setPickerOpen(false)} style={{
-                    background:"transparent", border:`1px solid ${T.sand}`,
-                    borderRadius:20, padding:"2px 8px", fontSize:11, cursor:"pointer", color:T.mist,
-                  }}>✕</button>
-                </>
-              )}
-            </div>
-          );
-        })()}
       </div>
     </div>
   );
@@ -2536,7 +2444,7 @@ function WishlistSection({ items, city }) {
   );
 }
 
-function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, flags = {}, flagCounts = {}, onFlag, onSelectHotel }) {
+function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, onSelectHotel }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
 
@@ -2649,7 +2557,6 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
               onReplace={()=>onReplaceActivity?.(act)}
               onSuggestAlternatives={()=>onSuggestAlternatives?.(act)}
               onChangeHotel={(mode)=>onChangeHotel?.(day.id, act, mode)}
-              flag={flags[act.id] ?? null} counts={flagCounts[act.id] ?? null} onFlag={onFlag}
               transitMapsUrl={transitMapsUrl}/>
             {!lastAct && !samePackageAsNext && (
               <TransitionRow
@@ -3652,76 +3559,6 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
   );
 }
 
-function CollabTab({ trip, session, inviteRole, setInviteRole, inviteLink, setInviteLink, linkCopied, setLinkCopied }) {
-  const members = trip.trip_members || [];
-
-  const generateInviteLink = async () => {
-    const { data } = await supabase.from("invite_links").insert({
-      trip_id: trip.id,
-      created_by: session.user.id,
-      role: inviteRole,
-    }).select().single();
-    if (data) setInviteLink(`${window.location.origin}/join/${data.token}`);
-  };
-
-  const copyInviteLink = () => {
-    navigator.clipboard.writeText(inviteLink);
-    setLinkCopied(true);
-    setTimeout(() => setLinkCopied(false), 2000);
-  };
-
-  return (
-    <div style={{padding:"20px 20px 120px"}}>
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:T.ink,marginBottom:16}}>👥 Collaborators</div>
-
-      {members.map((m) => {
-        const icon = FACE_ICONS[(m.profiles?.face_icon || 1) - 1];
-        const isYou = m.user_id === session.user.id;
-        return (
-          <div key={m.user_id} style={{background:T.chalk,borderRadius:14,padding:"12px 16px",marginBottom:8,display:"flex",alignItems:"center",gap:12,boxShadow:"0 1px 6px rgba(0,0,0,0.04)"}}>
-            <span style={{fontSize:26}}>{icon}</span>
-            <div style={{flex:1}}>
-              <div style={{fontSize:14,fontWeight:600,color:T.ink}}>{m.profiles?.username || "Unknown"}{isYou ? " (you)" : ""}</div>
-              <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",textTransform:"capitalize"}}>{m.role === "edit" ? "Editor" : m.role}</div>
-            </div>
-          </div>
-        );
-      })}
-
-      <div style={{background:"#F7F8FA",borderRadius:14,padding:16,marginTop:16,border:`1px solid #E8EAF0`}}>
-        <div style={{fontSize:14,fontWeight:600,color:T.ink,marginBottom:4}}>Invite someone</div>
-        <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:14}}>Share a link — they can join this trip</div>
-        <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
-          {[["edit","✏️ Editor","Can add & change anything"],["comment","💬 Comment only","Can view & comment"],["read","👁 Read only","View the itinerary"]].map(([val,label,sub])=>(
-            <button key={val} onClick={()=>setInviteRole(val)} style={{
-              padding:"10px 14px",borderRadius:10,cursor:"pointer",textAlign:"left",
-              border:`2px solid ${inviteRole===val?T.ocean:"#E8EAF0"}`,
-              background:inviteRole===val?"#EBF3FD":"white",
-            }}>
-              <div style={{fontSize:13,fontWeight:600,color:inviteRole===val?T.ocean:T.ink}}>{label}</div>
-              <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif"}}>{sub}</div>
-            </button>
-          ))}
-        </div>
-        {!inviteLink
-          ? <button onClick={generateInviteLink} style={{width:"100%",padding:13,borderRadius:12,border:"none",
-              background:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",
-              fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:"pointer"}}>Generate invite link</button>
-          : <div>
-              <div style={{background:"white",border:`1px solid #E8EAF0`,borderRadius:10,padding:"10px 12px",fontFamily:"Georgia,serif",fontSize:12,
-                color:T.ink,wordBreak:"break-all",marginBottom:8}}>{inviteLink}</div>
-              <button onClick={copyInviteLink} style={{width:"100%",padding:13,borderRadius:12,border:"none",
-                background:linkCopied?T.moss:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",
-                fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:"pointer",transition:"background 0.3s"}}>
-                {linkCopied ? "✓ Copied!" : "Copy link"}
-              </button>
-            </div>
-        }
-      </div>
-    </div>
-  );
-}
-
 /* ─── ROOT ───────────────────────────────────────────────────────────── */
 export default function App({ session, initialTrip, initialScreen = "setup", onHome }) {
   // Draft trip (RG done, no IG yet) → go straight to routes, not setup form
@@ -3735,7 +3572,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   useEffect(() => { daysRef.current = days; }, [days]);
   const [loading,   setLoading]   = useState(initialScreen === "itinerary");
   const [tab,         setTab]         = useState("plan");
-  const [collabToast, setCollabToast] = useState(false);
   const [debugMode] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get("debug") === "1";
     if (fromUrl) localStorage.setItem("tripjam_debug", "1");
@@ -3748,19 +3584,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [streamingTotal, setStreamingTotal] = useState(0);
   const [allDaysPlanned, setAllDaysPlanned] = useState(false);
   const [generatingRoute, setGeneratingRoute] = useState(null); // selected route shown during IG generation
-
-  const [myFlags,    setMyFlags]    = useState({}); // { [activityId]: 'love'|'skip'|'discuss' }
-  const [flagCounts, setFlagCounts] = useState({}); // { [activityId]: { love:N, skip:N, discuss:N } }
-
-  const buildFlagState = (flagData, userId) => {
-    const my = {}, counts = {};
-    (flagData || []).forEach(({ activity_id, flag, user_id }) => {
-      if (user_id === userId) my[activity_id] = flag;
-      if (!counts[activity_id]) counts[activity_id] = { love: 0, skip: 0, discuss: 0 };
-      counts[activity_id][flag] = (counts[activity_id][flag] || 0) + 1;
-    });
-    return { my, counts };
-  };
 
   useEffect(() => {
     if (initialScreen === "itinerary" && initialTrip?.id) {
@@ -3782,57 +3605,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               return a;
             }),
           })));
-          const actIds = (data || []).flatMap(d => (d.activities || []).map(a => a.id));
-          if (actIds.length) {
-            const { data: flagData } = await supabase
-              .from("activity_flags")
-              .select("activity_id, flag, user_id")
-              .in("activity_id", actIds);
-            const { my, counts } = buildFlagState(flagData, session.user.id);
-            setMyFlags(my);
-            setFlagCounts(counts);
-          }
-
-          // Load trip members + profiles
-          const { data: members } = await supabase
-            .from("trip_members")
-            .select("trip_id, user_id, role")
-            .eq("trip_id", initialTrip.id);
-          if (members?.length) {
-            const uids = members.map(m => m.user_id);
-            const { data: profiles } = await supabase.from("profiles").select("id, username, face_icon").in("id", uids);
-            const profileById = Object.fromEntries((profiles || []).map(p => [p.id, p]));
-            setTrip(prev => ({ ...prev, trip_members: members.map(m => ({ ...m, profiles: profileById[m.user_id] || null })) }));
-          }
 
           setLoading(false);
         });
     }
   }, []);
 
-  const handleFlag = async (activityId, flagType) => {
-    const current = myFlags[activityId];
-    if (current === flagType) {
-      // Toggle off
-      setMyFlags(f => { const n = { ...f }; delete n[activityId]; return n; });
-      setFlagCounts(c => {
-        const n = { ...c, [activityId]: { ...c[activityId] } };
-        n[activityId][flagType] = Math.max(0, (n[activityId]?.[flagType] || 1) - 1);
-        return n;
-      });
-      await supabase.from("activity_flags").delete().eq("activity_id", activityId).eq("user_id", session.user.id);
-    } else {
-      // Swap or add
-      setMyFlags(f => ({ ...f, [activityId]: flagType }));
-      setFlagCounts(c => {
-        const prev = { love: 0, skip: 0, discuss: 0, ...c[activityId] };
-        if (current) prev[current] = Math.max(0, prev[current] - 1);
-        prev[flagType] = (prev[flagType] || 0) + 1;
-        return { ...c, [activityId]: prev };
-      });
-      await supabase.from("activity_flags").upsert({ activity_id: activityId, user_id: session.user.id, flag: flagType }, { onConflict: "activity_id,user_id" });
-    }
-  };
   const [activeBottomTab, setActiveBottomTab] = useState("itinerary");
   const [pretripTab, setPretripTab] = useState("brainstorm"); // pre-trip bottom nav tab
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
@@ -3917,18 +3695,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           return loaded;
         });
       });
-
-    // Real-time: show messages from other users as they arrive
-    const channel = supabase
-      .channel(`trip-chat-${trip.id}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "trip_messages", filter: `trip_id=eq.${trip.id}` },
-        (payload) => {
-          const m = payload.new;
-          if (m.user_id === session.user.id) return; // already handled locally
-          setChatMessages(prev => [...prev, { id: m.id, role: m.role, content: m.content, user_id: m.user_id }]);
-        })
-      .subscribe();
-    return () => supabase.removeChannel(channel);
   }, [trip?.id]);
   const [setupModal,  setSetupModal]  = useState(null);
   const [editingTrip, setEditingTrip] = useState(() => (isDraft || (initialScreen === "setup" && initialTrip?.id)) ? initialTrip : null);
@@ -3950,10 +3716,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [showShare,   setShowShare]   = useState(false);
   const shareCardRef = useRef(null);
   const [flightsForm, setFlightsForm] = useState({ arrivalTime:"", departureTime:"" });
-  const [inviteRole,  setInviteRole]  = useState("edit");
-  const [inviteLink,  setInviteLink]  = useState("");
-  const [linkCopied,  setLinkCopied]  = useState(false);
-
   const scrollRef     = useRef(null);
   const dayRefs       = useRef([]);
   const pillStrip     = useRef(null);
@@ -5040,17 +4802,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               <div style={{fontSize:13,opacity:0.75,fontFamily:"Georgia,serif"}}>📅 {trip.dates || (trip.start_date && trip.end_date ? `${new Date(trip.start_date).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(trip.end_date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}` : "")}</div>
             </div>
 
-            {/* Coming soon toast */}
-            {collabToast && (
-              <div style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",
-                background:T.ink,color:"white",borderRadius:20,padding:"10px 22px",
-                fontFamily:"Georgia,serif",fontSize:13,zIndex:999,
-                boxShadow:"0 4px 20px rgba(0,0,0,0.25)",whiteSpace:"nowrap",
-                animation:"fadeUp 0.25s ease"}}>
-                👥 Collaboration — coming soon
-              </div>
-            )}
-
             {/* City-pill strip — based on hotel location, carried forward for non-hotel days */}
             {(() => {
               // Derive hotel city per day: use the day's city when it has a hotel activity,
@@ -5197,9 +4948,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                         if (!hotelCheckedInToday) return day.city;
                         return hCity;
                       })()}
-                      flags={myFlags}
-                      flagCounts={flagCounts}
-                      onFlag={handleFlag}
                       onSelectHotel={(hotel) => selectHotel(day.id, hotel)}
                     />
                   </div>
@@ -5215,18 +4963,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 onApplyHotels={applyHotelsToItinerary}
               />
             </div>
-            {tab==="collab" && (
-              <CollabTab
-                trip={trip}
-                session={session}
-                inviteRole={inviteRole}
-                setInviteRole={setInviteRole}
-                inviteLink={inviteLink}
-                setInviteLink={setInviteLink}
-                linkCopied={linkCopied}
-                setLinkCopied={setLinkCopied}
-              />
-            )}
           </div>
 
           {/* ── MAGAZINE TAB ── */}

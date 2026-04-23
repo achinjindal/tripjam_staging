@@ -4,7 +4,7 @@
 1. Mascot FAB appears on itinerary and brainstorm screens
 2. FAB is draggable with edge-snap behavior (snaps to left or right edge)
 3. Tapping FAB opens chat bottom sheet
-4. FAB shows unread indicator when there are new messages
+4. FAB shows unread indicator after new AI responses (e.g. after IG generation)
 
 ## Chat - Route Context (Pre-IG)
 5. Chat in brainstorm mode has write access to modify routes
