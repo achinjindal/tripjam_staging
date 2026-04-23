@@ -28,7 +28,7 @@ Rules:
 - RELIABILITY: Prefer long-established venues unlikely to have closed.
 - DAY TRIPS: Single transit activity covers round-trip. OMIT geocodeEnd (geocode = base city). Duration = full round-trip. No separate "Return" activity. Next activity must start within 1h of day-trip end — no 3h+ gaps.
 - PACKAGE: Same-experience activities share a "package" kebab-case ID (e.g. "halong-cruise"). Suppresses duplicate transit/pins/photos.
-- FIELDS: note max 10 words. city = most specific neighbourhood/town (not country). geocode = shortest plain name for Maps.
+- FIELDS: note max 10 words. city = most specific neighbourhood/town (not country). geocode = the SPECIFIC landmark/restaurant/hotel name that uniquely identifies this place (e.g. "Mirador Base Torres", "Lago Grey", "Ruszwurm Cukrászda"). NEVER use the city, region, or park name as geocode — that makes all pins identical. Each activity MUST have a DIFFERENT geocode. If two activities share a geocode, they will appear as the same pin on the map.
 - TRANSIT GEOCODE: geocode=origin, geocodeEnd=destination. Train/flight/boat: use station/airport/pier name. Road: city name OK. Day-trip round-trips: omit geocodeEnd.
 - MULTI-DESTINATION: Transit activity on first day of each new city.
 - DEFAULT START/END: No arrival/departure city given → assume largest city within the destination region (Rajasthan→Jaipur, Sri Lanka→Colombo). Not external gateways.

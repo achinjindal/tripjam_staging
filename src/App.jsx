@@ -39,7 +39,8 @@ function _isPortrait(url) {
 function PhotoStrip({ activity, city }) {
   const debugMode = useContext(DebugContext);
   const stored = activity?.photo_url;
-  const geocode = activity?.geocode || activity?.title;
+  // Use place name for photo search, not geocode (which may be a street address like "Akácfa utca 47")
+  const geocode = extractPlace(activity?.title || "") || activity?.geocode;
   const [liveUrl, setLiveUrl] = useState(stored ? null : undefined);
   const [broken, setBroken] = useState(false);
   const [coords, setCoords] = useState(null);
@@ -546,13 +547,10 @@ function MapView({ days }) {
               return true;
             })
             .map(async act => {
-              // Use stored coords if available, otherwise resolve and persist
-              let coords = (act.lat && act.lng) ? { lat: act.lat, lng: act.lng } : null;
-              if (!coords) {
-                coords = await geocodePlace(act.title, day.city, act.geocode);
-                if (coords && act.id) {
-                  supabase.from("activities").update({ lat: coords.lat, lng: coords.lng }).eq("id", act.id);
-                }
+              // Always resolve via geocodePlace (server has permanent DB cache — fast for known places)
+              const coords = await geocodePlace(act.title, day.city, act.geocode);
+              if (coords && act.id && (coords.lat !== act.lat || coords.lng !== act.lng)) {
+                supabase.from("activities").update({ lat: coords.lat, lng: coords.lng }).eq("id", act.id);
               }
               return coords ? { ...act, lat: coords.lat, lng: coords.lng, dayIndex: di, dayLabel: day.label } : null;
             })
@@ -1164,7 +1162,7 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
   );
 }
 
-function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onBack, onEditForm = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null }) {
+function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onBack, onEditForm = null, onOpenChat = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null }) {
   const [items, setItems] = useState(null); // null = loading, [] = empty, [...] = loaded
   const [localVotes, setLocalVotes] = useState({}); // { [tempId]: 1|-1|0 } — pre-trip mode votes
   const [generating, setGenerating] = useState(false);
@@ -1511,7 +1509,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
       </div>
 
       {/* Scrollable content */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", paddingBottom: isPretripMode ? 100 : 24 }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", paddingBottom: isPretripMode ? 160 : 24 }}>
 
         {/* ── PRE-TRIP: route cards ── */}
         {isPretripMode && (<>
@@ -1893,34 +1891,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
 
       </div>
 
-      {/* Build button — pre-trip mode only */}
-      {isPretripMode && (() => {
-        const hasSelection = tier1Items.some(it => (localVotes[it.id] || 0) === 1);
-        // Enable as soon as routes are ready + user has selected, even if stream is still open
-        const disabled = (!routesReady && generating) || (tier1Items.length > 0 && !hasSelection);
-        return (
-          <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "12px 16px 24px", background: `linear-gradient(to bottom, transparent, ${T.warm} 30%)`, pointerEvents: "none" }}>
-            <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", textAlign: "center", marginBottom: 8, fontStyle: "italic", pointerEvents: "all" }}>
-              💡 You can switch or edit routes later — this is reversible
-            </div>
-            <button
-              onClick={disabled ? undefined : handleBuild}
-              disabled={disabled}
-              style={{
-                width: "100%", padding: "15px 0", borderRadius: 16, border: "none",
-                background: disabled ? T.sand : `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
-                color: disabled ? T.mist : "white",
-                fontFamily: "'DM Serif Display',serif", fontSize: 17,
-                cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.7 : 1,
-                boxShadow: disabled ? "none" : "0 4px 20px rgba(15,25,35,0.2)",
-                pointerEvents: "all",
-              }}
-            >
-              {generating ? "Generating ideas…" : !hasSelection && tier1Items.length > 0 ? "Select a route to continue" : "Build My Itinerary →"}
-            </button>
-          </div>
-        );
-      })()}
+      {/* Build button removed — now in the persistent chat bar */}
     </div>
   );
 }
@@ -2098,8 +2069,8 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
   const debugMode = useContext(DebugContext);
 
   useEffect(() => {
-    // Walk: if we already have a stored walk value, skip recalculation
-    if (initialCommute?.mode === "walk") return;
+    // Use stored value if it looks reasonable. Recalculate suspicious 1-min values (likely from bad geocodes).
+    if (initialCommute && initialCommute.mins > 1) return;
     let cancelled = false;
     async function load() {
       if (delay > 0) await new Promise(r => setTimeout(r, delay));
@@ -4673,6 +4644,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 }
               : () => setScreen("setup")}
             onEditForm={editingTrip ? () => setScreen("setup") : null}
+            onOpenChat={() => { setChatOpen(true); setChatUnread(false); }}
             onItemsChange={setPretripRoutes}
             onSelectionChange={setPretripSelectedRouteId}
             externalSelectedId={pretripSelectedRouteId}
@@ -4805,7 +4777,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           <div
             ref={scrollRef}
             onScroll={handleScroll}
-            style={{flex:1,overflowY:"auto",paddingBottom:80,display:activeBottomTab==="itinerary"?"block":"none"}}
+            style={{flex:1,overflowY:"auto",paddingBottom:150,display:activeBottomTab==="itinerary"?"block":"none"}}
           >
             {/* Header — scrolls away */}
             <div style={{background:`linear-gradient(160deg,${T.dusk},${T.ocean})`,padding:"28px 20px 20px",color:"white",position:"relative",overflow:"hidden"}}>
@@ -5017,7 +4989,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
           {/* ── BOARD TAB ── */}
           {activeBottomTab === "board" && (
-            <div style={{flex:1,overflowY:"auto",paddingBottom:80,display:"flex",flexDirection:"column"}}>
+            <div style={{flex:1,overflowY:"auto",paddingBottom:150,display:"flex",flexDirection:"column"}}>
               <BoardView
                 trip={trip}
                 onSaveNotes={async (text) => {
@@ -5180,81 +5152,55 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       )}
 
 
-      {/* ── CHAT FAB (visible on trip and pre-trip screens, draggable) ── */}
+      {/* ── PERSISTENT CHAT BAR (collapsed state — between content and bottom nav) ── */}
       {!chatOpen && (screen === "itinerary" || screen === "brainstorm") && (
-        <div
-          onTouchStart={(e) => {
-            const t = e.touches[0];
-            fabDragRef.current = { dragging: false, startX: t.clientX, startY: t.clientY, startRight: fabPos.right, startBottom: fabPos.bottom };
-          }}
-          onTouchMove={(e) => {
-            const t = e.touches[0];
-            const dx = fabDragRef.current.startX - t.clientX;
-            const dy = fabDragRef.current.startY - t.clientY;
-            if (Math.abs(dx) > 5 || Math.abs(dy) > 5) fabDragRef.current.dragging = true;
-            if (fabDragRef.current.dragging) {
-              setFabPos({
-                right: Math.max(8, Math.min(window.innerWidth - 66, fabDragRef.current.startRight + dx)),
-                bottom: Math.max(80, Math.min(window.innerHeight - 80, fabDragRef.current.startBottom + dy)),
-              });
-            }
-          }}
-          onTouchEnd={() => {
-            if (!fabDragRef.current.dragging) { setChatOpen(true); setChatUnread(false); }
-            else {
-              // Snap to nearest edge
-              const midpoint = (window.innerWidth - 58) / 2;
-              setFabPos(prev => ({ ...prev, right: prev.right > midpoint ? window.innerWidth - 58 : 0 }));
-            }
-            fabDragRef.current.dragging = false;
-          }}
-          onMouseDown={(e) => {
-            fabDragRef.current = { dragging: false, startX: e.clientX, startY: e.clientY, startRight: fabPos.right, startBottom: fabPos.bottom };
-            const onMove = (ev) => {
-              const dx = fabDragRef.current.startX - ev.clientX;
-              const dy = fabDragRef.current.startY - ev.clientY;
-              if (Math.abs(dx) > 5 || Math.abs(dy) > 5) fabDragRef.current.dragging = true;
-              if (fabDragRef.current.dragging) {
-                setFabPos({
-                  right: Math.max(8, Math.min(window.innerWidth - 66, fabDragRef.current.startRight + dx)),
-                  bottom: Math.max(80, Math.min(window.innerHeight - 80, fabDragRef.current.startBottom + dy)),
-                });
-              }
-            };
-            const onUp = () => {
-              if (!fabDragRef.current.dragging) { setChatOpen(true); setChatUnread(false); }
-              else {
-                // Snap to nearest edge
-                const midpoint = (window.innerWidth - 58) / 2;
-                setFabPos(prev => ({ ...prev, right: prev.right > midpoint ? window.innerWidth - 58 : 0 }));
-              }
-              fabDragRef.current.dragging = false;
-              window.removeEventListener("mousemove", onMove);
-              window.removeEventListener("mouseup", onUp);
-            };
-            window.addEventListener("mousemove", onMove);
-            window.addEventListener("mouseup", onUp);
-          }}
-          style={{
-            position: "absolute", bottom: fabPos.bottom, right: fabPos.right,
-            width: 58, height: 58, borderRadius: "50%",
-            background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
-            color: "white", border: `2px solid ${T.ocean}`,
-            cursor: "grab", zIndex: 900,
-            boxShadow: "0 4px 18px rgba(37,99,168,0.45), 0 0 0 1px rgba(255,255,255,0.1) inset",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            overflow: "hidden", touchAction: "none", userSelect: "none",
-          }}
-          aria-label="Open chat"
-        >
-          <img src="/mascot.png?v=5" alt="TripJam" style={{width:90,height:90,objectFit:"cover",objectPosition:"50% 35%",flexShrink:0,pointerEvents:"none"}}/>
-          {chatUnread && (
-            <span style={{
-              position: "absolute", top: 4, right: 4,
-              width: 12, height: 12, borderRadius: "50%",
-              background: T.terra, border: "2px solid white",
-            }}/>
+        <div style={{
+          position: "absolute", bottom: 58, left: 0, right: 0, zIndex: 900,
+          background: T.chalk, borderTop: `1px solid ${T.sand}`,
+          padding: "6px 12px 6px",
+        }}>
+          {/* Build CTA — brainstorm only, shown when route is selected */}
+          {screen === "brainstorm" && pretripSelectedRouteId && (
+            <button onClick={() => {
+              // Trigger build from brainstorm — same as the old Build button
+              const voted = (pretripRoutes || []).map(r => ({ ...r, tier: 1, vote: r.id === pretripSelectedRouteId ? 1 : 0 }));
+              handleBuildFromBrainstorm(voted);
+            }} style={{
+              width: "100%", padding: "13px 0", borderRadius: 14, border: "none",
+              background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`, color: "white",
+              fontFamily: "'DM Serif Display',serif", fontSize: 16, cursor: "pointer",
+              boxShadow: "0 4px 20px rgba(15,25,35,0.2)", marginBottom: 8,
+            }}>
+              Build My Itinerary →
+            </button>
           )}
+          {/* Contextual CTA chips */}
+          <div className="no-scrollbar" style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 6, paddingBottom: 2 }}>
+            {screen === "brainstorm" ? (
+              <>
+                <button onClick={() => { setChatOpen(true); setChatUnread(false); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Compare routes</button>
+                <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Which route is best for "); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Best route for…</button>
+                <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Add a day trip to "); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Add a day trip</button>
+              </>
+            ) : (
+              <>
+                <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Suggest alternative hotels"); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Change hotel</button>
+                <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Suggest alternatives for "); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Swap activity</button>
+                <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Make the pace more relaxed"); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Adjust pace</button>
+                <button onClick={() => { setChatOpen(true); setChatUnread(false); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Ask anything</button>
+              </>
+            )}
+          </div>
+          {/* Input row */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ width: 28, height: 28, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: `1.5px solid ${T.ocean}33` }}>
+              <img src="/mascot.png?v=5" alt="" style={{ width: 36, height: 36, objectFit: "cover", objectPosition: "50% 35%", marginTop: -4, marginLeft: -4 }}/>
+            </div>
+            <div onClick={() => { setChatOpen(true); setChatUnread(false); setTimeout(() => chatInputRef.current?.focus(), 100); }}
+              style={{ flex: 1, padding: "9px 14px", borderRadius: 18, border: `1.5px solid ${T.sand}`, background: T.warm, fontFamily: "Georgia,serif", fontSize: 13, color: T.mist, cursor: "text" }}>
+              {chatUnread ? "New suggestions available…" : (screen === "brainstorm" ? "Ask about routes…" : "Ask anything about your trip…")}
+            </div>
+          </div>
         </div>
       )}
 
