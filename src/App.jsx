@@ -1752,6 +1752,13 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                   {data?.didYouKnow && (
                     <div style={{marginTop:10,fontSize:12,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.5}}>💡 {data.didYouKnow}</div>
                   )}
+                  <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent(dest)}`} target="_blank" rel="noopener noreferrer" style={{
+                    display:"inline-flex",alignItems:"center",gap:5,marginTop:12,
+                    padding:"6px 12px",borderRadius:8,border:`1px solid ${T.moss}33`,
+                    color:T.moss,fontFamily:"Georgia,serif",fontSize:11,fontWeight:600,textDecoration:"none",
+                  }}>
+                    🗺 Explore {dest} on TripAdvisor
+                  </a>
                 </>
               )}
             </div>
@@ -1814,7 +1821,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                 }
 
                 return (
-                  <CityCard key={city} city={city} cityDays={cityDays} writeup={writeup} onDeepDive={() => { setDeepDiveCity(city); loadCityDeepDive(city); }}>
+                  <CityCard key={city} city={city} cityDays={cityDays} writeup={writeup} deepDive={deepDiveCacheApp[city]} onDeepDive={() => { setDeepDiveCity(city); loadCityDeepDive(city); }}>
                     {/* City header is rendered inside CityCard */}
 
                     {/* Highlights — horizontal scroll of mini cards */}
@@ -2616,7 +2623,7 @@ function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
 }
 
 /* ─── MAGAZINE HIGHLIGHT CARD ────────────────────────────────────────── */
-function CityCard({ city, cityDays, writeup, onDeepDive, children }) {
+function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, children }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [photoLoaded, setPhotoLoaded] = useState(false);
   useEffect(() => {
@@ -2647,18 +2654,73 @@ function CityCard({ city, cityDays, writeup, onDeepDive, children }) {
           )}
         </div>
 
-        {/* Highlights + Deep dive (passed as children) */}
+        {/* Highlights (passed as children) */}
         {children}
 
-        {/* Deep dive CTA */}
-        <button onClick={onDeepDive} style={{
-          marginTop: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-          width: "100%", padding: "9px 14px", borderRadius: 10,
-          background: "transparent", border: `1.5px solid ${T.ocean}33`,
-          color: T.ocean, fontFamily: "Georgia,serif", fontSize: 12, fontWeight: 600, cursor: "pointer",
-        }}>
-          🔍 Deep dive into {city} →
-        </button>
+        {/* Inline deep dive sections — food + weather + etiquette */}
+        {deepDive && typeof deepDive === "object" && (<>
+          {deepDive.foodSpecialties?.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>🍜 Must-try food</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {deepDive.foodSpecialties.slice(0, 4).map((f, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, background: T.warm, borderRadius: 10, padding: "5px 10px", border: `1px solid ${T.sand}` }}>
+                    <span style={{ fontSize: 14 }}>{f.icon}</span>
+                    <div>
+                      <div style={{ fontSize: 12, fontFamily: "Georgia,serif", fontWeight: 600, color: T.ink }}>{f.name}</div>
+                      <div style={{ fontSize: 10, fontFamily: "Georgia,serif", color: T.mist }}>{f.note}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {deepDive.weather && (
+            <div style={{ marginTop: 12, fontSize: 12, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.5 }}>
+              <span style={{ fontWeight: 600, color: T.mist, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>☀️ Weather · </span>{deepDive.weather}
+            </div>
+          )}
+          {deepDive.etiquette?.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>🙏 Know before you go</div>
+              {deepDive.etiquette.slice(0, 3).map((tip, i) => (
+                <div key={i} style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.5, paddingLeft: 12, position: "relative", marginBottom: 2 }}>
+                  <span style={{ position: "absolute", left: 0, color: T.mist }}>•</span>{tip}
+                </div>
+              ))}
+            </div>
+          )}
+        </>)}
+        {deepDive === "loading" && (
+          <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+            {[0,1].map(i => (
+              <div key={i} style={{ width: "100%", height: 16, borderRadius: 4, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite", animationDelay: `${i*0.15}s` }} />
+            ))}
+          </div>
+        )}
+
+        {/* CTAs — deep dive + TripAdvisor */}
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          {deepDive && typeof deepDive === "object" && (
+            <button onClick={onDeepDive} style={{
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              padding: "9px 14px", borderRadius: 10,
+              background: "transparent", border: `1.5px solid ${T.ocean}33`,
+              color: T.ocean, fontFamily: "Georgia,serif", fontSize: 12, fontWeight: 600, cursor: "pointer",
+            }}>
+              🔍 More about {city}
+            </button>
+          )}
+          <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent(city)}`} target="_blank" rel="noopener noreferrer" style={{
+            flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            padding: "9px 14px", borderRadius: 10,
+            background: "transparent", border: `1.5px solid ${T.moss}33`,
+            color: T.moss, fontFamily: "Georgia,serif", fontSize: 12, fontWeight: 600, cursor: "pointer",
+            textDecoration: "none",
+          }}>
+            🗺 TripAdvisor
+          </a>
+        </div>
       </div>
     </div>
   );
@@ -3248,7 +3310,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
       {stepViews[step]}
       {destError && <div style={{color:"#e53e3e",fontSize:13,fontFamily:"Georgia,serif",marginTop:8,textAlign:"center"}}>{destError}</div>}
       <div style={{display:"flex",gap:10,marginTop:12}}>
-        {step>0 && <button onClick={()=>window.history.back()} style={{flex:1,padding:14,borderRadius:14,border:`2px solid ${T.sand}`,background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:15,cursor:"pointer"}}>← Back</button>}
+        {step>0 && <button onClick={()=>setStep(s=>s-1)} style={{flex:1,padding:14,borderRadius:14,border:`2px solid ${T.sand}`,background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:15,cursor:"pointer"}}>← Back</button>}
         {step<stepViews.length-1 && (
           <button onClick={()=>{
             if (step === 0) {
@@ -4442,7 +4504,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     let suggestions = null;
     let hasChanges = false;
     try {
-      if (trip?.id) {
+      if (screen === "itinerary") {
         const data = await callChatTrip(userMsg.content, trip, daysRef.current, history, (accumulated) => {
           const partial = extractPartialMessage(accumulated);
           if (partial !== null) {
@@ -4457,7 +4519,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         suggestions = data.suggestions || null;
         hasChanges = (data.updatedDays?.length || 0) > 0;
       } else {
-        // Pre-trip: call chat-brainstorm with routes context
+        // Pre-trip / brainstorm: call chat-brainstorm with routes context
         const data = await callChatBrainstorm(userMsg.content, history);
         finalContent = data.message || "Done.";
         if (data.updatedRoutes?.length) {
@@ -4599,9 +4661,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           <div style={{background:`linear-gradient(160deg,${T.dusk},${T.ocean})`,padding:"44px 20px 36px",color:"white",position:"relative",overflow:"hidden"}}>
             <div style={{position:"absolute",top:-50,right:-50,width:200,height:200,borderRadius:"50%",background:"rgba(255,255,255,0.04)",pointerEvents:"none"}}/>
             <div style={{position:"relative",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              {setupStep > 0
-                ? <button onClick={()=>window.history.back()} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Back</button>
-                : onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>
+              {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>
               }
               {onHome && setupStep > 0 && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>Trips →</button>}
             </div>
