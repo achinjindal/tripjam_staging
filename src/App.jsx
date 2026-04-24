@@ -1163,7 +1163,8 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
 }
 
 function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onBack, onEditForm = null, onOpenChat = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null }) {
-  const [items, setItems] = useState(null); // null = loading, [] = empty, [...] = loaded
+  const [items, setItems] = useState(null); // null = not started, [] = empty, [...] = loaded
+  const [loadingItems, setLoadingItems] = useState(false);
   const [localVotes, setLocalVotes] = useState({}); // { [tempId]: 1|-1|0 } — pre-trip mode votes
   const [generating, setGenerating] = useState(false);
   const [activeCategory, setActiveCategory] = useState("All");
@@ -1195,12 +1196,14 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
   useEffect(() => {
     if (editTripId && !autoGenerate) {
       // Edit flow entering via pencil: load previously-saved routes
-      loadSavedBrainstorm(editTripId);
+      setLoadingItems(true);
+      loadSavedBrainstorm(editTripId).finally(() => setLoadingItems(false));
     } else if (autoGenerate) {
       // Either new trip, or edit flow where form was just committed → fresh routes
       if (destinations.length) generate();
     } else {
-      loadItems();
+      setLoadingItems(true);
+      loadItems().finally(() => setLoadingItems(false));
     }
   }, [trip?.id, editTripId, autoGenerate]);
 
@@ -1520,14 +1523,14 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
               <button onClick={generate} style={{ background: T.ocean, color: "white", border: "none", borderRadius: 8, padding: "7px 14px", fontFamily: "Georgia,serif", fontSize: 12, cursor: "pointer" }}>Try again</button>
             </div>
           )}
-          {items?.length === 0 && !generating && !genError && (
+          {items?.length === 0 && !generating && !loadingItems && !genError && (
             <div style={{ textAlign: "center", padding: "60px 20px" }}>
               <div style={{ fontSize: 40, marginBottom: 12 }}>🗺️</div>
               <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink, marginBottom: 8 }}>Nothing came back</div>
               <div style={{ fontFamily: "Georgia,serif", fontSize: 13, color: T.mist }}>Try again.</div>
             </div>
           )}
-          {(generating || items === null) && (
+          {(generating || loadingItems || items === null) && (
             <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(247,248,250,0.55)", pointerEvents: "none" }}>
               <div style={{ width: 36, height: 36, border: `3px solid ${T.sand}`, borderTopColor: T.ocean, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
             </div>

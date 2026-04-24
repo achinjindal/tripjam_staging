@@ -19,3 +19,10 @@
 17. Bottom navigation shows: Magazine, Itinerary, Map, Board tabs
 18. "Trips" button returns to Home
 19. "Edit trip" button goes to Routes page with saved routes
+
+## Transitions & Geocoding Integrity
+20. No transition should show "1 min walk" for all activities in a day — indicates duplicate geocodes
+21. Activities within a trip should have distinct geocode values — never the generic city/park/region name for all
+22. Stale stored transition values (1 min) are recalculated on page load, not trusted
+23. Map always re-geocodes via server (does not trust stale stored lat/lng on activities)
+24. Photo search uses place name from title (via extractPlace), not the geocode field (which may be a street address)

@@ -94,29 +94,7 @@ async function autocomplete(q: string, types?: string): Promise<unknown> {
   return res.json();
 }
 
-async function textSearch(query: string): Promise<unknown> {
-  const res = await fetch(`${PLACES_BASE}/places:searchText`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": PLACES_KEY,
-      "X-Goog-FieldMask": "places.id,places.displayName,places.businessStatus,places.formattedAddress,places.photos",
-    },
-    body: JSON.stringify({ textQuery: query, languageCode: "en", maxResultCount: 1 }),
-  });
-  if (!res.ok) throw new Error(`Text search error: ${await res.text()}`);
-  return res.json();
-}
-
-async function getPhotoUri(photoName: string): Promise<string | null> {
-  const res = await fetch(
-    `${PLACES_BASE}/${photoName}/media?maxHeightPx=600&maxWidthPx=800&skipHttpRedirect=true`,
-    { headers: { "X-Goog-Api-Key": PLACES_KEY } }
-  );
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data.photoUri ?? null;
-}
+// Google Text Search and Photo URI removed — zero Google photo charges
 
 // ── TripAdvisor helpers ─────────────────────────────────────────────────────
 
@@ -199,30 +177,7 @@ async function handleHotelPhoto(req: Request): Promise<Response> {
     } catch (e) { console.error("TripAdvisor error:", e.message); }
   }
 
-  // 3. Try Google Places (within per-trip caps: 2/itinerary, 3/chat per day per trip)
-  if (tripId) {
-    const googleScope = context === "chat" ? `chat:${tripId}:${today()}` : `itinerary:${tripId}`;
-    const googleCap = context === "chat" ? 3 : 2;
-    const googleCount = await getUsage("google-photo", googleScope, today());
-
-    if (googleCount < googleCap) {
-      try {
-        const data: any = await textSearch(query);
-        const place = data?.places?.[0];
-        const photoName = place?.photos?.[0]?.name;
-        if (photoName) {
-          const photoUrl = await getPhotoUri(photoName);
-          if (photoUrl) {
-            await incrementUsage("google-photo", googleScope, today());
-            await cacheSet(cacheKey, "hotel-photo", { url: photoUrl, source: "google" }, "google");
-            return Response.json({ url: photoUrl, source: "google" }, { headers: corsHeaders });
-          }
-        }
-      } catch (e) { console.error("Google photo error:", e.message); }
-    }
-  }
-
-  // 4. No photo found
+  // 3. No photo found (Google fallback removed — zero Google photo charges)
   return Response.json({ url: null, source: null }, { headers: corsHeaders });
 }
 
@@ -269,9 +224,12 @@ async function handleGeocode(req: Request): Promise<Response> {
   if (city || q.includes(",")) {
     // Try segments from the query in reverse order (broadest last — usually the country/city)
     const segments = q.split(",").map((s: string) => s.trim()).filter(Boolean);
+    // Clean city: strip neighbourhood after spaced dash/em-dash (e.g. "Budapest – Jewish Quarter" → "Budapest")
+    const cleanCity = (city || "").split(/\s+[–—]\s+|\s+-\s+/)[0].trim();
     const biasAttempts = [
       ...segments.slice(1).reverse(),  // from broadest (last) to narrowest, skip the place name itself
-      city || "",
+      cleanCity || "",                 // city without neighbourhood suffix
+      city || "",                      // full city as fallback
     ].filter(Boolean);
     // Deduplicate
     const tried = new Set<string>();
@@ -297,7 +255,7 @@ async function handleGeocode(req: Request): Promise<Response> {
 
   // 3. Photon search — multiple strategies, validated against city bias
   // Use wider radius if bias came from a country/region vs a specific city
-  const MAX_DISTANCE_KM = 1000; // wide enough for within-country, catches wrong-continent (8000km+)
+  const MAX_DISTANCE_KM = 200; // tight enough to catch wrong-city (Budapest vs Bucharest = 640km), allows within-metro-area
   const photonQueries = [
     query.replace(/,/g, " ").replace(/\s+/g, " ").trim(),          // full query, commas→spaces
     query.split(",")[0].trim() + (city ? ` ${city}` : ""),          // first segment + city

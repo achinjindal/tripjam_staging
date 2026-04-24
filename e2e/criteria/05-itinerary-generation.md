@@ -18,3 +18,4 @@
 16. Wishlist items (Local gems) are included per day with specific named places
 17. Transit activities between cities have geocode (origin) and geocodeEnd (destination)
 18. Regenerating an existing trip deletes old days/activities before inserting new ones
+19. Each activity's geocode must be a specific landmark/venue name (e.g. "Mirador Base Torres"), never a generic city/region/park name. No two activities in a day should share the same geocode.
