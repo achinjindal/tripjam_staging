@@ -1,4 +1,4 @@
-import { StrictMode, useState, useEffect } from "react";
+import { StrictMode, useState, useEffect, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import { supabase } from "./supabase";
 import Auth from "./Auth.jsx";
@@ -6,17 +6,41 @@ import Home from "./Home.jsx";
 import App from "./App.jsx";
 import TripPublicView from "./TripPublicView.jsx";
 
-// Detect /trip/{token} URLs — served without authentication
-const PUBLIC_TRIP_MATCH = window.location.pathname.match(/^\/trip\/([a-f0-9-]{36})$/);
-const PUBLIC_TRIP_TOKEN = PUBLIC_TRIP_MATCH?.[1] ?? null;
+// ── URL helpers ──
 
-const LAST_TRIP_KEY = "tj_last_trip_id";
-const LAST_SCREEN_KEY = "tj_last_screen";
+function parseUrl(path = window.location.pathname) {
+  // Public share view — separate namespace from trip
+  const publicMatch = path.match(/^\/share\/([a-f0-9-]{36})$/);
+  if (publicMatch) return { page: "public", token: publicMatch[1] };
+  // Legacy /trip/:token format — only if no suffix (backwards compat)
+  const legacyPublic = path.match(/^\/trip\/([a-f0-9-]{36})$/);
+  // Check suffixed routes first (these are always authenticated trip views)
+  const routesMatch = path.match(/^\/trip\/([^/]+)\/plans$/);
+  if (routesMatch) return { page: "edit", tripId: routesMatch[1] };
+  const tabMatch = path.match(/^\/trip\/([^/]+)\/(magazine|map|board)$/);
+  if (tabMatch) return { page: "trip", tripId: tabMatch[1], tab: tabMatch[2] };
+  // /trip/:id — authenticated trip view (UUID is a trip ID, not a share token)
+  const tripMatch = path.match(/^\/trip\/([^/]+)$/);
+  if (tripMatch) return { page: "trip", tripId: tripMatch[1] };
+  const newStepMatch = path.match(/^\/new(?:\/(\d))?$/);
+  if (newStepMatch) return { page: "create", step: newStepMatch[1] ? parseInt(newStepMatch[1]) : 0 };
+  return { page: "home" };
+}
+
+function pushUrl(path) {
+  if (window.location.pathname !== path) {
+    window.history.pushState(null, "", path);
+  }
+}
+
+// ── Root ──
 
 function Root() {
-  const [session, setSession] = useState(undefined); // undefined = loading
-  const [screen, setScreen] = useState("home");       // 'home' | 'create' | 'trip'
+  const [session, setSession] = useState(undefined);
+  const [screen, setScreen] = useState("home");
   const [activeTrip, setActiveTrip] = useState(null);
+  const [initialTab, setInitialTab] = useState(null);
+  const [initialStep, setInitialStep] = useState(0);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -24,37 +48,74 @@ function Root() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // After session loads, restore last open trip from localStorage (survives HMR)
+  const loadTrip = useCallback(async (tripId) => {
+    const { data } = await supabase.from("trips").select("*").eq("id", tripId).single();
+    return data;
+  }, []);
+
+  // Resolve initial URL on session load
   useEffect(() => {
     if (!session) return;
-    const savedScreen = localStorage.getItem(LAST_SCREEN_KEY);
-    const savedTripId = localStorage.getItem(LAST_TRIP_KEY);
-    if (savedScreen === "trip" && savedTripId) {
-      supabase.from("trips").select("*").eq("id", savedTripId).single()
-        .then(({ data }) => {
-          if (data) { setActiveTrip(data); setScreen("trip"); }
-        });
+    const route = parseUrl();
+    if (route.page === "trip" || route.page === "edit") {
+      loadTrip(route.tripId).then(trip => {
+        if (trip) {
+          setActiveTrip(trip);
+          setScreen(route.page === "edit" ? "edit" : "trip");
+          if (route.tab) setInitialTab(route.tab);
+        } else {
+          pushUrl("/");
+        }
+      });
+    } else if (route.page === "create") {
+      setScreen("create");
+      setInitialStep(route.step || 0);
     }
   }, [session]);
+
+  // Browser back/forward
+  useEffect(() => {
+    const onPopState = () => {
+      const route = parseUrl();
+      if (route.page === "home") {
+        setActiveTrip(null); setScreen("home");
+      } else if (route.page === "create") {
+        setActiveTrip(null); setScreen("create");
+        setInitialStep(route.step || 0);
+      } else if (route.page === "trip" || route.page === "edit") {
+        if (activeTrip?.id === route.tripId) {
+          setScreen(route.page === "edit" ? "edit" : "trip");
+          if (route.tab) setInitialTab(route.tab);
+        } else {
+          loadTrip(route.tripId).then(trip => {
+            if (trip) {
+              setActiveTrip(trip);
+              setScreen(route.page === "edit" ? "edit" : "trip");
+              if (route.tab) setInitialTab(route.tab);
+            }
+          });
+        }
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [activeTrip?.id]);
 
   const openTrip = (trip) => {
     setActiveTrip(trip);
     setScreen("trip");
-    if (trip?.id) {
-      localStorage.setItem(LAST_TRIP_KEY, trip.id);
-      localStorage.setItem(LAST_SCREEN_KEY, "trip");
-    }
+    pushUrl(`/trip/${trip.id}`);
   };
 
   const goHome = () => {
     setActiveTrip(null);
     setScreen("home");
-    localStorage.removeItem(LAST_TRIP_KEY);
-    localStorage.removeItem(LAST_SCREEN_KEY);
+    pushUrl("/");
   };
 
-  // Public trip view — no auth required
-  if (PUBLIC_TRIP_TOKEN) return <TripPublicView token={PUBLIC_TRIP_TOKEN} />;
+  // Public view — no auth
+  const route = parseUrl();
+  if (route.page === "public") return <TripPublicView token={route.token} />;
 
   if (session === undefined) return null;
   if (!session) return <Auth />;
@@ -64,27 +125,25 @@ function Root() {
       <Home
         session={session}
         onOpenTrip={openTrip}
-        onCreateTrip={() => { setActiveTrip(null); setScreen("create"); }}
+        onCreateTrip={() => { setActiveTrip(null); setScreen("create"); setInitialStep(0); pushUrl("/new/0"); }}
         onEditTrip={(trip) => {
           setActiveTrip(trip);
           setScreen("edit");
-          // Persist so that a refresh during edit returns to this trip (rather than empty home)
-          if (trip?.id) {
-            localStorage.setItem(LAST_TRIP_KEY, trip.id);
-            localStorage.setItem(LAST_SCREEN_KEY, "trip");
-          }
+          pushUrl(`/trip/${trip.id}/plans`);
         }}
       />
     );
   }
 
-  // 'create', 'edit', and 'trip' all go into App
   return (
     <App
       session={session}
       initialTrip={activeTrip}
       initialScreen={screen === "create" || screen === "edit" ? "setup" : "itinerary"}
+      initialTab={initialTab}
+      initialSetupStep={initialStep}
       onHome={goHome}
+      onUrlChange={pushUrl}
     />
   );
 }

@@ -206,75 +206,74 @@ async function handleGeocode(req: Request): Promise<Response> {
   const { q, city } = await req.json();
   if (!q) return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
 
-  // Only append city if it's not already in the query
-  const query = (city && !q.toLowerCase().includes(city.toLowerCase())) ? `${q} ${city}` : q;
-  const cacheKey = `geocode:${query.toLowerCase()}`;
+  // Extract the MAIN CITY from the city field — always the last comma-separated segment
+  // "Shibuya & Shinjuku, Tokyo" → "Tokyo"
+  // "Fushimi / Arashiyama, Kyoto" → "Kyoto"
+  // "Budapest – Jewish Quarter" → "Budapest"
+  // "Asakusa, Tokyo" → "Tokyo"
+  // "Chaoyang" → "Chaoyang"
+  const mainCity = (() => {
+    const c = city || "";
+    // Split by comma, take last segment
+    const commaParts = c.split(",").map(s => s.trim()).filter(Boolean);
+    if (commaParts.length > 1) return commaParts[commaParts.length - 1];
+    // Split by dash/em-dash, take first segment
+    const dashParts = c.split(/\s+[–—]\s+|\s+-\s+/);
+    if (dashParts.length > 1) return dashParts[0].trim();
+    // Split by &, /, take last
+    const slashParts = c.split(/\s*[&/]\s*/);
+    if (slashParts.length > 1) return slashParts[slashParts.length - 1].trim();
+    return c;
+  })();
 
-  // 1. DB cache — permanent for hits, 1-day TTL for misses
+  const cacheKey = `geocode:${q.toLowerCase()}|${(city || "").toLowerCase()}`;
+
+  // 1. DB cache
   const cached = await cacheGet(cacheKey);
   if (cached) {
     incrementUsage("geocode", "cache-hit", today()).catch(() => {});
     return Response.json(cached, { headers: corsHeaders });
   }
 
-  // 2. Resolve city bias coordinates — extract the broadest place name from the query
-  //    e.g. "CCTV Tower, CBD, Chaoyang, Beijing" → try "Beijing" first (last segment), then full city param
+  // 2. Resolve city bias from mainCity (unambiguous — "Tokyo", "Kyoto", "Budapest")
   let biasLat: number | undefined;
   let biasLng: number | undefined;
-  if (city || q.includes(",")) {
-    // Try segments from the query in reverse order (broadest last — usually the country/city)
-    const segments = q.split(",").map((s: string) => s.trim()).filter(Boolean);
-    // Clean city: strip neighbourhood after spaced dash/em-dash (e.g. "Budapest – Jewish Quarter" → "Budapest")
-    const cleanCity = (city || "").split(/\s+[–—]\s+|\s+-\s+/)[0].trim();
-    const biasAttempts = [
-      ...segments.slice(1).reverse(),  // from broadest (last) to narrowest, skip the place name itself
-      cleanCity || "",                 // city without neighbourhood suffix
-      city || "",                      // full city as fallback
-    ].filter(Boolean);
-    // Deduplicate
-    const tried = new Set<string>();
-    for (const attempt of biasAttempts) {
-      if (tried.has(attempt.toLowerCase())) continue;
-      tried.add(attempt.toLowerCase());
-      const biasCacheKey = `geocode:${attempt.toLowerCase()}`;
-      const biasCache = await cacheGet(biasCacheKey);
-      if (biasCache?.lat) {
-        biasLat = biasCache.lat;
-        biasLng = biasCache.lng;
-        break;
-      }
-      const coords = await photonSearch(attempt);
+  if (mainCity) {
+    const biasCacheKey = `geocode:${mainCity.toLowerCase()}`;
+    const biasCache = await cacheGet(biasCacheKey);
+    if (biasCache?.lat) {
+      biasLat = biasCache.lat;
+      biasLng = biasCache.lng;
+    } else {
+      const coords = await photonSearch(mainCity);
       if (coords) {
         biasLat = coords.lat;
         biasLng = coords.lng;
         cacheSet(biasCacheKey, "geocode", coords, "photon").catch(() => {});
-        break;
       }
     }
   }
 
-  // 3. Photon search — multiple strategies, validated against city bias
-  // Use wider radius if bias came from a country/region vs a specific city
-  const MAX_DISTANCE_KM = 200; // tight enough to catch wrong-city (Budapest vs Bucharest = 640km), allows within-metro-area
+  // 3. Photon search — prioritized strategies, validated against bias
+  // Use wider radius if mainCity looks like a country (no comma, long distance expected)
+  const isCountryBias = mainCity && !mainCity.includes(",") && mainCity.length > 3 && !/tokyo|kyoto|osaka|delhi|mumbai|budapest|bangkok|beijing|seoul|paris|london|istanbul|cairo|rome/i.test(mainCity);
+  const MAX_DISTANCE_KM = isCountryBias ? 1500 : 200;
   const photonQueries = [
-    query.replace(/,/g, " ").replace(/\s+/g, " ").trim(),          // full query, commas→spaces
-    query.split(",")[0].trim() + (city ? ` ${city}` : ""),          // first segment + city
-    q.replace(/,/g, " ").replace(/\s+/g, " ").trim(),              // original q without appended city
-    q.split(",")[0].trim(),                                          // just the place name
+    `${q} ${mainCity}`,                                               // place + main city (best)
+    q,                                                                 // just the place name
+    q.replace(/,/g, " ").replace(/[&/–—]/g, " ").replace(/\s+/g, " ").trim(),  // cleaned full query
+    q.split(/[,&/–—]/)[0].trim() + (mainCity ? ` ${mainCity}` : ""),  // first segment + main city
   ];
   const seen = new Set<string>();
   for (const pq of photonQueries) {
-    if (seen.has(pq.toLowerCase()) || !pq) continue;
-    seen.add(pq.toLowerCase());
-    const coords = await photonSearch(pq, biasLat, biasLng);
+    const clean = pq.replace(/\s+/g, " ").trim();
+    if (!clean || seen.has(clean.toLowerCase())) continue;
+    seen.add(clean.toLowerCase());
+    const coords = await photonSearch(clean, biasLat, biasLng);
     if (coords) {
-      // Validate: if we have city bias, check result is nearby
       if (biasLat != null && biasLng != null) {
         const dist = haversineKm(biasLat, biasLng, coords.lat, coords.lng);
-        if (dist > MAX_DISTANCE_KM) {
-          console.log(`[geocode] Photon result for "${pq}" is ${Math.round(dist)}km from ${city} — skipping`);
-          continue;
-        }
+        if (dist > MAX_DISTANCE_KM) continue;
       }
       const result = { lat: coords.lat, lng: coords.lng };
       incrementUsage("geocode", "photon", today()).catch(() => {});

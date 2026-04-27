@@ -29,7 +29,7 @@ const PLACES_HEADERS = { "Authorization": `Bearer ${import.meta.env.VITE_SUPABAS
 const _photoCache = {};
 const _usedPhotoUrls = new Set();
 let _activeTripId = null; // set when a trip is opened, used for hotel photo rate limits
-let _rgInFlight = false;  // module-level guard against StrictMode double-mount generating twice
+// _rgInFlight removed — generate() is now called imperatively, not via useEffect
 let _igInFlight = false;  // same for IG // prevent same photo showing on multiple activities
 
 // Returns true if the URL looks like a person portrait or otherwise unsuitable place photo
@@ -1066,7 +1066,7 @@ function TodoView({ trip, onBack }) {
 const BRAINSTORM_CATEGORIES = ["All", "Sightseeing", "Dining", "Experiences", "Nightlife", "Nature", "Culture", "Shopping", "Day Trip"];
 const BRAINSTORM_CATEGORY_ICONS = { Sightseeing:"🏛️", Dining:"🍜", Experiences:"🎭", Nightlife:"🍸", Nature:"🌿", Culture:"🎨", Shopping:"🛍️", "Day Trip":"🚌" };
 
-function RouteCard({ item, vs, onVote, interactive, showRecommended = true, routeLabel = null, compact = false, onDismiss = null }) {
+function RouteCard({ item, vs, onVote, interactive, showRecommended = true, routeLabel = null, compact = false, onDismiss = null, onModify = null }) {
   const selected = interactive ? vs.mine === 1 : (item.selected === true || vs.mine === 1);
   const hasError = !!item._error;
 
@@ -1191,6 +1191,13 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
           }}>
             {selected ? "✓ Selected" : "Select"}
           </button>
+          {onModify && (
+            <button onClick={(e) => { e.stopPropagation(); onModify(); }} style={{
+              padding: "7px 12px", borderRadius: 10, border: "none",
+              background: "none", color: T.ocean, fontFamily: "Georgia,serif", fontSize: 12,
+              cursor: "pointer",
+            }}>Modify</button>
+          )}
           {onDismiss && (
             <button onClick={(e) => { e.stopPropagation(); onDismiss(); }} style={{
               padding: "7px 12px", borderRadius: 10, border: "none",
@@ -1206,7 +1213,7 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
   );
 }
 
-function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onBack, onEditForm = null, onOpenChat = null, onDismissRoute = null, undoDismissRef = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null }) {
+function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditForm = null, onOpenChat = null, onDismissRoute = null, onModifyRoute = null, undoDismissRef = null, triggerGenerateRef = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null }) {
   const [items, setItems] = useState(null); // null = not started, [] = empty, [...] = loaded
   const [loadingItems, setLoadingItems] = useState(false);
   const [localVotes, setLocalVotes] = useState({}); // { [tempId]: 1|-1|0 } — pre-trip mode votes
@@ -1250,18 +1257,21 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
     : (trip?.destination || "").split(" → ").map(s => s.trim()).filter(Boolean);
 
   useEffect(() => {
-    if (editTripId && !autoGenerate) {
-      // Edit flow entering via pencil: load previously-saved routes
+    if (editTripId) {
       setLoadingItems(true);
       loadSavedBrainstorm(editTripId).finally(() => setLoadingItems(false));
-    } else if (autoGenerate) {
-      // Either new trip, or edit flow where form was just committed → fresh routes
-      if (destinations.length) generate();
-    } else {
+    } else if (trip?.id) {
       setLoadingItems(true);
       loadItems().finally(() => setLoadingItems(false));
     }
-  }, [trip?.id, editTripId, autoGenerate]);
+  }, [trip?.id, editTripId]);
+
+  // Expose generate() to parent via ref — parent calls it imperatively, not via useEffect
+  useEffect(() => {
+    if (triggerGenerateRef) {
+      triggerGenerateRef.current = () => { if (destinations.length) generate(); };
+    }
+  });
 
   async function loadCityDeepDive(city) {
     if (!city) return;
@@ -1343,10 +1353,11 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
   }
 
   const isAddingMore = useRef(false);
+  const rgInFlight = useRef(false);
   async function generate(addMore = false) {
     if (!destinations.length) return;
-    if (_rgInFlight) return; // prevent double-call from StrictMode remount
-    _rgInFlight = true;
+    if (rgInFlight.current) return;
+    rgInFlight.current = true;
     isAddingMore.current = addMore;
     setGenerating(true);
     setGenError(null);
@@ -1364,6 +1375,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
           arrivalCity: igReq.arrivalCity || null, departureCity: igReq.departureCity || null,
           notes: igReq.notes || null,
           existingPlans: addMore ? (items || []).filter(it => it.tier === 1 && !it.dismissed).map(it => it.title) : null,
+          baseLocation: igReq.baseLocation || null,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1401,7 +1413,9 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                 try {
                   const item = JSON.parse(objStr);
                   if (item.title && item.category) {
-                    const labelNum = (isAddingMore.current ? (items || []).filter(it => it.tier === 1 && !it.dismissed).length : 0) + streamedItems.filter(s => s.tier === 1).length + 1;
+                    const existingTier1 = isAddingMore.current ? (items || []).filter(it => it.tier === 1 && !it.dismissed).length : 0;
+                    const streamedTier1 = streamedItems.filter(s => s.tier === 1).length;
+                    const labelNum = existingTier1 + streamedTier1 + 1;
                     const itemWithId = isPretripMode ? { ...item, id: `temp_${tempIdCounter++}`, routeLabel: item.tier === 1 ? `P${labelNum}` : undefined } : item;
                     streamedItems.push(itemWithId);
                     if (isAddingMore.current) {
@@ -1458,24 +1472,20 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
         }));
         const { data, error: insertErr } = await supabase.from("brainstorm_items").insert(rows).select();
         if (insertErr) console.warn("Failed to save brainstorm items:", insertErr);
-        // Merge DB rows with existing items
+        // Replace items entirely with DB rows (they have real UUIDs now)
         const saved = (data || []).map(row => ({ ...row, ...(row.data || {}) }));
-        setItems(prev => {
-          const existing = (prev || []).filter(p => !saved.some(s => s.id === p.id));
-          return [...existing, ...(saved.length ? saved : streamedItems)];
-        });
+        if (saved.length) {
+          setItems(saved);
+        }
       } else {
-        setItems(prev => {
-          const existing = (prev || []).filter(p => !streamedItems.some(s => s.id === p.id));
-          return [...existing, ...streamedItems];
-        });
+        // No DB — keep streamed items as-is (already set during streaming)
       }
     } catch (e) {
       console.error("Brainstorm generate error:", e);
       setGenError(e.message);
     }
     setGenerating(false);
-    _rgInFlight = false;
+    rgInFlight.current = false;
   }
 
   function castVote(itemId, value) {
@@ -1630,6 +1640,10 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
             {tier1Items.map((item, idx) => (
               <div key={item.id} ref={el => { if (el) routeCardRefs.current[item.id] = el; }}>
                 <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} showRecommended={routesReady} routeLabel={item.routeLabel || `P${idx + 1}`}
+                  onModify={() => {
+                    const label = item.routeLabel || `P${idx + 1}`;
+                    onModifyRoute?.(label);
+                  }}
                   onDismiss={() => {
                     const label = item.routeLabel || `P${idx + 1}`;
                     setItems(prev => (prev || []).map(it => it.id === item.id ? { ...it, dismissed: true } : it));
@@ -1840,7 +1854,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
           const isLoading = dd === "loading";
           // Trigger load if not cached
           if (dest && !deepDiveCache[dest]) loadCityDeepDive(dest);
-          if (!data?.writeup && !isLoading) return null;
+          if (!dest) return null;
           return (
             <DestinationHero dest={dest} isLoading={isLoading} data={data}>
               <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.6}}>{data?.writeup}</div>
@@ -2263,11 +2277,22 @@ function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAl
   const [menuOpen, setMenuOpen] = useState(false);
   const [draft, setDraft] = useState({ ...activity });
   const ts = typeStyle[draft.type] || typeStyle.sight;
-  const transitOrigin = (activity.geocode && activity.geocode !== activity.geocode_end)
-    ? activity.geocode : city;
+  const transitOrigin = (() => {
+    if (activity.geocode && activity.geocode_end && activity.geocode !== activity.geocode_end) return activity.geocode;
+    // Parse origin from title like "Drive Denpasar to Ubud via ..."
+    const titleMatch = activity.title?.match(/(?:Drive|Flight|Train|Bus|Ferry|Transit)\s+(.+?)\s+(?:to|→)\s+(.+?)(?:\s+via\s+|$)/i);
+    if (titleMatch) return titleMatch[1];
+    return activity.geocode || city;
+  })();
+  const transitDest = (() => {
+    if (activity.geocode_end && activity.geocode_end !== activity.geocode) return activity.geocode_end;
+    const titleMatch = activity.title?.match(/(?:Drive|Flight|Train|Bus|Ferry|Transit)\s+.+?\s+(?:to|→)\s+(.+?)(?:\s+via\s+|$)/i);
+    if (titleMatch) return titleMatch[1];
+    return activity.geocode_end || null;
+  })();
   const mapsUrl = transitMapsUrl ||
-    (activity.geocode_end
-      ? `https://www.google.com/maps/dir/${encodeURIComponent(transitOrigin)}/${encodeURIComponent(activity.geocode_end)}`
+    (transitDest
+      ? `https://www.google.com/maps/dir/${encodeURIComponent(transitOrigin)}/${encodeURIComponent(transitDest)}`
       : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${activity.geocode || activity.title} ${city}`)}`);
 
 
@@ -3279,8 +3304,8 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
   const _today = new Date();
   const _defaultStart = new Date(_today); _defaultStart.setDate(_today.getDate() + 15);
   const _defaultEnd   = new Date(_today); _defaultEnd.setDate(_today.getDate() + 20);
-  const _fmt = (d) => d.toISOString().slice(0, 12);
-  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", notes:"", arrivalCity:"", departureCity:"", ...prefill, ...(prefillForm || {}) });
+  const _fmt = (d) => d.toISOString().slice(0, 10);
+  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", notes:"", arrivalCity:"", departureCity:"", baseLocation:"", ...prefill, ...(prefillForm || {}) });
 
   // Re-apply prefillForm on any change (handles returning from brainstorm)
   useEffect(() => {
@@ -3340,6 +3365,11 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
   const budgets = [{key:"budget",label:"Budget 🏕️",sub:"Hostels, street food"},{key:"mid",label:"Mid-range 🏨",sub:"3★ hotels, restaurants"},{key:"luxury",label:"Luxury 🏰",sub:"5★ & fine dining"}];
 
   const handleGenerate = async () => {
+    const needsBase = form.destinations.some(d => d.toLowerCase().includes("open to ideas"));
+    if (needsBase && !form.baseLocation?.trim()) {
+      setDestError("Please tell us where you're based so we can suggest the right destinations.");
+      return;
+    }
     setGen(true);
     onGenerate(form);
   };
@@ -3525,9 +3555,21 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
     </div>,
 
     /* 3 – cities + notes + generate */
+    (() => { const isOpenToIdeas = form.destinations.some(d => d.toLowerCase().includes("open to ideas")); return (
     <div key={3} style={{animation:"fadeUp 0.3s ease"}}>
       <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>🛫</div>
       <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:20}}>A few more details</div>
+
+      {/* Base Location */}
+      <div style={{marginBottom:18}}>
+        <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,marginBottom:6}}>
+          Where are you based? {isOpenToIdeas ? <span style={{color:T.terra,fontWeight:600}}>*</span> : <span style={{color:T.mist,fontWeight:400}}>· optional</span>}
+        </div>
+        <CityInput value={form.baseLocation} onChange={v=>set("baseLocation",v)}
+          placeholder="e.g. Mumbai, London, New York"
+          inputStyle={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.baseLocation?T.ocean:isOpenToIdeas&&!form.baseLocation?T.terra:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
+        <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginTop:4}}>Helps us suggest destinations with easy flight connections</div>
+      </div>
 
       <div style={{display:"flex",gap:12,marginBottom:18}}>
         <div style={{flex:1}}>
@@ -3563,7 +3605,8 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
         boxShadow:generating?"none":"0 6px 22px rgba(37,99,168,0.4)",
         transition:"all 0.3s",marginTop:8,
       }}>{generating?"✨ Generating your itinerary…":"Start Planning ✨"}</button>
-    </div>,
+    </div>
+    ); })(),
   ];
 
   return (
@@ -3901,7 +3944,7 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
 }
 
 /* ─── ROOT ───────────────────────────────────────────────────────────── */
-export default function App({ session, initialTrip, initialScreen = "setup", onHome }) {
+export default function App({ session, initialTrip, initialScreen = "setup", initialTab = null, initialSetupStep = 0, onHome, onUrlChange }) {
   // Draft trip (RG done, no IG yet) → go straight to routes, not setup form
   const isDraft = initialTrip && !initialTrip.ig_response;
   const [screen,    setScreen]    = useState(isDraft ? "brainstorm" : initialScreen);
@@ -3935,7 +3978,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         .order("position")
         .then(async ({ data }) => {
           const seenPhotos = new Set();
-          setDays((data || []).map(d => ({
+          // Deduplicate days by label (handles duplicate rows from buggy generations)
+          const allDays = (data || []).map(d => ({
             ...d,
             activities: (d.activities || []).sort((a, b) => a.position - b.position).map(a => {
               if (a.photo_url) {
@@ -3945,14 +3989,32 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               }
               return a;
             }),
-          })));
+          }));
+          const seen = new Set();
+          const deduped = allDays.filter(d => {
+            if (seen.has(d.label)) return false;
+            seen.add(d.label);
+            return true;
+          });
+          setDays(deduped);
 
           setLoading(false);
         });
     }
   }, []);
 
-  const [activeBottomTab, setActiveBottomTab] = useState("itinerary");
+  const [activeBottomTab, setActiveBottomTab] = useState(initialTab || "itinerary");
+
+  // Sync URL when screen/tab changes
+  useEffect(() => {
+    if (!onUrlChange || !trip?.id) return;
+    if (screen === "itinerary") {
+      const tabPath = activeBottomTab === "itinerary" ? "" : `/${activeBottomTab === "brainstorm" ? "magazine" : activeBottomTab}`;
+      onUrlChange(`/trip/${trip.id}${tabPath}`);
+    } else if (screen === "brainstorm") {
+      onUrlChange(`/trip/${trip.id}/plans`);
+    }
+  }, [screen, activeBottomTab, trip?.id]);
   const [compactView, setCompactView] = useState(true); // start in compact mode
   const [detailedLoading, setDetailedLoading] = useState(false); // true while full IG loads in background
   const [detailedReady, setDetailedReady] = useState(initialScreen === "itinerary"); // true if opening existing trip
@@ -4066,6 +4128,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const isJumping     = useRef(false);
   const logisticsRef  = useRef(null);
   const undoDismissRef = useRef(null);
+  const triggerRgRef = useRef(null); // imperative trigger for RG generation
 
   const editActivity = (dayId, updated) => {
     setDays(prev=>prev.map(d=>d.id===dayId?{...d,activities:d.activities.map(a=>a.id===updated.id?updated:a)}:d));
@@ -4223,8 +4286,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       if (!error) {
         await supabase.from("trip_members").insert({ trip_id: draftId, user_id: session.user.id, role: "edit" });
         setEditingTrip({ id: draftId, name: draftName, destination: form.destinations.join(" → "), start_date: form.startDate, end_date: form.endDate, ig_request: igRequest });
+        onUrlChange?.(`/trip/${draftId}/plans`);
       }
+      } else {
+        // Existing draft — update URL to plans
+        onUrlChange?.(`/trip/${editingTrip.id}/plans`);
       }
+    // Trigger RG generation imperatively — NOT via useEffect
+    setTimeout(() => { triggerRgRef.current?.(); }, 0);
   };
 
   const handleBuildFromBrainstorm = (votedItems) => {
@@ -4632,16 +4701,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     setActiveDay(idx);
     const pill = pillStrip.current?.children[idx];
     pill?.scrollIntoView({ behavior:"smooth", block:"nearest", inline:"center" });
-    // Account for sticky elements: toggle bar + optional refining banner + pill strip
-    const stickyOffset = (() => {
-      let offset = 0;
-      const stickies = scrollRef.current.querySelectorAll('[style*="sticky"]');
-      stickies.forEach(s => { offset += s.getBoundingClientRect().height; });
-      return offset || 50;
-    })();
-    const containerTop = scrollRef.current.getBoundingClientRect().top;
-    const elTop        = el.getBoundingClientRect().top;
-    scrollRef.current.scrollBy({ top: elTop - containerTop - stickyOffset, behavior:"smooth" });
+    // Use offsetTop (absolute position in scroll container) — immune to current scroll position
+    scrollRef.current.scrollTo({ top: el.offsetTop - 50, behavior: "smooth" });
     setTimeout(() => { isJumping.current = false; }, 700);
   };
 
@@ -5046,9 +5107,9 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               key={pendingForm ? "resume" : "fresh"}
               onGenerate={handleSetupComplete}
               initialTrip={editingTrip || (initialScreen==="setup" && initialTrip?.destination ? initialTrip : null)}
-              onStepChange={setSetupStep}
+              onStepChange={(s) => { setSetupStep(s); if (onUrlChange && !editingTrip) onUrlChange(`/new/${s}`); }}
               prefillForm={pendingForm}
-              initialStep={pendingForm ? 3 : 0}
+              initialStep={initialSetupStep}
             />
           </div>
         </div>
@@ -5063,7 +5124,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             trip={null}
             session={session}
             pendingForm={pendingForm}
-            autoGenerate={!editingTrip || formEdited}
+            triggerGenerateRef={triggerRgRef}
             editTripId={editingTrip?.id || null}
             onBuild={handleBuildFromBrainstorm}
             onBack={editingTrip
@@ -5076,6 +5137,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             onEditForm={editingTrip ? () => setScreen("setup") : null}
             onOpenChat={() => { setChatOpen(true); setChatUnread(false); }}
             undoDismissRef={undoDismissRef}
+            onModifyRoute={(label) => {
+              setChatOpen(true); setChatUnread(false);
+              setChatInput(`Modify ${label}: `);
+              setTimeout(() => chatInputRef.current?.focus(), 100);
+            }}
             onDismissRoute={(label, itemId) => {
               const item = (pretripRoutes || []).find(r => r.id === itemId);
               const undoMsg = {
@@ -5232,7 +5298,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                     // Prefill pendingForm from the trip so BrainstormView has context (destinations/styles/budget/etc.)
                     const igReq = trip.ig_request || {};
                     setPendingForm({
-                      destinations: (trip.destination || "").split(" → ").map(s => s.trim()).filter(Boolean),
+                      destinations: igReq.destinations?.length ? igReq.destinations : (trip.destination || "").split(" → ").map(s => s.trim()).filter(Boolean),
                       startDate: trip.start_date || "",
                       endDate: trip.end_date || "",
                       travelers: String(igReq.travelers || "2"),
@@ -5278,7 +5344,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             {detailedLoading && (
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8,padding:"10px 16px",background:`${T.ocean}08`,borderBottom:`1px solid ${T.ocean}15`}}>
                 <span style={{width:12,height:12,border:`2px solid ${T.sand}`,borderTopColor:T.ocean,borderRadius:"50%",animation:"spin 0.8s linear infinite",flexShrink:0}}/>
-                <span style={{fontSize:12,fontFamily:"Georgia,serif",color:T.ocean}}>Fine-tuning your itinerary — details will update shortly</span>
+                <span style={{fontSize:12,fontFamily:"Georgia,serif",color:T.ocean}}>Fine-tuning your itinerary — meanwhile, tap any item to explore</span>
               </div>
             )}
 
@@ -5374,7 +5440,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                         const hCity = hotelPerDay[i]?.city;
                         if (!hCity) return day.city;
                         return hCity === day.city ? day.city : `${day.city} (${hCity})`;
-                      })()} onExpand={() => { setCompactView(false); setActiveDay(i); setTimeout(() => { requestAnimationFrame(() => { const el = dayRefs.current[i]; if (el && scrollRef.current) { let stickyOffset = 0; scrollRef.current.querySelectorAll('[style*="sticky"]').forEach(s => { stickyOffset += s.getBoundingClientRect().height; }); const top = el.getBoundingClientRect().top - scrollRef.current.getBoundingClientRect().top; scrollRef.current.scrollBy({ top: top - (stickyOffset || 50), behavior: "smooth" }); } }); }, 300); }} />
+                      })()} onExpand={() => { setCompactView(false); setActiveDay(i); setTimeout(() => { requestAnimationFrame(() => { const el = dayRefs.current[i]; if (el && scrollRef.current) { scrollRef.current.scrollTo({ top: el.offsetTop - 50, behavior: "smooth" }); } }); }, 300); }} />
                     ) : (
                     <DaySection
                       day={day}
@@ -5605,7 +5671,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                       if (token) setTrip(t => ({ ...t, share_token: token }));
                     }
                     if (!token) return;
-                    const url = `${window.location.origin}/trip/${token}`;
+                    const url = `${window.location.origin}/share/${token}`;
                     if (navigator.share) {
                       await navigator.share({ title: trip.name, text: `Check out our trip: ${trip.name}`, url });
                     } else {
@@ -5650,15 +5716,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             }}>
               Build My Itinerary →
             </button>
-          )}
-          {/* Contextual CTA chips — itinerary only */}
-          {screen === "itinerary" && (
-            <div className="no-scrollbar" style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 6, paddingBottom: 2 }}>
-              <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Suggest alternative hotels"); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Change hotel</button>
-              <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Suggest alternatives for "); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Swap activity</button>
-              <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Make the pace more relaxed"); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Adjust pace</button>
-              <button onClick={() => { setChatOpen(true); setChatUnread(false); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Ask anything</button>
-            </div>
           )}
           {/* Input row */}
           <div style={{ display: "flex", gap: 8, alignItems: screen === "brainstorm" ? "flex-end" : "center" }}>
@@ -5706,16 +5763,19 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                     <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",borderLeft:`3px solid ${T.ocean}`}}>
                       {screen === "brainstorm"
                         ? "I've put together some trip plans for you. Ask me anything — compare plans, tweak a specific one, or tell me what matters most to you."
-                        : "Here's a first draft of your plan! Let's tweak it together — swap activities, change the pace, or try a different hotel. Just ask."
+                        : "Hey! This is just the first draft of your itinerary! Let's tweak it together — swap activities, change the pace, or try a different hotel. Just ask."
                       }
                     </div>
                   </div>
-                  <div style={{display:"flex",flexDirection:"column",gap:8,padding:"4px 0"}}>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6,padding:"4px 0"}}>
                     {(screen === "brainstorm"
-                      ? ["What's the difference between P1 and P2?","Add a day trip to P3","Make P1 more relaxed"]
-                      : ["Make day 2 more food-focused","Add a beach day","Replace morning activities with something relaxing"]
+                      ? ["Difference between P1 and P2?","Add a day trip to P3","Make P1 more relaxed"]
+                      : ["Change Day 1 hotel","Add a beach day","Make Day 3 morning relaxed"]
                     ).map(s=>(
-                      <button key={s} onClick={()=>setChatInput(s)} style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:20,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer",textAlign:"left"}}>"{s}"</button>
+                      <button key={s} onClick={()=>{ setChatInput(s); setTimeout(() => chatInputRef.current?.focus(), 50); }} style={{
+                        background:"transparent",border:`1px solid ${T.ocean}`,borderRadius:8,padding:"4px 10px",
+                        fontSize:10,fontFamily:"Georgia,serif",fontWeight:500,color:T.ocean,cursor:"pointer",
+                      }}>{s}</button>
                     ))}
                   </div>
                 </div>
@@ -5746,7 +5806,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 return (
                   <div key={i} style={{display:"flex",flexDirection:"column",alignItems:isOwn?"flex-end":"flex-start"}}>
                     {isAI && (
-                      <div style={{fontSize:11,color:T.ocean,fontFamily:"Georgia,serif",marginBottom:2,paddingLeft:4,fontWeight:600}}>✨ AI</div>
+                      <div style={{fontSize:11,color:T.ocean,fontFamily:"Georgia,serif",marginBottom:2,paddingLeft:4,fontWeight:600}}>✨ Trippy</div>
                     )}
                     {isOther && (
                       <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:2,paddingLeft:4}}>{getMemberName(m.user_id)}</div>

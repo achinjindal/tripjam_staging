@@ -67,7 +67,7 @@ serve(async (req) => {
   }
 
   try {
-    const { destinations, styles, budget, travelMonth, numDays, arrivalCity, departureCity, notes, existingPlans } = await req.json();
+    const { destinations, styles, budget, travelMonth, numDays, arrivalCity, departureCity, notes, existingPlans, baseLocation } = await req.json();
 
     const budgetLabel = { budget: "budget", mid: "mid-range", luxury: "luxury" }[budget] || "mid-range";
     const stylesText = (styles || []).join(", ");
@@ -80,13 +80,13 @@ serve(async (req) => {
     const isOpenToIdeas = destinations.length === 1 && destinations[0].toLowerCase().includes("open to ideas");
 
     const userMessage = isOpenToIdeas
-      ? `The traveler is OPEN TO IDEAS — they haven't decided on a destination yet. Suggest 4 completely different destinations around the world that would be ideal for their preferences.` +
+      ? `The traveler is OPEN TO IDEAS — they haven't decided on a destination yet.${baseLocation ? ` They are based in ${baseLocation} — prioritize destinations with easy/direct flight connections from there.` : ""} Suggest 4 completely different destinations around the world that would be ideal for their preferences.` +
         (numDays ? ` Trip duration: ${numDays} days.` : "") +
         (travelMonth ? ` Travel month: ${travelMonth}.` : "") +
         ` Trip style: ${stylesText || "general"}, ${budgetLabel} budget.` +
         (notes ? `\n\nTraveler notes: ${notes}` : "") +
         `\n\nGenerate exactly 4 tier 1 route options, each in a DIFFERENT country/region. Each route should be a complete itinerary outline for that destination. Make each suggestion genuinely different — e.g. one beach destination, one cultural, one adventure, one off-the-beaten-path. Include the country/region in the title (e.g. "Sri Lanka South Coast", "Patagonia Explorer"). Then generate 15–20 tier 2 experiences spread across all 4 destinations.\n\nCRITICAL: Only suggest destinations where the WEATHER IS GOOD in the travel month. Do NOT suggest places in their winter, monsoon, or extreme weather season. For example: do NOT suggest New Zealand or Patagonia for June (southern hemisphere winter), do NOT suggest Southeast Asia in August (peak monsoon). Every suggestion must be a destination where the traveler will enjoy pleasant weather.`
-      : `Destination: ${destinations.join(", ")}.` +
+      : `Destination: ${destinations.join(", ")}.${baseLocation ? ` Traveler is based in ${baseLocation}.` : ""}` +
         (numDays ? ` Trip duration: ${numDays} days.` : "") +
         (travelMonth ? ` Travel month: ${travelMonth}.` : "") +
         ` Trip style: ${stylesText || "general"}, ${budgetLabel} budget.` +
