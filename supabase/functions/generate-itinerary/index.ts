@@ -41,8 +41,12 @@ Rules:
 - SUMMARY: Top-level "summary" string, 2 sentences max.
 - CITIES: Top-level "cities" array, one per unique city: {"name":"...","writeup":"2–3 evocative sentences about this destination"}.
 
+IMPORTANT OUTPUT ORDER: Generate the "compact" array BEFORE the "days" array. The app renders compact immediately while days stream in.
+
 Return ONLY a raw JSON object. Start with { end with }. Structure:
-{"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"days":[{"label":"Day 1","city":"...","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","icon":"🏛️"}],"wishlist":[{"title":"...","geocode":"...","note":"...","icon":"..."}]}]}`;
+{"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"compact":[{"label":"Day 1","city":"...","hotel":"specific hotel name","highlights":[{"title":"Place 1","icon":"🏛"},{"title":"Place 2","icon":"🍜"},{"title":"Place 3","icon":"🌿"}],"description":"1 sentence day overview"}],"days":[{"label":"Day 1","city":"...","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","icon":"🏛️"}],"wishlist":[{"title":"...","geocode":"...","note":"...","icon":"..."}]}]}
+
+The "compact" array must have one entry per day with: label, city, hotel (specific name), highlights (3-4 objects with "title" and "icon" emoji), description (1 sentence). Keep it brief — this is a quick preview. Example highlight: {"title":"Tsukiji Market","icon":"🍜"}.`;
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -52,7 +56,7 @@ serve(async (req) => {
   try {
     const body = await req.json();
     console.log("Request body:", JSON.stringify(body));
-    const { destinations, numDays, travelers, styles, budget, pace, morningStart, notes, startDate, arrivalCity, arrivalTime, arrivalMode, departureCity, departureTime, departureMode, hasCar, votedItems, compact } = body;
+    const { destinations, numDays, travelers, styles, budget, pace, morningStart, notes, startDate, arrivalCity, arrivalTime, arrivalMode, departureCity, departureTime, departureMode, hasCar, votedItems } = body;
 
     const budgetLabel = { budget: "budget (hostels, street food)", mid: "mid-range (3-star hotels, local restaurants)", luxury: "luxury (5-star hotels, fine dining)" }[budget] || "mid-range";
     const stylesText = styles.join(", ");
@@ -176,51 +180,6 @@ ${r.points?.length ? `\nKey characteristics of this route the traveler values:\n
 
     console.log("day1Note:", day1Note);
 
-    // ── COMPACT MODE: quick overview, no full activities ──
-    if (compact) {
-      const compactPrompt = `Generate a COMPACT ${numDays}-day itinerary overview for: ${destinations.join(" → ")}.
-${travelers} travelers, ${(styles || []).join(", ")} style, ${budgetLabel} budget.${travelMonth ? ` Travel month: ${travelMonth}.` : ""}
-${routeConstraint ? routeConstraint : ""}
-${notesNote}
-
-Return ONLY a raw JSON object:
-{"name":"trip name","summary":"2 sentences","cities":[{"name":"...","writeup":"1 sentence"}],"days":[{"label":"Day 1","city":"...","hotel":"specific hotel name","highlights":["Place 1","Place 2","Place 3"],"description":"1 sentence overview of this day"}]}
-
-Rules:
-- highlights: 3-4 specific named places per day (real places only). Icon + name.
-- hotel: specific named hotel, not generic.
-- description: 1 sentence capturing the day's theme.
-- No times, durations, geocodes, or activity details — just the highlights.`;
-
-      const compactResponse = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 2000,
-          temperature: 0.7,
-          stream: true,
-          messages: [{ role: "user", content: compactPrompt }],
-        }),
-      });
-
-      if (!compactResponse.ok) {
-        const err = await compactResponse.text();
-        throw new Error(`Anthropic compact error: ${err}`);
-      }
-
-      // Forward stream as SSE
-      const body = compactResponse.body;
-      return new Response(body, {
-        headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
-      });
-    }
-
-    // ── FULL MODE: detailed itinerary ──
     const userMessage = `${routeConstraint ? routeConstraint + "\n\n────\n\n" : ""}Generate a ${numDays}-day itinerary for: ${destinations.join(" → ")}.
 
 Trip: ${travelers} travelers, ${stylesText} style, ${budgetLabel} budget.${travelMonth ? ` Travel dates: ${travelMonth}.` : ""}

@@ -16,7 +16,7 @@ serve(async (req) => {
     const routeSummary = (routes || []).map((r: any, i: number) => {
       const points = (r.points || []).map((p: any) => `  • ${p.good === false ? "✗" : "✓"} ${p.text}`).join("\n");
       const days = (r.days || []).map((d: string, di: number) => `    Day ${di + 1}: ${d}`).join("\n");
-      return `ROUTE R${i + 1} (id="${r.id}") — ${r.title}
+      return `PLAN P${i + 1} (id="${r.id}") — ${r.title}
   Cities: ${r.city || ""}
   Tagline: ${r.tagline || ""}
   Best for: ${r.bestFor || ""}
@@ -39,17 +39,19 @@ TRAVELLER FORM:
 - Budget: ${form.budget || "not set"}
 - Notes: ${form.notes || "none"}
 
-CURRENT ROUTE OPTIONS:
+CURRENT PLAN OPTIONS:
 ${routeSummary}
 
 RULES:
-- ROUTE LABELS: Routes are labelled R1, R2, R3, R4 in the UI. Always refer to routes by their label (e.g. "R2" not "route 2" or the full title). When the user says "R2", they mean the route labelled R2 above.
-- INTENT: Answer questions about the routes OR modify them when the user requests a clear change. Keep "message" conversational, 2-3 sentences max. Always reference the route label (R1–R4) in your response.
-- MUTATION: When the user asks to change a route (e.g. "add Ella to R2", "make R3 slower", "rename R1 to Beach Paradise", "change the title of R2"), include an "updatedRoutes" array with the modified route objects. You CAN change ANY field including title, tagline, icon, days, cities, points, bestFor, warning. Each must include the route's original id, plus whichever fields changed. Unchanged fields can be omitted, but it's safer to return the full route object.
+- PLAN LABELS: Plans are labelled P1, P2, P3, P4 in the UI. Always refer to plans by their label (e.g. "P2" not "route 2" or the full title). When the user says "P2", they mean the plan labelled P2 above.
+- INTENT: Answer questions about the plans OR modify them when the user requests a clear change. Keep "message" conversational, 2-3 sentences max. Always reference the plan label (P1–P4) in your response.
+- MUTATION: When the user asks to change a plan (e.g. "add Ella to P2", "make P3 slower", "rename P1 to Beach Paradise", "change the title of P2"), include an "updatedRoutes" array with the modified route objects. You CAN change ANY field including title, tagline, icon, days, cities, points, bestFor, warning. Each must include the route's original id, plus whichever fields changed. Unchanged fields can be omitted, but it's safer to return the full route object.
 - NO MUTATION: For questions, comparisons, or informational answers, DO NOT include updatedRoutes. Respond conversationally.
-- Respect the existing route structure. Don't add new routes. Don't remove routes.
-- PRESERVE TRIP DURATION: Each route's "days" array length MUST stay the same as the original UNLESS the user explicitly asks to add or remove days (e.g. "make it a 6-day trip", "can we add 2 more days?", "shorten to 3 days"). Reshuffling activities within the same number of days is fine. If the user DOES explicitly request a different duration, include a "durationChanged" field set to the new number of days (e.g. "durationChanged": 6) alongside the updated route — this tells the app to adjust the trip dates.
-- MAINTAIN INVARIANTS: If you modify a route, ensure (a) its "city" field lists every city/town named in its days outline in travel order, (b) every day has a readable phrase naming the place and activity, (c) if the traveller's notes mention a requirement (e.g. scuba), reflect compatibility in "points".
+- You CAN completely replace a plan with a different destination/theme if the user asks (e.g. "Replace P3 with a Portugal plan", "Make P2 about food instead"). Return the full updated plan object with the same id.
+- When only 1-3 routes need changing, return their full objects in "updatedRoutes".
+- When ALL routes need changing (e.g. "make all plans kid-friendly", "add beach days to every plan"), return ONLY the FIRST 3 plans in "updatedRoutes" and include "pendingRoutes": [list of remaining route ids that still need the same change]. The app will apply the change to the remaining routes in follow-up calls automatically.
+- PRESERVE TRIP DURATION: Each plan.s "days" array length MUST stay the same as the original UNLESS the user explicitly asks to add or remove days (e.g. "make it a 6-day trip", "can we add 2 more days?", "shorten to 3 days"). Reshuffling activities within the same number of days is fine. If the user DOES explicitly request a different duration, include a "durationChanged" field set to the new number of days (e.g. "durationChanged": 6) alongside the updated plan — this tells the app to adjust the trip dates.
+- MAINTAIN INVARIANTS: If you modify a plan, ensure (a) its "city" field lists every city/town named in its days outline in travel order, (b) every day has a readable phrase naming the place and activity, (c) if the traveller's notes mention a requirement (e.g. scuba), reflect compatibility in "points".
 - DAYS FORMAT: "days" MUST be an array of complete descriptive strings, one per day. NEVER use numbers or short placeholders. Correct: ["Colombo → Galle (2.5h drive)", "Galle Fort walk and Unawatuna beach", "Day trip to Hikkaduwa for scuba", "Drive back to Colombo"]. WRONG: ["1","2","3","4"] or ["Day 1","Day 2"] or [{"day":1}]. When modifying a route, rewrite the FULL days array with complete descriptions — do NOT abbreviate or omit.
 - ROUTE OBJECT COMPLETENESS: Always return the ENTIRE route object in "updatedRoutes" — all fields: id, title, tagline, tier, category, icon, city, days (full strings), bestFor, warning, recommended, points. Partial returns cause the UI to render broken data.
 - POINTS FORMAT: Each point is { "text": "...", "good": true|false }. The "text" field must NOT start with ✓, ✗, •, or "-". The UI already renders a checkmark/cross based on the "good" boolean — don't duplicate it. Good: {"text":"Hikkaduwa has top scuba sites","good":true}. Bad: {"text":"✓ Hikkaduwa has top scuba sites","good":true}.
@@ -86,7 +88,7 @@ If no mutation, omit updatedRoutes:
       },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 4096,
+        max_tokens: 8192,
         stream: true,
         system: systemPrompt,
         messages,

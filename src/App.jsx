@@ -28,7 +28,9 @@ const PLACES_HEADERS = { "Authorization": `Bearer ${import.meta.env.VITE_SUPABAS
 /* ─── PHOTO HOOK ─────────────────────────────────────────────────────── */
 const _photoCache = {};
 const _usedPhotoUrls = new Set();
-let _activeTripId = null; // set when a trip is opened, used for hotel photo rate limits // prevent same photo showing on multiple activities
+let _activeTripId = null; // set when a trip is opened, used for hotel photo rate limits
+let _rgInFlight = false;  // module-level guard against StrictMode double-mount generating twice
+let _igInFlight = false;  // same for IG // prevent same photo showing on multiple activities
 
 // Returns true if the URL looks like a person portrait or otherwise unsuitable place photo
 function _isPortrait(url) {
@@ -70,7 +72,9 @@ function PhotoStrip({ activity, city }) {
       setLiveUrl(cached);
       return;
     }
+    let cancelled = false;
     _fetchPhoto(geocode, city, activity?.type).then(src => {
+      if (cancelled) return;
       if (src) {
         _usedPhotoUrls.add(src);
         if (activity?.id) supabase.from("activities").update({ photo_url: src }).eq("id", activity.id).then();
@@ -78,6 +82,7 @@ function PhotoStrip({ activity, city }) {
       _photoCache[key] = src ?? null;
       setLiveUrl(src ?? null);
     });
+    return () => { cancelled = true; };
   }, [stored, broken, visible, geocode, city]);
 
   useEffect(() => {
@@ -700,9 +705,9 @@ function RouteMapView({ routes, selectedId, onSelectRoute }) {
       {/* Header */}
       <div style={{ background: T.chalk, borderBottom: `1px solid ${T.sand}`, flexShrink: 0 }}>
         <div style={{ padding: "10px 14px 6px" }}>
-          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: T.ink, marginBottom: 2 }}>🗺 Routes on the map</div>
+          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: T.ink, marginBottom: 2 }}>🗺 Plans on the map</div>
           <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}>
-            {resolving ? "Plotting your route options…" : selectedId ? (routes || []).find(r => r.id === selectedId)?.title : "Tap a route to focus"}
+            {resolving ? "Plotting your trip plans…" : selectedId ? (routes || []).find(r => r.id === selectedId)?.title : "Tap a plan to focus"}
           </div>
         </div>
         {/* Route picker pills */}
@@ -714,7 +719,7 @@ function RouteMapView({ routes, selectedId, onSelectRoute }) {
             color: !selectedId ? "white" : T.mist,
             fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer",
             fontWeight: !selectedId ? 700 : 400,
-          }}>All routes</button>
+          }}>All plans</button>
           {(routes || []).map((r, i) => {
             const active = selectedId === r.id;
             const color = DAY_COLORS[i % DAY_COLORS.length];
@@ -752,7 +757,7 @@ function RouteMapView({ routes, selectedId, onSelectRoute }) {
               ))}
             </div>
             <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>
-              Plotting routes…
+              Plotting plans…
             </div>
           </div>
         </div>
@@ -888,7 +893,8 @@ function TodoView({ trip, onBack }) {
 
   useEffect(() => {
     supabase.from("trip_todos").select("*").eq("trip_id", trip.id).order("position")
-      .then(({ data }) => { setTodos(data || []); setLoading(false); });
+      .then(({ data }) => { setTodos(data || []); setLoading(false); })
+      .catch(() => setLoading(false));
   }, [trip.id]);
 
   const generate = async () => {
@@ -1094,18 +1100,18 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
   // Full mode: expanded card with all details
   return (
     <div onClick={interactive ? onVote : undefined} style={{
-      background: hasError ? "#FFF0F0" : selected ? `linear-gradient(135deg, ${T.ocean}12, ${T.dusk}08)` : T.chalk,
+      background: hasError ? "#FFF0F0" : selected ? `linear-gradient(135deg, ${T.moss}08, ${T.moss}04)` : T.chalk,
       borderRadius: 16, padding: "14px 16px",
-      border: `2px solid ${hasError ? "#e53e3e" : selected ? T.ocean : T.sand}`,
-      cursor: interactive ? "pointer" : "default",
+      border: `2px solid ${hasError ? "#e53e3e" : selected ? T.moss : T.sand}`,
       position: "relative",
+      cursor: interactive ? "pointer" : "default",
     }}>
       {/* Header row — route label inline with title */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
         <div style={{ fontSize: 24, flexShrink: 0, marginTop: 1 }}>{item.icon}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-            {routeLabel && <span style={{background:T.dusk,color:"white",fontSize:10,fontFamily:"Georgia,serif",fontWeight:700,borderRadius:6,padding:"2px 7px",letterSpacing:0.5,flexShrink:0}}>{routeLabel}</span>}
+            {routeLabel && <span style={{background:T.dusk,color:"white",fontSize:9,fontFamily:"Georgia,serif",fontWeight:600,borderRadius:4,padding:"1px 5px",letterSpacing:0.3,flexShrink:0,opacity:0.8}}>{routeLabel}</span>}
             <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, lineHeight: 1.2 }}>{item.title}</div>
           </div>
           {item.recommended && showRecommended && (
@@ -1116,19 +1122,11 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
             </div>
           )}
         </div>
-        {interactive ? (
-          <div style={{
-            width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
-            border: `2px solid ${selected ? T.ocean : T.sand}`,
-            background: selected ? T.ocean : "transparent",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            color: "white", fontSize: 11, fontWeight: 700,
-          }}>{selected && "✓"}</div>
-        ) : selected ? (
-          <span style={{ fontSize: 11, color: T.ocean, background: "#EBF3FD", borderRadius: 20, padding: "2px 9px", fontFamily: "Georgia,serif", fontWeight: 600, flexShrink: 0 }}>
-            Selected
+        {!interactive && selected && (
+          <span style={{ fontSize: 11, color: T.moss, background: "#DCFCE7", borderRadius: 20, padding: "2px 9px", fontFamily: "Georgia,serif", fontWeight: 600, flexShrink: 0 }}>
+            ✓ Selected
           </span>
-        ) : null}
+        )}
       </div>
       {/* Day-by-day outline */}
       {item.days?.length > 0 && (
@@ -1179,23 +1177,36 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
       {/* Error banner */}
       {hasError && (
         <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: "#FEE2E2", border: "1px solid #FECACA", fontSize: 12, color: "#c53030", fontFamily: "Georgia,serif" }}>
-          ⚠ {item._error} — try editing this route again in chat
+          ⚠ {item._error} — try editing this plan again in chat
         </div>
       )}
-      {/* Dismiss */}
-      {onDismiss && (
-        <button onClick={(e) => { e.stopPropagation(); onDismiss(); }} style={{
-          position: "absolute", top: 8, right: 36,
-          width: 22, height: 22, borderRadius: "50%", border: "none",
-          background: T.sand, color: T.mist, fontSize: 12, cursor: "pointer",
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>✕</button>
+      {/* Action buttons */}
+      {interactive && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+          <button onClick={(e) => { e.stopPropagation(); onVote?.(); }} style={{
+            padding: "7px 18px", borderRadius: 10, border: "none",
+            background: selected ? T.moss : T.ocean,
+            color: "white", fontFamily: "Georgia,serif", fontSize: 12, fontWeight: 600,
+            cursor: "pointer",
+          }}>
+            {selected ? "✓ Selected" : "Select"}
+          </button>
+          {onDismiss && (
+            <button onClick={(e) => { e.stopPropagation(); onDismiss(); }} style={{
+              padding: "7px 12px", borderRadius: 10, border: "none",
+              background: "none", color: T.mist, fontFamily: "Georgia,serif", fontSize: 12,
+              cursor: "pointer",
+            }}>
+              Dismiss this plan
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onBack, onEditForm = null, onOpenChat = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null }) {
+function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onBack, onEditForm = null, onOpenChat = null, onDismissRoute = null, undoDismissRef = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null }) {
   const [items, setItems] = useState(null); // null = not started, [] = empty, [...] = loaded
   const [loadingItems, setLoadingItems] = useState(false);
   const [localVotes, setLocalVotes] = useState({}); // { [tempId]: 1|-1|0 } — pre-trip mode votes
@@ -1211,7 +1222,19 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
 
   // Fun counter: climbs from 12 to an absurd number while generating.
   // Stops once the routes are visibly present even if the stream hasn't formally closed.
-  const routesReady = (items || []).filter(it => it.tier === 1).length >= 4;
+  const routesReady = !generating && (items || []).filter(it => it.tier === 1 && !it.dismissed).length > 0;
+
+  // Expose undo-dismiss function to parent via ref
+  useEffect(() => {
+    if (undoDismissRef) {
+      undoDismissRef.current = (routeId) => {
+        setItems(prev => (prev || []).map(it => it.id === routeId ? { ...it, dismissed: false } : it));
+        if (routeId && !String(routeId).startsWith("temp_")) {
+          supabase.from("brainstorm_items").update({ dismissed: false }).eq("id", routeId);
+        }
+      };
+    }
+  });
   useEffect(() => {
     if (!generating || routesReady) { setIdeaCount(12); return; }
     const id = setInterval(() => {
@@ -1292,12 +1315,16 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
       }
       return merged;
     });
-    if (flattened.length === 0) {
-      // No saved routes yet — generate fresh ones
-      if (destinations.length) { generate(); return; }
-    }
-    setItems(flattened);
-    const previouslySelected = flattened.find(it => it.tier === 1 && it.selected);
+    // If no saved routes, show empty state — user can click "Show me more plans"
+    // Assign stable route labels if missing
+    let labelCounter = 0;
+    const labeled = flattened.map(it => {
+      if (it.tier === 1 && !it.routeLabel) return { ...it, routeLabel: `P${++labelCounter}` };
+      if (it.tier === 1 && it.routeLabel) { labelCounter = Math.max(labelCounter, parseInt(it.routeLabel.replace("R","")) || 0); }
+      return it;
+    });
+    setItems(labeled);
+    const previouslySelected = labeled.find(it => it.tier === 1 && !it.dismissed && it.selected);
     if (previouslySelected) {
       setLocalVotes({ [previouslySelected.id]: 1 });
     }
@@ -1315,12 +1342,15 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
     setItems(flattened);
   }
 
-  async function generate() {
+  const isAddingMore = useRef(false);
+  async function generate(addMore = false) {
     if (!destinations.length) return;
+    if (_rgInFlight) return; // prevent double-call from StrictMode remount
+    _rgInFlight = true;
+    isAddingMore.current = addMore;
     setGenerating(true);
     setGenError(null);
-    // Don't clear existing items — new routes will be added alongside
-    if (!items?.length) setItems([]);
+    if (!addMore) { setItems([]); setLocalVotes({}); }
     try {
       const travelMonth = igReq.startDate ? new Date(igReq.startDate).toLocaleString("en-US", { month: "long" }) : null;
       const numDays = (igReq.startDate && igReq.endDate)
@@ -1329,7 +1359,12 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-brainstorm`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-        body: JSON.stringify({ destinations, styles: igReq.styles, budget: igReq.budget, travelMonth, numDays, arrivalCity: igReq.arrivalCity || null, departureCity: igReq.departureCity || null, notes: igReq.notes || null }),
+        body: JSON.stringify({
+          destinations, styles: igReq.styles, budget: igReq.budget, travelMonth, numDays,
+          arrivalCity: igReq.arrivalCity || null, departureCity: igReq.departureCity || null,
+          notes: igReq.notes || null,
+          existingPlans: addMore ? (items || []).filter(it => it.tier === 1 && !it.dismissed).map(it => it.title) : null,
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -1366,13 +1401,21 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                 try {
                   const item = JSON.parse(objStr);
                   if (item.title && item.category) {
-                    const itemWithId = isPretripMode ? { ...item, id: `temp_${tempIdCounter++}` } : item;
+                    const labelNum = (isAddingMore.current ? (items || []).filter(it => it.tier === 1 && !it.dismissed).length : 0) + streamedItems.filter(s => s.tier === 1).length + 1;
+                    const itemWithId = isPretripMode ? { ...item, id: `temp_${tempIdCounter++}`, routeLabel: item.tier === 1 ? `P${labelNum}` : undefined } : item;
                     streamedItems.push(itemWithId);
-                    setItems(prev => {
-                      // Append new items to any existing ones (don't replace)
-                      const existing = (prev || []).filter(p => !streamedItems.some(s => s.id === p.id));
-                      return [...existing, ...streamedItems];
-                    });
+                    if (isAddingMore.current) {
+                      setItems(prev => {
+                        const existing = (prev || []).filter(p => !streamedItems.some(s => s.id === p.id));
+                        return [...existing, ...streamedItems];
+                      });
+                    } else {
+                      setItems(prev => {
+                        // Keep any non-tier1 items from prev (tier2 etc.) + new streamed items
+                        const kept = (prev || []).filter(p => p.tier !== 1 && !streamedItems.some(s => s.id === p.id));
+                        return [...kept, ...streamedItems];
+                      });
+                    }
                   }
                 } catch { /* partial object, skip */ }
               }
@@ -1397,25 +1440,28 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
 
       if (!streamedItems.length) throw new Error("No items received");
 
-      // Persist new items to DB (append, don't replace existing)
       const targetTripId = trip?.id || editTripIdRef.current;
       if (targetTripId) {
-        // Get max position of existing items
-        const { data: existingItems } = await supabase.from("brainstorm_items").select("position").eq("trip_id", targetTripId).order("position", { ascending: false }).limit(1);
-        const startPos = (existingItems?.[0]?.position ?? -1) + 1;
+        let startPos = 0;
+        if (isAddingMore.current) {
+          const { data: existingItems } = await supabase.from("brainstorm_items").select("position").eq("trip_id", targetTripId).order("position", { ascending: false }).limit(1);
+          startPos = (existingItems?.[0]?.position ?? -1) + 1;
+        } else {
+          await supabase.from("brainstorm_items").delete().eq("trip_id", targetTripId);
+        }
         const rows = streamedItems.map((item, i) => ({
           trip_id: targetTripId, title: item.title, city: item.city || null,
           category: item.category || "Route", note: item.tagline || null,
           icon: item.icon || null, geocode: item.geocode || null,
           position: startPos + i, tier: item.tier || 2,
-          data: { tagline: item.tagline, days: item.days, bestFor: item.bestFor, warning: item.warning, recommended: !!item.recommended, points: item.points },
+          data: { tagline: item.tagline, days: item.days, bestFor: item.bestFor, warning: item.warning, recommended: !!item.recommended, points: item.points, routeLabel: item.routeLabel || null },
         }));
         const { data, error: insertErr } = await supabase.from("brainstorm_items").insert(rows).select();
         if (insertErr) console.warn("Failed to save brainstorm items:", insertErr);
         // Merge DB rows with existing items
         const saved = (data || []).map(row => ({ ...row, ...(row.data || {}) }));
         setItems(prev => {
-          const existing = (prev || []).filter(p => !saved.some(s => s.title === p.title && s.tier === p.tier));
+          const existing = (prev || []).filter(p => !saved.some(s => s.id === p.id));
           return [...existing, ...(saved.length ? saved : streamedItems)];
         });
       } else {
@@ -1429,6 +1475,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
       setGenError(e.message);
     }
     setGenerating(false);
+    _rgInFlight = false;
   }
 
   function castVote(itemId, value) {
@@ -1460,8 +1507,8 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
     onBuild(voted);
   };
 
-  const tier1Items = (items || []).filter(it => it.tier === 1);
-  const tier2Items = (items || []).filter(it => (it.tier || 2) === 2);
+  const tier1Items = (items || []).filter(it => it.tier === 1 && !it.dismissed).slice(0, 12);
+  const tier2Items = (items || []).filter(it => (it.tier || 2) === 2 && !it.dismissed);
   const visibleTier2 = tier2Items.filter(it => activeCategory === "All" || it.category === activeCategory);
 
   // Notify parent when tier 1 routes change (for external map / chat consumers)
@@ -1582,33 +1629,40 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {tier1Items.map((item, idx) => (
               <div key={item.id} ref={el => { if (el) routeCardRefs.current[item.id] = el; }}>
-                <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} showRecommended={routesReady} routeLabel={`R${idx + 1}`}
+                <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} showRecommended={routesReady} routeLabel={item.routeLabel || `P${idx + 1}`}
                   onDismiss={() => {
-                    setItems(prev => (prev || []).filter(it => it.id !== item.id));
+                    const label = item.routeLabel || `P${idx + 1}`;
+                    setItems(prev => (prev || []).map(it => it.id === item.id ? { ...it, dismissed: true } : it));
                     setLocalVotes(prev => { const next = { ...prev }; delete next[item.id]; return next; });
-                    // Remove from DB if persisted
                     if (item.id && !String(item.id).startsWith("temp_")) {
-                      supabase.from("brainstorm_items").delete().eq("id", item.id);
+                      supabase.from("brainstorm_items").update({ dismissed: true }).eq("id", item.id);
                     }
+                    onDismissRoute?.(label, item.id);
                   }}
                 />
               </div>
             ))}
           </div>
-          {/* Generate new options — only when we're showing saved routes (edit flow) */}
-          {tier1Items.length > 0 && !generating && (
-            <button
-              onClick={generate}
-              style={{
-                marginTop: 14, width: "100%",
-                padding: "11px 14px", borderRadius: 12,
-                background: T.chalk, border: `1.5px dashed ${T.sand}`, color: T.ocean,
-                fontFamily: "Georgia,serif", fontSize: 13, fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              ✨ Generate new options
-            </button>
+          {/* Generate new options */}
+          {!generating && (
+            tier1Items.length >= 12 ? (
+              <div style={{ marginTop: 14, textAlign: "center", fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>
+                Maximum 12 plans reached — dismiss some to generate more
+              </div>
+            ) : (
+              <button
+                onClick={() => generate(true)}
+                style={{
+                  marginTop: 14, width: "100%",
+                  padding: "11px 14px", borderRadius: 12,
+                  background: T.chalk, border: `1.5px dashed ${T.sand}`, color: T.ocean,
+                  fontFamily: "Georgia,serif", fontSize: 13, fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                ✨ Show me more plans
+              </button>
+            )
           )}
         </>)}
 
@@ -1888,7 +1942,7 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
           // Gather cities already on the itinerary
           const itineraryCities = new Set((days || []).map(d => (d.city || "").toLowerCase()));
           // Gather cities from unselected routes (tier 1, not selected)
-          const unselectedRoutes = (items || []).filter(it => it.tier === 1 && !it.selected);
+          const unselectedRoutes = (items || []).filter(it => it.tier === 1 && !it.selected && !it.dismissed);
           const otherCitiesMap = new Map(); // city → { city, fromRoute }
           for (const route of unselectedRoutes) {
             const cities = (route.city || "").split(",").map(s => s.trim()).filter(Boolean);
@@ -1952,7 +2006,8 @@ function BoardView({ trip, onSaveNotes }) {
   useEffect(() => {
     if (!trip?.id) return;
     supabase.from("trip_todos").select("id, text, done").eq("trip_id", trip.id).order("position").limit(5)
-      .then(({ data }) => setTodoItems(data || []));
+      .then(({ data }) => setTodoItems(data || []))
+      .catch(() => setTodoItems([]));
   }, [trip?.id, activeSection]); // re-fetch when returning from sub-view
 
   if (activeSection === "notes") {
@@ -2477,10 +2532,12 @@ function DayCompact({ day, displayCity, onExpand }) {
   }
   if (currentGroup.length) lines.push({ type: currentType, items: currentGroup });
 
+  const mapsLink = (text, city) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${text} ${city || day.city}`)}`;
+
   return (
-    <div style={{ marginBottom: 8, background: T.chalk, borderRadius: 14, border: `1px solid ${T.sand}`, padding: "12px 14px", cursor: "pointer" }} onClick={onExpand}>
-      {/* Day header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+    <div style={{ marginBottom: 8, background: T.chalk, borderRadius: 14, border: `1px solid ${T.sand}`, padding: "12px 14px" }}>
+      {/* Day header — clickable to expand */}
+      <div onClick={onExpand} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ background: T.ocean, color: "white", borderRadius: 8, padding: "3px 10px", fontFamily: "'DM Serif Display',serif", fontSize: 12 }}>{day.label}</div>
           <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink }}>{displayCity || day.city}</div>
@@ -2490,16 +2547,16 @@ function DayCompact({ day, displayCity, onExpand }) {
 
       {/* Transit */}
       {transit && (
-        <div style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.mist, marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}>
-          {transit.icon} {transit.title} · {transit.duration}
-        </div>
+        <a href={mapsLink(transit.geocode || transit.title)} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.mist, marginBottom: 6, display: "flex", alignItems: "center", gap: 4, textDecoration: "none" }}>
+          {transit.icon} {transit.title}
+        </a>
       )}
 
       {/* Hotel */}
       {hotel && (
-        <div style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.ink, marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}>
-          🏨 {hotel.title.replace(/^Check in at /i, "")} · {hotel.note || ""}
-        </div>
+        <a href={mapsLink(hotel.geocode || hotel.title.replace(/^Check in at /i, ""))} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.ink, marginBottom: 6, display: "flex", alignItems: "center", gap: 4, textDecoration: "none" }}>
+          🏨 {hotel.title.replace(/^Check in at /i, "")} {hotel.note ? `· ${hotel.note}` : ""}
+        </a>
       )}
 
       {/* Activity lines — grouped */}
@@ -2508,15 +2565,16 @@ function DayCompact({ day, displayCity, onExpand }) {
           {line.items.map((act, ai) => (
             <span key={ai}>
               {ai > 0 && <span style={{ color: T.mist }}> → </span>}
-              <span>{act.icon} {act.title}</span>
-              {act.duration && <span style={{ color: T.mist, fontSize: 10 }}> {act.duration}</span>}
+              <a href={mapsLink(act.geocode || act.title)} target="_blank" rel="noopener noreferrer" style={{ color: T.ink, textDecoration: "none" }}>
+                {act.icon} {act.title}
+              </a>
             </span>
           ))}
         </div>
       ))}
 
-      {/* Wishlist count */}
-      {day.wishlist?.length > 0 && (
+      {/* Wishlist count removed from compact view */}
+      {false && day.wishlist?.length > 0 && (
         <div style={{ fontSize: 10, fontFamily: "Georgia,serif", color: T.terra, marginTop: 4 }}>
           ✨ {day.wishlist.length} local gem{day.wishlist.length > 1 ? "s" : ""} nearby
         </div>
@@ -2551,7 +2609,7 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
           <a href={dayMapsUrl} target="_blank" rel="noopener noreferrer"
             style={{fontSize:12,color:T.ocean,textDecoration:"none",background:"#EBF3FD",
               borderRadius:20,padding:"4px 11px",fontFamily:"Georgia,serif",flexShrink:0,whiteSpace:"nowrap"}}>
-            <img src="/google-maps-icon.png" alt="" style={{width:12,height:12,objectFit:"contain"}}/> Navigate
+            <img src="/google-maps-icon.png" alt="" style={{width:12,height:12,objectFit:"contain"}}/> Route
           </a>
         )}
         {day.description && (
@@ -2698,10 +2756,13 @@ function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
+    let cancelled = false;
     _fetchPhoto(suggestion.geocode || suggestion.title, null, suggestion.type).then(url => {
+      if (cancelled) return;
       setPhotoUrl(url);
       setLoaded(true);
     });
+    return () => { cancelled = true; };
   }, [suggestion.geocode]);
   return (
     <div style={{
@@ -2920,11 +2981,13 @@ function MagazineHighlightCard({ item, city, inItinerary = false }) {
   const [loaded, setLoaded] = useState(!!item.photo_url);
   useEffect(() => {
     if (photoUrl) { setLoaded(true); return; }
-    // Pass city as context so Wikipedia search scopes correctly (e.g. "Amber Fort" + "Jaipur")
+    let cancelled = false;
     _fetchPhoto(searchKey, city, item.type || "sight").then(url => {
+      if (cancelled) return;
       setPhotoUrl(url);
       setLoaded(true);
     });
+    return () => { cancelled = true; };
   }, [searchKey, city]);
   const mapsQuery = encodeURIComponent((item.geocode || item.title) + (city ? `, ${city}` : ""));
   return (
@@ -2959,7 +3022,9 @@ function HotelSuggestionCard({ suggestion, onSelect, onKnowMore }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
-    _fetchPhoto(suggestion.geocode || suggestion.title, null, "hotel", { context: "chat" }).then(url => { setPhotoUrl(url); setLoaded(true); });
+    let cancelled = false;
+    _fetchPhoto(suggestion.geocode || suggestion.title, null, "hotel", { context: "chat" }).then(url => { if (!cancelled) { setPhotoUrl(url); setLoaded(true); } });
+    return () => { cancelled = true; };
   }, [suggestion.geocode]);
   const priceLen = (suggestion.price || "").length;
   const priceColor = priceLen >= 4 ? "#7C3AED" : priceLen === 3 ? "#92400E" : "#166534";
@@ -3010,7 +3075,9 @@ function HotelCard({ hotel, selected, onSelect }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
-    _fetchPhoto(hotel.geocode || hotel.title, null, "hotel", { context: "itinerary" }).then(url => { setPhotoUrl(url); setLoaded(true); });
+    let cancelled = false;
+    _fetchPhoto(hotel.geocode || hotel.title, null, "hotel", { context: "itinerary" }).then(url => { if (!cancelled) { setPhotoUrl(url); setLoaded(true); } });
+    return () => { cancelled = true; };
   }, [hotel.geocode]);
   return (
     <div onClick={onSelect} style={{
@@ -3057,7 +3124,7 @@ function HotelCarousel({ options, checkInTime, selectedTitle, onSelect }) {
 
 /* ─── DATE RANGE PICKER ──────────────────────────────────────────────── */
 function DateRangePicker({ startDate, endDate, onChange }) {
-  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayISO = new Date().toISOString().slice(0, 12);
   const initDate = startDate || todayISO;
   const [viewYear, setViewYear] = useState(() => parseInt(initDate.slice(0, 4)));
   const [viewMonth, setViewMonth] = useState(() => parseInt(initDate.slice(5, 7)) - 1);
@@ -3212,7 +3279,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
   const _today = new Date();
   const _defaultStart = new Date(_today); _defaultStart.setDate(_today.getDate() + 15);
   const _defaultEnd   = new Date(_today); _defaultEnd.setDate(_today.getDate() + 20);
-  const _fmt = (d) => d.toISOString().slice(0, 10);
+  const _fmt = (d) => d.toISOString().slice(0, 12);
   const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", notes:"", arrivalCity:"", departureCity:"", ...prefill, ...(prefillForm || {}) });
 
   // Re-apply prefillForm on any change (handles returning from brainstorm)
@@ -3325,7 +3392,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
       </div>
 
       <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:14}}>
-        {["Rajasthan 🏯","Kyoto 🌸","Amalfi 🌊","Patagonia 🏔️","Morocco 🕌","Koh Samui 🏝️","Bali 🌴","Santorini ☀️"].map(d=>{
+        {["Rajasthan 🏯","Japan 🌸","Amalfi 🌊","Patagonia 🏔️","Morocco 🕌","Koh Samui 🏝️","Bali 🌴","Santorini ☀️"].map(d=>{
           const name = d.split(" ")[0];
           const sel  = form.destinations.includes(name);
           return (
@@ -3338,12 +3405,12 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
         })}
       </div>
       {form.destinations.length === 0 && (
-        <button onClick={()=>addDestination("Open to ideas")} style={{
+        <button onClick={()=>{ addDestination("Open to ideas"); setStep(1); }} style={{
           display:"flex",alignItems:"center",justifyContent:"center",gap:6,
           width:"100%",marginTop:12,padding:"12px 0",borderRadius:14,
-          border:`2px dashed ${form.destinations.includes("Open to ideas")?T.ocean:T.sand}`,
-          background:form.destinations.includes("Open to ideas")?`${T.ocean}08`:"transparent",
-          color:form.destinations.includes("Open to ideas")?T.ocean:T.mist,
+          border:`2px dashed ${T.sand}`,
+          background:"transparent",
+          color:T.mist,
           fontFamily:"Georgia,serif",fontSize:14,cursor:"pointer",
         }}>
           🌐 Help me decide
@@ -3888,7 +3955,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [activeBottomTab, setActiveBottomTab] = useState("itinerary");
   const [compactView, setCompactView] = useState(true); // start in compact mode
   const [detailedLoading, setDetailedLoading] = useState(false); // true while full IG loads in background
-  const [detailedReady, setDetailedReady] = useState(false); // true once full IG is loaded
+  const [detailedReady, setDetailedReady] = useState(initialScreen === "itinerary"); // true if opening existing trip
   const [pretripTab, setPretripTab] = useState("brainstorm"); // pre-trip bottom nav tab
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
   const [fabPos, setFabPos] = useState({ right: 0, bottom: 140 }); // draggable FAB position, flush right
@@ -3998,6 +4065,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const pillStrip     = useRef(null);
   const isJumping     = useRef(false);
   const logisticsRef  = useRef(null);
+  const undoDismissRef = useRef(null);
 
   const editActivity = (dayId, updated) => {
     setDays(prev=>prev.map(d=>d.id===dayId?{...d,activities:d.activities.map(a=>a.id===updated.id?updated:a)}:d));
@@ -4171,6 +4239,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   };
 
   const handleGenerate = async (form, votedItems = null) => {
+    if (_igInFlight) return;
+    _igInFlight = true;
+    const capturedTripId = editingTrip?.id || null;
+    let genLogId = null; // track this generation's log row
     setGenerateError("");
     setStreamingDays(0);
     setAllDaysPlanned(false);
@@ -4203,81 +4275,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       votedItems: votedItems || null,
     };
 
-    // ── STEP 1: Compact itinerary (fast, uses Haiku) ──
-    let compactItinerary = null;
-    const generationStartedAt = new Date().toISOString();
-    try {
-      const res1 = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-itinerary`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-          body: JSON.stringify({ ...igBody, compact: true }),
-        }
-      );
-      if (res1.ok) {
-        const reader1 = res1.body.getReader();
-        const decoder1 = new TextDecoder();
-        let acc1 = "", lb1 = "";
-        while (true) {
-          const { done, value } = await reader1.read();
-          if (done) break;
-          lb1 += decoder1.decode(value, { stream: true });
-          const lines = lb1.split("\n"); lb1 = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const raw = line.slice(6).trim();
-            if (raw === "[DONE]") continue;
-            try { acc1 += JSON.parse(raw); } catch {}
-          }
-        }
-        // Parse compact JSON
-        let cleaned = acc1.replace(/^```json\s*/,"").replace(/\s*```$/,"").trim();
-        const s1 = cleaned.indexOf("{"), e1 = cleaned.lastIndexOf("}");
-        if (s1 >= 0 && e1 > s1) compactItinerary = JSON.parse(cleaned.slice(s1, e1 + 1));
-      }
-    } catch (e) { console.warn("Compact IG failed, proceeding to full:", e.message); }
-
-    // Show compact itinerary immediately if available
-    if (compactItinerary) {
-      // Build minimal day structure for compact view
-      const start = new Date(form.startDate);
-      const compactDays = (compactItinerary.days || []).map((day, i) => {
-        const dayDate = new Date(start); dayDate.setDate(start.getDate() + i);
-        return {
-          id: `compact-${i}`,
-          label: day.label || `Day ${i + 1}`,
-          city: day.city || "",
-          date: dayDate.toISOString().split("T")[0],
-          description: day.description || "",
-          activities: [
-            ...(day.hotel ? [{ id: `c-hotel-${i}`, type: "hotel", title: `Check in at ${day.hotel}`, icon: "🏨", time: "14:00", duration: "0.5h", note: "" }] : []),
-            ...(day.highlights || []).map((h, hi) => ({ id: `c-act-${i}-${hi}`, type: "sight", title: typeof h === "string" ? h : h.title || "", icon: typeof h === "string" ? "📍" : (h.icon || "📍"), time: "", duration: "", note: "" })),
-          ],
-          wishlist: [],
-        };
-      });
-      const fmt = (d) => new Date(d).toLocaleDateString("en-US", { month:"short", day:"numeric" });
-      setTrip(prev => ({
-        ...prev,
-        name: compactItinerary.name || prev.name,
-        dates: `${fmt(form.startDate)} – ${fmt(form.endDate)}, ${new Date(form.endDate).getFullYear()}`,
-        ig_response: compactItinerary,
-      }));
-      setDays(compactDays);
-      setActiveDay(0);
-      setScreen("itinerary");
-      setCompactView(true);
-      setDetailedLoading(true);
-      playDoneChime();
-    }
-
-    // ── STEP 2: Full detailed itinerary (background, uses Sonnet) ──
+    // ── Single call: streams compact first, then full days ──
+    let compactShown = false;
     let itinerary;
     let accumulated = "";
+    const generationStartedAt = new Date().toISOString();
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 90000);
+      const timeout = setTimeout(() => controller.abort(), 120000);
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-itinerary`,
         {
@@ -4307,10 +4312,85 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           if (raw === "[DONE]") continue;
           try {
             accumulated += JSON.parse(raw);
-            const daysPlanned = (accumulated.match(/"label"\s*:/g) || []).length;
-            if (daysPlanned > 0) setStreamingDays(daysPlanned);
-            // Only flip to "Hold your breath…" after the final day's content is substantially complete
-            // (heuristic: we've seen wishlist or summary sections, or stream has accumulated well past labels)
+
+            // Detect compact section complete — render immediately
+            if (!compactShown && /"compact"\s*:\s*\[/.test(accumulated) && /"days"\s*:\s*\[/.test(accumulated)) {
+              try {
+                // Extract just enough JSON to parse compact
+                const compactEnd = accumulated.indexOf('"days"');
+                if (compactEnd > 0) {
+                  let partial = accumulated.slice(0, compactEnd).replace(/,\s*$/, "") + "}";
+                  partial = partial.replace(/^```(?:json)?\s*/i, "").trim();
+                  const s = partial.indexOf("{");
+                  if (s >= 0) {
+                    const compactData = JSON.parse(partial.slice(s));
+                    if (compactData.compact?.length) {
+                      compactShown = true;
+                      const start = new Date(form.startDate);
+                      const compactDays = compactData.compact.map((day, i) => {
+                        const dayDate = new Date(start); dayDate.setDate(start.getDate() + i);
+                        return {
+                          id: `compact-${i}`, label: day.label || `Day ${i + 1}`, city: day.city || "",
+                          date: dayDate.toISOString().split("T")[0], description: day.description || "",
+                          activities: [
+                            ...(day.hotel ? [{ id: `c-hotel-${i}`, type: "hotel", title: `Check in at ${day.hotel}`, icon: "🏨", time: "14:00", duration: "0.5h", note: "" }] : []),
+                            ...(day.highlights || []).map((h, hi) => {
+                              const title = typeof h === "string" ? h : h.title || "";
+                              const llmIcon = typeof h === "object" ? h.icon : null;
+                              const tl = title.toLowerCase();
+                              const icon = llmIcon || (
+                                /sushi|ramen|food|eat|dining|restaurant|cafe|bakery|market|street food/i.test(tl) ? "🍜"
+                                : /temple|shrine|mosque|church|cathedral/i.test(tl) ? "⛩"
+                                : /museum|gallery|art/i.test(tl) ? "🏛"
+                                : /park|garden|nature|forest|lake|mountain|volcano|trek|hike/i.test(tl) ? "🌿"
+                                : /beach|coast|island|bay|snorkel|dive/i.test(tl) ? "🏖"
+                                : /shop|mall|bazaar|souk/i.test(tl) ? "🛍"
+                                : /bar|club|night/i.test(tl) ? "🍸"
+                                : /spa|onsen|bath|wellness/i.test(tl) ? "♨️"
+                                : /walk|stroll|district|quarter|street|lane/i.test(tl) ? "🚶"
+                                : /palace|castle|fort/i.test(tl) ? "🏰"
+                                : "📍"
+                              );
+                              return { id: `c-act-${i}-${hi}`, type: "sight", title, icon, time: "", duration: "", note: "" };
+                            }),
+                          ],
+                          wishlist: [],
+                        };
+                      });
+                      const fmt = (d) => new Date(d).toLocaleDateString("en-US", { month:"short", day:"numeric" });
+                      const compactTripName = compactData.name
+                        ? `${compactData.name} · ${fmt(form.startDate)}–${fmt(form.endDate)}`
+                        : editingTrip?.name || igDestinations.join(" → ");
+                      const compactDates = (form.startDate && form.endDate) ? `${fmt(form.startDate)} – ${fmt(form.endDate)}, ${new Date(form.endDate).getFullYear()}` : "";
+                      setTrip(prev => ({
+                        ...prev, name: compactTripName, destination: igDestinations.join(" → "),
+                        dates: compactDates,
+                        travelers: parseInt(form.travelers) || prev.travelers || null,
+                        ig_response: compactData,
+                      }));
+                      if (capturedTripId) {
+                        const compactReadyAt = new Date().toISOString();
+                        supabase.from("trips").update({ name: compactTripName, destination: igDestinations.join(" → "), ig_response: compactData, compact_ready_at: compactReadyAt, generation_started_at: generationStartedAt }).eq("id", capturedTripId);
+                        supabase.from("generation_log").insert({ trip_id: capturedTripId, generation_started_at: generationStartedAt, compact_ready_at: compactReadyAt }).select("id").single().then(({ data }) => { if (data) genLogId = data.id; });
+                      }
+                      setDays(compactDays);
+                      setActiveDay(0);
+                      setScreen("itinerary");
+                      setCompactView(true);
+                      setDetailedLoading(true);
+                      playDoneChime();
+                    }
+                  }
+                }
+              } catch { /* compact parse failed, continue streaming */ }
+            }
+
+            // Track day progress for the generating screen (if compact hasn't shown yet)
+            const daysInDaysArray = (accumulated.match(/"label"\s*:/g) || []).length;
+            // Subtract compact labels (they appear before days)
+            const compactLabels = (accumulated.match(/"compact"\s*:[\s\S]*?"label"/g) || []).length;
+            const daysPlanned = Math.max(0, daysInDaysArray - (compactShown ? compactLabels : 0));
+            if (daysPlanned > 0 && !compactShown) setStreamingDays(daysPlanned);
             if (daysPlanned >= numDays && (/"summary"\s*:/.test(accumulated) || /"wishlist"\s*:\s*\[[\s\S]*?\][\s\S]{200,}/.test(accumulated))) {
               setAllDaysPlanned(true);
             }
@@ -4370,6 +4450,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       console.error("Accumulated tail:", accumulated.slice(-300));
       setGenerateError(`Generation failed: ${e.message}. Please try again.`);
       setScreen("setup");
+      _igInFlight = false;
       return;
     }
     const generationCompletedAt = new Date().toISOString();
@@ -4394,12 +4475,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     const tripPayload = {
       id: tripId,
       name: tripName,
-      destination: form.destinations.join(" → "),
+      destination: igDestinations.join(" → "),
       start_date: form.startDate,
       end_date: form.endDate,
       created_by: session.user.id,
       generation_started_at: generationStartedAt,
       generation_completed_at: generationCompletedAt,
+      detailed_ready_at: generationCompletedAt,
       ig_request: igRequest,
       ig_response: itinerary,
       ig_count: (editingTrip?.ig_count || 0) + 1,
@@ -4426,7 +4508,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
       }
       const { error: delDayErr } = await supabase.from("days").delete().eq("trip_id", tripId);
       if (delDayErr) console.error("Failed to delete days:", delDayErr);
-      await supabase.from("brainstorm_items").delete().eq("trip_id", tripId);
+      // Keep brainstorm_items — user can go back to "Explore Other Plans"
     } else {
       const { error: tripErr } = await supabase.from("trips").insert(tripPayload);
       if (tripErr) { abort("Failed to save trip", tripErr); return; }
@@ -4507,12 +4589,19 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     });
     setDays(savedDays);
     setActiveDay(0);
-    if (!compactItinerary) playDoneChime(); // chime only if compact didn't already play it
+    if (!compactShown) playDoneChime(); // chime only if compact didn't already play it
     setChatUnread(true);
     setEditingTrip(null);
     setPendingForm(null);
     setDetailedLoading(false);
     setDetailedReady(true);
+    _igInFlight = false;
+    // Log generation timing
+    if (genLogId) {
+      supabase.from("generation_log").update({ detailed_ready_at: generationCompletedAt, ig_count: tripPayload.ig_count }).eq("id", genLogId);
+    } else if (tripData.id) {
+      supabase.from("generation_log").insert({ trip_id: tripData.id, generation_started_at: generationStartedAt, detailed_ready_at: generationCompletedAt, ig_count: tripPayload.ig_count });
+    }
     setScreen("itinerary");
 
     // Fetch and persist photos in background — staggered to avoid Wikimedia rate limits
@@ -4543,9 +4632,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     setActiveDay(idx);
     const pill = pillStrip.current?.children[idx];
     pill?.scrollIntoView({ behavior:"smooth", block:"nearest", inline:"center" });
+    // Account for sticky elements: toggle bar + optional refining banner + pill strip
+    const stickyOffset = (() => {
+      let offset = 0;
+      const stickies = scrollRef.current.querySelectorAll('[style*="sticky"]');
+      stickies.forEach(s => { offset += s.getBoundingClientRect().height; });
+      return offset || 50;
+    })();
     const containerTop = scrollRef.current.getBoundingClientRect().top;
     const elTop        = el.getBoundingClientRect().top;
-    scrollRef.current.scrollBy({ top: elTop - containerTop - 8, behavior:"smooth" });
+    scrollRef.current.scrollBy({ top: elTop - containerTop - stickyOffset, behavior:"smooth" });
     setTimeout(() => { isJumping.current = false; }, 700);
   };
 
@@ -4779,11 +4875,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
         const data = await callChatBrainstorm(userMsg.content, history);
         finalContent = data.message || "Done.";
         if (data.updatedRoutes?.length) {
+          hasChanges = true;
           setPretripRoutes(prev => {
             const merged = prev.map(r => {
               const upd = data.updatedRoutes.find(u => u.id === r.id);
               if (!upd) return r;
-              const result = { ...r, ...upd, id: r.id, tier: r.tier };
+              const result = { ...r, ...upd, id: r.id, tier: r.tier || 1 };
               // Detect bad data and flag the route
               const badDays = !Array.isArray(result.days) || result.days.length === 0 || result.days.some(d => typeof d !== "string" || d.trim().length < 5);
               const badTitle = !result.title || result.title.trim().length === 0;
@@ -4794,10 +4891,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               }
               return result;
             });
-            if (merged.filter(r => r.tier === 1).length < prev.filter(r => r.tier === 1).length) {
-              console.warn("[TripChat] Route count decreased after merge — keeping original routes");
-              return prev;
-            }
             // Re-save to DB so edits persist across refreshes
             const tripId = editingTrip?.id;
             if (tripId) {
@@ -4817,6 +4910,26 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             }
             return merged;
           });
+          // Auto-follow-up for pendingRoutes (bulk update — AI returns 3 at a time)
+          if (data.pendingRoutes?.length) {
+            (async () => {
+              for (const pendingId of data.pendingRoutes) {
+                try {
+                  const followUp = await callChatBrainstorm(
+                    `Apply the same change to route id="${pendingId}". Return only this one route in updatedRoutes.`,
+                    [...history, userMsg, { role: "assistant", content: data.message }]
+                  );
+                  if (followUp.updatedRoutes?.length) {
+                    setPretripRoutes(prev => prev.map(r => {
+                      const upd = followUp.updatedRoutes.find(u => u.id === r.id);
+                      if (!upd) return r;
+                      return { ...r, ...upd, id: r.id, tier: r.tier || 1 };
+                    }));
+                  }
+                } catch (e) { console.warn("Pending route update failed:", pendingId, e); }
+              }
+            })();
+          }
           setPretripSelectedRouteId(data.updatedRoutes[0].id);
           const durChange = data.updatedRoutes.find(u => u.durationChanged);
           if (durChange?.durationChanged && pendingForm?.startDate) {
@@ -4962,6 +5075,18 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               : () => setScreen("setup")}
             onEditForm={editingTrip ? () => setScreen("setup") : null}
             onOpenChat={() => { setChatOpen(true); setChatUnread(false); }}
+            undoDismissRef={undoDismissRef}
+            onDismissRoute={(label, itemId) => {
+              const item = (pretripRoutes || []).find(r => r.id === itemId);
+              const undoMsg = {
+                role: "system-undo",
+                content: `${label} "${item?.title || "route"}" was dismissed.`,
+                undoData: { dismissedRouteId: itemId },
+                id: `undo-route-${Date.now()}`,
+              };
+              setChatMessages(prev => [...prev, undoMsg]);
+              setChatUnread(true);
+            }}
             onItemsChange={setPretripRoutes}
             onSelectionChange={setPretripSelectedRouteId}
             externalSelectedId={pretripSelectedRouteId}
@@ -4984,7 +5109,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
             <div style={{padding:"20px 16px 12px",background:T.chalk,borderBottom:`1px solid ${T.sand}`}}>
               <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink}}>Magazine</div>
               <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginTop:4}}>
-                Explore the destinations across your route options
+                Explore the destinations across your trip plans
               </div>
             </div>
             <div style={{padding:"12px 16px 24px",display:"flex",flexDirection:"column",gap:16}}>
@@ -5122,42 +5247,43 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                     setFormEdited(false); // entering from Edit — load saved routes, don't regenerate
                     setPretripTab("brainstorm");
                     setScreen("brainstorm");
-                  }} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>Explore Other Routes</button>
+                  }} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>Explore Other Plans</button>
                 </div>
                 <button onClick={()=>setShowShare(true)} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>📤 Share</button>
               </div>
               <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,lineHeight:1.2,marginBottom:4}}>{trip.name}</div>
-              <div style={{fontSize:13,opacity:0.75,fontFamily:"Georgia,serif"}}>📅 {trip.dates || (trip.start_date && trip.end_date ? `${new Date(trip.start_date).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(trip.end_date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}` : "")}</div>
+              <div style={{fontSize:13,opacity:0.75,fontFamily:"Georgia,serif"}}>📅 {trip.dates || (trip.start_date && trip.end_date ? `${new Date(trip.start_date).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(trip.end_date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}` : "")}{trip.travelers ? ` · 👤 ${trip.travelers} traveler${trip.travelers > 1 ? "s" : ""}` : ""}</div>
             </div>
 
-            {/* Compact / Detailed toggle — sticky */}
-            <div style={{position:"sticky",top:0,zIndex:9,display:"flex",justifyContent:"flex-end",alignItems:"center",gap:8,padding:"6px 16px",background:T.warm}}>
-              {compactView && detailedLoading && (
-                <span style={{fontSize:11,fontFamily:"Georgia,serif",color:T.ocean,display:"flex",alignItems:"center",gap:4}}>
-                  <span style={{width:10,height:10,border:`2px solid ${T.sand}`,borderTopColor:T.ocean,borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
-                  Loading details…
-                </span>
-              )}
-              {compactView && detailedReady && !detailedLoading && (
-                <span style={{fontSize:11,fontFamily:"Georgia,serif",color:T.moss,fontWeight:600}}>✓ Details ready</span>
-              )}
-              <button onClick={()=>{
-                if (compactView && !detailedReady) return; // can't switch to detailed until ready
-                setCompactView(v=>!v);
-              }} style={{
-                display:"flex",alignItems:"center",gap:5,
-                padding:"4px 12px",borderRadius:20,border:`1px solid ${T.sand}`,
-                background: compactView && !detailedReady ? T.sand : T.chalk,
-                color: compactView && !detailedReady ? `${T.mist}88` : T.mist,
-                fontSize:11,fontFamily:"Georgia,serif",
-                cursor: compactView && !detailedReady ? "not-allowed" : "pointer",
-              }}>
-                {compactView ? "📋 Detailed view" : "📄 Compact view"}
-              </button>
+            {/* Compact / Detailed toggle — sticky segmented control */}
+            <div style={{position:"sticky",top:0,zIndex:9,display:"flex",alignItems:"center",justifyContent:"center",gap:8,padding:"8px 16px",background:T.warm}}>
+              <div style={{display:"flex",borderRadius:10,border:`1px solid ${T.sand}`,overflow:"hidden",background:T.chalk}}>
+                <button onClick={()=>setCompactView(true)} style={{
+                  padding:"6px 16px",border:"none",fontSize:12,fontFamily:"Georgia,serif",fontWeight:600,cursor:"pointer",
+                  background:compactView?T.ocean:"transparent",color:compactView?"white":T.mist,
+                }}>Compact</button>
+                <button onClick={()=>{ if (detailedReady) setCompactView(false); }} style={{
+                  padding:"6px 16px",border:"none",fontSize:12,fontFamily:"Georgia,serif",fontWeight:600,
+                  cursor:detailedReady?"pointer":"not-allowed",
+                  background:!compactView?T.ocean:"transparent",color:!compactView?"white":detailedReady?T.mist:`${T.mist}66`,
+                  display:"flex",alignItems:"center",gap:4,
+                }}>
+                  Detailed
+                  {detailedLoading && <span style={{width:8,height:8,border:`1.5px solid ${T.sand}`,borderTopColor:T.ocean,borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>}
+                </button>
+              </div>
             </div>
 
-            {/* City-pill strip — based on hotel location, carried forward for non-hotel days */}
-            {(() => {
+            {/* Refining banner — shown while detailed IG streams in background */}
+            {detailedLoading && (
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8,padding:"10px 16px",background:`${T.ocean}08`,borderBottom:`1px solid ${T.ocean}15`}}>
+                <span style={{width:12,height:12,border:`2px solid ${T.sand}`,borderTopColor:T.ocean,borderRadius:"50%",animation:"spin 0.8s linear infinite",flexShrink:0}}/>
+                <span style={{fontSize:12,fontFamily:"Georgia,serif",color:T.ocean}}>Fine-tuning your itinerary — details will update shortly</span>
+              </div>
+            )}
+
+            {/* City-pill strip — only in detailed view */}
+            {!compactView && (() => {
               // Derive hotel city per day: use the day's city when it has a hotel activity,
               // carry forward the last known hotel city for day-trip / non-hotel days
               let lastHotelCity = days[0]?.city || "";
@@ -5196,7 +5322,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                           boxShadow: active ? "0 2px 8px rgba(37,99,168,0.28)" : "none",
                           whiteSpace:"nowrap",
                         }}>
-                          <span style={{fontWeight: active ? 700 : 500}}>{g.city.split(",")[0]}</span>
+                          <span style={{fontWeight: active ? 700 : 500}}>{g.city.split(/[,–—]/)[0].trim()}</span>
                           <span style={{opacity:0.75, fontSize:11}}>{dayRange}</span>
                         </button>
                       );
@@ -5248,7 +5374,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                         const hCity = hotelPerDay[i]?.city;
                         if (!hCity) return day.city;
                         return hCity === day.city ? day.city : `${day.city} (${hCity})`;
-                      })()} onExpand={() => setCompactView(false)} />
+                      })()} onExpand={() => { setCompactView(false); setActiveDay(i); setTimeout(() => { requestAnimationFrame(() => { const el = dayRefs.current[i]; if (el && scrollRef.current) { let stickyOffset = 0; scrollRef.current.querySelectorAll('[style*="sticky"]').forEach(s => { stickyOffset += s.getBoundingClientRect().height; }); const top = el.getBoundingClientRect().top - scrollRef.current.getBoundingClientRect().top; scrollRef.current.scrollBy({ top: top - (stickyOffset || 50), behavior: "smooth" }); } }); }, 300); }} />
                     ) : (
                     <DaySection
                       day={day}
@@ -5536,12 +5662,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           )}
           {/* Input row */}
           <div style={{ display: "flex", gap: 8, alignItems: screen === "brainstorm" ? "flex-end" : "center" }}>
-            <div style={{ width: 28, height: 28, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: `1.5px solid ${T.ocean}33`, marginBottom: screen === "brainstorm" ? 4 : 0 }}>
-              <img src="/mascot.png?v=5" alt="" style={{ width: 36, height: 36, objectFit: "cover", objectPosition: "50% 35%", marginTop: -4, marginLeft: -4 }}/>
+            <div onClick={() => { setChatOpen(true); setChatUnread(false); }} style={{ width: screen === "brainstorm" ? 40 : 28, height: screen === "brainstorm" ? 40 : 28, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: `1.5px solid ${T.ocean}33`, marginBottom: screen === "brainstorm" ? 2 : 0, cursor: "pointer" }}>
+              <img src="/mascot.png?v=5" alt="Trippy" style={{ width: screen === "brainstorm" ? 52 : 36, height: screen === "brainstorm" ? 52 : 36, objectFit: "cover", objectPosition: "50% 35%", marginTop: screen === "brainstorm" ? -6 : -4, marginLeft: screen === "brainstorm" ? -6 : -4 }}/>
             </div>
             <div onClick={() => { setChatOpen(true); setChatUnread(false); setTimeout(() => chatInputRef.current?.focus(), 100); }}
               style={{ flex: 1, padding: screen === "brainstorm" ? "10px 14px" : "9px 14px", borderRadius: screen === "brainstorm" ? 14 : 18, border: `1.5px solid ${T.sand}`, background: T.warm, fontFamily: "Georgia,serif", fontSize: 13, color: T.mist, cursor: "text", minHeight: screen === "brainstorm" ? 44 : "auto" }}>
-              {chatUnread ? "New suggestions available…" : (screen === "brainstorm" ? "Compare routes, ask questions, request changes…" : "Ask anything about your trip…")}
+              {chatUnread ? "New suggestions available…" : (screen === "brainstorm" ? "Compare plans, ask questions, request changes…" : "Ask anything about your trip…")}
             </div>
           </div>
         </div>
@@ -5567,26 +5693,26 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 <div style={{width:30,height:30,borderRadius:"50%",overflow:"hidden",border:"1.5px solid rgba(255,255,255,0.3)",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
                   <img src="/mascot.png?v=5" alt="TripJam" style={{width:40,height:40,objectFit:"cover",objectPosition:"50% 35%",pointerEvents:"none"}}/>
                 </div>
-                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15}}>TripChat</div>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15}}>Travel with Trippy</div>
               </div>
               <button onClick={()=>setChatOpen(false)} style={{background:"rgba(255,255,255,0.15)",border:"none",color:"white",width:28,height:28,borderRadius:"50%",fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
             </div>
             {/* Filter pills removed — no group features in phase 1 */}
             {/* Messages */}
             <div style={{flex:1,overflowY:"auto",padding:"16px 16px 8px",display:"flex",flexDirection:"column",gap:10}}>
-              {filteredMessages.length === 0 && (
+              {filteredMessages.filter(m => m.role !== "system-undo").length === 0 && (
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   <div style={{display:"flex",justifyContent:"flex-start"}}>
                     <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",borderLeft:`3px solid ${T.ocean}`}}>
                       {screen === "brainstorm"
-                        ? "I've put together some route options for you. Ask me anything — compare routes, tweak a specific one, or tell me what matters most to you."
+                        ? "I've put together some trip plans for you. Ask me anything — compare plans, tweak a specific one, or tell me what matters most to you."
                         : "Here's a first draft of your plan! Let's tweak it together — swap activities, change the pace, or try a different hotel. Just ask."
                       }
                     </div>
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:8,padding:"4px 0"}}>
                     {(screen === "brainstorm"
-                      ? ["What's the difference between R1 and R2?","Add a day trip to R3","Make R1 more relaxed"]
+                      ? ["What's the difference between P1 and P2?","Add a day trip to P3","Make P1 more relaxed"]
                       : ["Make day 2 more food-focused","Add a beach day","Replace morning activities with something relaxing"]
                     ).map(s=>(
                       <button key={s} onClick={()=>setChatInput(s)} style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:20,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer",textAlign:"left"}}>"{s}"</button>
@@ -5596,11 +5722,20 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               )}
               {filteredMessages.map((m,i)=>{
                 if (m.role === "system-undo") {
+                  const handleUndo = () => {
+                    if (m.undoData?.dismissedRouteId) {
+                      // Undo route dismiss — call BrainstormView's undo via ref
+                      undoDismissRef.current?.(m.undoData.dismissedRouteId);
+                      setChatMessages(prev => prev.filter(msg => msg.id !== m.id));
+                    } else if (m.undoData?.dayId && m.undoData?.actSnap) {
+                      undoRemoveActivity(m.undoData.dayId, m.undoData.actSnap);
+                    }
+                  };
                   return (
                     <div key={m.id || i} style={{display:"flex",justifyContent:"center",margin:"6px 0"}}>
                       <div style={{background:T.sand,borderRadius:12,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.mist,display:"flex",alignItems:"center",gap:10}}>
                         <span>{m.content}</span>
-                        <button onClick={()=>undoRemoveActivity(m.undoData.dayId, m.undoData.actSnap)} style={{background:"none",border:`1px solid ${T.mist}`,borderRadius:8,padding:"2px 10px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer"}}>Undo</button>
+                        <button onClick={handleUndo} style={{background:"none",border:`1px solid ${T.mist}`,borderRadius:8,padding:"2px 10px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer"}}>Undo</button>
                       </div>
                     </div>
                   );
@@ -5655,7 +5790,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                           boxShadow: "0 2px 8px rgba(15,25,35,0.15)",
                         }}
                       >
-                        {trip ? "🗺️ View Updated Itinerary" : "💡 View Updated Routes"}
+                        {trip ? "🗺️ View Updated Itinerary" : "💡 View Updated Plans"}
                       </button>
                     )}
                   </div>
@@ -5677,7 +5812,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 onKeyDown={e=>{
                   if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
                 }}
-                placeholder={screen === "brainstorm" ? "Ask about routes…" : "Ask anything about your trip…"}
+                placeholder={screen === "brainstorm" ? "Ask about plans…" : "Ask anything about your trip…"}
                 style={{flex:1,padding:"11px 14px",borderRadius:18,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",background:T.warm,resize:"none",lineHeight:1.4,overflow:"hidden",display:"block"}}
               />
               <button onClick={sendChatMessage} disabled={chatLoading||!chatInput.trim()} style={{width:44,height:44,borderRadius:"50%",background:chatInput.trim()?T.ocean:T.sand,color:"white",border:"none",fontSize:18,cursor:chatInput.trim()?"pointer":"default",flexShrink:0}}>↑</button>

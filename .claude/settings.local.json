@@ -12,7 +12,21 @@
       "Bash(supabase functions:*)",
       "Bash(npm install:*)",
       "WebFetch(domain:www.hostelworld.com)",
-      "WebFetch(domain:www.booking.com)"
+      "WebFetch(domain:www.booking.com)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(node:*)",
+      "Bash(ls -t ~/Desktop/*)",
+      "Bash(curl -s -X POST https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/generate-itinerary -H 'Content-Type: application/json' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpeXZkcXd3bmJicWp1d2l1emJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODgxNzcsImV4cCI6MjA4OTU2NDE3N30.yTPlrirndnDpIeN4PPr7qKqzc4IhDXrfj_1Uuxv_Zgs' -d '{\"destinations\":[\"Seoul\",\"Jeju Island\"],\"numDays\":3,\"travelers\":\"2\",\"styles\":[\"History & Culture\"],\"budget\":\"mid\",\"pace\":\"active\",\"morningStart\":\"early\",\"startDate\":\"2026-05-06\",\"endDate\":\"2026-05-08\",\"arrivalTime\":\"09:00\",\"departureTime\":\"18:00\",\"arrivalMode\":\"flight\",\"departureMode\":\"flight\"}')",
+      "Bash(curl -s 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/rest/v1/place_cache?key=like.geocode:%25tiananmen%25&select=key,source,result' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpeXZkcXd3bmJicWp1d2l1emJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODgxNzcsImV4cCI6MjA4OTU2NDE3N30.yTPlrirndnDpIeN4PPr7qKqzc4IhDXrfj_1Uuxv_Zgs' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpeXZkcXd3bmJicWp1d2l1emJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODgxNzcsImV4cCI6MjA4OTU2NDE3N30.yTPlrirndnDpIeN4PPr7qKqzc4IhDXrfj_1Uuxv_Zgs')",
+      "Bash(curl -s 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/rest/v1/place_cache?key=like.geocode:%25forbidden%25&select=key,source,result' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpeXZkcXd3bmJicWp1d2l1emJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODgxNzcsImV4cCI6MjA4OTU2NDE3N30.yTPlrirndnDpIeN4PPr7qKqzc4IhDXrfj_1Uuxv_Zgs' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpeXZkcXd3bmJicWp1d2l1emJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODgxNzcsImV4cCI6MjA4OTU2NDE3N30.yTPlrirndnDpIeN4PPr7qKqzc4IhDXrfj_1Uuxv_Zgs')",
+      "Bash(curl -s -X DELETE 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/rest/v1/place_cache?action=eq.geocode' -H 'apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpeXZkcXd3bmJicWp1d2l1emJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODgxNzcsImV4cCI6MjA4OTU2NDE3N30.yTPlrirndnDpIeN4PPr7qKqzc4IhDXrfj_1Uuxv_Zgs' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpeXZkcXd3bmJicWp1d2l1emJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODgxNzcsImV4cCI6MjA4OTU2NDE3N30.yTPlrirndnDpIeN4PPr7qKqzc4IhDXrfj_1Uuxv_Zgs')",
+      "Bash(curl -s -X POST 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode' -H 'Content-Type: application/json' -d '{\"q\":\"Walled City, Cartagena, Colombia\",\"city\":\"Cartagena\"}')",
+      "Bash(curl -s -X POST 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode' -H 'Content-Type: application/json' -d '{\"q\":\"Hotel Casa San Agustin, Cartagena, Colombia\",\"city\":\"Cartagena\"}')",
+      "Bash(curl -s -X POST 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode' -H 'Content-Type: application/json' -d '{\"q\":\"Hotel Grande Bretagne, Syntagma, Athens\",\"city\":\"Syntagma\"}')",
+      "Bash(curl -s -X POST 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode' -H 'Content-Type: application/json' -d '{\"q\":\"CCTV Tower, CBD, Chaoyang, Beijing\",\"city\":\"Chaoyang\"}')",
+      "Bash(curl -s -X POST 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode' -H 'Content-Type: application/json' -d '{\"q\":\"Forbidden City, Beijing\",\"city\":\"Dongcheng\"}')"
     ]
   }
 }
