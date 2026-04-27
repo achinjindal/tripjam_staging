@@ -1060,9 +1060,38 @@ function TodoView({ trip, onBack }) {
 const BRAINSTORM_CATEGORIES = ["All", "Sightseeing", "Dining", "Experiences", "Nightlife", "Nature", "Culture", "Shopping", "Day Trip"];
 const BRAINSTORM_CATEGORY_ICONS = { Sightseeing:"🏛️", Dining:"🍜", Experiences:"🎭", Nightlife:"🍸", Nature:"🌿", Culture:"🎨", Shopping:"🛍️", "Day Trip":"🚌" };
 
-function RouteCard({ item, vs, onVote, interactive, showRecommended = true, routeLabel = null }) {
+function RouteCard({ item, vs, onVote, interactive, showRecommended = true, routeLabel = null, compact = false, onDismiss = null }) {
   const selected = interactive ? vs.mine === 1 : (item.selected === true || vs.mine === 1);
   const hasError = !!item._error;
+
+  // Compact mode: just label, icon, title, tagline — for 2-column grid
+  if (compact) {
+    return (
+      <div onClick={interactive ? onVote : undefined} style={{
+        background: hasError ? "#FFF0F0" : selected ? `linear-gradient(135deg, ${T.ocean}12, ${T.dusk}08)` : T.chalk,
+        borderRadius: 14, padding: "12px 12px 10px",
+        border: `2px solid ${hasError ? "#e53e3e" : selected ? T.ocean : T.sand}`,
+        cursor: interactive ? "pointer" : "default",
+        position: "relative", flex: 1, minWidth: 0,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {routeLabel && <span style={{background:T.dusk,color:"white",fontSize:9,fontFamily:"Georgia,serif",fontWeight:700,borderRadius:5,padding:"1px 6px",letterSpacing:0.5}}>{routeLabel}</span>}
+            {item.recommended && showRecommended && <span style={{fontSize:9,fontFamily:"Georgia,serif",fontWeight:600,color:"#92400E",background:"#FEF3C7",borderRadius:10,padding:"1px 5px"}}>★</span>}
+          </div>
+          {interactive && (
+            <div style={{width:18,height:18,borderRadius:"50%",border:`2px solid ${selected?T.ocean:T.sand}`,background:selected?T.ocean:"transparent",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontSize:9,fontWeight:700,flexShrink:0}}>{selected && "✓"}</div>
+          )}
+        </div>
+        <div style={{ fontSize: 18, marginBottom: 4 }}>{item.icon}</div>
+        <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.2, marginBottom: 3 }}>{item.title}</div>
+        {item.tagline && <div style={{ fontSize: 10, color: T.ocean, fontFamily: "Georgia,serif", lineHeight: 1.3 }}>{item.tagline}</div>}
+        {item.bestFor && <div style={{ fontSize: 9, color: "#16A34A", fontFamily: "Georgia,serif", marginTop: 4 }}>✓ {item.bestFor}</div>}
+      </div>
+    );
+  }
+
+  // Full mode: expanded card with all details
   return (
     <div onClick={interactive ? onVote : undefined} style={{
       background: hasError ? "#FFF0F0" : selected ? `linear-gradient(135deg, ${T.ocean}12, ${T.dusk}08)` : T.chalk,
@@ -1071,24 +1100,21 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
       cursor: interactive ? "pointer" : "default",
       position: "relative",
     }}>
-      {routeLabel && (
-        <div style={{position:"absolute",top:10,left:12,background:T.dusk,color:"white",fontSize:10,fontFamily:"Georgia,serif",fontWeight:700,borderRadius:6,padding:"2px 7px",letterSpacing:0.5}}>
-          {routeLabel}
-        </div>
-      )}
-      {/* Header row */}
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 10, marginTop: routeLabel ? 20 : 0 }}>
+      {/* Header row — route label inline with title */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 10 }}>
         <div style={{ fontSize: 24, flexShrink: 0, marginTop: 1 }}>{item.icon}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+            {routeLabel && <span style={{background:T.dusk,color:"white",fontSize:10,fontFamily:"Georgia,serif",fontWeight:700,borderRadius:6,padding:"2px 7px",letterSpacing:0.5,flexShrink:0}}>{routeLabel}</span>}
             <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, lineHeight: 1.2 }}>{item.title}</div>
-            {item.recommended && showRecommended && (
-              <span style={{ fontSize: 10, fontFamily: "Georgia,serif", fontWeight: 600, color: "#92400E", background: "#FEF3C7", borderRadius: 20, padding: "1px 7px", flexShrink: 0 }}>
+          </div>
+          {item.recommended && showRecommended && (
+            <div style={{ marginTop: 2 }}>
+              <span style={{ fontSize: 10, fontFamily: "Georgia,serif", fontWeight: 600, color: "#92400E", background: "#FEF3C7", borderRadius: 20, padding: "1px 7px" }}>
                 ★ Recommended
               </span>
-            )}
-          </div>
-          {item.tagline && <div style={{ fontSize: 12, color: T.ocean, fontFamily: "Georgia,serif" }}>{item.tagline}</div>}
+            </div>
+          )}
         </div>
         {interactive ? (
           <div style={{
@@ -1108,7 +1134,6 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
       {item.days?.length > 0 && (
         <div style={{ marginBottom: 10, paddingLeft: 4 }}>
           {item.days.map((d, i) => {
-            // Guard: AI has sometimes returned days as {day, description} objects. Coerce to string.
             const text = typeof d === "string" ? d : (d?.description || d?.text || d?.day || d?.title || "");
             if (!text) return null;
             return (
@@ -1125,7 +1150,6 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
         <div style={{ marginBottom: 10, borderTop: `1px solid ${selected ? T.ocean + "33" : T.sand}`, paddingTop: 8 }}>
           {item.points.map((pt, i) => {
             let text = typeof pt === "string" ? pt : (typeof pt?.text === "string" ? pt.text : JSON.stringify(pt));
-            // Strip leading ✓/✗/•/- that some AI responses include — the UI renders those already
             text = text.replace(/^[\s]*[✓✗•\-—]+[\s]*/, "").trim();
             const good = typeof pt === "object" ? pt.good : true;
             return (
@@ -1157,6 +1181,15 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
         <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: "#FEE2E2", border: "1px solid #FECACA", fontSize: 12, color: "#c53030", fontFamily: "Georgia,serif" }}>
           ⚠ {item._error} — try editing this route again in chat
         </div>
+      )}
+      {/* Dismiss */}
+      {onDismiss && (
+        <button onClick={(e) => { e.stopPropagation(); onDismiss(); }} style={{
+          position: "absolute", top: 8, right: 36,
+          width: 22, height: 22, borderRadius: "50%", border: "none",
+          background: T.sand, color: T.mist, fontSize: 12, cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>✕</button>
       )}
     </div>
   );
@@ -1286,8 +1319,8 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
     if (!destinations.length) return;
     setGenerating(true);
     setGenError(null);
-    setItems([]);
-    setLocalVotes({});
+    // Don't clear existing items — new routes will be added alongside
+    if (!items?.length) setItems([]);
     try {
       const travelMonth = igReq.startDate ? new Date(igReq.startDate).toLocaleString("en-US", { month: "long" }) : null;
       const numDays = (igReq.startDate && igReq.endDate)
@@ -1335,7 +1368,11 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                   if (item.title && item.category) {
                     const itemWithId = isPretripMode ? { ...item, id: `temp_${tempIdCounter++}` } : item;
                     streamedItems.push(itemWithId);
-                    setItems([...streamedItems]);
+                    setItems(prev => {
+                      // Append new items to any existing ones (don't replace)
+                      const existing = (prev || []).filter(p => !streamedItems.some(s => s.id === p.id));
+                      return [...existing, ...streamedItems];
+                    });
                   }
                 } catch { /* partial object, skip */ }
               }
@@ -1360,25 +1397,32 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
 
       if (!streamedItems.length) throw new Error("No items received");
 
-      // Persist to DB if we have a trip ID (draft or existing trip)
+      // Persist new items to DB (append, don't replace existing)
       const targetTripId = trip?.id || editTripIdRef.current;
       if (targetTripId) {
-        await supabase.from("brainstorm_items").delete().eq("trip_id", targetTripId);
+        // Get max position of existing items
+        const { data: existingItems } = await supabase.from("brainstorm_items").select("position").eq("trip_id", targetTripId).order("position", { ascending: false }).limit(1);
+        const startPos = (existingItems?.[0]?.position ?? -1) + 1;
         const rows = streamedItems.map((item, i) => ({
           trip_id: targetTripId, title: item.title, city: item.city || null,
           category: item.category || "Route", note: item.tagline || null,
           icon: item.icon || null, geocode: item.geocode || null,
-          position: i, tier: item.tier || 2,
+          position: startPos + i, tier: item.tier || 2,
           data: { tagline: item.tagline, days: item.days, bestFor: item.bestFor, warning: item.warning, recommended: !!item.recommended, points: item.points },
         }));
         const { data, error: insertErr } = await supabase.from("brainstorm_items").insert(rows).select();
         if (insertErr) console.warn("Failed to save brainstorm items:", insertErr);
-        // Use DB rows (with real UUIDs) if insert succeeded
+        // Merge DB rows with existing items
         const saved = (data || []).map(row => ({ ...row, ...(row.data || {}) }));
-        setItems(saved.length ? saved : streamedItems);
+        setItems(prev => {
+          const existing = (prev || []).filter(p => !saved.some(s => s.title === p.title && s.tier === p.tier));
+          return [...existing, ...(saved.length ? saved : streamedItems)];
+        });
       } else {
-        // No trip ID yet — keep temp IDs in memory only
-        setItems([...streamedItems]);
+        setItems(prev => {
+          const existing = (prev || []).filter(p => !streamedItems.some(s => s.id === p.id));
+          return [...existing, ...streamedItems];
+        });
       }
     } catch (e) {
       console.error("Brainstorm generate error:", e);
@@ -1481,11 +1525,11 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
                 <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: T.mist, padding: "0 4px 0 0", lineHeight: 1 }}>←</button>
               )}
               <div>
-                <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 20, color: T.ink }}>
-                  {isPretripMode ? "Shape your trip" : "Magazine"}
+                <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink }}>
+                  {isPretripMode ? destinations.join(" → ") : "Magazine"}
                 </div>
                 {isPretripMode && (
-                  <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", marginTop: 2 }}>
+                  <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", marginTop: 2 }}>
                     {generating
                       ? items?.length
                         ? `Shortlisting from ${ideaCount.toLocaleString("en-US")} ideas…`
@@ -1535,13 +1579,19 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
               <div style={{ width: 36, height: 36, border: `3px solid ${T.sand}`, borderTopColor: T.ocean, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
             </div>
           )}
-          <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>
-            {tier1Items.length > 0 ? (editTripId ? "Your saved routes" : "Choose your route") : ""}
-          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {tier1Items.map((item, idx) => (
               <div key={item.id} ref={el => { if (el) routeCardRefs.current[item.id] = el; }}>
-                <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} showRecommended={routesReady} routeLabel={`R${idx + 1}`} />
+                <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} showRecommended={routesReady} routeLabel={`R${idx + 1}`}
+                  onDismiss={() => {
+                    setItems(prev => (prev || []).filter(it => it.id !== item.id));
+                    setLocalVotes(prev => { const next = { ...prev }; delete next[item.id]; return next; });
+                    // Remove from DB if persisted
+                    if (item.id && !String(item.id).startsWith("temp_")) {
+                      supabase.from("brainstorm_items").delete().eq("id", item.id);
+                    }
+                  }}
+                />
               </div>
             ))}
           </div>
@@ -1738,30 +1788,19 @@ function BrainstormView({ trip, session, pendingForm, autoGenerate, onBuild, onB
           if (dest && !deepDiveCache[dest]) loadCityDeepDive(dest);
           if (!data?.writeup && !isLoading) return null;
           return (
-            <div style={{background:`linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,borderRadius:16,padding:"16px 18px",border:`1px solid ${T.ocean}15`,marginBottom:4}}>
-              {isLoading ? (
-                <>
-                  <div style={{width:120,height:18,borderRadius:6,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:10}}/>
-                  <div style={{width:"100%",height:13,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:6}}/>
-                  <div style={{width:"80%",height:13,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
-                </>
-              ) : (
-                <>
-                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:8}}>{dest}</div>
-                  <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.6}}>{data.writeup}</div>
-                  {data?.didYouKnow && (
-                    <div style={{marginTop:10,fontSize:12,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.5}}>💡 {data.didYouKnow}</div>
-                  )}
-                  <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent(dest)}`} target="_blank" rel="noopener noreferrer" style={{
-                    display:"inline-flex",alignItems:"center",gap:5,marginTop:12,
-                    padding:"6px 12px",borderRadius:8,border:`1px solid ${T.moss}33`,
-                    color:T.moss,fontFamily:"Georgia,serif",fontSize:11,fontWeight:600,textDecoration:"none",
-                  }}>
-                    🗺 Explore {dest} on TripAdvisor
-                  </a>
-                </>
+            <DestinationHero dest={dest} isLoading={isLoading} data={data}>
+              <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.6}}>{data?.writeup}</div>
+              {data?.didYouKnow && (
+                <div style={{marginTop:10,fontSize:12,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.5}}>💡 {data.didYouKnow}</div>
               )}
-            </div>
+              <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent(dest)}`} target="_blank" rel="noopener noreferrer" style={{
+                display:"inline-flex",alignItems:"center",gap:5,marginTop:12,
+                padding:"6px 12px",borderRadius:8,border:`1px solid ${T.moss}33`,
+                color:T.moss,fontFamily:"Georgia,serif",fontSize:11,fontWeight:600,textDecoration:"none",
+              }}>
+                🗺 Explore {dest} on TripAdvisor
+              </a>
+            </DestinationHero>
           );
         })()}
 
@@ -2415,6 +2454,77 @@ function WishlistSection({ items, city }) {
   );
 }
 
+/* ─── COMPACT DAY VIEW ────────────────────────────────────────────── */
+function DayCompact({ day, displayCity, onExpand }) {
+  const acts = day.activities || [];
+  const hotel = acts.find(a => a.type === "hotel");
+  const transit = acts.find(a => a.type === "transit");
+  const meaningful = acts.filter(a => a.type !== "transit" && a.type !== "hotel");
+
+  // Group consecutive food items, consecutive sights, etc.
+  const lines = [];
+  let currentGroup = [];
+  let currentType = null;
+  for (const act of meaningful) {
+    const groupType = act.type === "food" ? "food" : "activity";
+    if (groupType === currentType) {
+      currentGroup.push(act);
+    } else {
+      if (currentGroup.length) lines.push({ type: currentType, items: currentGroup });
+      currentGroup = [act];
+      currentType = groupType;
+    }
+  }
+  if (currentGroup.length) lines.push({ type: currentType, items: currentGroup });
+
+  return (
+    <div style={{ marginBottom: 8, background: T.chalk, borderRadius: 14, border: `1px solid ${T.sand}`, padding: "12px 14px", cursor: "pointer" }} onClick={onExpand}>
+      {/* Day header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ background: T.ocean, color: "white", borderRadius: 8, padding: "3px 10px", fontFamily: "'DM Serif Display',serif", fontSize: 12 }}>{day.label}</div>
+          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink }}>{displayCity || day.city}</div>
+        </div>
+        <span style={{ fontSize: 10, color: T.mist }}>▼</span>
+      </div>
+
+      {/* Transit */}
+      {transit && (
+        <div style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.mist, marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}>
+          {transit.icon} {transit.title} · {transit.duration}
+        </div>
+      )}
+
+      {/* Hotel */}
+      {hotel && (
+        <div style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.ink, marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}>
+          🏨 {hotel.title.replace(/^Check in at /i, "")} · {hotel.note || ""}
+        </div>
+      )}
+
+      {/* Activity lines — grouped */}
+      {lines.map((line, li) => (
+        <div key={li} style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.ink, marginBottom: 3, lineHeight: 1.5 }}>
+          {line.items.map((act, ai) => (
+            <span key={ai}>
+              {ai > 0 && <span style={{ color: T.mist }}> → </span>}
+              <span>{act.icon} {act.title}</span>
+              {act.duration && <span style={{ color: T.mist, fontSize: 10 }}> {act.duration}</span>}
+            </span>
+          ))}
+        </div>
+      ))}
+
+      {/* Wishlist count */}
+      {day.wishlist?.length > 0 && (
+        <div style={{ fontSize: 10, fontFamily: "Georgia,serif", color: T.terra, marginTop: 4 }}>
+          ✨ {day.wishlist.length} local gem{day.wishlist.length > 1 ? "s" : ""} nearby
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, onSelectHotel }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
@@ -2441,7 +2551,7 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
           <a href={dayMapsUrl} target="_blank" rel="noopener noreferrer"
             style={{fontSize:12,color:T.ocean,textDecoration:"none",background:"#EBF3FD",
               borderRadius:20,padding:"4px 11px",fontFamily:"Georgia,serif",flexShrink:0,whiteSpace:"nowrap"}}>
-            🗺️ Route
+            <img src="/google-maps-icon.png" alt="" style={{width:12,height:12,objectFit:"contain"}}/> Navigate
           </a>
         )}
         {day.description && (
@@ -2623,11 +2733,89 @@ function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
 }
 
 /* ─── MAGAZINE HIGHLIGHT CARD ────────────────────────────────────────── */
+function DestinationHero({ dest, isLoading, data, children }) {
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [photoLoaded, setPhotoLoaded] = useState(false);
+  useEffect(() => {
+    if (!dest) return;
+    (async () => {
+      try {
+        const BAD = /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|panorama|blank|in_Indonesia|location|special_marker/i;
+        // Try Wikipedia exact
+        const res = await fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(dest)}&prop=pageimages&format=json&pithumbsize=900&redirects=1&origin=*`);
+        const d = await res.json();
+        const page = Object.values(d?.query?.pages || {})[0];
+        const src = page?.thumbnail?.source;
+        if (src && !BAD.test(src)) { setPhotoUrl(src); setPhotoLoaded(true); return; }
+        // Fallback: search
+        const res2 = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(dest)}&gsrlimit=3&prop=pageimages&pithumbsize=900&format=json&origin=*`);
+        const d2 = await res2.json();
+        for (const p of Object.values(d2?.query?.pages || {})) {
+          const s = p?.thumbnail?.source;
+          if (s && !BAD.test(s)) { setPhotoUrl(s); setPhotoLoaded(true); return; }
+        }
+      } catch { /* ignore */ }
+      setPhotoLoaded(true);
+    })();
+  }, [dest]);
+  return (
+    <div style={{borderRadius:16,overflow:"hidden",border:`1px solid ${T.ocean}15`,marginBottom:4}}>
+      {/* Hero photo */}
+      {(!photoLoaded || photoUrl) && (
+        <div style={{ height: 160, background: T.sand, overflow: "hidden", position: "relative" }}>
+          {!photoLoaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+          {photoUrl && (
+            <>
+              <img src={photoUrl} alt={dest} onLoad={() => setPhotoLoaded(true)} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+              <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent, rgba(0,0,0,0.5))",padding:"24px 18px 12px"}}>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:"white",textShadow:"0 1px 4px rgba(0,0,0,0.4)"}}>{dest}</div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      <div style={{background:`linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,padding:"16px 18px"}}>
+        {isLoading ? (
+          <>
+            {!photoUrl && <div style={{width:120,height:18,borderRadius:6,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:10}}/>}
+            <div style={{width:"100%",height:13,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:6}}/>
+            <div style={{width:"80%",height:13,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
+          </>
+        ) : (
+          <>
+            {!photoUrl && <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:8}}>{dest}</div>}
+            {children}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, children }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [photoLoaded, setPhotoLoaded] = useState(false);
   useEffect(() => {
-    _fetchPhoto(city, null, "sight").then(url => { setPhotoUrl(url); setPhotoLoaded(true); });
+    // Fetch city photo directly from Wikipedia — skip _fetchPhoto's deduplication
+    // so city cards always get photos even if activity cards claimed the same URL
+    (async () => {
+      try {
+        const res = await fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(city)}&prop=pageimages&format=json&pithumbsize=800&redirects=1&origin=*`);
+        const data = await res.json();
+        const page = Object.values(data?.query?.pages || {})[0];
+        const src = page?.thumbnail?.source;
+        const BAD = /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|panorama|blank|in_Indonesia|location/i;
+        if (src && !BAD.test(src)) { setPhotoUrl(src); setPhotoLoaded(true); return; }
+        // Fallback: Wikipedia search
+        const res2 = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(city)}&gsrlimit=3&prop=pageimages&pithumbsize=800&format=json&origin=*`);
+        const data2 = await res2.json();
+        for (const p of Object.values(data2?.query?.pages || {})) {
+          const s = p?.thumbnail?.source;
+          if (s && !BAD.test(s)) { setPhotoUrl(s); setPhotoLoaded(true); return; }
+        }
+      } catch { /* ignore */ }
+      setPhotoLoaded(true);
+    })();
   }, [city]);
   return (
     <div style={{ background: T.chalk, borderRadius: 18, overflow: "hidden", border: `1px solid ${T.sand}`, boxShadow: "0 2px 10px rgba(15,25,35,0.04)" }}>
@@ -3149,6 +3337,18 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
           );
         })}
       </div>
+      {form.destinations.length === 0 && (
+        <button onClick={()=>addDestination("Open to ideas")} style={{
+          display:"flex",alignItems:"center",justifyContent:"center",gap:6,
+          width:"100%",marginTop:12,padding:"12px 0",borderRadius:14,
+          border:`2px dashed ${form.destinations.includes("Open to ideas")?T.ocean:T.sand}`,
+          background:form.destinations.includes("Open to ideas")?`${T.ocean}08`:"transparent",
+          color:form.destinations.includes("Open to ideas")?T.ocean:T.mist,
+          fontFamily:"Georgia,serif",fontSize:14,cursor:"pointer",
+        }}>
+          🌐 Help me decide
+        </button>
+      )}
     </div>,
 
     /* 1 – dates & travelers */
@@ -3686,6 +3886,9 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   }, []);
 
   const [activeBottomTab, setActiveBottomTab] = useState("itinerary");
+  const [compactView, setCompactView] = useState(true); // start in compact mode
+  const [detailedLoading, setDetailedLoading] = useState(false); // true while full IG loads in background
+  const [detailedReady, setDetailedReady] = useState(false); // true once full IG is loaded
   const [pretripTab, setPretripTab] = useState("brainstorm"); // pre-trip bottom nav tab
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
   const [fabPos, setFabPos] = useState({ right: 0, bottom: 140 }); // draggable FAB position, flush right
@@ -3746,8 +3949,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
   const [chatLoading, setChatLoading] = useState(false);
   const chatBottomRef = useRef(null);
   const chatInputRef  = useRef(null);
-  const [chatFilter, setChatFilter] = useState("all");
-  const [mentionSearch, setMentionSearch] = useState(null);
+  // chatFilter removed — no group features in phase 1
+  // mention/tagging removed — phase 1 is AI-only chat
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages, chatLoading]);
@@ -3971,6 +4174,9 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     setGenerateError("");
     setStreamingDays(0);
     setAllDaysPlanned(false);
+    setDetailedLoading(false);
+    setDetailedReady(false);
+    setCompactView(true);
     const chosenRoute = (votedItems || []).find(it => it.tier === 1 && it.vote === 1) || null;
     setGeneratingRoute(chosenRoute);
     setScreen("generating");
@@ -3978,40 +4184,107 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     const numDays = Math.max(1, Math.round((new Date(form.endDate) - new Date(form.startDate)) / (1000*60*60*24)) + 1);
     setStreamingTotal(numDays);
 
-    // Call edge function for AI generation; fall back to local data if unavailable
-    let itinerary;
-    let accumulated = ""; // declared here so catch block can log it
+    // Common request body for both compact and full calls
+    const igDestinations = (() => {
+      const cr = (votedItems || []).find(it => it.tier === 1 && it.vote === 1);
+      if (cr?.city) {
+        const cities = cr.city.split(",").map(c => c.trim()).filter(Boolean);
+        if (cities.length) return cities;
+      }
+      return form.destinations;
+    })();
+    const igBody = {
+      destinations: igDestinations,
+      numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null,
+      arrivalTime: form.arrivalTime || "09:00",
+      departureTime: form.departureTime || "22:00",
+      arrivalMode: form.arrivalMode || "flight",
+      departureMode: form.departureMode || "flight",
+      votedItems: votedItems || null,
+    };
+
+    // ── STEP 1: Compact itinerary (fast, uses Haiku) ──
+    let compactItinerary = null;
     const generationStartedAt = new Date().toISOString();
     try {
+      const res1 = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-itinerary`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+          body: JSON.stringify({ ...igBody, compact: true }),
+        }
+      );
+      if (res1.ok) {
+        const reader1 = res1.body.getReader();
+        const decoder1 = new TextDecoder();
+        let acc1 = "", lb1 = "";
+        while (true) {
+          const { done, value } = await reader1.read();
+          if (done) break;
+          lb1 += decoder1.decode(value, { stream: true });
+          const lines = lb1.split("\n"); lb1 = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const raw = line.slice(6).trim();
+            if (raw === "[DONE]") continue;
+            try { acc1 += JSON.parse(raw); } catch {}
+          }
+        }
+        // Parse compact JSON
+        let cleaned = acc1.replace(/^```json\s*/,"").replace(/\s*```$/,"").trim();
+        const s1 = cleaned.indexOf("{"), e1 = cleaned.lastIndexOf("}");
+        if (s1 >= 0 && e1 > s1) compactItinerary = JSON.parse(cleaned.slice(s1, e1 + 1));
+      }
+    } catch (e) { console.warn("Compact IG failed, proceeding to full:", e.message); }
+
+    // Show compact itinerary immediately if available
+    if (compactItinerary) {
+      // Build minimal day structure for compact view
+      const start = new Date(form.startDate);
+      const compactDays = (compactItinerary.days || []).map((day, i) => {
+        const dayDate = new Date(start); dayDate.setDate(start.getDate() + i);
+        return {
+          id: `compact-${i}`,
+          label: day.label || `Day ${i + 1}`,
+          city: day.city || "",
+          date: dayDate.toISOString().split("T")[0],
+          description: day.description || "",
+          activities: [
+            ...(day.hotel ? [{ id: `c-hotel-${i}`, type: "hotel", title: `Check in at ${day.hotel}`, icon: "🏨", time: "14:00", duration: "0.5h", note: "" }] : []),
+            ...(day.highlights || []).map((h, hi) => ({ id: `c-act-${i}-${hi}`, type: "sight", title: typeof h === "string" ? h : h.title || "", icon: typeof h === "string" ? "📍" : (h.icon || "📍"), time: "", duration: "", note: "" })),
+          ],
+          wishlist: [],
+        };
+      });
+      const fmt = (d) => new Date(d).toLocaleDateString("en-US", { month:"short", day:"numeric" });
+      setTrip(prev => ({
+        ...prev,
+        name: compactItinerary.name || prev.name,
+        dates: `${fmt(form.startDate)} – ${fmt(form.endDate)}, ${new Date(form.endDate).getFullYear()}`,
+        ig_response: compactItinerary,
+      }));
+      setDays(compactDays);
+      setActiveDay(0);
+      setScreen("itinerary");
+      setCompactView(true);
+      setDetailedLoading(true);
+      playDoneChime();
+    }
+
+    // ── STEP 2: Full detailed itinerary (background, uses Sonnet) ──
+    let itinerary;
+    let accumulated = "";
+    try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
+      const timeout = setTimeout(() => controller.abort(), 90000);
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-itinerary`,
         {
           method: "POST",
           signal: controller.signal,
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({
-            // Use route cities as effective destinations if user picked a route; fall back to form input.
-            destinations: (() => {
-              const chosenRoute = (votedItems || []).find(it => it.tier === 1 && it.vote === 1);
-              if (chosenRoute?.city) {
-                const cities = chosenRoute.city.split(",").map(c => c.trim()).filter(Boolean);
-                if (cities.length) return cities;
-              }
-              return form.destinations;
-            })(),
-            numDays, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null,
-            // Default arrival/departure times if not explicitly set — AI uses these to constrain Day 1 start and last day end.
-            arrivalTime: form.arrivalTime || "09:00",
-            departureTime: form.departureTime || "22:00",
-            arrivalMode: form.arrivalMode || "flight",
-            departureMode: form.departureMode || "flight",
-            votedItems: votedItems || null,
-          }),
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+          body: JSON.stringify(igBody),
         }
       );
       clearTimeout(timeout);
@@ -4234,10 +4507,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     });
     setDays(savedDays);
     setActiveDay(0);
-    playDoneChime();
+    if (!compactItinerary) playDoneChime(); // chime only if compact didn't already play it
     setChatUnread(true);
     setEditingTrip(null);
     setPendingForm(null);
+    setDetailedLoading(false);
+    setDetailedReady(true);
     setScreen("itinerary");
 
     // Fetch and persist photos in background — staggered to avoid Wikimedia rate limits
@@ -4438,26 +4713,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
     });
   };
 
-  const chatMembers = (trip?.trip_members || [])
-    .filter(m => m.user_id !== session.user.id && m.profiles?.username)
-    .map(m => ({ name: m.profiles.username, icon: m.profiles.face_icon || "👤" }));
-
-  const mentionOptions = [
-    { name: "all", icon: "👥" },
-    ...chatMembers,
-  ].filter(opt => opt.name.toLowerCase().startsWith(mentionSearch || ""));
-
-  const selectMention = (name) => {
-    setChatInput(prev => prev.replace(/@\w*$/, `@${name} `));
-    setMentionSearch(null);
-  };
-
-  const filteredMessages = chatMessages.filter(m => {
-    if (m.role === "system-undo") return true; // always show undo toasts
-    if (chatFilter === "group") return m.role === "user";
-    if (chatFilter === "ai") return m.role === "assistant";
-    return true;
-  });
+  const filteredMessages = chatMessages;
 
   const sendChatDirect = async (message) => {
     if (!message.trim() || chatLoading) return;
@@ -4661,9 +4917,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
           <div style={{background:`linear-gradient(160deg,${T.dusk},${T.ocean})`,padding:"44px 20px 36px",color:"white",position:"relative",overflow:"hidden"}}>
             <div style={{position:"absolute",top:-50,right:-50,width:200,height:200,borderRadius:"50%",background:"rgba(255,255,255,0.04)",pointerEvents:"none"}}/>
             <div style={{position:"relative",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>
-              }
-              {onHome && setupStep > 0 && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>Trips →</button>}
+              {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
             </div>
             <div style={{fontSize:13,letterSpacing:3,opacity:0.6,textTransform:"uppercase",marginBottom:10,fontFamily:"Georgia,serif"}}>Wayfarer</div>
             <div style={{fontFamily:"'DM Serif Display',serif",fontSize:34,lineHeight:1.2,marginBottom:10}}>Plan your next<br/>adventure ✈️</div>
@@ -4868,12 +5122,38 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                     setFormEdited(false); // entering from Edit — load saved routes, don't regenerate
                     setPretripTab("brainstorm");
                     setScreen("brainstorm");
-                  }} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>Edit trip</button>
+                  }} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>Explore Other Routes</button>
                 </div>
                 <button onClick={()=>setShowShare(true)} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>📤 Share</button>
               </div>
               <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,lineHeight:1.2,marginBottom:4}}>{trip.name}</div>
               <div style={{fontSize:13,opacity:0.75,fontFamily:"Georgia,serif"}}>📅 {trip.dates || (trip.start_date && trip.end_date ? `${new Date(trip.start_date).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(trip.end_date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}` : "")}</div>
+            </div>
+
+            {/* Compact / Detailed toggle — sticky */}
+            <div style={{position:"sticky",top:0,zIndex:9,display:"flex",justifyContent:"flex-end",alignItems:"center",gap:8,padding:"6px 16px",background:T.warm}}>
+              {compactView && detailedLoading && (
+                <span style={{fontSize:11,fontFamily:"Georgia,serif",color:T.ocean,display:"flex",alignItems:"center",gap:4}}>
+                  <span style={{width:10,height:10,border:`2px solid ${T.sand}`,borderTopColor:T.ocean,borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+                  Loading details…
+                </span>
+              )}
+              {compactView && detailedReady && !detailedLoading && (
+                <span style={{fontSize:11,fontFamily:"Georgia,serif",color:T.moss,fontWeight:600}}>✓ Details ready</span>
+              )}
+              <button onClick={()=>{
+                if (compactView && !detailedReady) return; // can't switch to detailed until ready
+                setCompactView(v=>!v);
+              }} style={{
+                display:"flex",alignItems:"center",gap:5,
+                padding:"4px 12px",borderRadius:20,border:`1px solid ${T.sand}`,
+                background: compactView && !detailedReady ? T.sand : T.chalk,
+                color: compactView && !detailedReady ? `${T.mist}88` : T.mist,
+                fontSize:11,fontFamily:"Georgia,serif",
+                cursor: compactView && !detailedReady ? "not-allowed" : "pointer",
+              }}>
+                {compactView ? "📋 Detailed view" : "📄 Compact view"}
+              </button>
             </div>
 
             {/* City-pill strip — based on hotel location, carried forward for non-hotel days */}
@@ -4963,6 +5243,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
 
                 return (
                   <div key={day.id} ref={el=>{ dayRefs.current[i]=el; }}>
+                    {compactView ? (
+                      <DayCompact day={day} displayCity={(() => {
+                        const hCity = hotelPerDay[i]?.city;
+                        if (!hCity) return day.city;
+                        return hCity === day.city ? day.city : `${day.city} (${hCity})`;
+                      })()} onExpand={() => setCompactView(false)} />
+                    ) : (
                     <DaySection
                       day={day}
                       dayIndex={i}
@@ -5024,6 +5311,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                       })()}
                       onSelectHotel={(hotel) => selectHotel(day.id, hotel)}
                     />
+                    )}
                   </div>
                 );
               });
@@ -5237,76 +5525,56 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               Build My Itinerary →
             </button>
           )}
-          {/* Contextual CTA chips */}
-          <div className="no-scrollbar" style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 6, paddingBottom: 2 }}>
-            {screen === "brainstorm" ? (
-              <>
-                <button onClick={() => { setChatOpen(true); setChatUnread(false); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Compare routes</button>
-                <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Which route is best for "); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Best route for…</button>
-                <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Add a day trip to "); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Add a day trip</button>
-              </>
-            ) : (
-              <>
-                <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Suggest alternative hotels"); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Change hotel</button>
-                <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Suggest alternatives for "); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Swap activity</button>
-                <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Make the pace more relaxed"); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Adjust pace</button>
-                <button onClick={() => { setChatOpen(true); setChatUnread(false); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Ask anything</button>
-              </>
-            )}
-          </div>
+          {/* Contextual CTA chips — itinerary only */}
+          {screen === "itinerary" && (
+            <div className="no-scrollbar" style={{ display: "flex", gap: 6, overflowX: "auto", marginBottom: 6, paddingBottom: 2 }}>
+              <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Suggest alternative hotels"); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Change hotel</button>
+              <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Suggest alternatives for "); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Swap activity</button>
+              <button onClick={() => { setChatOpen(true); setChatUnread(false); setChatInput("Make the pace more relaxed"); setTimeout(() => chatInputRef.current?.focus(), 100); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Adjust pace</button>
+              <button onClick={() => { setChatOpen(true); setChatUnread(false); }} style={{ flexShrink: 0, padding: "5px 12px", borderRadius: 16, border: `1px solid ${T.ocean}33`, background: `${T.ocean}08`, color: T.ocean, fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer", whiteSpace: "nowrap" }}>Ask anything</button>
+            </div>
+          )}
           {/* Input row */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <div style={{ width: 28, height: 28, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: `1.5px solid ${T.ocean}33` }}>
+          <div style={{ display: "flex", gap: 8, alignItems: screen === "brainstorm" ? "flex-end" : "center" }}>
+            <div style={{ width: 28, height: 28, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: `1.5px solid ${T.ocean}33`, marginBottom: screen === "brainstorm" ? 4 : 0 }}>
               <img src="/mascot.png?v=5" alt="" style={{ width: 36, height: 36, objectFit: "cover", objectPosition: "50% 35%", marginTop: -4, marginLeft: -4 }}/>
             </div>
             <div onClick={() => { setChatOpen(true); setChatUnread(false); setTimeout(() => chatInputRef.current?.focus(), 100); }}
-              style={{ flex: 1, padding: "9px 14px", borderRadius: 18, border: `1.5px solid ${T.sand}`, background: T.warm, fontFamily: "Georgia,serif", fontSize: 13, color: T.mist, cursor: "text" }}>
-              {chatUnread ? "New suggestions available…" : (screen === "brainstorm" ? "Ask about routes…" : "Ask anything about your trip…")}
+              style={{ flex: 1, padding: screen === "brainstorm" ? "10px 14px" : "9px 14px", borderRadius: screen === "brainstorm" ? 14 : 18, border: `1.5px solid ${T.sand}`, background: T.warm, fontFamily: "Georgia,serif", fontSize: 13, color: T.mist, cursor: "text", minHeight: screen === "brainstorm" ? 44 : "auto" }}>
+              {chatUnread ? "New suggestions available…" : (screen === "brainstorm" ? "Compare routes, ask questions, request changes…" : "Ask anything about your trip…")}
             </div>
           </div>
         </div>
       )}
 
       {/* ── CHAT SHEET (floating bottom sheet, rendered globally) ── */}
-      {chatOpen && (screen === "itinerary" || screen === "brainstorm") && (
+      {chatOpen && (screen === "itinerary" || screen === "brainstorm") && (() => {
+        const isBrainstorm = screen === "brainstorm";
+        return (
         <div style={{position:"fixed",inset:0,zIndex:1500,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",pointerEvents:"none"}}>
-          {/* Scrim */}
-          <div onClick={()=>setChatOpen(false)} style={{position:"absolute",inset:0,background:"rgba(15,25,35,0.45)",animation:"fadeUp 0.2s ease",pointerEvents:"all"}}/>
-          {/* Sheet */}
-          <div style={{position:"relative",width:"100%",maxWidth:430,height:"85dvh",background:T.warm,borderRadius:"18px 18px 0 0",boxShadow:"0 -8px 30px rgba(0,0,0,0.22)",display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideUp 0.25s ease",pointerEvents:"all"}}>
+          {/* Scrim — only on itinerary (full sheet), skip on brainstorm (half sheet) */}
+          {!isBrainstorm && <div onClick={()=>setChatOpen(false)} style={{position:"absolute",inset:0,background:"rgba(15,25,35,0.45)",animation:"fadeUp 0.2s ease",pointerEvents:"all"}}/>}
+          {/* On brainstorm: no scrim, touches pass through to routes behind */}
+          {/* Sheet — half height on brainstorm, full on itinerary */}
+          <div style={{position:"relative",width:"100%",maxWidth:430,height:isBrainstorm?"50dvh":"85dvh",background:T.warm,borderRadius:"18px 18px 0 0",boxShadow:"0 -8px 30px rgba(0,0,0,0.22)",display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideUp 0.25s ease",pointerEvents:"all"}}>
             {/* Drag handle */}
             <div style={{padding:"8px 0 4px",display:"flex",justifyContent:"center",flexShrink:0,background:`linear-gradient(135deg,${T.dusk},${T.ocean})`}}>
               <div style={{width:38,height:4,borderRadius:4,background:"rgba(255,255,255,0.4)"}}/>
             </div>
-            {/* Chat header */}
-            <div style={{background:`linear-gradient(135deg,${T.dusk},${T.ocean})`,padding:"6px 16px 12px",color:"white",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <div style={{width:44,height:44,borderRadius:"50%",overflow:"hidden",border:"2px solid rgba(255,255,255,0.3)",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                  <img src="/mascot.png?v=5" alt="TripJam" style={{width:56,height:56,objectFit:"cover",objectPosition:"50% 35%",pointerEvents:"none"}}/>
+            {/* Chat header — compact */}
+            <div style={{background:`linear-gradient(135deg,${T.dusk},${T.ocean})`,padding:"6px 16px 8px",color:"white",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:30,height:30,borderRadius:"50%",overflow:"hidden",border:"1.5px solid rgba(255,255,255,0.3)",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <img src="/mascot.png?v=5" alt="TripJam" style={{width:40,height:40,objectFit:"cover",objectPosition:"50% 35%",pointerEvents:"none"}}/>
                 </div>
-                <div>
-                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,marginBottom:1}}>TripChat</div>
-                  <div style={{fontSize:11,opacity:0.75,fontFamily:"Georgia,serif"}}>{screen === "brainstorm" ? "Shape your trip" : (trip?.name || "")}</div>
-                </div>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15}}>TripChat</div>
               </div>
-              <button onClick={()=>setChatOpen(false)} style={{background:"rgba(255,255,255,0.15)",border:"none",color:"white",width:32,height:32,borderRadius:"50%",fontSize:16,cursor:"pointer"}}>✕</button>
+              <button onClick={()=>setChatOpen(false)} style={{background:"rgba(255,255,255,0.15)",border:"none",color:"white",width:28,height:28,borderRadius:"50%",fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
             </div>
-            {/* Filter pills — only in-trip */}
-            {trip && (
-              <div style={{display:"flex",gap:6,padding:"8px 16px",background:T.chalk,borderBottom:`1px solid ${T.sand}`,flexShrink:0}}>
-                {[["all","All"],["group","Group"],["ai","AI ✨"]].map(([f,label])=>(
-                  <button key={f} onClick={()=>setChatFilter(f)} style={{
-                    padding:"4px 14px",borderRadius:20,border:"none",cursor:"pointer",
-                    background:chatFilter===f?T.ocean:T.sand,
-                    color:chatFilter===f?"white":T.mist,
-                    fontSize:12,fontFamily:"Georgia,serif",transition:"background 0.15s",
-                  }}>{label}</button>
-                ))}
-              </div>
-            )}
+            {/* Filter pills removed — no group features in phase 1 */}
             {/* Messages */}
             <div style={{flex:1,overflowY:"auto",padding:"16px 16px 8px",display:"flex",flexDirection:"column",gap:10}}>
-              {filteredMessages.length === 0 && chatFilter !== "group" && (
+              {filteredMessages.length === 0 && (
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   <div style={{display:"flex",justifyContent:"flex-start"}}>
                     <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",borderLeft:`3px solid ${T.ocean}`}}>
@@ -5324,11 +5592,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                       <button key={s} onClick={()=>setChatInput(s)} style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:20,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer",textAlign:"left"}}>"{s}"</button>
                     ))}
                   </div>
-                </div>
-              )}
-              {filteredMessages.length === 0 && chatFilter === "group" && (
-                <div style={{textAlign:"center",color:T.mist,fontFamily:"Georgia,serif",fontSize:13,paddingTop:40}}>
-                  No group messages yet
                 </div>
               )}
               {filteredMessages.map((m,i)=>{
@@ -5400,16 +5663,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
               })}
               <div ref={chatBottomRef} />
             </div>
-            {/* Mention picker — only in-trip */}
-            {trip && mentionSearch !== null && mentionOptions.length > 0 && (
-              <div style={{background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:12,margin:"0 12px 4px",overflow:"hidden",flexShrink:0,maxHeight:160,overflowY:"auto"}}>
-                {mentionOptions.map(opt=>(
-                  <div key={opt.name} onMouseDown={e=>{e.preventDefault();selectMention(opt.name);}} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 14px",cursor:"pointer",borderBottom:`1px solid ${T.sand}`,fontSize:13,fontFamily:"Georgia,serif",color:T.ink}}>
-                    <span>{opt.icon}</span><span style={{color:T.ocean,fontWeight:600}}>@{opt.name}</span>
-                  </div>
-                ))}
-              </div>
-            )}
             {/* Input */}
             <div style={{padding:"8px 12px",paddingBottom:"calc(8px + env(safe-area-inset-bottom, 0px))",background:T.chalk,borderTop:`1px solid ${T.sand}`,display:"flex",gap:8,alignItems:"flex-end",flexShrink:0}}>
               <textarea
@@ -5418,25 +5671,21 @@ export default function App({ session, initialTrip, initialScreen = "setup", onH
                 rows={1}
                 onChange={e=>{
                   setChatInput(e.target.value);
-                  if (trip) {
-                    const match = e.target.value.match(/@(\w*)$/);
-                    setMentionSearch(match ? match[1].toLowerCase() : null);
-                  }
                   e.target.style.height = "auto";
                   e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
                 }}
                 onKeyDown={e=>{
-                  if (e.key==="Escape") { setMentionSearch(null); return; }
-                  if (e.key==="Enter" && !e.shiftKey && mentionSearch===null) { e.preventDefault(); sendChatMessage(); }
+                  if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
                 }}
-                placeholder={trip ? "Message… type @ to mention" : "Ask about the routes or request a change…"}
+                placeholder={screen === "brainstorm" ? "Ask about routes…" : "Ask anything about your trip…"}
                 style={{flex:1,padding:"11px 14px",borderRadius:18,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",background:T.warm,resize:"none",lineHeight:1.4,overflow:"hidden",display:"block"}}
               />
               <button onClick={sendChatMessage} disabled={chatLoading||!chatInput.trim()} style={{width:44,height:44,borderRadius:"50%",background:chatInput.trim()?T.ocean:T.sand,color:"white",border:"none",fontSize:18,cursor:chatInput.trim()?"pointer":"default",flexShrink:0}}>↑</button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── SETUP MODALS ── */}
       {setupModal && (

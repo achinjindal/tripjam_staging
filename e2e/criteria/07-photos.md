@@ -16,9 +16,8 @@
 9. TripAdvisor results are cached in DB for 30 days
 10. TripAdvisor rate limits enforced: 1,000 calls/day, 4,900 calls/month
 11. Each hotel lookup costs 2 TripAdvisor API calls (search + photos)
-12. When TripAdvisor limits exhausted, falls back to Google Places
-13. Google hotel photo fallback capped at: 2 per itinerary generation, 3 per chat per day per trip
-14. Google fallback only fires when tripId is provided
+12. When TripAdvisor limits exhausted or hotel not found, photo area collapses (no Google fallback)
+13. No Google Places photo calls — zero Google photo charges
 
 ## Performance
 15. Photo fetch queue allows 3 concurrent requests with 200ms stagger (not serial 800ms)
