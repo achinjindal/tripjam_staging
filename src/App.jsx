@@ -5039,7 +5039,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   };
 
   return (
-    <div style={{fontFamily:"Georgia,serif",background:T.warm,maxWidth:430,margin:"0 auto",position:"relative",display:"flex",flexDirection:"column",height:"100dvh",overflow:"hidden"}}>
+    <div style={{fontFamily:"Georgia,serif",background:T.warm,maxWidth:430,margin:"0 auto",position:"relative",display:"flex",flexDirection:"column",height:"100dvh",overflow:"hidden",paddingTop:"env(safe-area-inset-top, 0px)"}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;}
@@ -5440,7 +5440,26 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                         const hCity = hotelPerDay[i]?.city;
                         if (!hCity) return day.city;
                         return hCity === day.city ? day.city : `${day.city} (${hCity})`;
-                      })()} onExpand={() => { setCompactView(false); setActiveDay(i); setTimeout(() => { requestAnimationFrame(() => { const el = dayRefs.current[i]; if (el && scrollRef.current) { scrollRef.current.scrollTo({ top: el.offsetTop - 50, behavior: "smooth" }); } }); }, 300); }} />
+                      })()} onExpand={() => {
+                        setCompactView(false);
+                        setActiveDay(i);
+                        // Wait for detailed view to render, then scroll
+                        const tryScroll = (attempts = 0) => {
+                          requestAnimationFrame(() => {
+                            const el = dayRefs.current[i];
+                            if (el && scrollRef.current) {
+                              const top = el.offsetTop;
+                              // If top is 0 and not the first day, layout isn't ready yet
+                              if (top === 0 && i > 0 && attempts < 10) {
+                                setTimeout(() => tryScroll(attempts + 1), 100);
+                                return;
+                              }
+                              scrollRef.current.scrollTo({ top: top - 50, behavior: "smooth" });
+                            }
+                          });
+                        };
+                        setTimeout(() => tryScroll(), 150);
+                      }} />
                     ) : (
                     <DaySection
                       day={day}
@@ -5698,7 +5717,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       {/* ── PERSISTENT CHAT BAR (collapsed state — between content and bottom nav) ── */}
       {!chatOpen && (screen === "itinerary" || screen === "brainstorm") && (
         <div style={{
-          position: "absolute", bottom: 58, left: 0, right: 0, zIndex: 900,
+          position: "absolute", bottom: "calc(58px + env(safe-area-inset-bottom, 0px))", left: 0, right: 0, zIndex: 900,
           background: T.chalk, borderTop: `1px solid ${T.sand}`,
           padding: "6px 12px 6px",
         }}>
