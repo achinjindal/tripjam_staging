@@ -67,7 +67,8 @@ serve(async (req) => {
   }
 
   try {
-    const { destinations: rawDest, styles, budget, travelMonth, numDays, arrivalCity, departureCity, notes, existingPlans, baseLocation } = await req.json();
+    const { destinations: rawDest, styles, budget, travelMonth, numDays, arrivalCity, departureCity, notes, existingPlans, baseLocation, numPlans: rawNumPlans } = await req.json();
+    const numPlans = Math.max(1, Math.min(4, rawNumPlans || 4));
 
     const destinations = rawDest?.length ? rawDest : ["Help me decide"];
 
@@ -82,13 +83,13 @@ serve(async (req) => {
     const isOpenToIdeas = destinations.length === 1 && (destinations[0].toLowerCase().includes("help me decide") || destinations[0].toLowerCase().includes("open to ideas"));
 
     const userMessage = isOpenToIdeas
-      ? `The traveler needs HELP DECIDING on a destination — they haven't chosen one yet.${baseLocation ? ` They are based in ${baseLocation}.` : ""} Suggest 4 completely different destinations around the world that would be ideal for their preferences.` +
+      ? `The traveler needs HELP DECIDING on a destination — they haven't chosen one yet.${baseLocation ? ` They are based in ${baseLocation}.` : ""} Suggest ${numPlans} completely different destinations around the world that would be ideal for their preferences.` +
         (numDays ? ` Trip duration: ${numDays} days.` : "") +
         (travelMonth ? ` Travel month: ${travelMonth}.` : "") +
         ` Trip style: ${stylesText || "general"}, ${budgetLabel} budget.` +
         (notes ? `\n\nTraveler notes: ${notes}` : "") +
         (existingPlans?.length ? `\n\nEXISTING PLANS (already shown to the user — do NOT repeat these destinations or similar itineraries, generate COMPLETELY DIFFERENT countries/regions): ${existingPlans.join(", ")}` : "") +
-        `\n\nGenerate exactly 4 tier 1 route options, each in a DIFFERENT country/region. Each route should be a complete itinerary outline for that destination. Make each suggestion genuinely different — e.g. one beach destination, one cultural, one adventure, one off-the-beaten-path. Include the country/region in the title (e.g. "Sri Lanka South Coast", "Patagonia Explorer"). Then generate 15–20 tier 2 experiences spread across all 4 destinations.\n\nCRITICAL RULES:\n1. WEATHER: Only suggest destinations where the WEATHER IS GOOD in the travel month. Do NOT suggest places in their winter, monsoon, or extreme weather season. For example: do NOT suggest New Zealand or Patagonia for June (southern hemisphere winter), do NOT suggest Southeast Asia in August (peak monsoon).\n2. FLIGHT TIME vs TRIP DURATION: ${baseLocation ? `The traveler is based in ${baseLocation}. ` : ""}One-way flight time to the destination must be reasonable relative to the trip length. The round-trip travel time (both ways) MUST NOT exceed 20% of the total trip days. This is a HARD LIMIT — violating it disqualifies a destination. For example: a 6-day trip allows max ~1.2 days of flying round-trip, so one-way flight must be under ~14 hours. A 10-day trip allows ~2 days, so one-way under ~24 hours. NEVER suggest destinations requiring 20+ hour one-way flights for trips under 10 days. For short trips (5-7 days), strongly prefer destinations reachable in under 6-8 hours of flying from the base location.`
+        `\n\nGenerate exactly ${numPlans} tier 1 route options, each in a DIFFERENT country/region. Each route should be a complete itinerary outline for that destination. Make each suggestion genuinely different — e.g. one beach destination, one cultural, one adventure, one off-the-beaten-path. Include the country/region in the title (e.g. "Sri Lanka South Coast", "Patagonia Explorer"). Then generate 15–20 tier 2 experiences spread across all suggested destinations.\n\nCRITICAL RULES:\n1. WEATHER: Only suggest destinations where the WEATHER IS GOOD in the travel month. Do NOT suggest places in their winter, monsoon, or extreme weather season. For example: do NOT suggest New Zealand or Patagonia for June (southern hemisphere winter), do NOT suggest Southeast Asia in August (peak monsoon).\n2. FLIGHT TIME vs TRIP DURATION: ${baseLocation ? `The traveler is based in ${baseLocation}. ` : ""}One-way flight time to the destination must be reasonable relative to the trip length. The round-trip travel time (both ways) MUST NOT exceed 20% of the total trip days. This is a HARD LIMIT — violating it disqualifies a destination. For example: a 6-day trip allows max ~1.2 days of flying round-trip, so one-way flight must be under ~14 hours. A 10-day trip allows ~2 days, so one-way under ~24 hours. NEVER suggest destinations requiring 20+ hour one-way flights for trips under 10 days. For short trips (5-7 days), strongly prefer destinations reachable in under 6-8 hours of flying from the base location.`
       : `Destination: ${destinations.join(", ")}.${baseLocation ? ` Traveler is based in ${baseLocation}.` : ""}` +
         (numDays ? ` Trip duration: ${numDays} days.` : "") +
         (travelMonth ? ` Travel month: ${travelMonth}.` : "") +
@@ -96,7 +97,7 @@ serve(async (req) => {
         (loopNote ? ` ${loopNote}` : "") +
         (notes ? `\n\nTraveler notes: ${notes}` : "") +
         (existingPlans?.length ? `\n\nEXISTING PLANS (already shown to the user — do NOT repeat these or generate similar itineraries with overlapping cities/routes, create COMPLETELY DIFFERENT plans): ${existingPlans.join(", ")}` : "") +
-        `\n\nIf this is a country/region-level destination, generate 3–4 realistic route options (tier 1) first, then 15–20 specific experiences (tier 2). Only specific named places.`;
+        `\n\nIf this is a country/region-level destination, generate exactly ${numPlans} realistic route options (tier 1) first, then 15–20 specific experiences (tier 2). Only specific named places.`;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

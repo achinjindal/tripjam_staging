@@ -671,7 +671,7 @@ function MapView({ days }) {
 }
 
 /* ─── ROUTE MAP VIEW (pre-trip brainstorm) ──────────────────────────── */
-function RouteMapView({ routes, selectedId, onSelectRoute }) {
+function RouteMapView({ routes, selectedId, onSelectRoute, destination }) {
   const [pinsByRoute, setPinsByRoute] = useState({}); // { routeId: [{ lat, lng, city }, ...] }
   const [resolving, setResolving] = useState(true);
 
@@ -683,7 +683,7 @@ function RouteMapView({ routes, selectedId, onSelectRoute }) {
       await Promise.all((routes || []).map(async (route) => {
         const cities = (route.city || "").split(",").map(s => s.trim()).filter(Boolean);
         const coords = await Promise.all(cities.map(async (c) => {
-          const pt = await geocodePlace(c, null, c);
+          const pt = await geocodePlace(c, destination || null, c);
           return pt ? { ...pt, city: c } : null;
         }));
         result[route.id] = coords.filter(Boolean);
@@ -885,19 +885,28 @@ const CATEGORY_ORDER = ["Bookings", "Documents", "Health & safety", "Money", "Pa
 
 function TodoView({ trip, onBack }) {
   const [todos, setTodos]           = useState([]);
-  const [suggestions, setSuggestions] = useState([]); // AI-generated, pending review
+  const [suggestions, setSuggestions] = useState([]);
   const [generating, setGenerating] = useState(false);
   const [newText, setNewText]       = useState("");
   const [loading, setLoading]       = useState(true);
+  const autoGenTriggered = useRef(false);
   const inputRef = useRef(null);
 
   useEffect(() => {
     supabase.from("trip_todos").select("*").eq("trip_id", trip.id).order("position")
-      .then(({ data }) => { setTodos(data || []); setLoading(false); })
+      .then(({ data }) => {
+        setTodos(data || []);
+        setLoading(false);
+        // Auto-generate on first visit if list is empty
+        if ((!data || data.length === 0) && !autoGenTriggered.current) {
+          autoGenTriggered.current = true;
+          generateTodos(data || []);
+        }
+      })
       .catch(() => setLoading(false));
   }, [trip.id]);
 
-  const generate = async () => {
+  const generateTodos = async (existing) => {
     setGenerating(true);
     setSuggestions([]);
     try {
@@ -907,8 +916,7 @@ function TodoView({ trip, onBack }) {
           body: JSON.stringify({ trip }) }
       );
       const { items } = await res.json();
-      // Filter out items already in the todo list (by text)
-      const existingTexts = new Set(todos.map(t => t.text.toLowerCase()));
+      const existingTexts = new Set((existing || todos).map(t => t.text.toLowerCase()));
       setSuggestions((items || []).filter(s => !existingTexts.has(s.text.toLowerCase())));
     } catch { /* silent */ }
     setGenerating(false);
@@ -916,7 +924,7 @@ function TodoView({ trip, onBack }) {
 
   const accept = async (item, idx) => {
     const { data } = await supabase.from("trip_todos")
-      .insert({ trip_id: trip.id, text: item.text, done: false, position: todos.length })
+      .insert({ trip_id: trip.id, text: item.text, done: false, position: todos.length, category: item.category || null, due_date: item.due_date || null })
       .select().single();
     if (data) setTodos(prev => [...prev, data]);
     setSuggestions(prev => prev.filter((_, i) => i !== idx));
@@ -925,7 +933,7 @@ function TodoView({ trip, onBack }) {
   const discard = (idx) => setSuggestions(prev => prev.filter((_, i) => i !== idx));
 
   const acceptAll = async () => {
-    const rows = suggestions.map((s, i) => ({ trip_id: trip.id, text: s.text, done: false, position: todos.length + i }));
+    const rows = suggestions.map((s, i) => ({ trip_id: trip.id, text: s.text, done: false, position: todos.length + i, category: s.category || null, due_date: s.due_date || null }));
     const { data } = await supabase.from("trip_todos").insert(rows).select();
     setTodos(prev => [...prev, ...(data || [])]);
     setSuggestions([]);
@@ -953,19 +961,30 @@ function TodoView({ trip, onBack }) {
     if (data) setTodos(prev => [...prev, data]);
   };
 
-  const done = todos.filter(t => t.done).length;
+  const doneCount = todos.filter(t => t.done).length;
   const total = todos.length;
 
   // Group suggestions by category
-  const grouped = CATEGORY_ORDER.reduce((acc, cat) => {
+  const groupedSuggestions = CATEGORY_ORDER.reduce((acc, cat) => {
     const items = suggestions.filter(s => s.category === cat);
     if (items.length) acc.push({ cat, items });
     return acc;
   }, []);
-  // Catch any uncategorised
   const knownCats = new Set(CATEGORY_ORDER);
-  const otherItems = suggestions.filter(s => !knownCats.has(s.category));
-  if (otherItems.length) grouped.push({ cat: "Other", items: otherItems });
+  const otherSuggestions = suggestions.filter(s => !knownCats.has(s.category));
+  if (otherSuggestions.length) groupedSuggestions.push({ cat: "Other", items: otherSuggestions });
+
+  // Group todos by category
+  const DUE_ORDER = ["2 months before", "1 month before", "2 weeks before", "1 week before", "Day before", "Day of travel"];
+  const groupedTodos = CATEGORY_ORDER.reduce((acc, cat) => {
+    const items = todos.filter(t => (t.category || "Other") === cat);
+    if (items.length) acc.push({ cat, items });
+    return acc;
+  }, []);
+  const otherTodos = todos.filter(t => !t.category || !knownCats.has(t.category));
+  if (otherTodos.length) groupedTodos.push({ cat: "Other", items: otherTodos });
+
+  const CATEGORY_ICONS = { Bookings: "📋", Documents: "📄", Packing: "🧳", "Health & safety": "🏥", Money: "💳", "Day of travel": "✈️", Other: "📌" };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: T.warm }}>
@@ -974,14 +993,14 @@ function TodoView({ trip, onBack }) {
         <button onClick={onBack} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: T.ocean, padding: "0 4px", lineHeight: 1 }}>←</button>
         <div style={{ flex: 1 }}>
           <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink }}>To-do</div>
-          {total > 0 && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}>{done}/{total} done</div>}
+          {total > 0 && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}>{doneCount}/{total} done</div>}
         </div>
-        <button onClick={generate} disabled={generating} style={{
+        <button onClick={() => generateTodos()} disabled={generating} style={{
           background: generating ? T.sand : T.ocean, color: "white", border: "none",
           borderRadius: 20, padding: "7px 14px", fontSize: 12,
           fontFamily: "Georgia,serif", cursor: generating ? "default" : "pointer",
         }}>
-          {generating ? "Generating…" : suggestions.length ? "Regenerate" : "✨ Generate"}
+          {generating ? "Generating…" : todos.length > 0 || suggestions.length ? "✨ More" : "✨ Generate"}
         </button>
       </div>
 
@@ -997,14 +1016,17 @@ function TodoView({ trip, onBack }) {
                 Accept all
               </button>
             </div>
-            {grouped.map(({ cat, items }) => (
+            {groupedSuggestions.map(({ cat, items }) => (
               <div key={cat} style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", letterSpacing: 0.5, marginBottom: 6, paddingLeft: 2 }}>{cat}</div>
+                <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", letterSpacing: 0.5, marginBottom: 6, paddingLeft: 2 }}>{CATEGORY_ICONS[cat] || "📌"} {cat}</div>
                 {items.map((item, globalIdx) => {
                   const idx = suggestions.indexOf(item);
                   return (
                     <div key={globalIdx} style={{ display: "flex", alignItems: "center", gap: 8, background: "#F0F7FF", border: `1px solid #C8DFFE`, borderRadius: 10, padding: "10px 12px", marginBottom: 6 }}>
-                      <div style={{ flex: 1, fontSize: 13, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.4 }}>{item.text}</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.4 }}>{item.text}</div>
+                        {item.due_date && <div style={{ fontSize: 10, color: T.ocean, fontFamily: "Georgia,serif", marginTop: 3 }}>⏰ {item.due_date}</div>}
+                      </div>
                       <button onClick={() => accept(item, idx)} title="Add to list" style={{ background: T.moss, border: "none", borderRadius: "50%", width: 28, height: 28, color: "white", fontSize: 14, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</button>
                       <button onClick={() => discard(idx)} title="Discard" style={{ background: "none", border: `1px solid ${T.sand}`, borderRadius: "50%", width: 28, height: 28, color: T.mist, fontSize: 14, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
                     </div>
@@ -1016,31 +1038,51 @@ function TodoView({ trip, onBack }) {
           </div>
         )}
 
-        {/* Todos list */}
+        {/* Todos list — grouped by category */}
         {loading ? (
           <div style={{ padding: "24px 16px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13, textAlign: "center" }}>Loading…</div>
-        ) : todos.length === 0 && suggestions.length === 0 ? (
+        ) : todos.length === 0 && suggestions.length === 0 && !generating ? (
           <div style={{ padding: "32px 24px", textAlign: "center" }}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>✅</div>
             <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, marginBottom: 6 }}>Nothing here yet</div>
             <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif", lineHeight: 1.6 }}>Tap <strong>✨ Generate</strong> for a personalised checklist, or add items below.</div>
           </div>
+        ) : generating && todos.length === 0 && suggestions.length === 0 ? (
+          <div style={{ padding: "32px 24px", textAlign: "center" }}>
+            <div style={{ fontSize: 36, marginBottom: 12, animation: "pulse 1.5s ease-in-out infinite" }}>✨</div>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, marginBottom: 6 }}>Generating your checklist…</div>
+            <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif" }}>Tailored to your {trip.destination} trip</div>
+          </div>
         ) : (
-          <div style={{ padding: "12px 16px 0" }}>
-            {todos.map(todo => (
-              <div key={todo.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 4px", borderBottom: `1px solid ${T.sand}` }}>
-                <button onClick={() => toggleDone(todo)} style={{
-                  width: 22, height: 22, borderRadius: "50%", flexShrink: 0, marginTop: 1, cursor: "pointer",
-                  border: `2px solid ${todo.done ? T.moss : T.sand}`,
-                  background: todo.done ? T.moss : "transparent",
-                  display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 12,
-                }}>
-                  {todo.done ? "✓" : ""}
-                </button>
-                <div style={{ flex: 1, fontSize: 13, fontFamily: "Georgia,serif", color: todo.done ? T.mist : T.ink, textDecoration: todo.done ? "line-through" : "none", lineHeight: 1.5, paddingTop: 2 }}>
-                  {todo.text}
+          <div style={{ padding: "8px 16px 0" }}>
+            {groupedTodos.map(({ cat, items }) => (
+              <div key={cat} style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, paddingTop: 4 }}>
+                  <span style={{ fontSize: 14 }}>{CATEGORY_ICONS[cat] || "📌"}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: T.ink, fontFamily: "Georgia,serif", letterSpacing: 0.3 }}>{cat}</span>
+                  <span style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif" }}>({items.filter(t => t.done).length}/{items.length})</span>
                 </div>
-                <button onClick={() => deleteTodo(todo)} style={{ background: "none", border: "none", fontSize: 14, color: T.sand, cursor: "pointer", padding: "0 2px", flexShrink: 0 }}>✕</button>
+                {items.map(todo => (
+                  <div key={todo.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 4px", borderBottom: `1px solid ${T.sand}` }}>
+                    <button onClick={() => toggleDone(todo)} style={{
+                      width: 22, height: 22, borderRadius: "50%", flexShrink: 0, marginTop: 1, cursor: "pointer",
+                      border: `2px solid ${todo.done ? T.moss : T.sand}`,
+                      background: todo.done ? T.moss : "transparent",
+                      display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 12,
+                    }}>
+                      {todo.done ? "✓" : ""}
+                    </button>
+                    <div style={{ flex: 1, paddingTop: 2 }}>
+                      <div style={{ fontSize: 13, fontFamily: "Georgia,serif", color: todo.done ? T.mist : T.ink, textDecoration: todo.done ? "line-through" : "none", lineHeight: 1.5 }}>
+                        {todo.text}
+                      </div>
+                      {todo.due_date && !todo.done && (
+                        <div style={{ fontSize: 10, color: T.ocean, fontFamily: "Georgia,serif", marginTop: 2 }}>⏰ {todo.due_date}</div>
+                      )}
+                    </div>
+                    <button onClick={() => deleteTodo(todo)} style={{ background: "none", border: "none", fontSize: 14, color: T.sand, cursor: "pointer", padding: "0 2px", flexShrink: 0 }}>✕</button>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
@@ -1063,10 +1105,450 @@ function TodoView({ trip, onBack }) {
   );
 }
 
+/* ─── BOOKMARKS VIEW ─────────────────────────────────────────────────── */
+function BookmarksView({ trip, onBack }) {
+  const [bookmarks, setBookmarks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [title, setTitle] = useState("");
+  const [url, setUrl] = useState("");
+  const [editing, setEditing] = useState(null);
+  const titleRef = useRef(null);
+
+  useEffect(() => {
+    supabase.from("trip_bookmarks").select("*").eq("trip_id", trip.id).order("position")
+      .then(({ data }) => { setBookmarks(data || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [trip.id]);
+
+  const iconForUrl = (u) => {
+    if (/booking\.com/i.test(u)) return "🏨";
+    if (/airbnb/i.test(u)) return "🏠";
+    if (/airline|flight|skyscanner|kayak|google\.com\/travel\/flights/i.test(u)) return "✈️";
+    if (/maps\.google|goo\.gl\/maps/i.test(u)) return "📍";
+    if (/tripadvisor/i.test(u)) return "⭐";
+    if (/docs\.google|drive\.google/i.test(u)) return "📄";
+    if (/visa|embassy|consulate/i.test(u)) return "🛂";
+    if (/insurance/i.test(u)) return "🛡️";
+    return "🔗";
+  };
+
+  // Auto-fetch page title when URL is pasted/changed
+  const fetchingTitle = useRef(false);
+  useEffect(() => {
+    if (editing || title.trim() || !url.trim() || fetchingTitle.current) return;
+    let u = url.trim();
+    if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+    // Extract a readable title from the URL as fallback
+    try {
+      const hostname = new URL(u).hostname.replace(/^www\./, "");
+      const path = new URL(u).pathname.replace(/\/$/, "").split("/").pop() || "";
+      const readable = path ? decodeURIComponent(path).replace(/[-_]/g, " ") : hostname;
+      setTitle(readable.charAt(0).toUpperCase() + readable.slice(1));
+    } catch { /* invalid URL */ }
+  }, [url, editing]);
+
+  const addBookmark = async () => {
+    const t = title.trim();
+    let u = url.trim();
+    if (!t || !u) return;
+    if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+    setTitle(""); setUrl("");
+    const icon = iconForUrl(u);
+    const { data } = await supabase.from("trip_bookmarks")
+      .insert({ trip_id: trip.id, title: t, url: u, icon, position: bookmarks.length })
+      .select().single();
+    if (data) setBookmarks(prev => [...prev, data]);
+  };
+
+  const deleteBookmark = async (bm) => {
+    setBookmarks(prev => prev.filter(b => b.id !== bm.id));
+    await supabase.from("trip_bookmarks").delete().eq("id", bm.id);
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    const t = title.trim();
+    let u = url.trim();
+    if (!t || !u) return;
+    if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+    const icon = iconForUrl(u);
+    setBookmarks(prev => prev.map(b => b.id === editing.id ? { ...b, title: t, url: u, icon } : b));
+    setEditing(null); setTitle(""); setUrl("");
+    await supabase.from("trip_bookmarks").update({ title: t, url: u, icon }).eq("id", editing.id);
+  };
+
+  const startEdit = (bm) => {
+    setEditing(bm);
+    setTitle(bm.title);
+    setUrl(bm.url);
+    setTimeout(() => titleRef.current?.focus(), 50);
+  };
+
+  const cancelEdit = () => { setEditing(null); setTitle(""); setUrl(""); };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: T.warm }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 16px 10px", borderBottom: `1px solid ${T.sand}`, flexShrink: 0 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: T.ocean, padding: "0 4px", lineHeight: 1 }}>←</button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink }}>Bookmarks</div>
+          {bookmarks.length > 0 && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}>{bookmarks.length} saved</div>}
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {loading ? (
+          <div style={{ padding: "24px 16px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13, textAlign: "center" }}>Loading…</div>
+        ) : bookmarks.length === 0 ? (
+          <div style={{ padding: "32px 24px", textAlign: "center" }}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>🔖</div>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, marginBottom: 6 }}>No bookmarks yet</div>
+            <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif", lineHeight: 1.6 }}>Save links to flights, hotels, reservations, or any useful pages for your trip.</div>
+          </div>
+        ) : (
+          <div style={{ padding: "12px 16px 0" }}>
+            {bookmarks.map(bm => (
+              <div key={bm.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 4px", borderBottom: `1px solid ${T.sand}` }}>
+                <span style={{ fontSize: 20, flexShrink: 0 }}>{bm.icon}</span>
+                <a href={bm.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, textDecoration: "none", minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bm.title}</div>
+                  <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bm.url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0]}</div>
+                </a>
+                <button onClick={() => startEdit(bm)} style={{ background: "none", border: "none", fontSize: 13, color: T.mist, cursor: "pointer", padding: "0 4px", flexShrink: 0 }}>✏️</button>
+                <button onClick={() => deleteBookmark(bm)} style={{ background: "none", border: "none", fontSize: 14, color: T.sand, cursor: "pointer", padding: "0 2px", flexShrink: 0 }}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: "10px 16px", paddingBottom: "calc(10px + env(safe-area-inset-bottom, 0px))", borderTop: `1px solid ${T.sand}`, background: T.chalk, flexShrink: 0 }}>
+        {editing && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <span style={{ fontSize: 11, color: T.ocean, fontFamily: "Georgia,serif" }}>Editing bookmark</span>
+            <button onClick={cancelEdit} style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: "none", border: "none", cursor: "pointer" }}>Cancel</button>
+          </div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <input
+            ref={titleRef}
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            placeholder="Title (e.g. Flight to Tokyo)"
+            style={{ padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm }}
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && (editing ? saveEdit() : addBookmark())}
+              placeholder="URL (e.g. booking.com/...)"
+              style={{ flex: 1, padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm }}
+            />
+            <button onClick={editing ? saveEdit : addBookmark} disabled={!title.trim() || !url.trim()} style={{
+              width: 40, height: 40, borderRadius: "50%", border: "none", fontSize: 18, cursor: (title.trim() && url.trim()) ? "pointer" : "default",
+              background: (title.trim() && url.trim()) ? T.ocean : T.sand, color: "white",
+            }}>{editing ? "✓" : "+"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── EXPENSES VIEW ──────────────────────────────────────────────────── */
+const EXPENSE_CATEGORIES = ["Stay", "Transport", "Food", "Activities", "Shopping", "Other"];
+const EXPENSE_ICONS = { Stay: "🏨", Transport: "🚌", Food: "🍜", Activities: "🎭", Shopping: "🛍️", Other: "📦" };
+const EXPENSE_COLORS = { Stay: "#7C3AED", Transport: "#2563A8", Food: "#D97706", Activities: "#059669", Shopping: "#DB2777", Other: "#6B7280" };
+
+function ExpensesView({ trip, onBack, onUpdateTrip }) {
+  const [expenses, setExpenses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [addTitle, setAddTitle] = useState("");
+  const [addAmount, setAddAmount] = useState("");
+  const [addCategory, setAddCategory] = useState("Food");
+  const [addIsPlanned, setAddIsPlanned] = useState(true);
+  const [budget, setBudget] = useState(trip.budget_amount || null);
+  const [editingBudget, setEditingBudget] = useState(false);
+  const [budgetInput, setBudgetInput] = useState(trip.budget_amount?.toString() || "");
+  const [tab, setTab] = useState("planned"); // "planned" | "actual"
+  const [generating, setGenerating] = useState(false);
+
+  useEffect(() => {
+    supabase.from("trip_expenses").select("*").eq("trip_id", trip.id).order("position")
+      .then(({ data }) => { setExpenses(data || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [trip.id]);
+
+  const addExpense = async () => {
+    const t = addTitle.trim();
+    const amt = parseFloat(addAmount);
+    if (!t || isNaN(amt) || amt <= 0) return;
+    setAddTitle(""); setAddAmount(""); setShowAdd(false);
+    const { data } = await supabase.from("trip_expenses")
+      .insert({ trip_id: trip.id, title: t, amount: amt, category: addCategory, is_planned: addIsPlanned, position: expenses.length })
+      .select().single();
+    if (data) setExpenses(prev => [...prev, data]);
+  };
+
+  const deleteExpense = async (exp) => {
+    setExpenses(prev => prev.filter(e => e.id !== exp.id));
+    await supabase.from("trip_expenses").delete().eq("id", exp.id);
+  };
+
+  const saveBudget = async () => {
+    const amt = parseFloat(budgetInput);
+    if (isNaN(amt) || amt <= 0) return;
+    setBudget(amt);
+    setEditingBudget(false);
+    await supabase.from("trips").update({ budget_amount: amt }).eq("id", trip.id);
+    if (onUpdateTrip) onUpdateTrip({ budget_amount: amt });
+  };
+
+  const generateEstimate = async () => {
+    setGenerating(true);
+    try {
+      const igReq = trip.ig_request || {};
+      const budgetLabel = { budget: "budget", mid: "mid-range", luxury: "luxury" }[igReq.budget] || "mid-range";
+      const numDays = trip.start_date && trip.end_date
+        ? Math.max(1, Math.round((new Date(trip.end_date) - new Date(trip.start_date)) / 864e5) + 1)
+        : 5;
+      const prompt = `Estimate trip costs for: ${trip.destination}, ${numDays} days, ${igReq.travelers || 2} travelers, ${budgetLabel} budget.
+Return ONLY a JSON array of estimated expenses. Each: {"title":"...","amount":number,"category":"Stay|Transport|Food|Activities|Shopping|Other"}
+Include: accommodation (total), flights/transport, daily food budget, key activities, misc. Use USD. Be realistic for the destination and budget level. 8-12 items.`;
+
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": "", // Client-side — use edge function instead
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1024, messages: [{ role: "user", content: prompt }] }),
+      });
+      // Actually, let's use an edge function approach
+      throw new Error("use-edge");
+    } catch {
+      // Fallback: use generate-todos-style edge function
+      try {
+        const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/estimate-expenses`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+          body: JSON.stringify({ trip }),
+        });
+        const { items } = await res.json();
+        if (items?.length) {
+          const existingTitles = new Set(expenses.map(e => e.title.toLowerCase()));
+          const newItems = (items || []).filter(i => !existingTitles.has(i.title.toLowerCase()));
+          const rows = newItems.map((item, i) => ({
+            trip_id: trip.id, title: item.title, amount: item.amount,
+            category: item.category || "Other", is_planned: true, position: expenses.length + i,
+          }));
+          if (rows.length) {
+            const { data } = await supabase.from("trip_expenses").insert(rows).select();
+            setExpenses(prev => [...prev, ...(data || [])]);
+            // Auto-set budget if not set
+            if (!budget) {
+              const total = [...expenses, ...(data || [])].reduce((s, e) => s + (e.is_planned ? Number(e.amount) : 0), 0);
+              setBudget(total);
+              setBudgetInput(total.toString());
+              await supabase.from("trips").update({ budget_amount: total }).eq("id", trip.id);
+            }
+          }
+        }
+      } catch { /* silent */ }
+    }
+    setGenerating(false);
+  };
+
+  const filtered = expenses.filter(e => tab === "planned" ? e.is_planned : !e.is_planned);
+  const totalPlanned = expenses.filter(e => e.is_planned).reduce((s, e) => s + Number(e.amount), 0);
+  const totalActual = expenses.filter(e => !e.is_planned).reduce((s, e) => s + Number(e.amount), 0);
+
+  // Category breakdown
+  const categoryTotals = EXPENSE_CATEGORIES.map(cat => ({
+    cat,
+    planned: expenses.filter(e => e.is_planned && e.category === cat).reduce((s, e) => s + Number(e.amount), 0),
+    actual: expenses.filter(e => !e.is_planned && e.category === cat).reduce((s, e) => s + Number(e.amount), 0),
+  })).filter(c => c.planned > 0 || c.actual > 0);
+
+  const maxCatTotal = Math.max(...categoryTotals.map(c => Math.max(c.planned, c.actual)), 1);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: T.warm }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 16px 10px", borderBottom: `1px solid ${T.sand}`, flexShrink: 0 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: T.ocean, padding: "0 4px", lineHeight: 1 }}>←</button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink }}>Expenses</div>
+        </div>
+        {expenses.filter(e => e.is_planned).length === 0 && (
+          <button onClick={generateEstimate} disabled={generating} style={{
+            background: generating ? T.sand : T.ocean, color: "white", border: "none",
+            borderRadius: 20, padding: "7px 14px", fontSize: 12,
+            fontFamily: "Georgia,serif", cursor: generating ? "default" : "pointer",
+          }}>
+            {generating ? "Estimating…" : "✨ Estimate"}
+          </button>
+        )}
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {/* Budget bar */}
+        <div style={{ padding: "14px 16px 10px" }}>
+          {editingBudget ? (
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={{ fontSize: 13, fontFamily: "Georgia,serif", color: T.mist }}>Budget $</span>
+              <input value={budgetInput} onChange={e => setBudgetInput(e.target.value)} onKeyDown={e => e.key === "Enter" && saveBudget()}
+                autoFocus style={{ width: 100, padding: "6px 10px", borderRadius: 8, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 14, color: T.ink, outline: "none" }} />
+              <button onClick={saveBudget} style={{ background: T.ocean, color: "white", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontFamily: "Georgia,serif", cursor: "pointer" }}>Save</button>
+              <button onClick={() => setEditingBudget(false)} style={{ background: "none", border: "none", fontSize: 12, color: T.mist, cursor: "pointer", fontFamily: "Georgia,serif" }}>Cancel</button>
+            </div>
+          ) : (
+            <div onClick={() => { setEditingBudget(true); setBudgetInput(budget?.toString() || ""); }} style={{ cursor: "pointer" }}>
+              {budget ? (
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                    <span style={{ fontSize: 12, fontFamily: "Georgia,serif", color: T.mist }}>Budget</span>
+                    <span style={{ fontSize: 13, fontFamily: "Georgia,serif", fontWeight: 600, color: (totalPlanned > budget) ? "#DC2626" : T.ink }}>
+                      ${totalPlanned.toLocaleString()} / ${budget.toLocaleString()}
+                    </span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 3, background: T.sand, overflow: "hidden" }}>
+                    <div style={{ height: "100%", borderRadius: 3, background: (totalPlanned / budget) > 1 ? "#DC2626" : (totalPlanned / budget) > 0.8 ? "#D97706" : T.moss, width: `${Math.min(100, (totalPlanned / budget) * 100)}%`, transition: "width 0.3s" }} />
+                  </div>
+                  {totalActual > 0 && (
+                    <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", marginTop: 4 }}>
+                      Spent so far: ${totalActual.toLocaleString()} ({budget > 0 ? Math.round((totalActual / budget) * 100) : 0}%)
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: T.ocean, fontFamily: "Georgia,serif" }}>+ Set a budget</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Category breakdown */}
+        {categoryTotals.length > 0 && (
+          <div style={{ padding: "0 16px 12px" }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {categoryTotals.map(({ cat, planned, actual }) => (
+                <div key={cat} style={{ display: "flex", alignItems: "center", gap: 4, background: T.chalk, border: `1px solid ${T.sand}`, borderRadius: 10, padding: "4px 10px" }}>
+                  <span style={{ fontSize: 12 }}>{EXPENSE_ICONS[cat]}</span>
+                  <span style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.ink }}>${(tab === "planned" ? planned : actual).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Tab switch */}
+        <div style={{ display: "flex", margin: "0 16px 12px", background: T.sand, borderRadius: 10, padding: 2 }}>
+          {[{ key: "planned", label: `Planned ($${totalPlanned.toLocaleString()})` }, { key: "actual", label: `Actual ($${totalActual.toLocaleString()})` }].map(({ key, label }) => (
+            <button key={key} onClick={() => { setTab(key); setAddIsPlanned(key === "planned"); }} style={{
+              flex: 1, padding: "8px 0", borderRadius: 8, border: "none",
+              background: tab === key ? T.chalk : "transparent",
+              color: tab === key ? T.ink : T.mist,
+              fontFamily: "Georgia,serif", fontSize: 12, fontWeight: tab === key ? 600 : 400,
+              cursor: "pointer", boxShadow: tab === key ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+            }}>{label}</button>
+          ))}
+        </div>
+
+        {/* Expense list */}
+        {loading ? (
+          <div style={{ padding: "24px 16px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13, textAlign: "center" }}>Loading…</div>
+        ) : filtered.length === 0 ? (
+          <div style={{ padding: "32px 24px", textAlign: "center" }}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>{tab === "planned" ? "📊" : "💸"}</div>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, marginBottom: 6 }}>
+              {tab === "planned" ? "No planned expenses" : "No expenses logged"}
+            </div>
+            <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif", lineHeight: 1.6 }}>
+              {tab === "planned"
+                ? expenses.filter(e => e.is_planned).length === 0
+                  ? "Tap ✨ Estimate for an AI-generated budget, or add items manually."
+                  : "All planned expenses are in the Actual tab."
+                : "Log expenses as you spend during your trip."
+              }
+            </div>
+          </div>
+        ) : (
+          <div style={{ padding: "0 16px" }}>
+            {EXPENSE_CATEGORIES.map(cat => {
+              const catItems = filtered.filter(e => e.category === cat);
+              if (catItems.length === 0) return null;
+              return (
+                <div key={cat} style={{ marginBottom: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                    <span style={{ fontSize: 14 }}>{EXPENSE_ICONS[cat]}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: T.ink, fontFamily: "Georgia,serif" }}>{cat}</span>
+                    <span style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif" }}>
+                      ${catItems.reduce((s, e) => s + Number(e.amount), 0).toLocaleString()}
+                    </span>
+                  </div>
+                  {catItems.map(exp => (
+                    <div key={exp.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 4px", borderBottom: `1px solid ${T.sand}` }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontFamily: "Georgia,serif", color: T.ink }}>{exp.title}</div>
+                      </div>
+                      <div style={{ fontSize: 14, fontFamily: "Georgia,serif", fontWeight: 600, color: T.ink, flexShrink: 0 }}>${Number(exp.amount).toLocaleString()}</div>
+                      <button onClick={() => deleteExpense(exp)} style={{ background: "none", border: "none", fontSize: 14, color: T.sand, cursor: "pointer", padding: "0 2px", flexShrink: 0 }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Add expense form */}
+      {showAdd ? (
+        <div style={{ padding: "12px 16px", paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))", borderTop: `1px solid ${T.sand}`, background: T.chalk, flexShrink: 0 }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <input value={addTitle} onChange={e => setAddTitle(e.target.value)} placeholder="What for?" autoFocus
+              style={{ flex: 1, padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm }} />
+            <input value={addAmount} onChange={e => setAddAmount(e.target.value)} placeholder="$" type="number" inputMode="decimal"
+              style={{ width: 80, padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm, textAlign: "right" }} />
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+            {EXPENSE_CATEGORIES.map(cat => (
+              <button key={cat} onClick={() => setAddCategory(cat)} style={{
+                padding: "5px 10px", borderRadius: 8, border: `1.5px solid ${addCategory === cat ? EXPENSE_COLORS[cat] : T.sand}`,
+                background: addCategory === cat ? EXPENSE_COLORS[cat] + "15" : "transparent",
+                color: addCategory === cat ? EXPENSE_COLORS[cat] : T.mist,
+                fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer",
+              }}>{EXPENSE_ICONS[cat]} {cat}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setShowAdd(false)} style={{ flex: 1, padding: "10px 0", borderRadius: 12, border: `1.5px solid ${T.sand}`, background: "transparent", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13, cursor: "pointer" }}>Cancel</button>
+            <button onClick={addExpense} disabled={!addTitle.trim() || !addAmount} style={{
+              flex: 1, padding: "10px 0", borderRadius: 12, border: "none",
+              background: (addTitle.trim() && addAmount) ? T.ocean : T.sand, color: "white",
+              fontFamily: "Georgia,serif", fontSize: 13, cursor: (addTitle.trim() && addAmount) ? "pointer" : "default",
+            }}>Add</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ padding: "10px 16px", paddingBottom: "calc(10px + env(safe-area-inset-bottom, 0px))", borderTop: `1px solid ${T.sand}`, background: T.chalk, flexShrink: 0 }}>
+          <button onClick={() => setShowAdd(true)} style={{
+            width: "100%", padding: "12px 0", borderRadius: 12, border: `1.5px dashed ${T.sand}`,
+            background: "transparent", color: T.ocean, fontFamily: "Georgia,serif", fontSize: 13, cursor: "pointer",
+          }}>+ Add {tab === "planned" ? "planned" : "actual"} expense</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const BRAINSTORM_CATEGORIES = ["All", "Sightseeing", "Dining", "Experiences", "Nightlife", "Nature", "Culture", "Shopping", "Day Trip"];
 const BRAINSTORM_CATEGORY_ICONS = { Sightseeing:"🏛️", Dining:"🍜", Experiences:"🎭", Nightlife:"🍸", Nature:"🌿", Culture:"🎨", Shopping:"🛍️", "Day Trip":"🚌" };
 
-function RouteCard({ item, vs, onVote, interactive, showRecommended = true, routeLabel = null, compact = false, onDismiss = null, onModify = null }) {
+function RouteCard({ item, vs, onVote, interactive, showRecommended = true, routeLabel = null, compact = false, onDismiss = null, onModify = null, onTellMore = null, onShowMap = null }) {
   const selected = interactive ? vs.mine === 1 : (item.selected === true || vs.mine === 1);
   const hasError = !!item._error;
 
@@ -1209,11 +1691,30 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
           )}
         </div>
       )}
+      {/* Explore buttons — always shown in full mode */}
+      {!compact && (onTellMore || onShowMap) && (
+        <div style={{ display: "flex", gap: 6, marginTop: interactive ? 6 : 10, paddingTop: 6, borderTop: `1px solid ${T.sand}` }}>
+          {onTellMore && (
+            <button onClick={(e) => { e.stopPropagation(); onTellMore(); }} style={{
+              flex: 1, padding: "7px 0", borderRadius: 10, border: `1.5px solid ${T.sand}`,
+              background: "transparent", color: T.ocean, fontFamily: "Georgia,serif", fontSize: 11, fontWeight: 500,
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+            }}>📖 Tell me more</button>
+          )}
+          {onShowMap && (
+            <button onClick={(e) => { e.stopPropagation(); onShowMap(); }} style={{
+              flex: 1, padding: "7px 0", borderRadius: 10, border: `1.5px solid ${T.sand}`,
+              background: "transparent", color: T.ocean, fontFamily: "Georgia,serif", fontSize: 11, fontWeight: 500,
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+            }}>🗺 Show on map</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditForm = null, onOpenChat = null, onDismissRoute = null, onModifyRoute = null, undoDismissRef = null, triggerGenerateRef = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null }) {
+function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditForm = null, onOpenChat = null, onDismissRoute = null, onModifyRoute = null, undoDismissRef = null, triggerGenerateRef = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null, onTellMore = null, onShowMap = null }) {
   const [items, setItems] = useState(null); // null = not started, [] = empty, [...] = loaded
   const [loadingItems, setLoadingItems] = useState(false);
   const [localVotes, setLocalVotes] = useState({}); // { [tempId]: 1|-1|0 } — pre-trip mode votes
@@ -1376,6 +1877,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
           notes: igReq.notes || null,
           existingPlans: addMore ? (items || []).filter(it => it.tier === 1).map(it => it.title) : null,
           baseLocation: igReq.baseLocation || null,
+          numPlans: addMore ? Math.min(4, 12 - (items || []).filter(it => it.tier === 1 && !it.dismissed).length) : 4,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1653,6 +2155,11 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                     }
                     onDismissRoute?.(label, item.id);
                   }}
+                  onTellMore={onTellMore ? () => {
+                    const cities = (item.city || "").split(",").map(s => s.trim()).filter(Boolean);
+                    onTellMore(cities, item.id);
+                  } : null}
+                  onShowMap={onShowMap ? () => onShowMap(item.id) : null}
                 />
               </div>
             ))}
@@ -1660,8 +2167,9 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
           {/* Generate new options */}
           {!generating && (
             tier1Items.length >= 12 ? (
-              <div style={{ marginTop: 14, textAlign: "center", fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>
-                Maximum 12 plans reached — dismiss some to generate more
+              <div style={{ marginTop: 14, padding: "12px 16px", borderRadius: 12, background: T.chalk, border: `1.5px solid ${T.sand}`, textAlign: "center" }}>
+                <div style={{ fontSize: 13, color: T.ink, fontFamily: "Georgia,serif", marginBottom: 4 }}>Maximum 12 trip ideas reached</div>
+                <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>Dismiss some ideas to generate new ones</div>
               </div>
             ) : (
               <button
@@ -1887,8 +2395,8 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
             cityGroups[city].push(d);
           }
           return (
-            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-              {cityOrder.map(city => {
+            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+              {cityOrder.map((city, ci) => {
                 const cityDays = cityGroups[city];
                 const allActs = cityDays.flatMap(d => d.activities || []);
                 // Write-up: prefer top-level cities[].writeup from IG response; fall back to day descriptions
@@ -1929,23 +2437,26 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                 }
 
                 return (
-                  <CityCard key={city} city={city} cityDays={cityDays} writeup={writeup} deepDive={deepDiveCacheApp[city]} onDeepDive={() => { setDeepDiveCity(city); loadCityDeepDive(city); }}>
+                  <Fragment key={city}>
+                  {ci > 0 && <div style={{height:8,background:"#F3EDE4"}}/>}
+                  <CityCard city={city} cityDays={cityDays} writeup={writeup} deepDive={deepDiveCache[city]} onDeepDive={() => { setDeepDiveCity(city); loadCityDeepDive(city); }}>
                     {/* City header is rendered inside CityCard */}
 
-                    {/* Highlights — horizontal scroll of mini cards */}
+                    {/* Highlights — masonry grid */}
                     {highlights.length > 0 && (
                       <>
-                        <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 8 }}>
+                        <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 10 }}>
                           Highlights
                         </div>
-                        <div className="no-scrollbar" style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4, margin: "0 -16px", padding: "0 16px 4px" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                           {highlights.map((act, i) => (
-                            <MagazineHighlightCard key={i} item={act} city={city} inItinerary={itineraryTitles.has((act.title || "").toLowerCase())} />
+                            <MagazineHighlightCard key={i} item={act} city={city} inItinerary={itineraryTitles.has((act.title || "").toLowerCase())} masonry={true} tall={i % 3 === 0} />
                           ))}
                         </div>
                       </>
                     )}
                   </CityCard>
+                  </Fragment>
                 );
               })}
             </div>
@@ -2017,19 +2528,49 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
 function BoardView({ trip, onSaveNotes }) {
   const [activeSection, setActiveSection] = useState(null);
   const [todoItems, setTodoItems] = useState(null);
+  const [bookmarkCount, setBookmarkCount] = useState(null);
+
+  // Push/pop history entries so browser back works inside sub-views
+  const openSection = (section) => {
+    setActiveSection(section);
+    window.history.pushState({ boardSection: section }, "");
+  };
+  useEffect(() => {
+    const onPop = (e) => {
+      if (activeSection) {
+        setActiveSection(null);
+      }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [activeSection]);
+
+  const goBack = () => {
+    setActiveSection(null);
+    window.history.back();
+  };
 
   useEffect(() => {
     if (!trip?.id) return;
     supabase.from("trip_todos").select("id, text, done").eq("trip_id", trip.id).order("position").limit(5)
       .then(({ data }) => setTodoItems(data || []))
       .catch(() => setTodoItems([]));
+    supabase.from("trip_bookmarks").select("id", { count: "exact", head: true }).eq("trip_id", trip.id)
+      .then(({ count }) => setBookmarkCount(count || 0))
+      .catch(() => setBookmarkCount(0));
   }, [trip?.id, activeSection]); // re-fetch when returning from sub-view
 
   if (activeSection === "notes") {
-    return <NotesView trip={trip} onSaveNotes={onSaveNotes} onBack={() => setActiveSection(null)} />;
+    return <NotesView trip={trip} onSaveNotes={onSaveNotes} onBack={goBack} />;
   }
   if (activeSection === "todo") {
-    return <TodoView trip={trip} onBack={() => setActiveSection(null)} />;
+    return <TodoView trip={trip} onBack={goBack} />;
+  }
+  if (activeSection === "bookmarks") {
+    return <BookmarksView trip={trip} onBack={goBack} />;
+  }
+  if (activeSection === "expenses") {
+    return <ExpensesView trip={trip} onBack={goBack} onUpdateTrip={(updates) => Object.assign(trip, updates)} />;
   }
 
   const noteText = trip.board_notes?.trim() || null;
@@ -2040,37 +2581,19 @@ function BoardView({ trip, onSaveNotes }) {
     <div style={{ padding: "16px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
 
       {/* ── EXPENSES ── */}
-      <div style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, opacity: 0.65 }}>
+      <div onClick={() => openSection("expenses")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
           <div style={{ fontSize: 24, flexShrink: 0 }}>💸</div>
           <div style={{ flex: 1 }}>
             <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: T.ink }}>Expenses</div>
             <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>Plan your trip budget</div>
           </div>
-          <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: T.sand, borderRadius: 10, padding: "3px 10px", flexShrink: 0 }}>Coming soon</div>
-        </div>
-        <div style={{ borderTop: `1px solid ${T.sand}`, padding: "10px 16px 14px" }}>
-          <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>No expenses planned yet</div>
-        </div>
-      </div>
-
-      {/* ── POLLS ── */}
-      <div style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, opacity: 0.65 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
-          <div style={{ fontSize: 24, flexShrink: 0 }}>🗳️</div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: T.ink }}>Polls</div>
-            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>Vote on destinations, restaurants, activities</div>
-          </div>
-          <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: T.sand, borderRadius: 10, padding: "3px 10px", flexShrink: 0 }}>Coming soon</div>
-        </div>
-        <div style={{ borderTop: `1px solid ${T.sand}`, padding: "10px 16px 14px" }}>
-          <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic" }}>No polls yet</div>
+          <div style={{ fontSize: 16, color: T.mist, flexShrink: 0 }}>›</div>
         </div>
       </div>
 
       {/* ── NOTES ── */}
-      <div onClick={() => setActiveSection("notes")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
+      <div onClick={() => openSection("notes")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
           <div style={{ fontSize: 24, flexShrink: 0 }}>📝</div>
           <div style={{ flex: 1 }}>
@@ -2088,7 +2611,7 @@ function BoardView({ trip, onSaveNotes }) {
       </div>
 
       {/* ── TO-DO ── */}
-      <div onClick={() => setActiveSection("todo")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
+      <div onClick={() => openSection("todo")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
           <div style={{ fontSize: 24, flexShrink: 0 }}>✅</div>
           <div style={{ flex: 1 }}>
@@ -2123,6 +2646,20 @@ function BoardView({ trip, onSaveNotes }) {
           {todoItems && todoItems.length > 4 && (
             <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", paddingLeft: 22 }}>+{todoItems.length - 4} more</div>
           )}
+        </div>
+      </div>
+
+      {/* ── BOOKMARKS ── */}
+      <div onClick={() => openSection("bookmarks")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
+          <div style={{ fontSize: 24, flexShrink: 0 }}>🔖</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: T.ink }}>Bookmarks</div>
+            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>
+              {bookmarkCount > 0 ? `${bookmarkCount} saved` : "Save links to flights, hotels & more"}
+            </div>
+          </div>
+          <div style={{ fontSize: 16, color: T.mist, flexShrink: 0 }}>›</div>
         </div>
       </div>
 
@@ -2879,12 +3416,32 @@ function DestinationHero({ dest, isLoading, data, children }) {
   );
 }
 
+function FoodSpotlightCard({ item, city }) {
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    const q = `${item.name} ${city} food`;
+    _fetchPhoto(item.name, city, "food").then(url => { setPhotoUrl(url); setLoaded(true); }).catch(() => setLoaded(true));
+  }, [item.name, city]);
+  return (
+    <div style={{ flexShrink: 0, width: 140, borderRadius: 14, overflow: "hidden", border: `1px solid #FED7AA`, background: "#FFF7ED" }}>
+      <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
+        {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+        {photoUrl && <img src={photoUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>}
+        {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>{item.icon || "🍜"}</div>}
+      </div>
+      <div style={{ padding: "8px 10px 6px" }}>
+        <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 12, color: T.ink, marginBottom: 2 }}>{item.icon} {item.name}</div>
+        {item.note && <div style={{ fontSize: 10, color: "#92400E", fontFamily: "Georgia,serif", lineHeight: 1.3 }}>{item.note}</div>}
+      </div>
+    </div>
+  );
+}
+
 function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, children }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [photoLoaded, setPhotoLoaded] = useState(false);
   useEffect(() => {
-    // Fetch city photo directly from Wikipedia — skip _fetchPhoto's deduplication
-    // so city cards always get photos even if activity cards claimed the same URL
     (async () => {
       try {
         const res = await fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(city)}&prop=pageimages&format=json&pithumbsize=800&redirects=1&origin=*`);
@@ -2893,7 +3450,6 @@ function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, children }) {
         const src = page?.thumbnail?.source;
         const BAD = /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|panorama|blank|in_Indonesia|location/i;
         if (src && !BAD.test(src)) { setPhotoUrl(src); setPhotoLoaded(true); return; }
-        // Fallback: Wikipedia search
         const res2 = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(city)}&gsrlimit=3&prop=pageimages&pithumbsize=800&format=json&origin=*`);
         const data2 = await res2.json();
         for (const p of Object.values(data2?.query?.pages || {})) {
@@ -2904,82 +3460,92 @@ function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, children }) {
       setPhotoLoaded(true);
     })();
   }, [city]);
+
+  const dd = deepDive && typeof deepDive === "object" ? deepDive : null;
+
   return (
-    <div style={{ background: T.chalk, borderRadius: 18, overflow: "hidden", border: `1px solid ${T.sand}`, boxShadow: "0 2px 10px rgba(15,25,35,0.04)" }}>
-      {/* City photo */}
-      {(!photoLoaded || photoUrl) && (
-        <div style={{ height: 140, background: T.sand, overflow: "hidden", position: "relative" }}>
-          {!photoLoaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
-          {photoUrl && <img src={photoUrl} alt={city} onLoad={() => setPhotoLoaded(true)} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+    <div style={{ background: T.chalk, overflow: "hidden" }}>
+      {/* City hero photo with overlay */}
+      <div style={{ height: 180, background: T.sand, overflow: "hidden", position: "relative" }}>
+        {!photoLoaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+        {photoUrl && <img src={photoUrl} alt={city} onLoad={() => setPhotoLoaded(true)} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+        {/* City name badge */}
+        <div style={{position:"absolute",top:12,left:12,background:"rgba(0,0,0,0.5)",backdropFilter:"blur(8px)",color:"white",fontFamily:"'DM Serif Display',serif",fontSize:18,padding:"4px 14px",borderRadius:10}}>
+          {city}
         </div>
-      )}
-      <div style={{ padding: "16px 16px 14px" }}>
-        {/* City header */}
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 22, color: T.ink, lineHeight: 1.15 }}>{city}</div>
-            <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}>
-              {cityDays.length} day{cityDays.length > 1 ? "s" : ""} · {cityDays.map(d => d.label).join(", ")}
-            </div>
-          </div>
-          {writeup && (
-            <div style={{ fontSize: 13, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.55, marginTop: 6 }}>
-              {writeup}
-            </div>
-          )}
-        </div>
-
-        {/* Highlights (passed as children) */}
-        {children}
-
-        {/* Inline deep dive sections — food + weather + etiquette */}
-        {deepDive && typeof deepDive === "object" && (<>
-          {deepDive.foodSpecialties?.length > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>🍜 Must-try food</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {deepDive.foodSpecialties.slice(0, 4).map((f, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, background: T.warm, borderRadius: 10, padding: "5px 10px", border: `1px solid ${T.sand}` }}>
-                    <span style={{ fontSize: 14 }}>{f.icon}</span>
-                    <div>
-                      <div style={{ fontSize: 12, fontFamily: "Georgia,serif", fontWeight: 600, color: T.ink }}>{f.name}</div>
-                      <div style={{ fontSize: 10, fontFamily: "Georgia,serif", color: T.mist }}>{f.note}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {deepDive.weather && (
-            <div style={{ marginTop: 12, fontSize: 12, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.5 }}>
-              <span style={{ fontWeight: 600, color: T.mist, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>☀️ Weather · </span>{deepDive.weather}
-            </div>
-          )}
-          {deepDive.etiquette?.length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>🙏 Know before you go</div>
-              {deepDive.etiquette.slice(0, 3).map((tip, i) => (
-                <div key={i} style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.5, paddingLeft: 12, position: "relative", marginBottom: 2 }}>
-                  <span style={{ position: "absolute", left: 0, color: T.mist }}>•</span>{tip}
-                </div>
-              ))}
-            </div>
-          )}
-        </>)}
-        {deepDive === "loading" && (
-          <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
-            {[0,1].map(i => (
-              <div key={i} style={{ width: "100%", height: 16, borderRadius: 4, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite", animationDelay: `${i*0.15}s` }} />
-            ))}
+        {/* Weather badge */}
+        {dd?.weather && (
+          <div style={{position:"absolute",top:12,right:12,background:"rgba(255,255,255,0.9)",backdropFilter:"blur(8px)",fontSize:11,padding:"4px 10px",borderRadius:8,color:T.ink,fontFamily:"Georgia,serif",fontWeight:600,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+            ☀️ {dd.weather.split(".")[0].slice(0, 30)}
           </div>
         )}
+        {/* Gradient overlay at bottom */}
+        <div style={{position:"absolute",bottom:0,left:0,right:0,height:40,background:"linear-gradient(transparent, rgba(0,0,0,0.2))"}}/>
+      </div>
 
-        {/* CTAs — deep dive + TripAdvisor */}
-        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-          {deepDive && typeof deepDive === "object" && (
-            <button onClick={onDeepDive} style={{
-              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-              padding: "9px 14px", borderRadius: 10,
+      {/* Writeup */}
+      <div style={{ padding: "14px 18px 10px" }}>
+        <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:6}}>
+          {cityDays.length} day{cityDays.length > 1 ? "s" : ""} · {cityDays.map(d => d.label).join(", ")}
+        </div>
+        {writeup && (
+          <div style={{ fontSize: 13, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.65 }}>
+            {writeup}
+          </div>
+        )}
+      </div>
+
+      {/* Pull quote — didYouKnow */}
+      {dd?.didYouKnow && (
+        <div style={{margin:"0 18px 14px",padding:"12px 16px",borderLeft:`3px solid ${T.ocean}`,background:`linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,borderRadius:"0 12px 12px 0"}}>
+          <div style={{fontSize:13,lineHeight:1.55,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic"}}>💡 {dd.didYouKnow}</div>
+        </div>
+      )}
+
+      {/* Highlights (passed as children — now rendered as masonry) */}
+      <div style={{ padding: "0 14px" }}>
+        {children}
+      </div>
+
+      {/* Food spotlight — photo cards */}
+      {dd?.foodSpecialties?.length > 0 && (
+        <div style={{ padding: "0 14px", marginTop: 4, marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 10, paddingLeft: 4 }}>🍜 Must try</div>
+          <div className="no-scrollbar" style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4 }}>
+            {dd.foodSpecialties.slice(0, 5).map((f, i) => (
+              <FoodSpotlightCard key={i} item={f} city={city} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Local tips */}
+      {dd?.etiquette?.length > 0 && (
+        <div style={{ padding: "0 18px 14px" }}>
+          <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 8 }}>🤝 Good to know</div>
+          {dd.etiquette.slice(0, 3).map((tip, i) => (
+            <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 0", borderBottom: (i < 2 && i < dd.etiquette.length - 1) ? `1px solid ${T.sand}` : "none" }}>
+              <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>{["🚇","🏮","🗑️","💬","👟"][i % 5]}</span>
+              <div style={{ fontSize: 12, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.5 }}>{tip}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {deepDive === "loading" && (
+        <div style={{ padding: "0 18px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {[0,1].map(i => (
+            <div key={i} style={{ width: "100%", height: 16, borderRadius: 4, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite", animationDelay: `${i*0.15}s` }} />
+          ))}
+        </div>
+      )}
+
+      {/* CTAs — deep dive + TripAdvisor */}
+      <div style={{ display: "flex", gap: 8, padding: "0 14px 14px" }}>
+        {dd && (
+          <button onClick={onDeepDive} style={{
+            flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            padding: "9px 14px", borderRadius: 10,
               background: "transparent", border: `1.5px solid ${T.ocean}33`,
               color: T.ocean, fontFamily: "Georgia,serif", fontSize: 12, fontWeight: 600, cursor: "pointer",
             }}>
@@ -2996,12 +3562,11 @@ function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, children }) {
             🗺 TripAdvisor
           </a>
         </div>
-      </div>
     </div>
   );
 }
 
-function MagazineHighlightCard({ item, city, inItinerary = false }) {
+function MagazineHighlightCard({ item, city, inItinerary = false, masonry = false, tall = false }) {
   const searchKey = item.geocode || item.title || "";
   const [photoUrl, setPhotoUrl] = useState(item.photo_url || null);
   const [loaded, setLoaded] = useState(!!item.photo_url);
@@ -3016,16 +3581,19 @@ function MagazineHighlightCard({ item, city, inItinerary = false }) {
     return () => { cancelled = true; };
   }, [searchKey, city]);
   const mapsQuery = encodeURIComponent((item.geocode || item.title) + (city ? `, ${city}` : ""));
+  const photoHeight = masonry ? (tall ? 160 : 120) : 90;
   return (
     <div style={{
-      flexShrink: 0, width: 160, borderRadius: 12, overflow: "hidden",
-      border: `1px solid ${inItinerary ? T.ocean + "44" : T.sand}`, background: T.warm,
+      flexShrink: masonry ? undefined : 0,
+      width: masonry ? "100%" : 160,
+      borderRadius: 14, overflow: "hidden",
+      border: `1px solid ${inItinerary ? T.ocean + "44" : T.sand}`, background: "#FFFDF9",
       position: "relative",
     }}>
       {inItinerary && (
-        <div style={{position:"absolute",top:6,right:6,zIndex:2,background:T.ocean,borderRadius:"50%",width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"white",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}>✓</div>
+        <div style={{position:"absolute",top:8,right:8,zIndex:2,background:T.ocean,borderRadius:"50%",width:20,height:20,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"white",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}>✓</div>
       )}
-      <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
+      <div style={{ height: photoHeight, background: T.sand, overflow: "hidden", position: "relative" }}>
         {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
         {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={item.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>}
         {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>{item.icon || "📍"}</div>}
@@ -3033,6 +3601,7 @@ function MagazineHighlightCard({ item, city, inItinerary = false }) {
       <div style={{ padding: "8px 10px 6px" }}>
         <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.25, marginBottom: 3 }}>{item.title}</div>
         {item.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic", lineHeight: 1.35 }}>{item.note}</div>}
+        {inItinerary && <div style={{display:"inline-block",marginTop:5,fontSize:9,background:"#DCFCE7",color:"#16A34A",padding:"1px 7px",borderRadius:10,fontFamily:"Georgia,serif",fontWeight:600}}>In your itinerary</div>}
       </div>
       <a href={`https://www.google.com/maps/search/?api=1&query=${mapsQuery}`} target="_blank" rel="noopener noreferrer"
         style={{ position: "absolute", bottom: 6, right: 6, display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 6, border: `1px solid ${T.sand}`, background: T.chalk, textDecoration: "none" }}>
@@ -3959,7 +4528,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const [debugMode] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get("debug") === "1";
     if (fromUrl) localStorage.setItem("tripjam_debug", "1");
-    return fromUrl || localStorage.getItem("tripjam_debug") === "1" || window.location.hostname === "localhost";
+    return fromUrl || localStorage.getItem("tripjam_debug") === "1";
   });
   const [activeDay, setActiveDay] = useState(0);
 
@@ -4019,6 +4588,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const [detailedLoading, setDetailedLoading] = useState(false); // true while full IG loads in background
   const [detailedReady, setDetailedReady] = useState(initialScreen === "itinerary"); // true if opening existing trip
   const [pretripTab, setPretripTab] = useState("brainstorm"); // pre-trip bottom nav tab
+  const [magazineFilterCities, setMagazineFilterCities] = useState(null); // cities to filter magazine by (from "Tell me more")
+  const [magazineFilterRouteId, setMagazineFilterRouteId] = useState(null);
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
   const [fabPos, setFabPos] = useState({ right: 0, bottom: 140 }); // draggable FAB position, flush right
   const fabDragRef = useRef({ dragging: false, startX: 0, startY: 0, startRight: 0, startBottom: 0 });
@@ -5157,6 +5728,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             onSelectionChange={setPretripSelectedRouteId}
             externalSelectedId={pretripSelectedRouteId}
             externalRoutes={pretripRoutes}
+            onTellMore={(cities, routeId) => {
+              // Switch to Magazine tab, filtered for this route's cities
+              setMagazineFilterCities(cities);
+              setMagazineFilterRouteId(routeId);
+              setPretripTab("magazine");
+            }}
+            onShowMap={(routeId) => {
+              setPretripSelectedRouteId(routeId);
+              setPretripTab("map");
+            }}
           />
         </div>
 
@@ -5166,21 +5747,34 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             routes={pretripRoutes}
             selectedId={pretripSelectedRouteId}
             onSelectRoute={setPretripSelectedRouteId}
+            destination={(pendingForm?.destinations || []).join(", ") || editingTrip?.destination || ""}
           />
         </div>
 
         {/* Pre-IG Magazine tab */}
         {pretripTab === "magazine" && (
           <div style={{flex:1,overflowY:"auto",background:T.warm}}>
-            <div style={{padding:"20px 16px 12px",background:T.chalk,borderBottom:`1px solid ${T.sand}`}}>
-              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink}}>Magazine</div>
-              <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginTop:4}}>
-                Explore the destinations across your trip plans
+            <div style={{padding:"20px 16px 12px",background:T.chalk,borderBottom:`1px solid ${T.sand}`,display:"flex",alignItems:"center",gap:10}}>
+              {magazineFilterCities && (
+                <button onClick={() => { setMagazineFilterCities(null); setMagazineFilterRouteId(null); setPretripTab("brainstorm"); }} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:T.ocean,padding:"0 4px",lineHeight:1}}>←</button>
+              )}
+              <div style={{flex:1}}>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink}}>
+                  {magazineFilterCities ? magazineFilterCities.join(", ") : "Magazine"}
+                </div>
+                <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginTop:4}}>
+                  {magazineFilterCities ? "Explore this route's destinations" : "Explore the destinations across your trip plans"}
+                </div>
               </div>
+              {magazineFilterCities && (
+                <button onClick={() => { setMagazineFilterCities(null); setMagazineFilterRouteId(null); }} style={{
+                  background:T.sand,border:"none",borderRadius:20,padding:"5px 11px",color:T.ink,fontSize:11,cursor:"pointer",fontFamily:"Georgia,serif"
+                }}>Show all</button>
+              )}
             </div>
             <div style={{padding:"12px 16px 24px",display:"flex",flexDirection:"column",gap:16}}>
-              {/* Destination-level intro */}
-              {(() => {
+              {/* Destination-level intro — hide when filtered */}
+              {!magazineFilterCities && (() => {
                 const dest = (pendingForm?.destinations || []).join(", ");
                 const dd = dest ? deepDiveCacheApp[dest] : null;
                 const data = (dd && typeof dd === "object") ? dd : null;
@@ -5196,11 +5790,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 );
               })()}
               {(() => {
-                // Collect all unique cities across all routes
+                // Collect all unique cities — optionally filtered by route
+                const filterSet = magazineFilterCities ? new Set(magazineFilterCities.map(c => c.toLowerCase())) : null;
                 const allCities = [];
                 const seen = new Set();
                 for (const route of pretripRoutes) {
                   for (const c of (route.city || "").split(",").map(s => s.trim()).filter(Boolean)) {
+                    if (filterSet && !filterSet.has(c.toLowerCase())) continue;
                     if (!seen.has(c.toLowerCase())) { seen.add(c.toLowerCase()); allCities.push({ city: c, fromRoute: route.title }); }
                   }
                 }
@@ -5259,7 +5855,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           ].map(({ key, icon, label }) => {
             const active = pretripTab === key;
             return (
-              <button key={key} onClick={()=>setPretripTab(key)} style={{
+              <button key={key} onClick={()=>{ setPretripTab(key); if (key !== "magazine") { setMagazineFilterCities(null); setMagazineFilterRouteId(null); } }} style={{
                 flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:3,
                 padding:"10px 0 8px", border:"none", background:"none", cursor:"pointer",
                 color: active ? T.ocean : T.mist, transition:"color 0.15s", position:"relative",

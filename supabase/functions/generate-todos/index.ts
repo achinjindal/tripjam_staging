@@ -13,15 +13,22 @@ Rules:
 - Tailor items to the destination, travel style, budget, and dates given
 - Include destination-specific items (e.g. visa requirements, local transport cards, vaccination needs)
 - Categories: Bookings | Documents | Packing | Health & safety | Money | Day of travel
+- Due dates: assign a realistic due_date to each item relative to the trip. Use these labels:
+  "2 months before" — visa applications, major bookings
+  "1 month before" — vaccinations, travel insurance, transport passes
+  "2 weeks before" — packing, currency exchange, confirmations
+  "1 week before" — final checks, downloads, copies
+  "Day before" — last-minute packing, charge devices
+  "Day of travel" — airport/station tasks, check-in
 
 Return ONLY a raw JSON array. No markdown, no code fences. Start with [ and end with ].
-Each item: {"text": "...", "category": "..."}
+Each item: {"text": "...", "category": "...", "due_date": "..."}
 
 Example:
 [
-  {"text": "Book train from Mumbai to Goa in advance — sells out fast", "category": "Bookings"},
-  {"text": "Check visa-on-arrival eligibility for your passport", "category": "Documents"},
-  {"text": "Pack reef-safe sunscreen — regular sunscreen banned at some beaches", "category": "Packing"}
+  {"text": "Book train from Mumbai to Goa in advance — sells out fast", "category": "Bookings", "due_date": "1 month before"},
+  {"text": "Check visa-on-arrival eligibility for your passport", "category": "Documents", "due_date": "2 months before"},
+  {"text": "Pack reef-safe sunscreen — regular sunscreen banned at some beaches", "category": "Packing", "due_date": "2 weeks before"}
 ]`;
 
 serve(async (req) => {
