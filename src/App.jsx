@@ -995,98 +995,113 @@ function TodoView({ trip, onBack }) {
           <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 18, color: T.ink }}>To-do</div>
           {total > 0 && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}>{doneCount}/{total} done</div>}
         </div>
-        <button onClick={() => generateTodos()} disabled={generating} style={{
-          background: generating ? T.sand : T.ocean, color: "white", border: "none",
-          borderRadius: 20, padding: "7px 14px", fontSize: 12,
-          fontFamily: "Georgia,serif", cursor: generating ? "default" : "pointer",
-        }}>
-          {generating ? "Generating…" : todos.length > 0 || suggestions.length ? "✨ More" : "✨ Generate"}
-        </button>
+        {/* Generate button moved to suggestions section below */}
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto" }}>
-        {/* Suggestions */}
-        {suggestions.length > 0 && (
-          <div style={{ margin: "16px 16px 0" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: T.ocean, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1 }}>
-                Suggestions — {suggestions.length} items
-              </div>
-              <button onClick={acceptAll} style={{ fontSize: 12, color: T.moss, fontFamily: "Georgia,serif", background: "none", border: `1px solid ${T.moss}`, borderRadius: 20, padding: "4px 12px", cursor: "pointer" }}>
-                Accept all
+      <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+        {/* ── TOP HALF: My checklist ── */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          {loading ? (
+            <div style={{ padding: "24px 16px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13, textAlign: "center" }}>Loading…</div>
+          ) : todos.length === 0 && !generating ? (
+            <div style={{ padding: "32px 24px", textAlign: "center" }}>
+              <div style={{ fontSize: 36, marginBottom: 12 }}>✅</div>
+              <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, marginBottom: 6 }}>Nothing here yet</div>
+              <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif", lineHeight: 1.6 }}>Accept suggestions below or add items manually.</div>
+            </div>
+          ) : (
+            <div style={{ padding: "8px 16px 0" }}>
+              {groupedTodos.map(({ cat, items }) => (
+                <div key={cat} style={{ marginBottom: 16 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, paddingTop: 4 }}>
+                    <span style={{ fontSize: 14 }}>{CATEGORY_ICONS[cat] || "📌"}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: T.ink, fontFamily: "Georgia,serif", letterSpacing: 0.3 }}>{cat}</span>
+                    <span style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif" }}>({items.filter(t => t.done).length}/{items.length})</span>
+                  </div>
+                  {items.map(todo => (
+                    <div key={todo.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 4px", borderBottom: `1px solid ${T.sand}` }}>
+                      <button onClick={() => toggleDone(todo)} style={{
+                        width: 22, height: 22, borderRadius: "50%", flexShrink: 0, marginTop: 1, cursor: "pointer",
+                        border: `2px solid ${todo.done ? T.moss : T.sand}`,
+                        background: todo.done ? T.moss : "transparent",
+                        display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 12,
+                      }}>
+                        {todo.done ? "✓" : ""}
+                      </button>
+                      <div style={{ flex: 1, paddingTop: 2 }}>
+                        <div style={{ fontSize: 13, fontFamily: "Georgia,serif", color: todo.done ? T.mist : T.ink, textDecoration: todo.done ? "line-through" : "none", lineHeight: 1.5 }}>
+                          {todo.text}
+                        </div>
+                        {todo.due_date && !todo.done && (
+                          <div style={{ fontSize: 10, color: T.ocean, fontFamily: "Georgia,serif", marginTop: 2 }}>⏰ {todo.due_date}</div>
+                        )}
+                      </div>
+                      <button onClick={() => deleteTodo(todo)} style={{ background: "none", border: "none", fontSize: 14, color: T.sand, cursor: "pointer", padding: "0 2px", flexShrink: 0 }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── BOTTOM HALF: Suggestions ── */}
+        <div style={{ borderTop: `2px solid ${T.sand}`, background: "#F8F5EF", flexShrink: 0, maxHeight: "45%", overflowY: "auto" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px 6px" }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: T.ocean, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1 }}>
+              ✨ Suggestions {suggestions.length > 0 ? `(${suggestions.length})` : ""}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {suggestions.length > 0 && (
+                <button onClick={acceptAll} style={{ fontSize: 11, color: T.moss, fontFamily: "Georgia,serif", background: "none", border: `1px solid ${T.moss}`, borderRadius: 20, padding: "3px 10px", cursor: "pointer" }}>
+                  Accept all
+                </button>
+              )}
+              <button onClick={() => generateTodos()} disabled={generating} style={{
+                fontSize: 11, color: "white", fontFamily: "Georgia,serif",
+                background: generating ? T.sand : T.ocean, border: "none",
+                borderRadius: 20, padding: "3px 10px", cursor: generating ? "default" : "pointer",
+              }}>
+                {generating ? "Generating…" : "✨ Generate"}
               </button>
             </div>
-            {groupedSuggestions.map(({ cat, items }) => (
-              <div key={cat} style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", letterSpacing: 0.5, marginBottom: 6, paddingLeft: 2 }}>{CATEGORY_ICONS[cat] || "📌"} {cat}</div>
-                {items.map((item, globalIdx) => {
-                  const idx = suggestions.indexOf(item);
-                  return (
-                    <div key={globalIdx} style={{ display: "flex", alignItems: "center", gap: 8, background: "#F0F7FF", border: `1px solid #C8DFFE`, borderRadius: 10, padding: "10px 12px", marginBottom: 6 }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.4 }}>{item.text}</div>
-                        {item.due_date && <div style={{ fontSize: 10, color: T.ocean, fontFamily: "Georgia,serif", marginTop: 3 }}>⏰ {item.due_date}</div>}
-                      </div>
-                      <button onClick={() => accept(item, idx)} title="Add to list" style={{ background: T.moss, border: "none", borderRadius: "50%", width: 28, height: 28, color: "white", fontSize: 14, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</button>
-                      <button onClick={() => discard(idx)} title="Discard" style={{ background: "none", border: `1px solid ${T.sand}`, borderRadius: "50%", width: 28, height: 28, color: T.mist, fontSize: 14, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
-                    </div>
-                  );
-                })}
+          </div>
+          {generating && suggestions.length === 0 && (
+            <div style={{ padding: "20px 24px", textAlign: "center" }}>
+              <div style={{ fontSize: 24, marginBottom: 8, animation: "pulse 1.5s ease-in-out infinite" }}>✨</div>
+              <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif" }}>Generating suggestions for your {trip.destination} trip…</div>
+            </div>
+          )}
+          {!generating && suggestions.length === 0 && (
+            <div style={{ padding: "16px 24px", textAlign: "center" }}>
+              <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>
+                {todos.length > 0 ? "No new suggestions. Tap Generate for more." : "Tap Generate for a personalised checklist."}
               </div>
-            ))}
-            <div style={{ height: 1, background: T.sand, margin: "8px 0 16px" }} />
-          </div>
-        )}
-
-        {/* Todos list — grouped by category */}
-        {loading ? (
-          <div style={{ padding: "24px 16px", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13, textAlign: "center" }}>Loading…</div>
-        ) : todos.length === 0 && suggestions.length === 0 && !generating ? (
-          <div style={{ padding: "32px 24px", textAlign: "center" }}>
-            <div style={{ fontSize: 36, marginBottom: 12 }}>✅</div>
-            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, marginBottom: 6 }}>Nothing here yet</div>
-            <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif", lineHeight: 1.6 }}>Tap <strong>✨ Generate</strong> for a personalised checklist, or add items below.</div>
-          </div>
-        ) : generating && todos.length === 0 && suggestions.length === 0 ? (
-          <div style={{ padding: "32px 24px", textAlign: "center" }}>
-            <div style={{ fontSize: 36, marginBottom: 12, animation: "pulse 1.5s ease-in-out infinite" }}>✨</div>
-            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink, marginBottom: 6 }}>Generating your checklist…</div>
-            <div style={{ fontSize: 13, color: T.mist, fontFamily: "Georgia,serif" }}>Tailored to your {trip.destination} trip</div>
-          </div>
-        ) : (
-          <div style={{ padding: "8px 16px 0" }}>
-            {groupedTodos.map(({ cat, items }) => (
-              <div key={cat} style={{ marginBottom: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, paddingTop: 4 }}>
-                  <span style={{ fontSize: 14 }}>{CATEGORY_ICONS[cat] || "📌"}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: T.ink, fontFamily: "Georgia,serif", letterSpacing: 0.3 }}>{cat}</span>
-                  <span style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif" }}>({items.filter(t => t.done).length}/{items.length})</span>
+            </div>
+          )}
+          {suggestions.length > 0 && (
+            <div style={{ padding: "4px 16px 12px" }}>
+              {groupedSuggestions.map(({ cat, items }) => (
+                <div key={cat} style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", letterSpacing: 0.5, marginBottom: 6, paddingLeft: 2 }}>{CATEGORY_ICONS[cat] || "📌"} {cat}</div>
+                  {items.map((item, globalIdx) => {
+                    const idx = suggestions.indexOf(item);
+                    return (
+                      <div key={globalIdx} style={{ display: "flex", alignItems: "center", gap: 8, background: "#F0F7FF", border: `1px solid #C8DFFE`, borderRadius: 10, padding: "10px 12px", marginBottom: 6 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 13, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.4 }}>{item.text}</div>
+                          {item.due_date && <div style={{ fontSize: 10, color: T.ocean, fontFamily: "Georgia,serif", marginTop: 3 }}>⏰ {item.due_date}</div>}
+                        </div>
+                        <button onClick={() => accept(item, idx)} title="Add to list" style={{ background: T.moss, border: "none", borderRadius: "50%", width: 28, height: 28, color: "white", fontSize: 14, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</button>
+                        <button onClick={() => discard(idx)} title="Discard" style={{ background: "none", border: `1px solid ${T.sand}`, borderRadius: "50%", width: 28, height: 28, color: T.mist, fontSize: 14, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+                      </div>
+                    );
+                  })}
                 </div>
-                {items.map(todo => (
-                  <div key={todo.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 4px", borderBottom: `1px solid ${T.sand}` }}>
-                    <button onClick={() => toggleDone(todo)} style={{
-                      width: 22, height: 22, borderRadius: "50%", flexShrink: 0, marginTop: 1, cursor: "pointer",
-                      border: `2px solid ${todo.done ? T.moss : T.sand}`,
-                      background: todo.done ? T.moss : "transparent",
-                      display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 12,
-                    }}>
-                      {todo.done ? "✓" : ""}
-                    </button>
-                    <div style={{ flex: 1, paddingTop: 2 }}>
-                      <div style={{ fontSize: 13, fontFamily: "Georgia,serif", color: todo.done ? T.mist : T.ink, textDecoration: todo.done ? "line-through" : "none", lineHeight: 1.5 }}>
-                        {todo.text}
-                      </div>
-                      {todo.due_date && !todo.done && (
-                        <div style={{ fontSize: 10, color: T.ocean, fontFamily: "Georgia,serif", marginTop: 2 }}>⏰ {todo.due_date}</div>
-                      )}
-                    </div>
-                    <button onClick={() => deleteTodo(todo)} style={{ background: "none", border: "none", fontSize: 14, color: T.sand, cursor: "pointer", padding: "0 2px", flexShrink: 0 }}>✕</button>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Add manual item */}
@@ -1265,8 +1280,10 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [editingExpense, setEditingExpense] = useState(null);
   const [addTitle, setAddTitle] = useState("");
   const [addAmount, setAddAmount] = useState("");
+  const [addCurrency, setAddCurrency] = useState(trip.budget_currency || "USD");
   const [addCategory, setAddCategory] = useState("Food");
   const [addIsPlanned, setAddIsPlanned] = useState(true);
   const [budget, setBudget] = useState(trip.budget_amount || null);
@@ -1285,11 +1302,32 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
     const t = addTitle.trim();
     const amt = parseFloat(addAmount);
     if (!t || isNaN(amt) || amt <= 0) return;
-    setAddTitle(""); setAddAmount(""); setShowAdd(false);
-    const { data } = await supabase.from("trip_expenses")
-      .insert({ trip_id: trip.id, title: t, amount: amt, category: addCategory, is_planned: addIsPlanned, position: expenses.length })
-      .select().single();
-    if (data) setExpenses(prev => [...prev, data]);
+    if (editingExpense) {
+      // Update existing
+      setExpenses(prev => prev.map(e => e.id === editingExpense.id ? { ...e, title: t, amount: amt, currency: addCurrency, category: addCategory } : e));
+      setEditingExpense(null); setAddTitle(""); setAddAmount(""); setShowAdd(false);
+      await supabase.from("trip_expenses").update({ title: t, amount: amt, currency: addCurrency, category: addCategory }).eq("id", editingExpense.id);
+    } else {
+      setAddTitle(""); setAddAmount(""); setShowAdd(false);
+      const { data } = await supabase.from("trip_expenses")
+        .insert({ trip_id: trip.id, title: t, amount: amt, currency: addCurrency, category: addCategory, is_planned: addIsPlanned, position: expenses.length })
+        .select().single();
+      if (data) setExpenses(prev => [...prev, data]);
+    }
+  };
+
+  const startEditExpense = (exp) => {
+    setEditingExpense(exp);
+    setAddTitle(exp.title);
+    setAddAmount(String(exp.amount));
+    setAddCurrency(exp.currency || "USD");
+    setAddCategory(exp.category || "Other");
+    setShowAdd(true);
+  };
+
+  const cancelAdd = () => {
+    setShowAdd(false); setEditingExpense(null);
+    setAddTitle(""); setAddAmount("");
   };
 
   const deleteExpense = async (exp) => {
@@ -1490,12 +1528,15 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
                     </span>
                   </div>
                   {catItems.map(exp => (
-                    <div key={exp.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 4px", borderBottom: `1px solid ${T.sand}` }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontFamily: "Georgia,serif", color: T.ink }}>{exp.title}</div>
+                    <div key={exp.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 4px", borderBottom: `1px solid ${T.sand}` }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontFamily: "Georgia,serif", color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{exp.title}</div>
                       </div>
-                      <div style={{ fontSize: 14, fontFamily: "Georgia,serif", fontWeight: 600, color: T.ink, flexShrink: 0 }}>${Number(exp.amount).toLocaleString()}</div>
-                      <button onClick={() => deleteExpense(exp)} style={{ background: "none", border: "none", fontSize: 14, color: T.sand, cursor: "pointer", padding: "0 2px", flexShrink: 0 }}>✕</button>
+                      <div style={{ fontSize: 14, fontFamily: "Georgia,serif", fontWeight: 600, color: T.ink, flexShrink: 0 }}>
+                        {(exp.currency || "USD") === "USD" ? "$" : exp.currency + " "}{Number(exp.amount).toLocaleString()}
+                      </div>
+                      <button onClick={() => startEditExpense(exp)} style={{ background: "none", border: "none", fontSize: 13, color: T.ocean, cursor: "pointer", padding: "2px 4px", flexShrink: 0 }}>✏️</button>
+                      <button onClick={() => deleteExpense(exp)} style={{ background: "none", border: `1px solid #FECACA`, borderRadius: 6, fontSize: 12, color: "#DC2626", cursor: "pointer", padding: "2px 6px", flexShrink: 0 }}>✕</button>
                     </div>
                   ))}
                 </div>
@@ -1505,14 +1546,26 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
         )}
       </div>
 
-      {/* Add expense form */}
+      {/* Add/Edit expense form */}
       {showAdd ? (
         <div style={{ padding: "12px 16px", paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))", borderTop: `1px solid ${T.sand}`, background: T.chalk, flexShrink: 0 }}>
+          {editingExpense && (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: T.ocean, fontFamily: "Georgia,serif" }}>Editing expense</span>
+              <button onClick={cancelAdd} style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", background: "none", border: "none", cursor: "pointer" }}>Cancel</button>
+            </div>
+          )}
+          <input value={addTitle} onChange={e => setAddTitle(e.target.value)} placeholder="What for?" autoFocus
+            style={{ width: "100%", padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm, boxSizing: "border-box", marginBottom: 8 }} />
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-            <input value={addTitle} onChange={e => setAddTitle(e.target.value)} placeholder="What for?" autoFocus
-              style={{ flex: 1, padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm }} />
-            <input value={addAmount} onChange={e => setAddAmount(e.target.value)} placeholder="$" type="number" inputMode="decimal"
-              style={{ width: 80, padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm, textAlign: "right" }} />
+            <select value={addCurrency} onChange={e => setAddCurrency(e.target.value)}
+              style={{ width: 80, padding: "10px 8px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm, appearance: "none", textAlign: "center" }}>
+              {["USD","EUR","GBP","INR","JPY","AUD","CAD","SGD","AED","THB","IDR","MYR","VND","KRW","CHF","SEK","NOK","DKK","NZD","ZAR","BRL","MXN","TRY","SAR","QAR","PHP","TWD","HKD","CNY","CZK","PLN","HUF","ILS","EGP","MAD","LKR","NPR","MMK","KHR","LAK"].map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <input value={addAmount} onChange={e => setAddAmount(e.target.value)} placeholder="Amount" type="number" inputMode="decimal"
+              style={{ flex: 1, padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm, textAlign: "right" }} />
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
             {EXPENSE_CATEGORIES.map(cat => (
@@ -1525,17 +1578,17 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
             ))}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => setShowAdd(false)} style={{ flex: 1, padding: "10px 0", borderRadius: 12, border: `1.5px solid ${T.sand}`, background: "transparent", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13, cursor: "pointer" }}>Cancel</button>
+            <button onClick={cancelAdd} style={{ flex: 1, padding: "10px 0", borderRadius: 12, border: `1.5px solid ${T.sand}`, background: "transparent", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13, cursor: "pointer" }}>Cancel</button>
             <button onClick={addExpense} disabled={!addTitle.trim() || !addAmount} style={{
               flex: 1, padding: "10px 0", borderRadius: 12, border: "none",
               background: (addTitle.trim() && addAmount) ? T.ocean : T.sand, color: "white",
               fontFamily: "Georgia,serif", fontSize: 13, cursor: (addTitle.trim() && addAmount) ? "pointer" : "default",
-            }}>Add</button>
+            }}>{editingExpense ? "Save" : "Add"}</button>
           </div>
         </div>
       ) : (
         <div style={{ padding: "10px 16px", paddingBottom: "calc(10px + env(safe-area-inset-bottom, 0px))", borderTop: `1px solid ${T.sand}`, background: T.chalk, flexShrink: 0 }}>
-          <button onClick={() => setShowAdd(true)} style={{
+          <button onClick={() => { setEditingExpense(null); setShowAdd(true); }} style={{
             width: "100%", padding: "12px 0", borderRadius: 12, border: `1.5px dashed ${T.sand}`,
             background: "transparent", color: T.ocean, fontFamily: "Georgia,serif", fontSize: 13, cursor: "pointer",
           }}>+ Add {tab === "planned" ? "planned" : "actual"} expense</button>
@@ -2369,7 +2422,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
               {data?.didYouKnow && (
                 <div style={{marginTop:10,fontSize:12,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.5}}>💡 {data.didYouKnow}</div>
               )}
-              <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent(dest)}`} target="_blank" rel="noopener noreferrer" style={{
+              <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent("Tourism " +dest)}`} target="_blank" rel="noopener noreferrer" style={{
                 display:"inline-flex",alignItems:"center",gap:5,marginTop:12,
                 padding:"6px 12px",borderRadius:8,border:`1px solid ${T.moss}33`,
                 color:T.moss,fontFamily:"Georgia,serif",fontSize:11,fontWeight:600,textDecoration:"none",
@@ -3552,7 +3605,7 @@ function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, children }) {
               🔍 More about {city}
             </button>
           )}
-          <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent(city)}`} target="_blank" rel="noopener noreferrer" style={{
+          <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent("Tourism " +city)}`} target="_blank" rel="noopener noreferrer" style={{
             flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
             padding: "9px 14px", borderRadius: 10,
             background: "transparent", border: `1.5px solid ${T.moss}33`,
@@ -4006,11 +4059,11 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
       {form.destinations.length === 0 && (
         <button onClick={()=>{ addDestination("Help me decide"); setStep(1); }} style={{
           display:"flex",alignItems:"center",justifyContent:"center",gap:6,
-          width:"100%",marginTop:12,padding:"12px 0",borderRadius:14,
-          border:`2px dashed ${T.sand}`,
-          background:"transparent",
-          color:T.mist,
-          fontFamily:"Georgia,serif",fontSize:14,cursor:"pointer",
+          width:"100%",marginTop:12,padding:"13px 0",borderRadius:14,
+          border:`2px solid ${T.ocean}44`,
+          background:`linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,
+          color:T.ocean,
+          fontFamily:"Georgia,serif",fontSize:14,fontWeight:600,cursor:"pointer",
         }}>
           🌐 Help me decide
         </button>
@@ -4040,7 +4093,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
       <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>🎒</div>
       <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:4}}>Trip style</div>
       <div style={{fontSize:13,color:T.mist,textAlign:"center",marginBottom:18,fontFamily:"Georgia,serif"}}>Pick up to 5</div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:24}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
         {styles.map(s=>{
           const sel = form.styles.includes(s);
           const maxed = !sel && form.styles.length >= 5;
@@ -4061,66 +4114,6 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
           );
         })}
       </div>
-
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:10,marginTop:24}}>When do you like to head out?</div>
-      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:24}}>
-        {[
-          {key:"early", icon:"🌅", label:"Early bird", sub:"Out by 8–9am, beat the crowds and enjoy the cool morning"},
-          {key:"late",  icon:"☕", label:"Slow starter", sub:"Leisurely breakfast, out by 11am — unless something unmissable needs an early start"},
-        ].map(({key,icon,label,sub})=>{
-          const sel = form.morningStart === key;
-          return (
-            <button key={key} onClick={()=>set("morningStart",key)} style={{
-              padding:"12px 16px",borderRadius:12,cursor:"pointer",textAlign:"left",
-              border:`2px solid ${sel?T.ocean:T.sand}`,
-              background:sel?"#EBF3FD":T.chalk,
-              transition:"all 0.2s",
-            }}>
-              <div style={{fontFamily:"Georgia,serif",fontSize:14,color:sel?T.ocean:T.ink,fontWeight:sel?700:400,marginBottom:2}}>{icon} {label}</div>
-              <div style={{fontFamily:"Georgia,serif",fontSize:12,color:T.mist}}>{sub}</div>
-            </button>
-          );
-        })}
-      </div>
-
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:10}}>How active should the trip be?</div>
-      <div style={{display:"flex",flexDirection:"column",gap:8}}>
-        {[
-          {key:"relaxed", icon:"🌿", label:"Relaxed", sub:"Enough downtime to chill and breathe"},
-          {key:"active",  icon:"⚡", label:"Active",  sub:"Up for multiple activities and covering the destination well"},
-        ].map(({key,icon,label,sub})=>{
-          const sel = form.pace === key;
-          return (
-            <button key={key} onClick={()=>set("pace",key)} style={{
-              padding:"12px 16px",borderRadius:12,cursor:"pointer",textAlign:"left",
-              border:`2px solid ${sel?T.ocean:T.sand}`,
-              background:sel?"#EBF3FD":T.chalk,
-              transition:"all 0.2s",
-            }}>
-              <div style={{fontFamily:"Georgia,serif",fontSize:14,color:sel?T.ocean:T.ink,fontWeight:sel?700:400,marginBottom:2}}>{icon} {label}</div>
-              <div style={{fontFamily:"Georgia,serif",fontSize:12,color:T.mist}}>{sub}</div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Budget */}
-      <div style={{marginTop:24}}>
-        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:10}}>Budget range</div>
-        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {budgets.map(b=>(
-            <button key={b.key} onClick={()=>set("budget",b.key)} style={{
-              padding:"12px 16px",borderRadius:12,cursor:"pointer",textAlign:"left",
-              border:`2px solid ${form.budget===b.key?T.terra:T.sand}`,
-              background:form.budget===b.key?"#FFF4EE":T.chalk,
-              transition:"all 0.2s",
-            }}>
-              <div style={{fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:form.budget===b.key?700:400}}>{b.label}</div>
-              <div style={{fontFamily:"Georgia,serif",fontSize:12,color:T.mist,marginTop:2}}>{b.sub}</div>
-            </button>
-          ))}
-        </div>
-      </div>
     </div>,
 
     /* 3 – cities + notes + generate */
@@ -4137,22 +4130,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
         <CityInput value={form.baseLocation} onChange={v=>set("baseLocation",v)}
           placeholder="e.g. Mumbai, London, New York"
           inputStyle={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.baseLocation?T.ocean:isOpenToIdeas&&!form.baseLocation?T.terra:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
-        <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginTop:4}}>Helps us suggest destinations with easy flight connections</div>
-      </div>
-
-      <div style={{display:"flex",gap:12,marginBottom:18}}>
-        <div style={{flex:1}}>
-          <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,marginBottom:6}}>Start city <span style={{color:T.mist,fontWeight:400}}>· if you know</span></div>
-          <CityInput value={form.arrivalCity} onChange={v=>set("arrivalCity",v)}
-            placeholder="e.g. London"
-            inputStyle={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.arrivalCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
-        </div>
-        <div style={{flex:1}}>
-          <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,marginBottom:6}}>End city <span style={{color:T.mist,fontWeight:400}}>· if you know</span></div>
-          <CityInput value={form.departureCity} onChange={v=>set("departureCity",v)}
-            placeholder="e.g. Paris"
-            inputStyle={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.departureCity?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
-        </div>
+        <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginTop:4}}>{isOpenToIdeas ? "Helps us suggest destinations with easy flight connections" : "Your trip will start and end from here"}</div>
       </div>
 
       <div style={{marginBottom:22}}>
@@ -4589,6 +4567,9 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const [detailedReady, setDetailedReady] = useState(initialScreen === "itinerary"); // true if opening existing trip
   const [pretripTab, setPretripTab] = useState("brainstorm"); // pre-trip bottom nav tab
   const [magazineFilterCities, setMagazineFilterCities] = useState(null); // cities to filter magazine by (from "Tell me more")
+  const [pretripDeepDiveCity, setPretripDeepDiveCity] = useState(null); // city for deep dive in pre-trip magazine
+  const [showPreIgSheet, setShowPreIgSheet] = useState(false); // pre-IG refinement bottom sheet
+  const [preIgForm, setPreIgForm] = useState({ budget: "mid", morningStart: "early", pace: "active", igNotes: "" });
   const [magazineFilterRouteId, setMagazineFilterRouteId] = useState(null);
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
   const [fabPos, setFabPos] = useState({ right: 0, bottom: 140 }); // draggable FAB position, flush right
@@ -4867,15 +4848,21 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     setTimeout(() => { triggerRgRef.current?.(); }, 0);
   };
 
-  const handleBuildFromBrainstorm = (votedItems) => {
-    if (!pendingForm) return;
+  const handleBuildFromBrainstorm = (votedItems, formOverride = null) => {
+    const form = formOverride || pendingForm;
+    if (!form) return;
     setFormEdited(false);
+    if (formOverride) setPendingForm(formOverride);
     const freshenedItems = (votedItems || []).map(item => {
       if (item.tier !== 1) return item;
       const latest = pretripRoutes.find(r => r.id === item.id);
       return latest ? { ...item, ...latest, vote: item.vote } : item;
     });
-    handleGenerate(pendingForm, freshenedItems);
+    // Derive arrivalCity/departureCity from baseLocation if not set
+    const finalForm = { ...form };
+    if (form.baseLocation && !form.arrivalCity) finalForm.arrivalCity = form.baseLocation;
+    if (form.baseLocation && !form.departureCity) finalForm.departureCity = form.baseLocation;
+    handleGenerate(finalForm, freshenedItems);
   };
 
   const handleGenerate = async (form, votedItems = null) => {
@@ -5752,7 +5739,87 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
         </div>
 
         {/* Pre-IG Magazine tab */}
-        {pretripTab === "magazine" && (
+        {pretripTab === "magazine" && pretripDeepDiveCity && (() => {
+          const ddCity = pretripDeepDiveCity;
+          const dd = deepDiveCacheApp[ddCity];
+          const data = (dd && typeof dd === "object") ? dd : null;
+          const loading = dd === "loading";
+          const errored = dd === "error";
+          return (
+            <div style={{flex:1,overflowY:"auto",background:T.warm,padding:"16px 16px 24px"}}>
+              <button onClick={() => setPretripDeepDiveCity(null)} style={{alignSelf:"flex-start",background:"none",border:"none",color:T.ocean,fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer",padding:"4px 0",marginBottom:12}}>
+                ← Back to destinations
+              </button>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:28,color:T.ink,lineHeight:1.15,marginBottom:12}}>{ddCity}</div>
+              {data?.writeup && <div style={{fontSize:14,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.6,marginBottom:16}}>{data.writeup}</div>}
+              {data?.didYouKnow && (
+                <div style={{marginBottom:16,padding:"12px 16px",borderLeft:`3px solid ${T.ocean}`,background:`linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,borderRadius:"0 12px 12px 0"}}>
+                  <div style={{fontSize:13,lineHeight:1.55,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic"}}>💡 {data.didYouKnow}</div>
+                </div>
+              )}
+              {data?.moreSights?.length > 0 && (
+                <div style={{marginBottom:16}}>
+                  <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1.2,marginBottom:10}}>🧭 More to discover</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                    {data.moreSights.map((s, i) => <MagazineHighlightCard key={i} item={s} city={ddCity} masonry={true} tall={i % 3 === 0} />)}
+                  </div>
+                </div>
+              )}
+              {data?.foodSpecialties?.length > 0 && (
+                <div style={{background:T.chalk,borderRadius:14,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
+                  <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🍜 Food you should try</div>
+                  {data.foodSpecialties.map((f, i) => (
+                    <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:8}}>
+                      <span style={{fontSize:18,flexShrink:0}}>{f.icon || "🍽️"}</span>
+                      <div><div style={{fontFamily:"'DM Serif Display',serif",fontSize:13,color:T.ink}}>{f.name}</div>
+                      {f.note && <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif"}}>{f.note}</div>}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {data?.weather && (
+                <div style={{background:T.chalk,borderRadius:14,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
+                  <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>🌤 Weather & season</div>
+                  <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.55}}>{data.weather}</div>
+                </div>
+              )}
+              {data?.gettingAround && (
+                <div style={{background:T.chalk,borderRadius:14,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
+                  <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>🚕 Getting around</div>
+                  <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.55}}>{data.gettingAround}</div>
+                </div>
+              )}
+              {data?.etiquette?.length > 0 && (
+                <div style={{background:T.chalk,borderRadius:14,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
+                  <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🤝 Local etiquette</div>
+                  {data.etiquette.map((tip, i) => (
+                    <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:4}}>
+                      <span style={{fontSize:11,color:T.ocean,flexShrink:0,marginTop:3}}>●</span>
+                      <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.5}}>{tip}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {loading && (
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  {[0,1,2].map(i => (
+                    <div key={i} style={{background:T.chalk,borderRadius:14,padding:"14px 16px",border:`1px solid ${T.sand}`}}>
+                      <div style={{width:100,height:10,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:10}}/>
+                      <div style={{width:"90%",height:12,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:6}}/>
+                      <div style={{width:"70%",height:12,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {errored && (
+                <div style={{padding:"14px 16px",textAlign:"center",color:"#c53030",fontFamily:"Georgia,serif",fontSize:13,background:"#FFF0F0",borderRadius:10}}>
+                  Couldn't load details. <button onClick={() => loadCityDeepDiveApp(ddCity)} style={{background:"none",border:"none",color:T.ocean,cursor:"pointer",textDecoration:"underline"}}>Retry</button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+        {pretripTab === "magazine" && !pretripDeepDiveCity && (
           <div style={{flex:1,overflowY:"auto",background:T.warm}}>
             <div style={{padding:"20px 16px 12px",background:T.chalk,borderBottom:`1px solid ${T.sand}`,display:"flex",alignItems:"center",gap:10}}>
               {magazineFilterCities && (
@@ -5773,20 +5840,27 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               )}
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:0}}>
-              {/* Destination-level intro — hide when filtered */}
-              {!magazineFilterCities && (() => {
+              {/* Destination-level intro — always shown with hero photo */}
+              {(() => {
                 const dest = (pendingForm?.destinations || []).join(", ");
                 const dd = dest ? deepDiveCacheApp[dest] : null;
                 const data = (dd && typeof dd === "object") ? dd : null;
-                if (!data?.writeup) return null;
+                const isLoading = dd === "loading";
+                if (!dest) return null;
                 return (
-                  <div style={{background:`linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,margin:"12px 16px",borderRadius:16,padding:"16px 18px",border:`1px solid ${T.ocean}15`}}>
-                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:8}}>{dest}</div>
-                    <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.6}}>{data.writeup}</div>
+                  <DestinationHero dest={dest} isLoading={isLoading} data={data}>
+                    <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.6}}>{data?.writeup}</div>
                     {data?.didYouKnow && (
                       <div style={{marginTop:10,padding:"12px 16px",borderLeft:`3px solid ${T.ocean}`,background:`linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,borderRadius:"0 12px 12px 0",fontSize:13,lineHeight:1.55,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic"}}>💡 {data.didYouKnow}</div>
                     )}
-                  </div>
+                    <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent("Tourism " + dest)}`} target="_blank" rel="noopener noreferrer" style={{
+                      display:"inline-flex",alignItems:"center",gap:5,marginTop:12,
+                      padding:"8px 14px",borderRadius:10,border:`1px solid ${T.moss}33`,
+                      color:T.moss,fontFamily:"Georgia,serif",fontSize:12,fontWeight:600,textDecoration:"none",
+                    }}>
+                      🗺 Explore {dest} on TripAdvisor
+                    </a>
+                  </DestinationHero>
                 );
               })()}
               {(() => {
@@ -5811,7 +5885,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                   return (
                     <Fragment key={city}>
                       {ci > 0 && <div style={{height:8,background:"#F3EDE4",margin:"0 -16px"}}/>}
-                      <CityCard city={city} cityDays={[{ label: fromRoute }]} writeup={data?.writeup || ""} deepDive={dd} onDeepDive={() => { loadCityDeepDiveApp(city); }}>
+                      <CityCard city={city} cityDays={[{ label: fromRoute }]} writeup={data?.writeup || ""} deepDive={dd} onDeepDive={() => { loadCityDeepDiveApp(city); setPretripDeepDiveCity(city); }}>
                         {highlights.length > 0 && (
                           <>
                             <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1.2,marginBottom:10}}>Things to see</div>
@@ -6296,19 +6370,15 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
 
       {/* ── PERSISTENT CHAT BAR (collapsed state — between content and bottom nav) ── */}
-      {!chatOpen && (screen === "itinerary" || screen === "brainstorm") && (
+      {!chatOpen && (screen === "itinerary" || screen === "brainstorm") && activeBottomTab !== "board" && (
         <div style={{
           position: "absolute", bottom: "calc(58px + env(safe-area-inset-bottom, 0px))", left: 0, right: 0, zIndex: 900,
           background: T.chalk, borderTop: `1px solid ${T.sand}`,
           padding: "6px 12px 6px",
         }}>
-          {/* Build CTA — brainstorm only, shown when route is selected */}
-          {screen === "brainstorm" && pretripSelectedRouteId && (
-            <button onClick={() => {
-              // Trigger build from brainstorm — same as the old Build button
-              const voted = (pretripRoutes || []).map(r => ({ ...r, tier: 1, vote: r.id === pretripSelectedRouteId ? 1 : 0 }));
-              handleBuildFromBrainstorm(voted);
-            }} style={{
+          {/* Build CTA — brainstorm Route tab only, shown when route is selected */}
+          {screen === "brainstorm" && pretripTab === "brainstorm" && pretripSelectedRouteId && (
+            <button onClick={() => setShowPreIgSheet(true)} style={{
               width: "100%", padding: "13px 0", borderRadius: 14, border: "none",
               background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`, color: "white",
               fontFamily: "'DM Serif Display',serif", fontSize: 16, cursor: "pointer",
@@ -6330,8 +6400,115 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
         </div>
       )}
 
+      {/* ── PRE-IG REFINEMENT BOTTOM SHEET ── */}
+      {showPreIgSheet && (
+        <div style={{position:"fixed",inset:0,zIndex:1600,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end"}}>
+          {/* Scrim */}
+          <div onClick={()=>setShowPreIgSheet(false)} style={{position:"absolute",inset:0,background:"rgba(15,25,35,0.45)",animation:"fadeUp 0.2s ease"}}/>
+          {/* Sheet */}
+          <div style={{
+            position:"relative",width:"100%",maxWidth:430,
+            background:T.warm,borderRadius:"20px 20px 0 0",
+            boxShadow:"0 -4px 30px rgba(15,25,35,0.15)",
+            padding:"20px 20px",paddingBottom:"calc(20px + env(safe-area-inset-bottom, 0px))",
+            animation:"fadeUp 0.25s ease",
+            maxHeight:"85vh",overflowY:"auto",
+          }}>
+            {/* Handle */}
+            <div style={{width:36,height:4,borderRadius:2,background:T.sand,margin:"0 auto 16px"}}/>
+
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,textAlign:"center",marginBottom:4}}>Fine-tune your itinerary</div>
+            <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",textAlign:"center",marginBottom:20}}>These preferences shape your day-by-day plan</div>
+
+            {/* Budget */}
+            <div style={{marginBottom:18}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:T.ink,marginBottom:8}}>Budget range</div>
+              <div style={{display:"flex",gap:8}}>
+                {[{key:"budget",label:"Budget",icon:"🏕️"},{key:"mid",label:"Mid-range",icon:"🏨"},{key:"luxury",label:"Luxury",icon:"🏰"}].map(b=>(
+                  <button key={b.key} onClick={()=>setPreIgForm(f=>({...f,budget:b.key}))} style={{
+                    flex:1,padding:"10px 8px",borderRadius:12,cursor:"pointer",textAlign:"center",
+                    border:`2px solid ${preIgForm.budget===b.key?T.terra:T.sand}`,
+                    background:preIgForm.budget===b.key?"#FFF4EE":T.chalk,
+                    transition:"all 0.2s",
+                  }}>
+                    <div style={{fontSize:20,marginBottom:2}}>{b.icon}</div>
+                    <div style={{fontFamily:"Georgia,serif",fontSize:12,color:T.ink,fontWeight:preIgForm.budget===b.key?700:400}}>{b.label}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Morning preference */}
+            <div style={{marginBottom:18}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:T.ink,marginBottom:8}}>When do you like to head out?</div>
+              <div style={{display:"flex",gap:8}}>
+                {[{key:"early",icon:"🌅",label:"Early bird",sub:"Out by 8–9am"},{key:"late",icon:"☕",label:"Slow starter",sub:"Out by 11am"}].map(({key,icon,label,sub})=>(
+                  <button key={key} onClick={()=>setPreIgForm(f=>({...f,morningStart:key}))} style={{
+                    flex:1,padding:"10px 12px",borderRadius:12,cursor:"pointer",textAlign:"left",
+                    border:`2px solid ${preIgForm.morningStart===key?T.ocean:T.sand}`,
+                    background:preIgForm.morningStart===key?"#EBF3FD":T.chalk,
+                    transition:"all 0.2s",
+                  }}>
+                    <div style={{fontFamily:"Georgia,serif",fontSize:13,color:preIgForm.morningStart===key?T.ocean:T.ink,fontWeight:preIgForm.morningStart===key?700:400}}>{icon} {label}</div>
+                    <div style={{fontFamily:"Georgia,serif",fontSize:11,color:T.mist,marginTop:2}}>{sub}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Pace */}
+            <div style={{marginBottom:18}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:T.ink,marginBottom:8}}>How active should the trip be?</div>
+              <div style={{display:"flex",gap:8}}>
+                {[{key:"relaxed",icon:"🌿",label:"Relaxed",sub:"Downtime to breathe"},{key:"active",icon:"⚡",label:"Active",sub:"Cover more ground"}].map(({key,icon,label,sub})=>(
+                  <button key={key} onClick={()=>setPreIgForm(f=>({...f,pace:key}))} style={{
+                    flex:1,padding:"10px 12px",borderRadius:12,cursor:"pointer",textAlign:"left",
+                    border:`2px solid ${preIgForm.pace===key?T.ocean:T.sand}`,
+                    background:preIgForm.pace===key?"#EBF3FD":T.chalk,
+                    transition:"all 0.2s",
+                  }}>
+                    <div style={{fontFamily:"Georgia,serif",fontSize:13,color:preIgForm.pace===key?T.ocean:T.ink,fontWeight:preIgForm.pace===key?700:400}}>{icon} {label}</div>
+                    <div style={{fontFamily:"Georgia,serif",fontSize:11,color:T.mist,marginTop:2}}>{sub}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Free text */}
+            <div style={{marginBottom:20}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:T.ink,marginBottom:8}}>Anything specific?</div>
+              <textarea value={preIgForm.igNotes} onChange={e=>setPreIgForm(f=>({...f,igNotes:e.target.value}))}
+                placeholder="e.g. prefer boutique hotels, want a cooking class, no long drives, vegetarian food options…"
+                rows={3}
+                style={{width:"100%",padding:"10px 12px",borderRadius:12,border:`1.5px solid ${preIgForm.igNotes?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",resize:"none",boxSizing:"border-box",background:T.chalk}}/>
+            </div>
+
+            {/* Generate button */}
+            <button onClick={() => {
+              setShowPreIgSheet(false);
+              // Merge preIgForm into pendingForm so IG picks it up
+              const mergedForm = { ...(pendingForm || {}), budget: preIgForm.budget, morningStart: preIgForm.morningStart, pace: preIgForm.pace };
+              if (preIgForm.igNotes.trim()) {
+                mergedForm.notes = ((pendingForm?.notes || "") + "\n" + preIgForm.igNotes.trim()).trim();
+              }
+              setPendingForm(mergedForm);
+              const voted = (pretripRoutes || []).map(r => ({ ...r, tier: 1, vote: r.id === pretripSelectedRouteId ? 1 : 0 }));
+              // Small delay to let state settle
+              setTimeout(() => handleBuildFromBrainstorm(voted, mergedForm), 50);
+            }} style={{
+              width:"100%",padding:16,borderRadius:16,border:"none",
+              background:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",
+              fontFamily:"'DM Serif Display',serif",fontSize:18,cursor:"pointer",
+              boxShadow:"0 6px 22px rgba(37,99,168,0.4)",
+            }}>
+              Generate Itinerary →
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── CHAT SHEET (floating bottom sheet, rendered globally) ── */}
-      {chatOpen && (screen === "itinerary" || screen === "brainstorm") && (() => {
+      {chatOpen && (screen === "itinerary" || screen === "brainstorm") && activeBottomTab !== "board" && (() => {
         const isBrainstorm = screen === "brainstorm";
         return (
         <div style={{position:"fixed",inset:0,zIndex:1500,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",pointerEvents:"none"}}>
