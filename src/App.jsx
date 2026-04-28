@@ -1374,7 +1374,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
           destinations, styles: igReq.styles, budget: igReq.budget, travelMonth, numDays,
           arrivalCity: igReq.arrivalCity || null, departureCity: igReq.departureCity || null,
           notes: igReq.notes || null,
-          existingPlans: addMore ? (items || []).filter(it => it.tier === 1 && !it.dismissed).map(it => it.title) : null,
+          existingPlans: addMore ? (items || []).filter(it => it.tier === 1).map(it => it.title) : null,
           baseLocation: igReq.baseLocation || null,
         }),
       });
@@ -3365,7 +3365,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
   const budgets = [{key:"budget",label:"Budget 🏕️",sub:"Hostels, street food"},{key:"mid",label:"Mid-range 🏨",sub:"3★ hotels, restaurants"},{key:"luxury",label:"Luxury 🏰",sub:"5★ & fine dining"}];
 
   const handleGenerate = async () => {
-    const needsBase = form.destinations.some(d => d.toLowerCase().includes("open to ideas"));
+    const needsBase = form.destinations.some(d => d.toLowerCase().includes("help me decide"));
     if (needsBase && !form.baseLocation?.trim()) {
       setDestError("Please tell us where you're based so we can suggest the right destinations.");
       return;
@@ -3435,7 +3435,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
         })}
       </div>
       {form.destinations.length === 0 && (
-        <button onClick={()=>{ addDestination("Open to ideas"); setStep(1); }} style={{
+        <button onClick={()=>{ addDestination("Help me decide"); setStep(1); }} style={{
           display:"flex",alignItems:"center",justifyContent:"center",gap:6,
           width:"100%",marginTop:12,padding:"12px 0",borderRadius:14,
           border:`2px dashed ${T.sand}`,
@@ -3555,7 +3555,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
     </div>,
 
     /* 3 – cities + notes + generate */
-    (() => { const isOpenToIdeas = form.destinations.some(d => d.toLowerCase().includes("open to ideas")); return (
+    (() => { const isOpenToIdeas = form.destinations.some(d => d.toLowerCase().includes("help me decide")); return (
     <div key={3} style={{animation:"fadeUp 0.3s ease"}}>
       <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>🛫</div>
       <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:20}}>A few more details</div>
@@ -5773,8 +5773,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                       : ["Change Day 1 hotel","Add a beach day","Make Day 3 morning relaxed"]
                     ).map(s=>(
                       <button key={s} onClick={()=>{ setChatInput(s); setTimeout(() => chatInputRef.current?.focus(), 50); }} style={{
-                        background:"transparent",border:`1px solid ${T.ocean}`,borderRadius:8,padding:"4px 10px",
-                        fontSize:10,fontFamily:"Georgia,serif",fontWeight:500,color:T.ocean,cursor:"pointer",
+                        background:"transparent",border:`1px solid ${T.ocean}`,borderRadius:10,padding:"6px 14px",
+                        fontSize:13,fontFamily:"Georgia,serif",fontWeight:500,color:T.ocean,cursor:"pointer",
                       }}>{s}</button>
                     ))}
                   </div>

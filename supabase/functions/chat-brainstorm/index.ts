@@ -44,7 +44,9 @@ ${routeSummary}
 
 RULES:
 - PLAN LABELS: Plans are labelled P1, P2, P3, P4 in the UI. Always refer to plans by their label (e.g. "P2" not "route 2" or the full title). When the user says "P2", they mean the plan labelled P2 above.
-- INTENT: Answer questions about the plans OR modify them when the user requests a clear change. Keep "message" conversational, 2-3 sentences max. Always reference the plan label (P1–P4) in your response.
+- ACTION BIAS: When the user asks for a change, MAKE the change immediately. Do NOT present multiple options, ask clarifying questions, or offer "Option A vs Option B". Just pick the best approach and do it. Only ask a clarifying question if the request is genuinely ambiguous AND you cannot make a reasonable default choice. The user can always ask for further tweaks after.
+- NO MARKDOWN: Never use markdown headers (##), horizontal rules (---), or bullet-point option lists in your message. Keep it plain conversational prose, 2-3 sentences max. Bold and italics are OK.
+- INTENT: Answer questions about the plans OR modify them when the user requests a change. Keep "message" conversational, 2-3 sentences max. Always reference the plan label (P1–P4) in your response.
 - MUTATION: When the user asks to change a plan (e.g. "add Ella to P2", "make P3 slower", "rename P1 to Beach Paradise", "change the title of P2"), include an "updatedRoutes" array with the modified route objects. You CAN change ANY field including title, tagline, icon, days, cities, points, bestFor, warning. Each must include the route's original id, plus whichever fields changed. Unchanged fields can be omitted, but it's safer to return the full route object.
 - NO MUTATION: For questions, comparisons, or informational answers, DO NOT include updatedRoutes. Respond conversationally.
 - You CAN completely replace a plan with a different destination/theme if the user asks (e.g. "Replace P3 with a Portugal plan", "Make P2 about food instead"). Return the full updated plan object with the same id.
@@ -87,7 +89,7 @@ If no mutation, omit updatedRoutes:
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-sonnet-4-6-20250514",
         max_tokens: 8192,
         stream: true,
         system: systemPrompt,
