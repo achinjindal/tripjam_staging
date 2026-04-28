@@ -89,7 +89,7 @@ If no mutation, omit updatedRoutes:
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6-20250514",
+        model: "claude-sonnet-4-6",
         max_tokens: 8192,
         stream: true,
         system: systemPrompt,
