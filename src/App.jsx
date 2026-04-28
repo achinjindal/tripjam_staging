@@ -1903,6 +1903,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                 // First: itinerary activities (sights, food, experiences, etc.)
                 for (const a of allActs) {
                   if (a.type === "transit" || a.type === "hotel") continue;
+                  if (!a.title?.trim()) continue;
                   const key = (a.title || "").toLowerCase();
                   if (seenTitles.has(key)) continue;
                   seenTitles.add(key);
@@ -3024,12 +3025,11 @@ function MagazineHighlightCard({ item, city, inItinerary = false }) {
       {inItinerary && (
         <div style={{position:"absolute",top:6,right:6,zIndex:2,background:T.ocean,borderRadius:"50%",width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"white",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}>✓</div>
       )}
-      {(!loaded || photoUrl) && (
-        <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
-          {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
-          {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={item.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>}
-        </div>
-      )}
+      <div style={{ height: 90, background: T.sand, overflow: "hidden", position: "relative" }}>
+        {!loaded && <div style={{position:"absolute",inset:0,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>}
+        {photoUrl && <img src={photoUrl} onLoad={()=>setLoaded(true)} alt={item.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>}
+        {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>{item.icon || "📍"}</div>}
+      </div>
       <div style={{ padding: "8px 10px 6px" }}>
         <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.25, marginBottom: 3 }}>{item.title}</div>
         {item.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic", lineHeight: 1.35 }}>{item.note}</div>}
