@@ -5772,7 +5772,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 }}>Show all</button>
               )}
             </div>
-            <div style={{padding:"12px 16px 24px",display:"flex",flexDirection:"column",gap:16}}>
+            <div style={{display:"flex",flexDirection:"column",gap:0}}>
               {/* Destination-level intro — hide when filtered */}
               {!magazineFilterCities && (() => {
                 const dest = (pendingForm?.destinations || []).join(", ");
@@ -5780,11 +5780,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 const data = (dd && typeof dd === "object") ? dd : null;
                 if (!data?.writeup) return null;
                 return (
-                  <div style={{background:`linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,borderRadius:16,padding:"16px 18px",border:`1px solid ${T.ocean}15`}}>
+                  <div style={{background:`linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,margin:"12px 16px",borderRadius:16,padding:"16px 18px",border:`1px solid ${T.ocean}15`}}>
                     <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,marginBottom:8}}>{dest}</div>
                     <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.6}}>{data.writeup}</div>
                     {data?.didYouKnow && (
-                      <div style={{marginTop:10,fontSize:12,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.5}}>💡 {data.didYouKnow}</div>
+                      <div style={{marginTop:10,padding:"12px 16px",borderLeft:`3px solid ${T.ocean}`,background:`linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,borderRadius:"0 12px 12px 0",fontSize:13,lineHeight:1.55,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic"}}>💡 {data.didYouKnow}</div>
                     )}
                   </div>
                 );
@@ -5803,42 +5803,27 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 if (allCities.length === 0) {
                   return <div style={{textAlign:"center",padding:"40px 0",color:T.mist,fontFamily:"Georgia,serif",fontSize:13}}>Routes are still loading — cities will appear here shortly</div>;
                 }
-                return allCities.map(({ city, fromRoute }) => {
+                return allCities.map(({ city, fromRoute }, ci) => {
                   const dd = deepDiveCacheApp[city];
+                  // Build highlights from moreSights
                   const data = (dd && typeof dd === "object") ? dd : null;
-                  const loading = dd === "loading";
+                  const highlights = (data?.moreSights || []).map(s => ({ ...s, type: "sight" }));
                   return (
-                    <div key={city} style={{background:T.chalk,borderRadius:18,padding:"16px 16px 14px",border:`1px solid ${T.sand}`,boxShadow:"0 2px 10px rgba(15,25,35,0.04)"}}>
-                      <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap",marginBottom:4}}>
-                        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:T.ink,lineHeight:1.15}}>{city}</div>
-                      </div>
-                      {loading && <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",fontStyle:"italic",marginBottom:8,animation:"shimmer 1.5s ease-in-out infinite"}}>Loading…</div>}
-                      {data?.writeup && <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.55,marginTop:6,marginBottom:8}}>{data.writeup}</div>}
-                      {/* Highlights from moreSights */}
-                      {data?.moreSights?.length > 0 && (
-                        <>
-                          <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginTop:8,marginBottom:8}}>Things to see</div>
-                          <div className="no-scrollbar" style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:4,margin:"0 -16px",padding:"0 16px 4px"}}>
-                            {data.moreSights.map((s, i) => (
-                              <MagazineHighlightCard key={i} item={s} city={city} />
-                            ))}
-                          </div>
-                        </>
-                      )}
-                      {/* Food specialties preview */}
-                      {data?.foodSpecialties?.length > 0 && (
-                        <div style={{marginTop:10}}>
-                          <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>🍜 Must try</div>
-                          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                            {data.foodSpecialties.slice(0,3).map((f,i) => (
-                              <span key={i} style={{fontSize:11,background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:20,padding:"3px 9px",fontFamily:"Georgia,serif",color:T.ink}}>
-                                {f.icon} {f.name}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <Fragment key={city}>
+                      {ci > 0 && <div style={{height:8,background:"#F3EDE4",margin:"0 -16px"}}/>}
+                      <CityCard city={city} cityDays={[{ label: fromRoute }]} writeup={data?.writeup || ""} deepDive={dd} onDeepDive={() => { loadCityDeepDiveApp(city); }}>
+                        {highlights.length > 0 && (
+                          <>
+                            <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1.2,marginBottom:10}}>Things to see</div>
+                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                              {highlights.map((act, i) => (
+                                <MagazineHighlightCard key={i} item={act} city={city} masonry={true} tall={i % 3 === 0} />
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </CityCard>
+                    </Fragment>
                   );
                 });
               })()}
