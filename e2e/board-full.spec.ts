@@ -192,9 +192,9 @@ test.describe("Board tab (full flow)", () => {
     await page.locator("button", { hasText: /Add.*expense/i }).first().click();
     await page.waitForTimeout(300);
     await page.locator("input[placeholder*='What for']").first().fill("Flights");
-    await page.locator("input[placeholder*='$']").first().fill("800");
-    await page.locator("button", { hasText: /Transport/i }).first().click();
-    await page.locator("button", { hasText: /^Add$/ }).first().click();
+    await page.locator("input[placeholder*='Amount']").first().fill("800");
+    await page.locator("button:visible", { hasText: /Transport/i }).first().click();
+    await page.locator("button:visible", { hasText: /^Add$/ }).first().click();
     await page.waitForTimeout(500);
 
     const expenseVisible = await page.locator("text=/Flights/i").first().isVisible({ timeout: 3000 }).catch(() => false);

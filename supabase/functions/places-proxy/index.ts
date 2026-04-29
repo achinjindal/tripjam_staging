@@ -202,6 +202,27 @@ async function photonSearch(q: string, biasLat?: number, biasLng?: number): Prom
   return null;
 }
 
+// Nominatim fallback — better at finding named places like temples, streets, landmarks
+async function nominatimSearch(q: string): Promise<{lat:number,lng:number}|null> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`, {
+      headers: { "User-Agent": "TripJam/1.0 (travel planning app)" },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) { console.log(`[nominatim] HTTP ${res.status} for "${q}"`); return null; }
+    const data: any = await res.json();
+    if (data?.[0]?.lat && data?.[0]?.lon) {
+      console.log(`[nominatim] Found "${q}": ${data[0].lat}, ${data[0].lon}`);
+      return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+    }
+    console.log(`[nominatim] No results for "${q}"`);
+  } catch (e: any) { console.log(`[nominatim] Error for "${q}": ${e.message}`); }
+  return null;
+}
+
 async function handleGeocode(req: Request): Promise<Response> {
   const { q, city } = await req.json();
   if (!q) return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
@@ -235,21 +256,30 @@ async function handleGeocode(req: Request): Promise<Response> {
     return Response.json(cached, { headers: corsHeaders });
   }
 
-  // 2. Resolve city bias from mainCity (unambiguous — "Tokyo", "Kyoto", "Budapest")
+  // 2. Resolve city bias from mainCity using Nominatim (more reliable for city/country names)
   let biasLat: number | undefined;
   let biasLng: number | undefined;
   if (mainCity) {
-    const biasCacheKey = `geocode:${mainCity.toLowerCase()}`;
+    const biasCacheKey = `geocode-bias:${mainCity.toLowerCase()}`;
     const biasCache = await cacheGet(biasCacheKey);
     if (biasCache?.lat) {
       biasLat = biasCache.lat;
       biasLng = biasCache.lng;
     } else {
-      const coords = await photonSearch(mainCity);
-      if (coords) {
-        biasLat = coords.lat;
-        biasLng = coords.lng;
-        cacheSet(biasCacheKey, "geocode", coords, "photon").catch(() => {});
+      // Nominatim is reliable for city/country names (Photon returns wrong results from some datacenters)
+      const nomResult = await nominatimSearch(mainCity);
+      if (nomResult) {
+        biasLat = nomResult.lat;
+        biasLng = nomResult.lng;
+        cacheSet(biasCacheKey, "geocode", nomResult, "nominatim").catch(() => {});
+      } else {
+        // Photon fallback
+        const coords = await photonSearch(mainCity);
+        if (coords) {
+          biasLat = coords.lat;
+          biasLng = coords.lng;
+          cacheSet(biasCacheKey, "geocode", coords, "photon").catch(() => {});
+        }
       }
     }
   }
@@ -258,12 +288,18 @@ async function handleGeocode(req: Request): Promise<Response> {
   // Use wider radius if mainCity looks like a country (no comma, long distance expected)
   const isCountryBias = mainCity && !mainCity.includes(",") && mainCity.length > 3 && !/tokyo|kyoto|osaka|delhi|mumbai|budapest|bangkok|beijing|seoul|paris|london|istanbul|cairo|rome/i.test(mainCity);
   const MAX_DISTANCE_KM = isCountryBias ? 1500 : 200;
+  // Build query variations
+  const dehyphenated = q.replace(/-/g, " "); // "Senso-ji" → "Senso ji"
+  const noSuffix = q.replace(/\s+(temple|shrine|mosque|church|cathedral|market|road|street|beach|fort|palace|museum|park|garden|square|bridge|tower|station)$/i, "");
   const photonQueries = [
     `${q} ${mainCity}`,                                               // place + main city (best)
     q,                                                                 // just the place name
+    `${dehyphenated} ${mainCity}`,                                     // dehyphenated + city
+    dehyphenated,                                                      // dehyphenated alone
     q.replace(/,/g, " ").replace(/[&/–—]/g, " ").replace(/\s+/g, " ").trim(),  // cleaned full query
     q.split(/[,&/–—]/)[0].trim() + (mainCity ? ` ${mainCity}` : ""),  // first segment + main city
-  ];
+    noSuffix !== q ? `${noSuffix} ${mainCity}` : "",                   // without generic suffix + city
+  ].filter(Boolean);
   const seen = new Set<string>();
   for (const pq of photonQueries) {
     const clean = pq.replace(/\s+/g, " ").trim();
@@ -282,7 +318,31 @@ async function handleGeocode(req: Request): Promise<Response> {
     }
   }
 
-  // 4. No result — cache miss with 1-day TTL
+  // 4. Nominatim fallback — better at named POIs (temples, streets, landmarks)
+  const nominatimQueries = [
+    `${q}, ${mainCity || ""}`.trim(),
+    q,
+    dehyphenated,
+  ];
+  const seenNom = new Set<string>();
+  for (const nq of nominatimQueries) {
+    const clean = nq.replace(/\s+/g, " ").trim();
+    if (!clean || seenNom.has(clean.toLowerCase())) continue;
+    seenNom.add(clean.toLowerCase());
+    const coords = await nominatimSearch(clean);
+    if (coords) {
+      if (biasLat != null && biasLng != null) {
+        const dist = haversineKm(biasLat, biasLng, coords.lat, coords.lng);
+        if (dist > MAX_DISTANCE_KM) continue;
+      }
+      const result = { lat: coords.lat, lng: coords.lng };
+      incrementUsage("geocode", "nominatim", today()).catch(() => {});
+      cacheSet(cacheKey, "geocode", result, "nominatim").catch(() => {});
+      return Response.json(result, { headers: corsHeaders });
+    }
+  }
+
+  // 5. No result — cache miss with 1-day TTL
   incrementUsage("geocode", "miss", today()).catch(() => {});
   cacheSet(cacheKey, "geocode", { lat: null, lng: null }, "miss", 1).catch(() => {});
   return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
