@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, createContext, useContext, Fragment } from "react";
+import posthog from "posthog-js";
 import { supabase } from "./supabase";
 import html2canvas from "html2canvas";
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from "react-leaflet";
@@ -2046,6 +2047,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
   function castVote(itemId, value) {
     const item = (items || []).find(it => it.id === itemId);
     if (item?.tier === 1) {
+      posthog.capture("route_selected", { route: item?.title });
       // Route cards: single-select — selecting one deselects all others
       setLocalVotes(prev => {
         const next = { ...prev };
@@ -3983,7 +3985,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
   };
 
 
-  const styles  = ["History & Culture","Nature & Wildlife","Adventure & Thrill","Food & Culinary","Relaxation & Wellness","Nightlife & Bars","Family & Kids","Photography & Scenery","Shopping & Markets"];
+  const styles  = ["History & Culture","Nature & Wildlife","Adventure & Outdoors","Food & Culinary","Relaxation & Wellness","Nightlife & Bars","Family & Kids","Photography & Scenery","Shopping & Markets"];
   const budgets = [{key:"budget",label:"Budget 🏕️",sub:"Hostels, street food"},{key:"mid",label:"Mid-range 🏨",sub:"3★ hotels, restaurants"},{key:"luxury",label:"Luxury 🏰",sub:"5★ & fine dining"}];
 
   const handleGenerate = async () => {
@@ -4089,59 +4091,29 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
     </div>,
 
     /* 2 – style */
-    <div key={2} style={{animation:"fadeUp 0.3s ease"}}>
-      <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>🎒</div>
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:4}}>Trip style</div>
-      <div style={{fontSize:13,color:T.mist,textAlign:"center",marginBottom:18,fontFamily:"Georgia,serif"}}>Pick up to 5</div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-        {styles.map(s=>{
-          const sel = form.styles.includes(s);
-          const maxed = !sel && form.styles.length >= 5;
-          return (
-            <button key={s} onClick={()=>{ if (maxed) return; set("styles", sel ? form.styles.filter(x=>x!==s) : [...form.styles, s]); }} style={{
-              padding:"11px 12px",borderRadius:12,cursor:maxed?"default":"pointer",textAlign:"left",
-              border:`2px solid ${sel?T.ocean:T.sand}`,
-              background:sel?"#EBF3FD":T.chalk,
-              color:sel?T.ocean:maxed?T.mist:T.ink,
-              fontFamily:"Georgia,serif",fontSize:13,transition:"all 0.2s",
-              fontWeight:sel?700:400,
-              display:"flex",alignItems:"center",justifyContent:"space-between",
-              opacity:maxed?0.45:1,
-            }}>
-              {s}
-              {sel && <span style={{fontSize:13,color:T.ocean}}>✓</span>}
-            </button>
-          );
-        })}
-      </div>
-    </div>,
-
-    /* 3 – cities + notes + generate */
+    /* 2 – base city + notes + generate */
     (() => { const isOpenToIdeas = form.destinations.some(d => d.toLowerCase().includes("help me decide")); return (
     <div key={3} style={{animation:"fadeUp 0.3s ease"}}>
-      <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>🛫</div>
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:20}}>A few more details</div>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,textAlign:"center",marginBottom:24}}>🛫 A few more details</div>
 
       {/* Base Location */}
       <div style={{marginBottom:18}}>
-        <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,marginBottom:6}}>
+        <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,marginBottom:6,fontWeight:600}}>
           Where are you based? {isOpenToIdeas ? <span style={{color:T.terra,fontWeight:600}}>*</span> : <span style={{color:T.mist,fontWeight:400}}>· optional</span>}
         </div>
         <CityInput value={form.baseLocation} onChange={v=>set("baseLocation",v)}
-          placeholder="e.g. Mumbai, London, New York"
+          placeholder="Your home city"
           inputStyle={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.baseLocation?T.ocean:isOpenToIdeas&&!form.baseLocation?T.terra:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
-        <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginTop:4}}>{isOpenToIdeas ? "Helps us suggest destinations with easy flight connections" : "Your trip will start and end from here"}</div>
       </div>
 
       <div style={{marginBottom:22}}>
-        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:4}}>
-          Anything else we should know?
+        <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,marginBottom:6,fontWeight:600}}>
+          What kind of trip do you want?
         </div>
-        <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:10}}>The more you share, the better we can tailor it</div>
         <textarea value={form.notes} onChange={e=>set("notes",e.target.value)}
-          placeholder="e.g. we want to do scuba diving, prefer boutique hotels, travelling with two kids under 10, no long drives…"
-          rows={4}
-          style={{width:"100%",padding:"10px 12px",borderRadius:12,border:`1.5px solid ${form.notes?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",resize:"none",boxSizing:"border-box",background:T.chalk}}/>
+          placeholder="e.g. we love scuba diving, prefer boutique hotels, travelling with two kids under 10, no long drives, love trying local street food…"
+          rows={6}
+          style={{width:"100%",padding:"14px 16px",borderRadius:14,border:`1.5px solid ${form.notes?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",resize:"none",boxSizing:"border-box",background:T.chalk,lineHeight:1.6}}/>
       </div>
 <button onClick={handleGenerate} disabled={generating} style={{
         width:"100%",padding:16,borderRadius:16,border:"none",
@@ -4166,7 +4138,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
       </div>
       {stepViews[step]}
       {destError && <div style={{color:"#e53e3e",fontSize:13,fontFamily:"Georgia,serif",marginTop:8,textAlign:"center"}}>{destError}</div>}
-      <div style={{display:"flex",gap:10,marginTop:12}}>
+      <div style={{display:"flex",gap:10,marginTop:24}}>
         {step>0 && <button onClick={()=>setStep(s=>s-1)} style={{flex:1,padding:14,borderRadius:14,border:`2px solid ${T.sand}`,background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:15,cursor:"pointer"}}>← Back</button>}
         {step<stepViews.length-1 && (
           <button onClick={()=>{
@@ -4807,6 +4779,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
 
   const handleSetupComplete = async (form) => {
+    posthog.capture("setup_complete", { destinations: form.destinations, styles: form.styles, budget: form.budget, travelers: form.travelers });
     setPendingForm(form);
     setFormEdited(true);
     setPretripTab("brainstorm");
@@ -4851,6 +4824,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const handleBuildFromBrainstorm = (votedItems, formOverride = null) => {
     const form = formOverride || pendingForm;
     if (!form) return;
+    const selectedRoute = (votedItems || []).find(it => it.tier === 1 && it.vote === 1);
+    posthog.capture("build_itinerary", { destination: form.destinations?.join(" → "), route: selectedRoute?.title, budget: form.budget, pace: form.pace });
     setFormEdited(false);
     if (formOverride) setPendingForm(formOverride);
     const freshenedItems = (votedItems || []).map(item => {
@@ -5099,6 +5074,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       if (isEditing && !itinerary.name) return editingTrip.name;
       return `${itinerary.name || form.destinations.join(" → ")}${dateRange}`;
     })();
+    posthog.capture("itinerary_generated", { destination: igDestinations.join(" → "), days: savedDays.length });
     const tripPayload = {
       id: tripId,
       name: tripName,
@@ -5459,6 +5435,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
   const sendChatMessage = async () => {
     if (!chatInput.trim() || chatLoading) return;
+    posthog.capture("chat_message_sent", { screen, message_length: chatInput.trim().length });
     const userMsg = { role: "user", content: chatInput.trim(), user_id: session.user.id };
     const history = chatMessages.filter(m => m.role !== "system-undo");
     setChatMessages(prev => [...prev, userMsg, { role: "assistant", content: "", streaming: true }]);
@@ -5651,7 +5628,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             <div style={{position:"relative",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
             </div>
-            <div style={{fontSize:13,letterSpacing:3,opacity:0.6,textTransform:"uppercase",marginBottom:10,fontFamily:"Georgia,serif"}}>Wayfarer</div>
             <div style={{fontFamily:"'DM Serif Display',serif",fontSize:34,lineHeight:1.2,marginBottom:10}}>Plan your next<br/>adventure ✈️</div>
             <div style={{fontSize:14,opacity:0.7,fontFamily:"Georgia,serif"}}>AI-powered itineraries, built for you</div>
           </div>
@@ -6233,7 +6209,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             ].map(({ key, icon, label }) => {
               const active = activeBottomTab === key;
               return (
-                <button key={key} onClick={()=>setActiveBottomTab(key)} style={{
+                <button key={key} onClick={()=>{ posthog.capture("tab_switch", { tab: key }); setActiveBottomTab(key); }} style={{
                   flex:1,
                   display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
                   gap:3,

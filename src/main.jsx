@@ -1,10 +1,22 @@
 import { StrictMode, useState, useEffect, useCallback } from "react";
 import { createRoot } from "react-dom/client";
+import posthog from "posthog-js";
 import { supabase } from "./supabase";
 import Auth from "./Auth.jsx";
 import Home from "./Home.jsx";
 import App from "./App.jsx";
 import TripPublicView from "./TripPublicView.jsx";
+
+// ── PostHog ──
+if (import.meta.env.VITE_POSTHOG_KEY) {
+  posthog.init(import.meta.env.VITE_POSTHOG_KEY, {
+    api_host: import.meta.env.VITE_POSTHOG_HOST || "https://us.i.posthog.com",
+    autocapture: true,
+    capture_pageview: true,
+    capture_pageleave: true,
+    persistence: "localStorage",
+  });
+}
 
 // ── URL helpers ──
 
@@ -44,7 +56,15 @@ function Root() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => {
+      setSession(s);
+      // Identify user in PostHog
+      if (s?.user) {
+        posthog.identify(s.user.id, { email: s.user.email });
+      } else {
+        posthog.reset();
+      }
+    });
     return () => subscription.unsubscribe();
   }, []);
 
