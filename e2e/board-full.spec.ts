@@ -31,8 +31,8 @@ test.describe("Board tab (full flow)", () => {
     await page.locator("body").click({ position: { x: 10, y: 10 } });
     await page.waitForTimeout(500);
 
-    // Advance through steps 0→1→2→3
-    for (let step = 0; step < 3; step++) {
+    // Advance through steps 0→1 (step 2 has Start Planning button)
+    for (let step = 0; step < 2; step++) {
       const nextBtn = page.locator("button").filter({ hasText: /next|continue|→/i }).first();
       if (await nextBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
         await nextBtn.click({ force: true });

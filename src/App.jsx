@@ -2232,13 +2232,12 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {tier1Items.map((item, idx) => (
               <div key={item.id} ref={el => { if (el) routeCardRefs.current[item.id] = el; }}>
-                <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} showRecommended={routesReady} routeLabel={item.routeLabel || `P${idx + 1}`}
+                <RouteCard item={item} vs={getVoteState(item.id)} onVote={() => castVote(item.id, 1)} interactive={true} showRecommended={routesReady} routeLabel={`P${idx + 1}`}
                   onModify={() => {
-                    const label = item.routeLabel || `P${idx + 1}`;
-                    onModifyRoute?.(label);
+                    onModifyRoute?.(`P${idx + 1}`);
                   }}
                   onDismiss={() => {
-                    const label = item.routeLabel || `P${idx + 1}`;
+                    const label = `P${idx + 1}`;
                     setItems(prev => (prev || []).map(it => it.id === item.id ? { ...it, dismissed: true } : it));
                     setLocalVotes(prev => { const next = { ...prev }; delete next[item.id]; return next; });
                     if (item.id && !String(item.id).startsWith("temp_")) {
