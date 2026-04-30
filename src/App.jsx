@@ -1846,7 +1846,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
   // Expose generate() to parent via ref — parent calls it imperatively, not via useEffect
   useEffect(() => {
     if (triggerGenerateRef) {
-      triggerGenerateRef.current = () => { if (destinations.length) generate(); };
+      triggerGenerateRef.current = (opts) => { if (destinations.length) generate(opts?.addMore ?? false); };
     }
   });
 
@@ -2050,10 +2050,15 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
         }));
         const { data, error: insertErr } = await supabase.from("brainstorm_items").insert(rows).select();
         if (insertErr) console.warn("Failed to save brainstorm items:", insertErr);
-        // Replace items entirely with DB rows (they have real UUIDs now)
+        // Replace/merge items with DB rows (they have real UUIDs now)
         const saved = (data || []).map(row => ({ ...row, ...(row.data || {}) }));
         if (saved.length) {
-          setItems(saved);
+          if (isAddingMore.current) {
+            // Append new items to existing ones
+            setItems(prev => [...(prev || []).filter(it => !saved.some(s => s.id === it.id)), ...saved]);
+          } else {
+            setItems(saved);
+          }
         }
       } else {
         // No DB — keep streamed items as-is (already set during streaming)
@@ -2130,9 +2135,17 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
       if (it.tier !== 1) return it;
       const match = externalRoutes.find(er => er.id === it.id);
       if (!match) return it;
-      // Defensive merge: preserve id and tier from the original row so the item stays in tier1 filter.
       return { ...it, ...match, id: it.id, tier: it.tier };
     }));
+    // Clear votes for dismissed routes
+    const dismissedIds = externalRoutes.filter(r => r.dismissed).map(r => r.id);
+    if (dismissedIds.length) {
+      setLocalVotes(prev => {
+        const next = { ...prev };
+        dismissedIds.forEach(id => { delete next[id]; });
+        return next;
+      });
+    }
   }, [externalRoutes]);
   // Sync back: when external selection changes (e.g. user picks a route on the map), update localVotes.
   // IMPORTANT: only sync when external is a non-null id — never use external=null to CLEAR local,
@@ -2241,9 +2254,9 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                 />
               </div>
             ))}
-            {/* Skeleton cards while more routes are streaming */}
-            {generating && tier1Items.length > 0 && tier1Items.length < 4 && (
-              [...Array(4 - tier1Items.length)].map((_, i) => (
+            {/* Skeleton cards while routes are streaming */}
+            {generating && tier1Items.length > 0 && (
+              [...Array(Math.min(4, 12 - tier1Items.length))].map((_, i) => (
                 <div key={`skel-${i}`} style={{ borderRadius: 16, padding: "14px 16px", border: `2px solid ${T.sand}`, background: T.chalk }}>
                   <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
                     <div style={{ width: 24, height: 24, borderRadius: 6, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite" }} />
@@ -3945,6 +3958,7 @@ function DateRangePicker({ startDate, endDate, onChange }) {
 
 function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, initialStep = 0 }) {
   const [step, setStep]           = useState(initialStep);
+  useEffect(() => { setStep(initialStep); }, [initialStep]);
   const [generating, setGen]      = useState(false);
 
   // If prefillForm arrives (e.g. returning from brainstorm), merge its fields into form state.
@@ -4655,7 +4669,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   useEffect(() => {
     if (pretripRoutes.length === 0) return;
     // Also load destination-level intro (e.g. "Sri Lanka" or "Rajasthan")
-    const destination = (pendingForm?.destinations || []).join(", ") || trip?.destination;
+    const rawDests = (pendingForm?.destinations || []).filter(d => !d.toLowerCase().includes("help me decide"));
+    const destination = editingTrip?.destination || trip?.destination || (rawDests.length ? rawDests.join(", ") : null);
     if (destination && !deepDiveCacheApp[destination]) loadCityDeepDiveApp(destination);
 
     const allCities = new Set();
@@ -5453,8 +5468,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           const existingDay = daysRef.current.find(d => d.label?.trim().toLowerCase() === updatedDay.label?.trim().toLowerCase());
           if (!existingDay?.id) break;
           const dayId = existingDay.id;
-          // Delete + re-insert activities
-          await supabase.from("activities").delete().eq("day_id", dayId);
+          // Delete + re-insert activities (with RLS safety check)
+          const existingCount = existingDay.activities?.length ?? 0;
+          const { error: delErr, count: deletedCount } = await supabase.from("activities").delete({ count: "exact" }).eq("day_id", dayId);
+          if (delErr) { console.error("update_day delete error:", delErr); break; }
+          if (existingCount > 0 && (deletedCount === null || deletedCount === 0)) {
+            console.warn("update_day: delete blocked by RLS, skipping insert to avoid duplicates");
+            break;
+          }
           const existingPhotoMap = {};
           (existingDay.activities || []).forEach(a => { if (a.geocode && a.photo_url) existingPhotoMap[a.geocode] = a.photo_url; });
           const newActivities = (updatedDay.activities || []).map((act, j) => ({
@@ -5503,25 +5524,29 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
         case "add_todo": {
           const tripId = trip?.id || editingTrip?.id;
           if (!tripId || !action.text) break;
-          supabase.from("trip_todos").insert({ trip_id: tripId, text: action.text, done: false, category: action.category || null, due_date: action.due_date || null, position: 0 });
+          const { error: todoErr } = await supabase.from("trip_todos").insert({ trip_id: tripId, text: action.text, done: false, category: action.category || null, due_date: action.due_date || null, position: 0 });
+          if (todoErr) console.warn("add_todo failed:", todoErr);
           break;
         }
         case "add_expense": {
           const tripId = trip?.id || editingTrip?.id;
           if (!tripId || !action.title || !action.amount) break;
-          supabase.from("trip_expenses").insert({ trip_id: tripId, title: action.title, amount: action.amount, currency: action.currency || "USD", category: action.category || "Other", is_planned: action.is_planned !== false, position: 0 });
+          const { error: expErr } = await supabase.from("trip_expenses").insert({ trip_id: tripId, title: action.title, amount: action.amount, currency: action.currency || "USD", category: action.category || "Other", is_planned: action.is_planned !== false, position: 0 });
+          if (expErr) console.warn("add_expense failed:", expErr);
           break;
         }
         case "add_bookmark": {
           const tripId = trip?.id || editingTrip?.id;
           if (!tripId || !action.title || !action.url) break;
-          supabase.from("trip_bookmarks").insert({ trip_id: tripId, title: action.title, url: action.url, icon: "🔗", position: 0 });
+          const { error: bmErr } = await supabase.from("trip_bookmarks").insert({ trip_id: tripId, title: action.title, url: action.url, icon: "🔗", position: 0 });
+          if (bmErr) console.warn("add_bookmark failed:", bmErr);
           break;
         }
         case "set_budget": {
           const tripId = trip?.id || editingTrip?.id;
           if (!tripId || !action.amount) break;
-          supabase.from("trips").update({ budget_amount: action.amount }).eq("id", tripId);
+          const { error: budgetErr } = await supabase.from("trips").update({ budget_amount: action.amount }).eq("id", tripId);
+          if (budgetErr) console.warn("set_budget failed:", budgetErr);
           break;
         }
         case "navigate": {
@@ -5681,7 +5706,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               initialTrip={editingTrip || (initialScreen==="setup" && initialTrip?.destination ? initialTrip : null)}
               onStepChange={(s) => { setSetupStep(s); if (onUrlChange && !editingTrip) onUrlChange(`/new/${s}`); }}
               prefillForm={pendingForm}
-              initialStep={initialSetupStep}
+              initialStep={setupStep}
             />
           </div>
         </div>
@@ -5700,7 +5725,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             editTripId={editingTrip?.id || null}
             onBuild={handleBuildFromBrainstorm}
             onBack={() => setScreen("setup")}
-            onEditForm={editingTrip ? () => setScreen("setup") : null}
+            onEditForm={editingTrip ? () => { setSetupStep(0); setScreen("setup"); } : null}
             onOpenChat={() => { setChatOpen(true); setChatUnread(false); }}
             undoDismissRef={undoDismissRef}
             onModifyRoute={(label) => {
@@ -5835,7 +5860,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               )}
               <div style={{flex:1}}>
                 <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink}}>
-                  {magazineFilterCities ? magazineFilterCities.join(", ") : "Magazine"}
+                  {magazineFilterCities
+                    ? (() => {
+                        // Show country/region from route title (e.g. "Georgia – Caucasus Explorer" → "Georgia")
+                        const route = magazineFilterRouteId ? (pretripRoutes || []).find(r => r.id === magazineFilterRouteId) : null;
+                        if (route?.title) return route.title.split(/\s*[–—-]\s*/)[0].trim();
+                        return magazineFilterCities.join(", ");
+                      })()
+                    : (editingTrip?.destination || (pendingForm?.destinations || []).filter(d => !d.toLowerCase().includes("help me decide")).join(", ") || "Magazine")}
                 </div>
                 <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginTop:4}}>
                   {magazineFilterCities ? "Explore this route's destinations" : "Explore the destinations across your trip plans"}
@@ -5850,8 +5882,18 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             <div style={{display:"flex",flexDirection:"column",gap:0}}>
               {/* Destination-level intro — always shown with hero photo */}
               {(() => {
-                const dest = (pendingForm?.destinations || []).join(", ");
-                const dd = dest ? deepDiveCacheApp[dest] : null;
+                // Derive destination: from trip, form, or route title (for "Help me decide" flows)
+                const rawDest = (pendingForm?.destinations || []).filter(d => !d.toLowerCase().includes("help me decide"));
+                let dest = editingTrip?.destination || (rawDest.length ? rawDest.join(", ") : null);
+                // If filtered by a route, use country from route title
+                if (!dest && magazineFilterRouteId) {
+                  const route = (pretripRoutes || []).find(r => r.id === magazineFilterRouteId);
+                  if (route?.title) dest = route.title.split(/\s*[–—-]\s*/)[0].trim();
+                }
+                if (!dest) return null;
+                // Load deep dive if not cached
+                if (!deepDiveCacheApp[dest]) loadCityDeepDiveApp(dest);
+                const dd = deepDiveCacheApp[dest] || null;
                 const data = (dd && typeof dd === "object") ? dd : null;
                 const isLoading = dd === "loading";
                 if (!dest) return null;
@@ -5972,6 +6014,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                       notes: trip.notes || igReq.notes || "",
                       arrivalCity: trip.arrival_city || "",
                       departureCity: trip.departure_city || "",
+                      baseLocation: igReq.baseLocation || trip.arrival_city || "",
                     });
                     setFormEdited(false); // entering from Edit — load saved routes, don't regenerate
                     setPretripTab("brainstorm");
