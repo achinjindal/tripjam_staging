@@ -100,7 +100,7 @@ function Root() {
       if (route.page === "home") {
         setActiveTrip(null); setScreen("home");
       } else if (route.page === "create") {
-        setActiveTrip(null); setScreen("create");
+        setScreen("create");
         setInitialStep(route.step || 0);
       } else if (route.page === "trip" || route.page === "edit") {
         if (activeTrip?.id === route.tripId) {

@@ -35,7 +35,8 @@ let _igInFlight = false;  // same for IG // prevent same photo showing on multip
 
 // Returns true if the URL looks like a person portrait or otherwise unsuitable place photo
 function _isPortrait(url) {
-  return /portrait|headshot|cropped|_photo_of|mug.?shot|flag_of|coat_of_arms|logo|emblem|map_of|locator|location_map|blankmap|relief_map|seal_of/i.test(url);
+  const decoded = decodeURIComponent(url);
+  return /portrait|headshot|cropped\)|_photo_of|mug.?shot|flag_of|coat_of_arms|logo|emblem|map_of|locator|location_map|blankmap|relief_map|seal_of|_at_the_|_in_\d{4}|_\d{4}_\(|_speaking|_performing|_award|_ceremony|_interview|dress_uniform|uniform_|_official|campaign_poster|_signing|_visit/i.test(decoded);
 }
 
 
@@ -378,7 +379,7 @@ function makeQueue(delayMs, concurrency = 1) {
   });
 }
 
-const wikiQueuedFetch = makeQueue(200, 3); // Wikimedia — 3 concurrent, 200ms stagger
+const wikiQueuedFetch = makeQueue(150, 5); // Wikimedia — 5 concurrent, 150ms stagger
 
 async function _fetchPhoto(geocode, city, type, hotelOpts) {
   const BAD_PATTERNS = /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive/i;
@@ -466,11 +467,14 @@ async function _fetchPhoto(geocode, city, type, hotelOpts) {
   // Tier 3: Wikipedia full-text search — finds the right article even when title doesn't match geocode exactly
   const searchQ = city ? `${geocode} ${city}` : geocode;
   const data3 = await wikiQueuedFetch(
-    `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages&pithumbsize=700&format=json&origin=*`
+    `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages|description&pithumbsize=700&format=json&origin=*`
   );
   const results3 = Object.values(data3?.query?.pages || {});
+  const PERSON_DESC = /\b(born|politician|actor|actress|singer|player|wrestler|athlete|writer|emperor|empress|manga|anime|artist|novelist|musician|composer|director|comedian|model|journalist|general|admiral|prince|princess|voice actor)\b/i;
   for (let ri = 0; ri < results3.length; ri++) {
     const page = results3[ri];
+    // Skip person pages based on description
+    if (page.description && PERSON_DESC.test(page.description)) { continue; }
     // Accept top 2 results without strict title relevance, but still check filename
     const relaxed = ri < 2;
     if (!relaxed && !pageRelevant(page.title)) { console.log(`[photo] T3 skipped irrelevant: "${page.title}" for "${geocode}"`); continue; }
@@ -1768,7 +1772,7 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
   );
 }
 
-function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditForm = null, onOpenChat = null, onDismissRoute = null, onModifyRoute = null, undoDismissRef = null, triggerGenerateRef = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null, onTellMore = null, onShowMap = null }) {
+function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditForm = null, onOpenChat = null, onDismissRoute = null, onModifyRoute = null, undoDismissRef = null, triggerGenerateRef = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null, onTellMore = null, onShowMap = null, onAskTrippy = null }) {
   const [items, setItems] = useState(null); // null = not started, [] = empty, [...] = loaded
   const [loadingItems, setLoadingItems] = useState(false);
   const [localVotes, setLocalVotes] = useState({}); // { [tempId]: 1|-1|0 } — pre-trip mode votes
@@ -2146,7 +2150,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                   <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", marginTop: 2 }}>
                     {generating
                       ? items?.length
-                        ? `Shortlisting from ${ideaCount.toLocaleString("en-US")} ideas…`
+                        ? `Shortlisting from ${ideaCount.toLocaleString("en-US")} ideas…${ideaCount >= 10000 ? " :O" : ""}`
                         : ""
                       : items?.length ? "Pick your route, then build your itinerary" : "Generating ideas…"}
                   </div>
@@ -2188,8 +2192,9 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
               <div style={{ fontFamily: "Georgia,serif", fontSize: 13, color: T.mist }}>Try again.</div>
             </div>
           )}
-          {(generating || loadingItems || items === null) && (
-            <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(247,248,250,0.55)", pointerEvents: "none" }}>
+          {/* Full spinner only before first route arrives */}
+          {(generating || loadingItems || items === null) && tier1Items.length === 0 && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 0" }}>
               <div style={{ width: 36, height: 36, border: `3px solid ${T.sand}`, borderTopColor: T.ocean, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
             </div>
           )}
@@ -2218,6 +2223,25 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                 />
               </div>
             ))}
+            {/* Skeleton cards while more routes are streaming */}
+            {generating && tier1Items.length > 0 && tier1Items.length < 4 && (
+              [...Array(4 - tier1Items.length)].map((_, i) => (
+                <div key={`skel-${i}`} style={{ borderRadius: 16, padding: "14px 16px", border: `2px solid ${T.sand}`, background: T.chalk }}>
+                  <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                    <div style={{ width: 24, height: 24, borderRadius: 6, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite" }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ width: "60%", height: 14, borderRadius: 4, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite", marginBottom: 6 }} />
+                      <div style={{ width: "40%", height: 10, borderRadius: 4, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite" }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {[0,1,2].map(j => (
+                      <div key={j} style={{ width: `${85 - j * 10}%`, height: 10, borderRadius: 4, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite", animationDelay: `${j * 0.15}s` }} />
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
           </div>
           {/* Generate new options */}
           {!generating && (
@@ -2295,7 +2319,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                   <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Highlights</div>
                   <div className="no-scrollbar" style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4, margin: "0 -16px", padding: "0 16px 4px" }}>
                     {highlights.map((act, i) => (
-                      <MagazineHighlightCard key={i} item={act} city={deepDiveCity} inItinerary={ddItinTitles.has((act.title || "").toLowerCase())} />
+                      <MagazineHighlightCard key={i} item={act} city={deepDiveCity} inItinerary={ddItinTitles.has((act.title || "").toLowerCase())} onAskTrippy={onAskTrippy} />
                     ))}
                   </div>
                 </div>
@@ -2392,7 +2416,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                   <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>🧭 More to discover</div>
                   <div className="no-scrollbar" style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4, margin: "0 -16px", padding: "0 16px 4px" }}>
                     {data.moreSights.map((s, i) => (
-                      <MagazineHighlightCard key={i} item={s} city={deepDiveCity} inItinerary={ddItinTitles.has((s.title || "").toLowerCase())} />
+                      <MagazineHighlightCard key={i} item={s} city={deepDiveCity} inItinerary={ddItinTitles.has((s.title || "").toLowerCase())} onAskTrippy={onAskTrippy} />
                     ))}
                   </div>
                 </div>
@@ -2505,7 +2529,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                         </div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                           {highlights.map((act, i) => (
-                            <MagazineHighlightCard key={i} item={act} city={city} inItinerary={itineraryTitles.has((act.title || "").toLowerCase())} masonry={true} tall={i % 3 === 0} />
+                            <MagazineHighlightCard key={i} item={act} city={city} inItinerary={itineraryTitles.has((act.title || "").toLowerCase())} masonry={true} tall={i % 3 === 0} onAskTrippy={onAskTrippy} />
                           ))}
                         </div>
                       </>
@@ -2865,7 +2889,7 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
 }
 
 /* ─── ACTIVITY CARD ──────────────────────────────────────────────────── */
-function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAlternatives, onChangeHotel, transitMapsUrl }) {
+function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAlternatives, onChangeHotel, transitMapsUrl, onAskTrippy }) {
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [draft, setDraft] = useState({ ...activity });
@@ -2973,6 +2997,7 @@ function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAl
             <div style={{display:"flex",gap:5,alignItems:"center"}}>
               {activity.duration && <span style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif"}}>⏱ {activity.duration}</span>}
               <a href={mapsUrl} target="_blank" rel="noopener noreferrer" style={{lineHeight:1,textDecoration:"none"}} title="Open in Google Maps"><img src="/google-maps-icon.png" alt="Maps" style={{width:14,height:14,objectFit:"contain",display:"block"}} /></a>
+              {onAskTrippy && <button onClick={()=>onAskTrippy(activity.title)} style={{background:"transparent",border:"none",cursor:"pointer",fontSize:13,padding:"0 1px",lineHeight:1,color:T.ocean,opacity:0.6}} title="Ask Trippy">💬</button>}
               <div style={{position:"relative"}}>
                 <button onClick={()=>setMenuOpen(m=>!m)} style={{background:"transparent",border:"none",cursor:"pointer",fontSize:16,padding:"0 3px",color:T.mist,lineHeight:1}}>⋯</button>
                 {menuOpen && (
@@ -3201,7 +3226,7 @@ function DayCompact({ day, displayCity, onExpand }) {
   );
 }
 
-function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, onSelectHotel }) {
+function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, onSelectHotel, onAskTrippy }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
 
@@ -3314,7 +3339,8 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
               onReplace={()=>onReplaceActivity?.(act)}
               onSuggestAlternatives={()=>onSuggestAlternatives?.(act)}
               onChangeHotel={(mode)=>onChangeHotel?.(day.id, act, mode)}
-              transitMapsUrl={transitMapsUrl}/>
+              transitMapsUrl={transitMapsUrl}
+              onAskTrippy={onAskTrippy}/>
             {!lastAct && !samePackageAsNext && (
               <TransitionRow
                 from={act.type === "transit" && act.geocode_end ? { ...act, geocode: act.geocode_end } : act}
@@ -3621,17 +3647,34 @@ function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, children }) {
   );
 }
 
-function MagazineHighlightCard({ item, city, inItinerary = false, masonry = false, tall = false }) {
+function MagazineHighlightCard({ item, city, inItinerary = false, masonry = false, tall = false, onAskTrippy = null }) {
   const searchKey = item.geocode || item.title || "";
   const [photoUrl, setPhotoUrl] = useState(item.photo_url || null);
   const [loaded, setLoaded] = useState(!!item.photo_url);
   useEffect(() => {
     if (photoUrl) { setLoaded(true); return; }
     let cancelled = false;
+    // Fetch photo — for Magazine cards, also try a direct Wikipedia lookup
+    // since _fetchPhoto may reject due to dedup (_usedPhotoUrls)
     _fetchPhoto(searchKey, city, item.type || "sight").then(url => {
       if (cancelled) return;
-      setPhotoUrl(url);
-      setLoaded(true);
+      if (url) { setPhotoUrl(url); setLoaded(true); return; }
+      // Fallback: direct Wikipedia thumbnail (skip dedup/relevance checks)
+      (async () => {
+        try {
+          const q = searchKey;
+          const res = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(q + (city ? " " + city : ""))}&gsrlimit=5&prop=pageimages|description&pithumbsize=700&format=json&origin=*`);
+          const data = await res.json();
+          const BAD = /\.(svg|pdf)(\.|$)|map|marker|flag|logo|icon|coat.of.arms/i;
+          const PERSON = /\b(born|politician|actor|actress|singer|player|wrestler|athlete|writer|emperor|empress|manga|anime|artist|novelist|musician|composer|director|comedian|model|journalist)\b/i;
+          for (const p of Object.values(data?.query?.pages || {})) {
+            if (p.description && PERSON.test(p.description)) continue;
+            const src = p?.thumbnail?.source;
+            if (src && !BAD.test(src) && !_isPortrait(src)) { if (!cancelled) { setPhotoUrl(src); setLoaded(true); } return; }
+          }
+        } catch { /* ignore */ }
+        if (!cancelled) setLoaded(true);
+      })();
     });
     return () => { cancelled = true; };
   }, [searchKey, city]);
@@ -3658,10 +3701,15 @@ function MagazineHighlightCard({ item, city, inItinerary = false, masonry = fals
         {item.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic", lineHeight: 1.35 }}>{item.note}</div>}
         {inItinerary && <div style={{display:"inline-block",marginTop:5,fontSize:9,background:"#DCFCE7",color:"#16A34A",padding:"1px 7px",borderRadius:10,fontFamily:"Georgia,serif",fontWeight:600}}>In your itinerary</div>}
       </div>
-      <a href={`https://www.google.com/maps/search/?api=1&query=${mapsQuery}`} target="_blank" rel="noopener noreferrer"
-        style={{ position: "absolute", bottom: 6, right: 6, display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 6, border: `1px solid ${T.sand}`, background: T.chalk, textDecoration: "none" }}>
-        <img src="/google-maps-icon.png" alt="Maps" style={{ width: 13, height: 13, objectFit: "contain" }}/>
-      </a>
+      <div style={{ position: "absolute", bottom: 6, right: 6, display: "flex", gap: 4 }}>
+        {onAskTrippy && (
+          <button onClick={() => onAskTrippy(item.title)} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 6, border: `1px solid ${T.sand}`, background: T.chalk, cursor: "pointer", fontSize: 12, padding: 0 }}>💬</button>
+        )}
+        <a href={`https://www.google.com/maps/search/?api=1&query=${mapsQuery}`} target="_blank" rel="noopener noreferrer"
+          style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 6, border: `1px solid ${T.sand}`, background: T.chalk, textDecoration: "none" }}>
+          <img src="/google-maps-icon.png" alt="Maps" style={{ width: 13, height: 13, objectFit: "contain" }}/>
+        </a>
+      </div>
     </div>
   );
 }
@@ -4047,7 +4095,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
 
       <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:14}}>
         {["Rajasthan 🏯","Japan 🌸","Amalfi 🌊","Patagonia 🏔️","Morocco 🕌","Koh Samui 🏝️","Bali 🌴","Santorini ☀️"].map(d=>{
-          const name = d.split(" ")[0];
+          const name = d.replace(/\s*[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE00}-\u{FEFF}]+$/u, "").trim();
           const sel  = form.destinations.includes(name);
           return (
             <button key={d} onClick={()=>addDestination(name)} style={{
@@ -4573,6 +4621,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setDeepDiveCacheApp(prev => ({ ...prev, [city]: data }));
+      // Pre-fetch photos for moreSights so they're ready when Magazine opens
+      if (data?.moreSights?.length) {
+        for (const s of data.moreSights) {
+          const key = s.geocode || s.title;
+          if (key) _fetchPhoto(key, city, "sight");
+        }
+      }
     } catch (e) {
       console.warn("city-deep-dive failed:", e.message);
       setDeepDiveCacheApp(prev => ({ ...prev, [city]: "error" }));
@@ -5661,13 +5716,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             triggerGenerateRef={triggerRgRef}
             editTripId={editingTrip?.id || null}
             onBuild={handleBuildFromBrainstorm}
-            onBack={editingTrip
-              ? () => {
-                  setEditingTrip(null); setPendingForm(null); setFormEdited(false);
-                  // Draft trip (no IG done) → go home; complete trip → go to itinerary
-                  if (editingTrip.ig_response) { setScreen("itinerary"); } else if (onHome) { onHome(); }
-                }
-              : () => setScreen("setup")}
+            onBack={() => setScreen("setup")}
             onEditForm={editingTrip ? () => setScreen("setup") : null}
             onOpenChat={() => { setChatOpen(true); setChatUnread(false); }}
             undoDismissRef={undoDismissRef}
@@ -5737,7 +5786,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 <div style={{marginBottom:16}}>
                   <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1.2,marginBottom:10}}>🧭 More to discover</div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                    {data.moreSights.map((s, i) => <MagazineHighlightCard key={i} item={s} city={ddCity} masonry={true} tall={i % 3 === 0} />)}
+                    {data.moreSights.map((s, i) => <MagazineHighlightCard key={i} item={s} city={ddCity} masonry={true} tall={i % 3 === 0} onAskTrippy={(title) => { setChatInput(`Tell me about "${title}"`); setChatOpen(true); setChatUnread(false); setTimeout(() => chatInputRef.current?.focus(), 50); }} />)}
                   </div>
                 </div>
               )}
@@ -5867,7 +5916,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                             <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1.2,marginBottom:10}}>Things to see</div>
                             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
                               {highlights.map((act, i) => (
-                                <MagazineHighlightCard key={i} item={act} city={city} masonry={true} tall={i % 3 === 0} />
+                                <MagazineHighlightCard key={i} item={act} city={city} masonry={true} tall={i % 3 === 0} onAskTrippy={(title) => { setChatInput(`Tell me about "${title}"`); setChatOpen(true); setChatUnread(false); setTimeout(() => chatInputRef.current?.focus(), 50); }} />
                               ))}
                             </div>
                           </>
@@ -6152,6 +6201,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                         return hCity;
                       })()}
                       onSelectHotel={(hotel) => selectHotel(day.id, hotel)}
+                      onAskTrippy={(title) => {
+                        setChatInput(`Tell me about "${title}"`);
+                        setChatOpen(true);
+                        setChatUnread(false);
+                        setTimeout(() => chatInputRef.current?.focus(), 50);
+                      }}
                     />
                     )}
                   </div>
@@ -6171,7 +6226,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
           {/* ── MAGAZINE TAB ── */}
           {activeBottomTab === "brainstorm" && (
-            <BrainstormView trip={trip} session={session} days={days} />
+            <BrainstormView trip={trip} session={session} days={days} onAskTrippy={(title) => {
+              setChatInput(`Tell me about "${title}"`);
+              setChatOpen(true); setChatUnread(false);
+              setTimeout(() => chatInputRef.current?.focus(), 50);
+            }} />
           )}
 
           {/* Chat sheet is rendered at App root */}
@@ -6522,7 +6581,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                   </div>
                   <div style={{display:"flex",flexWrap:"wrap",gap:6,padding:"4px 0"}}>
                     {(screen === "brainstorm"
-                      ? ["Difference between P1 and P2?","Add a day trip to P3","Make P1 more relaxed"]
+                      ? [`Reduce hotel switches in P2`,`Add a beach day in P3`,`Suggest best nature spots in ${(pendingForm?.destinations?.[0] || trip?.destination?.split("→")[0]?.trim() || "this destination")}?`]
                       : ["Change Day 1 hotel","Add a beach day","Make Day 3 morning relaxed"]
                     ).map(s=>(
                       <button key={s} onClick={()=>{ setChatInput(s); setTimeout(() => chatInputRef.current?.focus(), 50); }} style={{
