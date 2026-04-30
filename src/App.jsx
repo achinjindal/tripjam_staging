@@ -1,6 +1,24 @@
-import { useState, useRef, useEffect, createContext, useContext, Fragment } from "react";
+import { useState, useRef, useEffect, createContext, useContext, Fragment, Component } from "react";
 import posthog from "posthog-js";
 import { supabase } from "./supabase";
+
+// ── Error Boundary ──
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { hasError: false }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(err) { console.error("ErrorBoundary caught:", err); posthog.capture("render_error", { error: err.message }); }
+  render() {
+    if (this.state.hasError) return (
+      <div style={{padding:"40px 24px",textAlign:"center",fontFamily:"Georgia,serif"}}>
+        <div style={{fontSize:36,marginBottom:12}}>😵</div>
+        <div style={{fontSize:16,color:"#1A2B3C",marginBottom:8,fontFamily:"'DM Serif Display',serif"}}>Something went wrong</div>
+        <div style={{fontSize:13,color:"#8BA5BB",marginBottom:16}}>Try refreshing the page</div>
+        <button onClick={()=>{ this.setState({ hasError: false }); window.location.reload(); }} style={{padding:"10px 20px",borderRadius:12,border:"none",background:"#2563A8",color:"white",fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer"}}>Refresh</button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
 import html2canvas from "html2canvas";
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from "react-leaflet";
 import L from "leaflet";
@@ -4151,7 +4169,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
         </div>
         <CityInput value={form.baseLocation} onChange={v=>set("baseLocation",v)}
           placeholder="Your home city"
-          inputStyle={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.baseLocation?T.ocean:isOpenToIdeas&&!form.baseLocation?T.terra:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
+          inputStyle={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.baseLocation?T.ocean:destError&&isOpenToIdeas&&!form.baseLocation?T.terra:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
       </div>
 
       <div style={{marginBottom:22}}>
@@ -4660,8 +4678,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   // chatFilter removed — no group features in phase 1
   // mention/tagging removed — phase 1 is AI-only chat
   useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages, chatLoading]);
+    chatBottomRef.current?.scrollIntoView({ behavior: chatOpen ? "instant" : "smooth" });
+  }, [chatMessages, chatLoading, chatOpen]);
 
   // Load persisted messages and subscribe to real-time updates
   useEffect(() => {
@@ -5323,124 +5341,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     return null;
   };
 
-  const callChatTrip = async (message, currentTrip, currentDays, history = [], onChunk) => {
-    const res = await fetch(
-      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-trip`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-        body: JSON.stringify({ trip: currentTrip, days: currentDays, message, history }),
-      }
-    );
-
-    // Read SSE stream and accumulate full JSON text
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let accumulated = "";
-    let lineBuffer = "";
-    outer: while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      lineBuffer += decoder.decode(value, { stream: true });
-      const lines = lineBuffer.split("\n");
-      lineBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const raw = line.slice(6).trim();
-        if (raw === "[DONE]") break outer;
-        try {
-          accumulated += JSON.parse(raw);
-          onChunk?.(accumulated);
-        } catch { }
-      }
-    }
-
-    // Parse accumulated JSON
-    const stripped = accumulated.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-    const start = stripped.indexOf("{");
-    const end = stripped.lastIndexOf("}");
-    let data;
-    try {
-      data = JSON.parse(stripped.slice(start, end + 1));
-      if (!data.message) data.message = "Done.";
-    } catch { data = { message: accumulated }; }
-    const incoming = data.updatedDays ?? [];
-    if (incoming.length) {
-      // Persist each updated day to Supabase: delete existing activities, insert new ones
-      for (const updatedDay of incoming) {
-        const existingDay = currentDays.find(d => d.label?.trim().toLowerCase() === updatedDay.label?.trim().toLowerCase());
-        if (!existingDay?.id) continue;
-        const dayId = existingDay.id;
-
-        // Delete all existing activities for this day
-        const existingCount = existingDay.activities?.length ?? 0;
-        const { error: deleteError, count: deletedCount } = await supabase
-          .from("activities")
-          .delete({ count: "exact" })
-          .eq("day_id", dayId);
-        if (deleteError) {
-          console.error("[TMT] delete error for day", dayId, deleteError);
-          continue;
-        }
-        // If existing activities weren't deleted (count 0 or null when there were rows),
-        // RLS is blocking — inserting would duplicate rows, so skip.
-        if (existingCount > 0 && (deletedCount === null || deletedCount === 0)) {
-          console.warn("[TMT] delete blocked for day", dayId, "— expected", existingCount, "deleted, got", deletedCount, "— skipping insert");
-          continue;
-        }
-
-        // Reuse existing photos where geocode matches
-        const existingPhotoMap = {};
-        (currentDays.find(d => d.id === dayId)?.activities || []).forEach(a => {
-          if (a.geocode && a.photo_url) existingPhotoMap[a.geocode] = a.photo_url;
-        });
-
-        // Insert new activities
-        const newActivities = (updatedDay.activities || []).map((act, j) => ({
-          day_id: dayId,
-          time: act.time, title: act.title, geocode: act.geocode || null, geocode_end: act.geocodeEnd || null,
-          type: act.type, duration: act.duration, note: act.note,
-          confirmed: act.confirmed ?? false, icon: act.icon, package: act.package || null,
-          position: j, added_by: session.user.id,
-          photo_url: (act.geocode && existingPhotoMap[act.geocode]) || null,
-        }));
-        const { data: insertedActs, error: insertError } = await supabase.from("activities").insert(newActivities).select();
-        if (insertError) { console.error("[TMT] insert failed for day", dayId, insertError); continue; }
-
-        // Update wishlist on the day row if LLM returned one
-        if (updatedDay.wishlist) {
-          await supabase.from("days").update({ wishlist: updatedDay.wishlist }).eq("id", dayId);
-        }
-
-        // Update in-memory state with real DB ids
-        setDays(prev => prev.map(day => {
-          if (day.id !== dayId) return day;
-          return {
-            ...day,
-            city: updatedDay.city ?? day.city,
-            wishlist: updatedDay.wishlist ?? day.wishlist,
-            activities: (insertedActs || []).map((act, i) => ({ ...act, ...updatedDay.activities[i] })),
-          };
-        }));
-
-        // Fetch photos for new activities that don't have one
-        const dayCity = updatedDay.city ?? currentDays.find(d => d.id === dayId)?.city;
-        for (const [i, act] of (updatedDay.activities || []).entries()) {
-          if (act.type === "transit" || existingPhotoMap[act.geocode]) continue;
-          const insertedAct = insertedActs?.[i];
-          if (!insertedAct) continue;
-          _fetchPhoto(act.geocode || act.title, dayCity, act.type).then(url => {
-            if (!url) return;
-            supabase.from("activities").update({ photo_url: url }).eq("id", insertedAct.id);
-            setDays(prev => prev.map(d => d.id !== dayId ? d : {
-              ...d, activities: d.activities.map(a => a.id === insertedAct.id ? { ...a, photo_url: url } : a),
-            }));
-          });
-        }
-      }
-    }
-    return data;
-  };
+  // callChatTrip removed — unified chat handles all screens
 
   const getMemberName = (userId) => {
     const m = (trip?.trip_members || []).find(mem => mem.user_id === userId);
@@ -5467,82 +5368,44 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     const history = chatMessages.filter(m => m.role !== "system-undo");
     setChatMessages(prev => [...prev, userMsg, { role: "assistant", content: "", streaming: true }]);
     setChatLoading(true);
-    supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "user", content: userMsg.content });
+    if (trip?.id) supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "user", content: userMsg.content });
     let finalContent = "Sorry, something went wrong. Try again.";
     let suggestions = null;
     let hasChanges = false;
     try {
-      const data = await callChatTrip(userMsg.content, trip, daysRef.current, history, (accumulated) => {
-        const partial = extractPartialMessage(accumulated);
-        if (partial !== null) {
-          setChatMessages(prev => { const updated = [...prev]; updated[updated.length - 1] = { role: "assistant", content: partial, streaming: true }; return updated; });
-        }
-      });
+      const data = await callUnifiedChat(userMsg.content, history);
       finalContent = data.message || "Done.";
-      suggestions = data.suggestions || null;
-      hasChanges = (data.updatedDays?.length || 0) > 0;
+      const suggestAction = (data.actions || []).find(a => a.type === "suggest");
+      if (suggestAction) suggestions = suggestAction.suggestions;
+      const mutationActions = (data.actions || []).filter(a => a.type !== "suggest");
+      hasChanges = mutationActions.length > 0;
+      if (data.actions?.length) await dispatchActions(data.actions, userMsg, history);
     } catch { /* use default error message */ }
     setChatMessages(prev => { const updated = [...prev]; updated[updated.length - 1] = { role: "assistant", content: finalContent, suggestions, hasChanges, streaming: false }; return updated; });
     setChatLoading(false);
     setChatUnread(true);
-    supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "assistant", content: finalContent });
+    if (trip?.id) supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "assistant", content: finalContent });
   };
 
-  const sendChatMessage = async () => {
-    if (!chatInput.trim() || chatLoading) return;
-    posthog.capture("chat_message_sent", { screen, message_length: chatInput.trim().length });
-    const userMsg = { role: "user", content: chatInput.trim(), user_id: session.user.id };
-    const history = chatMessages.filter(m => m.role !== "system-undo");
-    setChatMessages(prev => [...prev, userMsg, { role: "assistant", content: "", streaming: true }]);
-    setChatInput("");
-    if (chatInputRef.current) { chatInputRef.current.style.height = "auto"; }
-    setChatLoading(true);
-
-    // Persist user message (in-trip only)
-    if (trip?.id) {
-      supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "user", content: userMsg.content });
-    }
-
-    let finalContent = "Sorry, something went wrong. Try again.";
-    let suggestions = null;
-    let hasChanges = false;
-    try {
-      if (screen === "itinerary") {
-        const data = await callChatTrip(userMsg.content, trip, daysRef.current, history, (accumulated) => {
-          const partial = extractPartialMessage(accumulated);
-          if (partial !== null) {
-            setChatMessages(prev => {
-              const updated = [...prev];
-              updated[updated.length - 1] = { role: "assistant", content: partial, streaming: true };
-              return updated;
-            });
-          }
-        });
-        finalContent = data.message || "Done.";
-        suggestions = data.suggestions || null;
-        hasChanges = (data.updatedDays?.length || 0) > 0;
-      } else {
-        // Pre-trip / brainstorm: call chat-brainstorm with routes context
-        const data = await callChatBrainstorm(userMsg.content, history);
-        finalContent = data.message || "Done.";
-        if (data.updatedRoutes?.length) {
-          hasChanges = true;
+  // ── Action dispatcher: executes actions returned by unified chat ──
+  const dispatchActions = async (actions, userMsg, history) => {
+    if (!actions?.length) return;
+    for (const action of actions) {
+      switch (action.type) {
+        case "update_route": {
+          const upd = action.route;
+          if (!upd?.id) break;
           setPretripRoutes(prev => {
             const merged = prev.map(r => {
-              const upd = data.updatedRoutes.find(u => u.id === r.id);
-              if (!upd) return r;
+              if (r.id !== upd.id) return r;
               const result = { ...r, ...upd, id: r.id, tier: r.tier || 1 };
-              // Detect bad data and flag the route
               const badDays = !Array.isArray(result.days) || result.days.length === 0 || result.days.some(d => typeof d !== "string" || d.trim().length < 5);
               const badTitle = !result.title || result.title.trim().length === 0;
-              if (badDays || badTitle) {
-                result._error = badTitle ? "Route title is missing" : "Day descriptions are incomplete or corrupted";
-              } else {
-                delete result._error;
-              }
+              if (badDays || badTitle) result._error = badTitle ? "Route title is missing" : "Day descriptions are incomplete";
+              else delete result._error;
               return result;
             });
-            // Re-save to DB so edits persist across refreshes
+            // Persist to DB
             const tripId = editingTrip?.id;
             if (tripId) {
               (async () => {
@@ -5556,43 +5419,180 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                     data: { tagline: it.tagline, days: it.days, bestFor: it.bestFor, warning: it.warning, recommended: !!it.recommended, points: it.points },
                   }));
                   await supabase.from("brainstorm_items").insert(rows);
-                } catch (e) { console.warn("Failed to persist chat route edits:", e); }
+                } catch (e) { console.warn("Failed to persist route edits:", e); }
               })();
             }
             return merged;
           });
-          // Auto-follow-up for pendingRoutes (bulk update — AI returns 3 at a time)
-          if (data.pendingRoutes?.length) {
-            (async () => {
-              for (const pendingId of data.pendingRoutes) {
-                try {
-                  const followUp = await callChatBrainstorm(
-                    `Apply the same change to route id="${pendingId}". Return only this one route in updatedRoutes.`,
-                    [...history, userMsg, { role: "assistant", content: data.message }]
-                  );
-                  if (followUp.updatedRoutes?.length) {
-                    setPretripRoutes(prev => prev.map(r => {
-                      const upd = followUp.updatedRoutes.find(u => u.id === r.id);
-                      if (!upd) return r;
-                      return { ...r, ...upd, id: r.id, tier: r.tier || 1 };
-                    }));
-                  }
-                } catch (e) { console.warn("Pending route update failed:", pendingId, e); }
-              }
-            })();
-          }
-          setPretripSelectedRouteId(data.updatedRoutes[0].id);
-          const durChange = data.updatedRoutes.find(u => u.durationChanged);
-          if (durChange?.durationChanged && pendingForm?.startDate) {
-            const newDays = durChange.durationChanged;
-            const start = new Date(pendingForm.startDate + "T12:00:00");
-            const newEnd = new Date(start);
-            newEnd.setDate(start.getDate() + newDays - 1);
-            const newEndStr = newEnd.toISOString().split("T")[0];
-            setPendingForm(prev => ({ ...prev, endDate: newEndStr }));
-          }
-          hasChanges = true;
+          setPretripSelectedRouteId(upd.id);
+          break;
         }
+        case "dismiss_route": {
+          const routeId = action.routeId;
+          if (!routeId) break;
+          setPretripRoutes(prev => prev.map(it => it.id === routeId ? { ...it, dismissed: true } : it));
+          if (routeId && !String(routeId).startsWith("temp_")) {
+            supabase.from("brainstorm_items").update({ dismissed: true }).eq("id", routeId);
+          }
+          // Add undo message
+          const item = pretripRoutes.find(r => r.id === routeId);
+          setChatMessages(prev => [...prev, {
+            role: "system-undo", content: `"${item?.title || "Plan"}" was dismissed.`,
+            undoData: { dismissedRouteId: routeId }, id: `undo-route-${Date.now()}`,
+          }]);
+          break;
+        }
+        case "generate_more_plans": {
+          // Trigger the "Show more plans" flow in BrainstormView
+          triggerRgRef.current?.({ addMore: true });
+          break;
+        }
+        case "update_day": {
+          const updatedDay = action.day;
+          if (!updatedDay?.label) break;
+          const existingDay = daysRef.current.find(d => d.label?.trim().toLowerCase() === updatedDay.label?.trim().toLowerCase());
+          if (!existingDay?.id) break;
+          const dayId = existingDay.id;
+          // Delete + re-insert activities
+          await supabase.from("activities").delete().eq("day_id", dayId);
+          const existingPhotoMap = {};
+          (existingDay.activities || []).forEach(a => { if (a.geocode && a.photo_url) existingPhotoMap[a.geocode] = a.photo_url; });
+          const newActivities = (updatedDay.activities || []).map((act, j) => ({
+            day_id: dayId, time: act.time, title: act.title, geocode: act.geocode || null, geocode_end: act.geocodeEnd || null,
+            type: act.type, duration: act.duration, note: act.note, confirmed: act.confirmed ?? false, icon: act.icon,
+            package: act.package || null, position: j, added_by: session.user.id,
+            photo_url: (act.geocode && existingPhotoMap[act.geocode]) || null,
+          }));
+          const { data: insertedActs } = await supabase.from("activities").insert(newActivities).select();
+          if (updatedDay.wishlist) await supabase.from("days").update({ wishlist: updatedDay.wishlist }).eq("id", dayId);
+          setDays(prev => prev.map(day => day.id !== dayId ? day : {
+            ...day, city: updatedDay.city ?? day.city, wishlist: updatedDay.wishlist ?? day.wishlist,
+            activities: (insertedActs || []).map((act, i) => ({ ...act, ...updatedDay.activities[i] })),
+          }));
+          // Fetch photos for new activities
+          const dayCity = updatedDay.city ?? existingDay.city;
+          for (const [i, act] of (updatedDay.activities || []).entries()) {
+            if (act.type === "transit" || existingPhotoMap[act.geocode]) continue;
+            const insertedAct = insertedActs?.[i];
+            if (!insertedAct) continue;
+            _fetchPhoto(act.geocode || act.title, dayCity, act.type).then(url => {
+              if (!url) return;
+              supabase.from("activities").update({ photo_url: url }).eq("id", insertedAct.id);
+              setDays(prev => prev.map(d => d.id !== dayId ? d : { ...d, activities: d.activities.map(a => a.id === insertedAct.id ? { ...a, photo_url: url } : a) }));
+            });
+          }
+          break;
+        }
+        case "suggest": {
+          // Handled via suggestions in message metadata — no dispatch needed
+          break;
+        }
+        case "pending_routes": {
+          if (!action.routeIds?.length) break;
+          for (const pendingId of action.routeIds) {
+            try {
+              const followUp = await callUnifiedChat(
+                `Apply the same change to route id="${pendingId}". Return only this one route in actions.`,
+                [...history, userMsg, { role: "assistant", content: "applying..." }]
+              );
+              if (followUp.actions?.length) dispatchActions(followUp.actions, userMsg, history);
+            } catch (e) { console.warn("Pending route update failed:", pendingId, e); }
+          }
+          break;
+        }
+        case "add_todo": {
+          const tripId = trip?.id || editingTrip?.id;
+          if (!tripId || !action.text) break;
+          supabase.from("trip_todos").insert({ trip_id: tripId, text: action.text, done: false, category: action.category || null, due_date: action.due_date || null, position: 0 });
+          break;
+        }
+        case "add_expense": {
+          const tripId = trip?.id || editingTrip?.id;
+          if (!tripId || !action.title || !action.amount) break;
+          supabase.from("trip_expenses").insert({ trip_id: tripId, title: action.title, amount: action.amount, currency: action.currency || "USD", category: action.category || "Other", is_planned: action.is_planned !== false, position: 0 });
+          break;
+        }
+        case "add_bookmark": {
+          const tripId = trip?.id || editingTrip?.id;
+          if (!tripId || !action.title || !action.url) break;
+          supabase.from("trip_bookmarks").insert({ trip_id: tripId, title: action.title, url: action.url, icon: "🔗", position: 0 });
+          break;
+        }
+        case "set_budget": {
+          const tripId = trip?.id || editingTrip?.id;
+          if (!tripId || !action.amount) break;
+          supabase.from("trips").update({ budget_amount: action.amount }).eq("id", tripId);
+          break;
+        }
+        case "navigate": {
+          if (action.tab === "magazine" || action.tab === "brainstorm") {
+            if (screen === "brainstorm") setPretripTab(action.tab === "magazine" ? "magazine" : "brainstorm");
+            else setActiveBottomTab("brainstorm");
+          } else if (action.tab === "itinerary") setActiveBottomTab("itinerary");
+          else if (action.tab === "map") {
+            if (screen === "brainstorm") setPretripTab("map");
+            else setActiveBottomTab("map");
+          } else if (action.tab === "board") setActiveBottomTab("board");
+          setChatOpen(false);
+          break;
+        }
+      }
+    }
+  };
+
+  const callUnifiedChat = async (message, history = []) => {
+    const res = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({
+          screen,
+          trip: trip || editingTrip || null,
+          routes: pretripRoutes || [],
+          days: daysRef.current || [],
+          form: pendingForm || {},
+          message,
+          history: history.map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })),
+        }),
+      }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  };
+
+  const sendChatMessage = async () => {
+    if (!chatInput.trim() || chatLoading) return;
+    posthog.capture("chat_message_sent", { screen, message_length: chatInput.trim().length });
+    const userMsg = { role: "user", content: chatInput.trim(), user_id: session.user.id };
+    const history = chatMessages.filter(m => m.role !== "system-undo");
+    setChatMessages(prev => [...prev, userMsg, { role: "assistant", content: "", streaming: true }]);
+    setChatInput("");
+    if (chatInputRef.current) { chatInputRef.current.style.height = "auto"; }
+    setChatLoading(true);
+
+    if (trip?.id) {
+      supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "user", content: userMsg.content });
+    }
+
+    let finalContent = "Sorry, something went wrong. Try again.";
+    let suggestions = null;
+    let hasChanges = false;
+    try {
+      const data = await callUnifiedChat(userMsg.content, history);
+      finalContent = data.message || "Done.";
+
+      // Extract suggestions from actions
+      const suggestAction = (data.actions || []).find(a => a.type === "suggest");
+      if (suggestAction) suggestions = suggestAction.suggestions;
+
+      // Check if there are mutation actions
+      const mutationActions = (data.actions || []).filter(a => a.type !== "suggest");
+      hasChanges = mutationActions.length > 0;
+
+      // Dispatch all actions
+      if (data.actions?.length) {
+        await dispatchActions(data.actions, userMsg, history);
       }
     } catch (err) {
       console.warn("Chat error:", err);
@@ -5610,25 +5610,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     setChatLoading(false);
   };
 
-  const callChatBrainstorm = async (message, history = []) => {
-    const res = await fetch(
-      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-brainstorm`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-        body: JSON.stringify({
-          routes: pretripRoutes,
-          form: pendingForm || {},
-          message,
-          history: history.map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })),
-        }),
-      }
-    );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  };
-
   return (
+    <ErrorBoundary>
     <div style={{fontFamily:"Georgia,serif",background:T.warm,maxWidth:430,margin:"0 auto",position:"relative",display:"flex",flexDirection:"column",height:"100dvh",overflow:"hidden",paddingTop:"env(safe-area-inset-top, 0px)"}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap');
@@ -6735,5 +6718,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
         </div>
       )}
     </div>
+    </ErrorBoundary>
   );
 }
