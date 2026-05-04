@@ -2478,7 +2478,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
               {data?.didYouKnow && (
                 <div style={{marginTop:10,fontSize:12,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.5}}>💡 {data.didYouKnow}</div>
               )}
-              <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent("Tourism " +dest)}`} target="_blank" rel="noopener noreferrer" style={{
+              <a href={`https://www.google.com/search?q=${encodeURIComponent("site:tripadvisor.com Tourism " + dest)}&btnI`} target="_blank" rel="noopener noreferrer" style={{
                 display:"inline-flex",alignItems:"center",gap:5,marginTop:12,
                 padding:"6px 12px",borderRadius:8,border:`1px solid ${T.moss}33`,
                 color:T.moss,fontFamily:"Georgia,serif",fontSize:11,fontWeight:600,textDecoration:"none",
@@ -2634,7 +2634,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
   );
 }
 
-function BoardView({ trip, onSaveNotes }) {
+function BoardView({ trip, onSaveNotes, days, onSaveFlights, onSaveHotels, onApplyHotels }) {
   const [activeSection, setActiveSection] = useState(null);
   const [todoItems, setTodoItems] = useState(null);
   const [bookmarkCount, setBookmarkCount] = useState(null);
@@ -2681,6 +2681,17 @@ function BoardView({ trip, onSaveNotes }) {
   if (activeSection === "expenses") {
     return <ExpensesView trip={trip} onBack={goBack} onUpdateTrip={(updates) => Object.assign(trip, updates)} />;
   }
+  if (activeSection === "logistics") {
+    return (
+      <div style={{flex:1,overflowY:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,padding:"14px 16px",borderBottom:`1px solid ${T.sand}`,background:T.chalk}}>
+          <button onClick={goBack} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:T.ocean,padding:"0 4px",lineHeight:1}}>←</button>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:T.ink}}>Travel & Hotels</div>
+        </div>
+        <LogisticsTab trip={trip} days={days || []} onSaveFlights={onSaveFlights} onSaveHotels={onSaveHotels} onApplyHotels={onApplyHotels} />
+      </div>
+    );
+  }
 
   const noteText = trip.board_notes?.trim() || null;
   const notePreview = noteText ? noteText.slice(0, 120) + (noteText.length > 120 ? "…" : "") : null;
@@ -2688,6 +2699,20 @@ function BoardView({ trip, onSaveNotes }) {
 
   return (
     <div style={{ padding: "16px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+
+      {/* ── TRAVEL & HOTELS ── */}
+      <div onClick={() => openSection("logistics")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
+          <div style={{ fontSize: 24, flexShrink: 0 }}>🧭</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: T.ink }}>Travel & Hotels</div>
+            <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>
+              {trip.arrival_city ? `${trip.arrival_city} → ${trip.departure_city || trip.arrival_city}` : "Add flights and hotel details"}
+            </div>
+          </div>
+          <div style={{ fontSize: 16, color: T.mist, flexShrink: 0 }}>›</div>
+        </div>
+      </div>
 
       {/* ── EXPENSES ── */}
       <div onClick={() => openSection("expenses")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
@@ -3586,8 +3611,8 @@ function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, children }) {
         </div>
         {/* Weather badge */}
         {dd?.weather && (
-          <div style={{position:"absolute",top:12,right:12,background:"rgba(255,255,255,0.9)",backdropFilter:"blur(8px)",fontSize:11,padding:"4px 10px",borderRadius:8,color:T.ink,fontFamily:"Georgia,serif",fontWeight:600,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-            ☀️ {dd.weather.split(".")[0].slice(0, 30)}
+          <div style={{position:"absolute",bottom:8,right:8,background:"rgba(255,255,255,0.92)",backdropFilter:"blur(8px)",fontSize:11,padding:"6px 10px",borderRadius:10,color:T.ink,fontFamily:"Georgia,serif",fontWeight:600,maxWidth:200,lineHeight:1.4}}>
+            ☀️ {dd.weather.split(".")[0]}
           </div>
         )}
         {/* Gradient overlay at bottom */}
@@ -3663,7 +3688,7 @@ function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, children }) {
               🔍 More about {city}
             </button>
           )}
-          <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent("Tourism " +city)}`} target="_blank" rel="noopener noreferrer" style={{
+          <a href={`https://www.google.com/search?q=${encodeURIComponent("site:tripadvisor.com Tourism " + city)}&btnI`} target="_blank" rel="noopener noreferrer" style={{
             flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
             padding: "9px 14px", borderRadius: 10,
             background: "transparent", border: `1.5px solid ${T.moss}33`,
@@ -3689,7 +3714,7 @@ function MagazineHighlightCard({ item, city, inItinerary = false, masonry = fals
     _fetchPhoto(searchKey, city, item.type || "sight").then(url => {
       if (cancelled) return;
       if (url) { setPhotoUrl(url); setLoaded(true); return; }
-      // Fallback: direct Wikipedia thumbnail (skip dedup/relevance checks)
+      // Fallback: direct Wikipedia thumbnail (with dedup check)
       (async () => {
         try {
           const q = searchKey;
@@ -3700,7 +3725,7 @@ function MagazineHighlightCard({ item, city, inItinerary = false, masonry = fals
           for (const p of Object.values(data?.query?.pages || {})) {
             if (p.description && PERSON.test(p.description)) continue;
             const src = p?.thumbnail?.source;
-            if (src && !BAD.test(src) && !_isPortrait(src)) { if (!cancelled) { setPhotoUrl(src); setLoaded(true); } return; }
+            if (src && !BAD.test(src) && !_isPortrait(src) && !_usedPhotoUrls.has(src)) { _usedPhotoUrls.add(src); if (!cancelled) { setPhotoUrl(src); setLoaded(true); } return; }
           }
         } catch { /* ignore */ }
         if (!cancelled) setLoaded(true);
@@ -3727,18 +3752,20 @@ function MagazineHighlightCard({ item, city, inItinerary = false, masonry = fals
         {loaded && !photoUrl && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>{item.icon || "📍"}</div>}
       </div>
       <div style={{ padding: "8px 10px 6px" }}>
-        <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.25, marginBottom: 3 }}>{item.title}</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 4 }}>
+          <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.25, marginBottom: 3, flex: 1 }}>{item.title}</div>
+          <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
+            {onAskTrippy && (
+              <button onClick={() => onAskTrippy(item.title)} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: 6, border: `1px solid ${T.sand}`, background: T.chalk, cursor: "pointer", fontSize: 11, padding: 0 }}>💬</button>
+            )}
+            <a href={`https://www.google.com/maps/search/?api=1&query=${mapsQuery}`} target="_blank" rel="noopener noreferrer"
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: 6, border: `1px solid ${T.sand}`, background: T.chalk, textDecoration: "none" }}>
+              <img src="/google-maps-icon.png" alt="Maps" style={{ width: 12, height: 12, objectFit: "contain" }}/>
+            </a>
+          </div>
+        </div>
         {item.note && <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", fontStyle: "italic", lineHeight: 1.35 }}>{item.note}</div>}
         {inItinerary && <div style={{display:"inline-block",marginTop:5,fontSize:9,background:"#DCFCE7",color:"#16A34A",padding:"1px 7px",borderRadius:10,fontFamily:"Georgia,serif",fontWeight:600}}>In your itinerary</div>}
-      </div>
-      <div style={{ position: "absolute", bottom: 6, right: 6, display: "flex", gap: 4 }}>
-        {onAskTrippy && (
-          <button onClick={() => onAskTrippy(item.title)} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 6, border: `1px solid ${T.sand}`, background: T.chalk, cursor: "pointer", fontSize: 12, padding: 0 }}>💬</button>
-        )}
-        <a href={`https://www.google.com/maps/search/?api=1&query=${mapsQuery}`} target="_blank" rel="noopener noreferrer"
-          style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 6, border: `1px solid ${T.sand}`, background: T.chalk, textDecoration: "none" }}>
-          <img src="/google-maps-icon.png" alt="Maps" style={{ width: 13, height: 13, objectFit: "contain" }}/>
-        </a>
       </div>
     </div>
   );
@@ -4315,7 +4342,7 @@ function ModePills({ value, onChange }) {
 }
 
 /* ─── CITY INPUT ─────────────────────────────────────────────────────── */
-function CityInput({ value, onChange, placeholder, inputStyle, airportOnly = false }) {
+function CityInput({ value, onChange, placeholder, inputStyle, airportOnly = false, hotelCity = null }) {
   const [suggs, setSuggs] = useState([]);
   const [show, setShow]   = useState(false);
   const timer = useRef(null);
@@ -4326,10 +4353,13 @@ function CityInput({ value, onChange, placeholder, inputStyle, airportOnly = fal
     clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
       try {
+        const body = { q: hotelCity ? `${val} ${hotelCity}` : val };
+        if (airportOnly) body.types = "airport";
+        else if (hotelCity) body.types = "lodging";
         const res  = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
           method: "POST",
           headers: PLACES_HEADERS,
-          body: JSON.stringify(airportOnly ? { q: val, types: "airport" } : { q: val }),
+          body: JSON.stringify(body),
         });
         const data = await res.json();
         const items = (data.suggestions || []).slice(0, 6);
@@ -4516,9 +4546,10 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
         {hotels.map((h, i) => (
           <div key={h.city} style={{marginBottom:i < hotels.length-1 ? 12 : 16}}>
             <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>{h.city}</div>
-            <input value={h.name} onChange={e=>setHotels(prev=>prev.map((x,j)=>j===i?{...x,name:e.target.value}:x))}
+            <CityInput value={h.name} onChange={v=>setHotels(prev=>prev.map((x,j)=>j===i?{...x,name:v}:x))}
               placeholder={`Hotel in ${h.city}`}
-              style={inputStyle(h.name)}/>
+              hotelCity={h.city}
+              inputStyle={{...inputStyle(h.name)}}/>
           </div>
         ))}
       </div>
@@ -4660,24 +4691,45 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       setDeepDiveCacheApp(prev => ({ ...prev, [city]: "error" }));
     }
   };
-  // Background-load city-deep-dive for Magazine — fully independent from Route tab
+  // Background-load city-deep-dive for Magazine — destination + top 2 cities only
+  // Other cities are lazy-loaded when Magazine tab opens or user scrolls
   useEffect(() => {
     if (pretripRoutes.length === 0) return;
-    // Also load destination-level intro (e.g. "Sri Lanka" or "Rajasthan")
+    // 1. Destination-level intro (e.g. "Japan", "Sri Lanka") — always first
     const rawDests = (pendingForm?.destinations || []).filter(d => !d.toLowerCase().includes("help me decide"));
     const destination = editingTrip?.destination || trip?.destination || (rawDests.length ? rawDests.join(", ") : null);
     if (destination && !deepDiveCacheApp[destination]) loadCityDeepDiveApp(destination);
 
+    // 2. Find the 2 most common cities across all routes and pre-load those
+    const cityCount = {};
+    for (const route of pretripRoutes) {
+      for (const c of (route.city || "").split(",").map(s => s.trim()).filter(Boolean)) {
+        cityCount[c] = (cityCount[c] || 0) + 1;
+      }
+    }
+    const topCities = Object.entries(cityCount)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2)
+      .map(([city]) => city);
+    for (const city of topCities) {
+      if (!deepDiveCacheApp[city]) loadCityDeepDiveApp(city);
+    }
+  }, [pretripRoutes.length]);
+
+  // Lazy-load remaining city deep dives when Magazine tab opens — staggered to avoid burst
+  useEffect(() => {
+    if (pretripTab !== "magazine" || pretripRoutes.length === 0) return;
     const allCities = new Set();
     for (const route of pretripRoutes) {
       for (const c of (route.city || "").split(",").map(s => s.trim()).filter(Boolean)) {
         allCities.add(c);
       }
     }
-    for (const city of allCities) {
-      if (!deepDiveCacheApp[city]) loadCityDeepDiveApp(city);
-    }
-  }, [pretripRoutes.length]);
+    const uncached = [...allCities].filter(c => !deepDiveCacheApp[c]);
+    if (uncached.length === 0) return;
+    const timers = uncached.map((city, i) => setTimeout(() => loadCityDeepDiveApp(city), i * 500));
+    return () => timers.forEach(clearTimeout);
+  }, [pretripTab, pretripRoutes.length]);
 
   const [chatUnread, setChatUnread] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
@@ -5665,11 +5717,33 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               ? <div style={{padding:"12px 16px",borderRadius:12,background:"#FFF0F0",border:"1.5px solid #e53e3e",fontSize:13,color:"#c53030",fontFamily:"Georgia,serif",textAlign:"center",maxWidth:300}}>
                   ⚠️ {generateError}
                 </div>
-              : allDaysPlanned
-              ? <div style={{fontSize:13,color:T.terra,fontFamily:"Georgia,serif",textAlign:"center",fontStyle:"italic"}}>Hold your breath…</div>
-              : streamingDays > 0
-              ? <div style={{fontSize:13,color:T.moss,fontFamily:"Georgia,serif",textAlign:"center",fontWeight:600}}>Day {streamingDays}{streamingTotal > 0 ? ` of ${streamingTotal}` : ""} planned ✓</div>
-              : <LoadingHint />
+              : (() => {
+                  const pct = streamingTotal > 0
+                    ? allDaysPlanned ? 95 : Math.round((streamingDays / streamingTotal) * 85)
+                    : 0;
+                  return (
+                    <>
+                      {/* Progress bar */}
+                      <div style={{width:"100%",maxWidth:260}}>
+                        <div style={{height:6,borderRadius:3,background:T.sand,overflow:"hidden"}}>
+                          <div style={{height:"100%",borderRadius:3,background:`linear-gradient(90deg, ${T.ocean}, ${T.moss})`,width:`${pct || 5}%`,transition:"width 0.6s ease-out"}}/>
+                        </div>
+                        {streamingTotal > 0 && (
+                          <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",textAlign:"center",marginTop:6}}>
+                            {allDaysPlanned ? "Finalizing details…" : streamingDays > 0 ? `Day ${streamingDays} of ${streamingTotal}` : "Starting…"}
+                          </div>
+                        )}
+                      </div>
+                      {/* Status text */}
+                      {allDaysPlanned
+                        ? <div style={{fontSize:13,color:T.terra,fontFamily:"Georgia,serif",textAlign:"center",fontStyle:"italic"}}>Almost there — adding local tips & recommendations</div>
+                        : streamingDays > 0
+                        ? <div style={{fontSize:13,color:T.moss,fontFamily:"Georgia,serif",textAlign:"center",fontWeight:600}}>Day {streamingDays} of {streamingTotal} planned ✓</div>
+                        : <LoadingHint />
+                      }
+                    </>
+                  );
+                })()
             }
           </div>
           </div>
@@ -6194,17 +6268,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                       arrivalMode={i === 0 ? (trip.arrival_mode || "flight") : null}
                       arrivalCity={i === 0 ? trip.arrival_city : null}
                       onEditFlight={i === 0 ? () => {
-                        if (logisticsRef.current && scrollRef.current) {
-                          scrollRef.current.scrollTop = logisticsRef.current.offsetTop;
-                        }
+                        setActiveBottomTab("board");
                       } : undefined}
                       departureTime={i === days.length - 1 ? (trip.departure_time || (trip.end_date ? `${trip.end_date}T22:00:00` : null)) : null}
                       departureMode={i === days.length - 1 ? (trip.departure_mode || "flight") : null}
                       departureCity={i === days.length - 1 ? (trip.departure_city || null) : null}
                       onEditDeparture={i === days.length - 1 ? () => {
-                        if (logisticsRef.current && scrollRef.current) {
-                          scrollRef.current.scrollTop = logisticsRef.current.offsetTop;
-                        }
+                        setActiveBottomTab("board");
                       } : undefined}
                       hotelActivity={startHotel}
                       hotelCity={startHotelCity}
@@ -6232,15 +6302,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 );
               });
             })()}
-            <div ref={logisticsRef}>
-              <LogisticsTab
-                trip={trip}
-                days={days}
-                onSaveFlights={saveLogisticsFlights}
-                onSaveHotels={saveLogisticsHotels}
-                onApplyHotels={applyHotelsToItinerary}
-              />
-            </div>
+            <div ref={logisticsRef}></div>
           </div>
 
           {/* ── MAGAZINE TAB ── */}
@@ -6263,6 +6325,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             <div style={{flex:1,overflowY:"auto",paddingBottom:150,display:"flex",flexDirection:"column"}}>
               <BoardView
                 trip={trip}
+                days={days}
+                onSaveFlights={saveLogisticsFlights}
+                onSaveHotels={saveLogisticsHotels}
+                onApplyHotels={applyHotelsToItinerary}
                 onSaveNotes={async (text) => {
                   setTrip(t => ({ ...t, board_notes: text }));
                   await supabase.from("trips").update({ board_notes: text }).eq("id", trip.id);
