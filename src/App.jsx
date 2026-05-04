@@ -5970,7 +5970,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                     {data?.didYouKnow && (
                       <div style={{marginTop:10,padding:"12px 16px",borderLeft:`3px solid ${T.ocean}`,background:`linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,borderRadius:"0 12px 12px 0",fontSize:13,lineHeight:1.55,color:T.ocean,fontFamily:"Georgia,serif",fontStyle:"italic"}}>💡 {data.didYouKnow}</div>
                     )}
-                    <a href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent("Tourism " + dest)}`} target="_blank" rel="noopener noreferrer" style={{
+                    <a href={`https://www.google.com/search?q=${encodeURIComponent("site:tripadvisor.com Tourism " + dest)}&btnI`} target="_blank" rel="noopener noreferrer" style={{
                       display:"inline-flex",alignItems:"center",gap:5,marginTop:12,
                       padding:"8px 14px",borderRadius:10,border:`1px solid ${T.moss}33`,
                       color:T.moss,fontFamily:"Georgia,serif",fontSize:12,fontWeight:600,textDecoration:"none",
