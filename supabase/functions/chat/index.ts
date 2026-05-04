@@ -89,9 +89,11 @@ ${isBrainstorm ? `
    - PRESERVE trip duration (days array length) unless user explicitly asks to change it
    - You CAN completely replace a plan with a different destination/theme if asked
 
-2. dismiss_route — Remove a plan from view (user can undo)
-   {"type":"dismiss_route","routeId":"..."}
-   Use when user says "remove P3", "dismiss P2", "clear all plans", etc.
+2. dismiss_route — Remove plan(s) from view (user can undo)
+   Single: {"type":"dismiss_route","routeId":"..."}
+   Bulk: {"type":"dismiss_route","routeIds":["id1","id2","id3"]}
+   Use routeIds (array) when dismissing multiple plans at once. Use the actual id values from the plan data above.
+   Use when user says "remove P3", "dismiss P2", "clear all plans", "dismiss P1 to P6", etc.
 
 3. generate_more_plans — Trigger generation of additional plan options
    {"type":"generate_more_plans"}

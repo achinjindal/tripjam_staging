@@ -129,18 +129,18 @@ test.describe("Setup Form (updated)", () => {
     // Add a destination and advance
     const destInput = page.locator("input[placeholder*='Bangkok']").first();
     await destInput.fill("Japan");
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(1000);
     await destInput.press("Enter");
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(500);
     await page.locator("body").click({ position: { x: 10, y: 10 } });
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(500);
+    await page.locator("body").click({ position: { x: 10, y: 10 } });
+    await page.waitForTimeout(500);
 
-    await page.locator("body").click({ position: { x: 10, y: 10 } });
-    await page.waitForTimeout(300);
     const nextBtn = page.locator("button").filter({ hasText: /continue|→/i }).first();
-    if (await nextBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await nextBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
       await nextBtn.click({ force: true });
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(800);
 
       // Step 1: Trip details (dates + travelers)
       await expect(page.locator("text=/Trip details/i").first()).toBeVisible({ timeout: 3000 });

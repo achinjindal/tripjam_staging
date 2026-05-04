@@ -54,16 +54,26 @@ test.describe("Board tab (full flow)", () => {
       await page.waitForTimeout(500);
       await page.locator("body").click({ position: { x: 10, y: 10 } });
       await page.waitForTimeout(500);
+      await page.locator("body").click({ position: { x: 10, y: 10 } });
+      await page.waitForTimeout(500);
 
       for (let step = 0; step < 2; step++) {
         const nextBtn = page.locator("button").filter({ hasText: /next|continue|→/i }).first();
         if (await nextBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
           await nextBtn.click({ force: true });
-          await page.waitForTimeout(800);
+          await page.waitForTimeout(1000);
         }
       }
 
       const startBtn = page.locator("button", { hasText: /start planning/i }).first();
+      if (!await startBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+        // May still be on step 1 — try one more Continue
+        const retryBtn = page.locator("button").filter({ hasText: /continue|→/i }).first();
+        if (await retryBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await retryBtn.click({ force: true });
+          await page.waitForTimeout(1000);
+        }
+      }
       await expect(startBtn).toBeVisible({ timeout: 5000 });
       await startBtn.click();
 

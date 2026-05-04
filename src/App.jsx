@@ -47,6 +47,17 @@ const PLACES_HEADERS = { "Authorization": `Bearer ${import.meta.env.VITE_SUPABAS
 /* ─── PHOTO HOOK ─────────────────────────────────────────────────────── */
 const _photoCache = {};
 const _usedPhotoUrls = new Set();
+const _magazineFallbackQueue = []; // serialize fallback fetches to prevent duplicate photos
+let _magazineFallbackRunning = false;
+function _enqueueMagazineFallback(fn) {
+  return new Promise(resolve => {
+    _magazineFallbackQueue.push(async () => { resolve(await fn()); });
+    if (!_magazineFallbackRunning) {
+      _magazineFallbackRunning = true;
+      (async () => { while (_magazineFallbackQueue.length) { await _magazineFallbackQueue.shift()(); } _magazineFallbackRunning = false; })();
+    }
+  });
+}
 let _activeTripId = null; // set when a trip is opened, used for hotel photo rate limits
 // _rgInFlight removed — generate() is now called imperatively, not via useEffect
 let _igInFlight = false;  // same for IG // prevent same photo showing on multiple activities
@@ -466,7 +477,6 @@ async function _fetchPhoto(geocode, city, type, hotelOpts) {
   const page1 = Object.values(data1?.query?.pages || {})[0];
   const src = page1?.thumbnail?.source;
   if (good(src) && pageRelevant(page1?.title) && photoFilenameRelevant(src)) { _usedPhotoUrls.add(src); _photoCache[cacheKey] = src; return src; }
-  else if (src) console.log(`[photo] T1 filtered: "${page1?.title}" / ${src.split("/").pop()} for "${geocode}"`);
 
   // Tier 2: Wikipedia exact lookup with city stripped (geocode often has city appended)
   if (city) {
@@ -478,7 +488,6 @@ async function _fetchPhoto(geocode, city, type, hotelOpts) {
       const page2 = Object.values(data2?.query?.pages || {})[0];
       const src2 = page2?.thumbnail?.source;
       if (good(src2) && pageRelevant(page2?.title) && photoFilenameRelevant(src2)) { _usedPhotoUrls.add(src2); _photoCache[cacheKey] = src2; return src2; }
-      else if (src2) console.log(`[photo] T2 filtered: "${page2?.title}" / ${src2.split("/").pop()} for "${stripped}"`);
     }
   }
 
@@ -495,10 +504,9 @@ async function _fetchPhoto(geocode, city, type, hotelOpts) {
     if (page.description && PERSON_DESC.test(page.description)) { continue; }
     // Accept top 2 results without strict title relevance, but still check filename
     const relaxed = ri < 2;
-    if (!relaxed && !pageRelevant(page.title)) { console.log(`[photo] T3 skipped irrelevant: "${page.title}" for "${geocode}"`); continue; }
+    if (!relaxed && !pageRelevant(page.title)) continue;
     const src3 = page?.thumbnail?.source;
     if (good(src3) && photoFilenameRelevant(src3)) { _usedPhotoUrls.add(src3); _photoCache[cacheKey] = src3; return src3; }
-    else if (src3) console.log(`[photo] T3 filtered: ${src3.split("/").pop()} for "${geocode}"`);
   }
 
   // Tier 4: Wikimedia Commons file search — much larger photo pool than Wikipedia articles
@@ -1822,8 +1830,8 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
   useEffect(() => {
     if (!generating || routesReady) { setIdeaCount(12); return; }
     const id = setInterval(() => {
-      setIdeaCount(prev => Math.round(prev * (1.2 + Math.random() * 0.18)));
-    }, 280);
+      setIdeaCount(prev => Math.round(prev * (1.08 + Math.random() * 0.10)));
+    }, 600);
     return () => clearInterval(id);
   }, [generating, routesReady]);
 
@@ -2180,9 +2188,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                 {isPretripMode && (
                   <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", marginTop: 2 }}>
                     {generating
-                      ? items?.length
-                        ? `Shortlisting from ${ideaCount.toLocaleString("en-US")} ideas…${ideaCount >= 10000 ? " :O" : ""}`
-                        : ""
+                      ? `Shortlisting from ${ideaCount.toLocaleString("en-US")} ideas…${ideaCount >= 10000 ? " :O" : ""}`
                       : items?.length ? "Pick your route, then build your itinerary" : "Generating ideas…"}
                   </div>
                 )}
@@ -2223,9 +2229,9 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
               <div style={{ fontFamily: "Georgia,serif", fontSize: 13, color: T.mist }}>Try again.</div>
             </div>
           )}
-          {/* Full spinner only before first route arrives */}
+          {/* Full spinner only before first route arrives — centered vertically */}
           {(generating || loadingItems || items === null) && tier1Items.length === 0 && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 0" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", flex: 1, minHeight: "50vh" }}>
               <div style={{ width: 36, height: 36, border: `3px solid ${T.sand}`, borderTopColor: T.ocean, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
             </div>
           )}
@@ -3507,10 +3513,17 @@ function DestinationHero({ dest, isLoading, data, children }) {
         const page = Object.values(d?.query?.pages || {})[0];
         const src = page?.thumbnail?.source;
         if (src && !BAD.test(src)) { setPhotoUrl(src); setPhotoLoaded(true); return; }
-        // Fallback: search
+        // Fallback 1: search destination name
         const res2 = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(dest)}&gsrlimit=3&prop=pageimages&pithumbsize=900&format=json&origin=*`);
         const d2 = await res2.json();
         for (const p of Object.values(d2?.query?.pages || {})) {
+          const s = p?.thumbnail?.source;
+          if (s && !BAD.test(s)) { setPhotoUrl(s); setPhotoLoaded(true); return; }
+        }
+        // Fallback 2: search "Tourism in {dest}" — country pages often have flag as main image
+        const res3 = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent("Tourism in " + dest)}&gsrlimit=5&prop=pageimages&pithumbsize=900&format=json&origin=*`);
+        const d3 = await res3.json();
+        for (const p of Object.values(d3?.query?.pages || {})) {
           const s = p?.thumbnail?.source;
           if (s && !BAD.test(s)) { setPhotoUrl(s); setPhotoLoaded(true); return; }
         }
@@ -3611,7 +3624,7 @@ function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, children }) {
         </div>
         {/* Weather badge */}
         {dd?.weather && (
-          <div style={{position:"absolute",bottom:8,right:8,background:"rgba(255,255,255,0.92)",backdropFilter:"blur(8px)",fontSize:11,padding:"6px 10px",borderRadius:10,color:T.ink,fontFamily:"Georgia,serif",fontWeight:600,maxWidth:200,lineHeight:1.4}}>
+          <div style={{position:"absolute",bottom:8,right:8,background:"rgba(255,255,255,0.65)",backdropFilter:"blur(12px)",fontSize:11,padding:"6px 10px",borderRadius:10,color:T.ink,fontFamily:"Georgia,serif",fontWeight:600,maxWidth:200,lineHeight:1.4}}>
             ☀️ {dd.weather.split(".")[0]}
           </div>
         )}
@@ -3714,22 +3727,38 @@ function MagazineHighlightCard({ item, city, inItinerary = false, masonry = fals
     _fetchPhoto(searchKey, city, item.type || "sight").then(url => {
       if (cancelled) return;
       if (url) { setPhotoUrl(url); setLoaded(true); return; }
-      // Fallback: direct Wikipedia thumbnail (with dedup check)
-      (async () => {
+      // Fallback: direct Wikipedia thumbnail (serialized to prevent duplicate photos)
+      _enqueueMagazineFallback(async () => {
         try {
           const q = searchKey;
           const res = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(q + (city ? " " + city : ""))}&gsrlimit=5&prop=pageimages|description&pithumbsize=700&format=json&origin=*`);
           const data = await res.json();
-          const BAD = /\.(svg|pdf)(\.|$)|map|marker|flag|logo|icon|coat.of.arms/i;
-          const PERSON = /\b(born|politician|actor|actress|singer|player|wrestler|athlete|writer|emperor|empress|manga|anime|artist|novelist|musician|composer|director|comedian|model|journalist)\b/i;
+          const BAD = /\.(svg|pdf)(\.|$)|map|marker|flag|logo|icon|coat.of.arms|skyline|panorama|regulation|nintendo|game.boy|console/i;
+          const PERSON = /\b(born|politician|actor|actress|singer|player|wrestler|athlete|writer|emperor|empress|manga|anime|artist|novelist|musician|composer|director|comedian|model|journalist|general|admiral|voice actor)\b/i;
+          // Relevance: page title or description must relate to the search term
+          const STOPWORDS = new Set(["the","a","an","of","in","at","on","and","by","for","to","de","el","la"]);
+          const searchWords = q.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !STOPWORDS.has(w));
+          const isRelevant = (page) => {
+            const t = (page.title || "").toLowerCase();
+            const d = (page.description || "").toLowerCase();
+            const combined = t + " " + d;
+            return searchWords.some(w => combined.includes(w));
+          };
+          const isFilenameRelevant = (url) => {
+            const filename = decodeURIComponent((url || "").split("/").pop() || "").replace(/\.\w+$/, "").toLowerCase();
+            const fileWords = filename.split(/[\s_\-()]+/).filter(w => w.length > 3 && !STOPWORDS.has(w) && !/^\d+$/.test(w));
+            if (fileWords.length <= 2) return true;
+            return searchWords.some(sw => fileWords.some(fw => fw.includes(sw) || sw.includes(fw)));
+          };
           for (const p of Object.values(data?.query?.pages || {})) {
             if (p.description && PERSON.test(p.description)) continue;
+            if (!isRelevant(p)) continue;
             const src = p?.thumbnail?.source;
-            if (src && !BAD.test(src) && !_isPortrait(src) && !_usedPhotoUrls.has(src)) { _usedPhotoUrls.add(src); if (!cancelled) { setPhotoUrl(src); setLoaded(true); } return; }
+            if (src && !BAD.test(src) && !_isPortrait(src) && isFilenameRelevant(src) && !_usedPhotoUrls.has(src)) { _usedPhotoUrls.add(src); if (!cancelled) { setPhotoUrl(src); setLoaded(true); } return; }
           }
         } catch { /* ignore */ }
         if (!cancelled) setLoaded(true);
-      })();
+      });
     });
     return () => { cancelled = true; };
   }, [searchKey, city]);
@@ -4030,7 +4059,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
   } : {};
   const _today = new Date();
   const _defaultStart = new Date(_today); _defaultStart.setDate(_today.getDate() + 15);
-  const _defaultEnd   = new Date(_today); _defaultEnd.setDate(_today.getDate() + 20);
+  const _defaultEnd   = new Date(_today); _defaultEnd.setDate(_today.getDate() + 22);
   const _fmt = (d) => d.toISOString().slice(0, 10);
   const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], notes:"", arrivalCity:"", departureCity:"", baseLocation:"", ...prefill, ...(prefillForm || {}) });
 
@@ -4088,7 +4117,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
   };
 
 
-  const styles  = ["History & Culture","Nature & Wildlife","Adventure & Outdoors","Food & Culinary","Relaxation & Wellness","Nightlife & Bars","Family & Kids","Photography & Scenery","Shopping & Markets"];
+
 
   const handleGenerate = async () => {
     const needsBase = form.destinations.some(d => d.toLowerCase().includes("help me decide"));
@@ -4279,45 +4308,6 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
 
 
 /* ─── SETUP STRIP ───────────────────────────────────────────────────── */
-function SetupStrip({ done, onOpen, onDismiss }) {
-  const items = [
-    { key:"flights", icon:"✈️", title:"Add flights", desc:"Optimise Day 1 and last day" },
-  ].filter(item => !done[item.key]);
-
-  if (items.length === 0) return null;
-
-  return (
-    <div style={{flexShrink:0, background:"#FFFBF5", borderBottom:`1px solid ${T.sand}`, padding:"10px 16px"}}>
-      <div style={{fontSize:10,letterSpacing:2,color:T.mist,fontFamily:"Georgia,serif",marginBottom:8,textTransform:"uppercase"}}>Finish setting up</div>
-      <div className="no-scrollbar" style={{display:"flex",gap:10,overflowX:"auto"}}>
-        {items.map(item=>(
-          <div key={item.key} style={{
-            flexShrink:0, background:T.chalk, borderRadius:12,
-            border:`1.5px solid ${T.sand}`, padding:"10px 12px",
-            display:"flex", alignItems:"center", gap:10, minWidth:190,
-          }}>
-            <span style={{fontSize:22}}>{item.icon}</span>
-            <div style={{flex:1}}>
-              <div style={{fontSize:13,fontWeight:700,color:T.ink,fontFamily:"Georgia,serif"}}>{item.title}</div>
-              <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif"}}>{item.desc}</div>
-            </div>
-            <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
-              <button onClick={()=>onOpen(item.key)} style={{
-                background:T.ocean,color:"white",border:"none",borderRadius:8,
-                padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif",fontWeight:600,
-              }}>Add</button>
-              <button onClick={()=>onDismiss(item.key)} style={{
-                background:"none",color:T.mist,border:"none",fontSize:11,
-                cursor:"pointer",fontFamily:"Georgia,serif",padding:0,
-              }}>dismiss</button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /* ─── MODE PILLS ─────────────────────────────────────────────────────── */
 const TRAVEL_MODES = [
   { id:"flight", label:"✈️ Flight" },
@@ -4783,7 +4773,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const dayRefs       = useRef([]);
   const pillStrip     = useRef(null);
   const isJumping     = useRef(false);
-  const logisticsRef  = useRef(null);
   const undoDismissRef = useRef(null);
   const triggerRgRef = useRef(null); // imperative trigger for RG generation
 
@@ -5120,12 +5109,17 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               } catch { /* compact parse failed, continue streaming */ }
             }
 
-            // Track day progress for the generating screen (if compact hasn't shown yet)
+            // Track day progress — count "label" for pre-compact screen, "wishlist" for detailed progress
             const daysInDaysArray = (accumulated.match(/"label"\s*:/g) || []).length;
-            // Subtract compact labels (they appear before days)
             const compactLabels = (accumulated.match(/"compact"\s*:[\s\S]*?"label"/g) || []).length;
             const daysPlanned = Math.max(0, daysInDaysArray - (compactShown ? compactLabels : 0));
             if (daysPlanned > 0 && !compactShown) setStreamingDays(daysPlanned);
+            // Detailed progress: count completed days by "wishlist" markers (appears at end of each day)
+            if (compactShown) {
+              const daysSection = accumulated.slice(accumulated.indexOf('"days"'));
+              const detailedDays = (daysSection.match(/"wishlist"\s*:\s*\[/g) || []).length;
+              setStreamingDays(detailedDays);
+            }
             if (daysPlanned >= numDays && (/"summary"\s*:/.test(accumulated) || /"wishlist"\s*:\s*\[[\s\S]*?\][\s\S]{200,}/.test(accumulated))) {
               setAllDaysPlanned(true);
             }
@@ -5331,10 +5325,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     setPendingForm(null);
     setDetailedLoading(false);
     setDetailedReady(true);
+    playDoneChime();
     _igInFlight = false;
-    // Log generation timing
+    // Log generation timing — update by trip_id as fallback since genLogId may not be set yet
     if (genLogId) {
       supabase.from("generation_log").update({ detailed_ready_at: generationCompletedAt, ig_count: tripPayload.ig_count }).eq("id", genLogId);
+    } else if (capturedTripId) {
+      supabase.from("generation_log").update({ detailed_ready_at: generationCompletedAt, ig_count: tripPayload.ig_count }).eq("trip_id", capturedTripId).is("detailed_ready_at", null);
     } else if (tripData.id) {
       supabase.from("generation_log").insert({ trip_id: tripData.id, generation_started_at: generationStartedAt, detailed_ready_at: generationCompletedAt, ig_count: tripPayload.ig_count });
     }
@@ -5432,6 +5429,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     let finalContent = "Sorry, something went wrong. Try again.";
     let suggestions = null;
     let hasChanges = false;
+    let changedRouteIds = [];
     try {
       const data = await callUnifiedChat(userMsg.content, history);
       finalContent = data.message || "Done.";
@@ -5439,9 +5437,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       if (suggestAction) suggestions = suggestAction.suggestions;
       const mutationActions = (data.actions || []).filter(a => a.type !== "suggest");
       hasChanges = mutationActions.length > 0;
+      changedRouteIds = mutationActions.filter(a => a.type === "update_route" && a.route?.id).map(a => a.route.id);
       if (data.actions?.length) await dispatchActions(data.actions, userMsg, history);
     } catch { /* use default error message */ }
-    setChatMessages(prev => { const updated = [...prev]; updated[updated.length - 1] = { role: "assistant", content: finalContent, suggestions, hasChanges, streaming: false }; return updated; });
+    setChatMessages(prev => { const updated = [...prev]; updated[updated.length - 1] = { role: "assistant", content: finalContent, suggestions, hasChanges, changedRouteIds, streaming: false }; return updated; });
     setChatLoading(false);
     setChatUnread(true);
     if (trip?.id) supabase.from("trip_messages").insert({ trip_id: trip.id, user_id: session.user.id, role: "assistant", content: finalContent });
@@ -5488,17 +5487,21 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           break;
         }
         case "dismiss_route": {
-          const routeId = action.routeId;
-          if (!routeId) break;
-          setPretripRoutes(prev => prev.map(it => it.id === routeId ? { ...it, dismissed: true } : it));
-          if (routeId && !String(routeId).startsWith("temp_")) {
-            supabase.from("brainstorm_items").update({ dismissed: true }).eq("id", routeId);
+          // Support single routeId or array routeIds
+          const ids = action.routeIds || (action.routeId ? [action.routeId] : []);
+          if (ids.length === 0) break;
+          setPretripRoutes(prev => prev.map(it => ids.includes(it.id) ? { ...it, dismissed: true } : it));
+          for (const rid of ids) {
+            if (rid && !String(rid).startsWith("temp_")) {
+              supabase.from("brainstorm_items").update({ dismissed: true }).eq("id", rid);
+            }
           }
           // Add undo message
-          const item = pretripRoutes.find(r => r.id === routeId);
+          const titles = ids.map(rid => pretripRoutes.find(r => r.id === rid)?.title).filter(Boolean);
+          const label = titles.length > 1 ? `${titles.length} plans` : `"${titles[0] || "Plan"}"`;
           setChatMessages(prev => [...prev, {
-            role: "system-undo", content: `"${item?.title || "Plan"}" was dismissed.`,
-            undoData: { dismissedRouteId: routeId }, id: `undo-route-${Date.now()}`,
+            role: "system-undo", content: `${label} dismissed.`,
+            undoData: { dismissedRouteIds: ids }, id: `undo-route-${Date.now()}`,
           }]);
           break;
         }
@@ -5619,7 +5622,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
         body: JSON.stringify({
           screen,
           trip: trip || editingTrip || null,
-          routes: pretripRoutes || [],
+          routes: (pretripRoutes || []).filter(r => !r.dismissed),
           days: daysRef.current || [],
           form: pendingForm || {},
           message,
@@ -5648,6 +5651,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     let finalContent = "Sorry, something went wrong. Try again.";
     let suggestions = null;
     let hasChanges = false;
+    let changedRouteIds = [];
     try {
       const data = await callUnifiedChat(userMsg.content, history);
       finalContent = data.message || "Done.";
@@ -5659,6 +5663,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       // Check if there are mutation actions
       const mutationActions = (data.actions || []).filter(a => a.type !== "suggest");
       hasChanges = mutationActions.length > 0;
+      changedRouteIds = mutationActions.filter(a => a.type === "update_route" && a.route?.id).map(a => a.route.id);
 
       // Dispatch all actions
       if (data.actions?.length) {
@@ -5671,7 +5676,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
     setChatMessages(prev => {
       const updated = [...prev];
-      updated[updated.length - 1] = { role: "assistant", content: finalContent, suggestions, hasChanges };
+      updated[updated.length - 1] = { role: "assistant", content: finalContent, suggestions, hasChanges, changedRouteIds };
       return updated;
     });
     if (trip?.id) {
@@ -5717,33 +5722,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               ? <div style={{padding:"12px 16px",borderRadius:12,background:"#FFF0F0",border:"1.5px solid #e53e3e",fontSize:13,color:"#c53030",fontFamily:"Georgia,serif",textAlign:"center",maxWidth:300}}>
                   ⚠️ {generateError}
                 </div>
-              : (() => {
-                  const pct = streamingTotal > 0
-                    ? allDaysPlanned ? 95 : Math.round((streamingDays / streamingTotal) * 85)
-                    : 0;
-                  return (
-                    <>
-                      {/* Progress bar */}
-                      <div style={{width:"100%",maxWidth:260}}>
-                        <div style={{height:6,borderRadius:3,background:T.sand,overflow:"hidden"}}>
-                          <div style={{height:"100%",borderRadius:3,background:`linear-gradient(90deg, ${T.ocean}, ${T.moss})`,width:`${pct || 5}%`,transition:"width 0.6s ease-out"}}/>
-                        </div>
-                        {streamingTotal > 0 && (
-                          <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",textAlign:"center",marginTop:6}}>
-                            {allDaysPlanned ? "Finalizing details…" : streamingDays > 0 ? `Day ${streamingDays} of ${streamingTotal}` : "Starting…"}
-                          </div>
-                        )}
-                      </div>
-                      {/* Status text */}
-                      {allDaysPlanned
-                        ? <div style={{fontSize:13,color:T.terra,fontFamily:"Georgia,serif",textAlign:"center",fontStyle:"italic"}}>Almost there — adding local tips & recommendations</div>
-                        : streamingDays > 0
-                        ? <div style={{fontSize:13,color:T.moss,fontFamily:"Georgia,serif",textAlign:"center",fontWeight:600}}>Day {streamingDays} of {streamingTotal} planned ✓</div>
-                        : <LoadingHint />
-                      }
-                    </>
-                  );
-                })()
+              : allDaysPlanned
+              ? <div style={{fontSize:13,color:T.terra,fontFamily:"Georgia,serif",textAlign:"center",fontStyle:"italic"}}>Hold your breath…</div>
+              : streamingDays > 0
+              ? <div style={{fontSize:13,color:T.moss,fontFamily:"Georgia,serif",textAlign:"center",fontWeight:600}}>Day {streamingDays}{streamingTotal > 0 ? ` of ${streamingTotal}` : ""} planned ✓</div>
+              : <LoadingHint />
             }
           </div>
           </div>
@@ -6113,13 +6096,23 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               </div>
             </div>
 
-            {/* Refining banner — shown while detailed IG streams in background */}
-            {detailedLoading && (
-              <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8,padding:"10px 16px",background:`${T.ocean}08`,borderBottom:`1px solid ${T.ocean}15`}}>
-                <span style={{width:12,height:12,border:`2px solid ${T.sand}`,borderTopColor:T.ocean,borderRadius:"50%",animation:"spin 0.8s linear infinite",flexShrink:0}}/>
-                <span style={{fontSize:12,fontFamily:"Georgia,serif",color:T.ocean}}>Fine-tuning your itinerary — meanwhile, tap any item to explore</span>
-              </div>
-            )}
+            {/* Refining banner with progress — shown while detailed IG streams in background */}
+            {detailedLoading && (() => {
+              // 50% = compact done. 50-95% = detailed days streaming. Based on wishlist markers per day.
+              const detailedPct = streamingTotal > 0 ? Math.round((streamingDays / streamingTotal) * 45) : 0;
+              const pct = Math.min(95, 50 + detailedPct);
+              return (
+                <div style={{padding:"6px 16px 8px",background:`${T.ocean}08`,borderBottom:`1px solid ${T.ocean}15`}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{flex:1,height:3,borderRadius:2,background:T.sand,overflow:"hidden"}}>
+                      <div style={{height:"100%",borderRadius:2,background:`linear-gradient(90deg, ${T.ocean}, ${T.moss})`,width:`${pct}%`,transition:"width 0.6s ease-out"}}/>
+                    </div>
+                    <span style={{fontSize:11,fontFamily:"Georgia,serif",color:T.ocean,flexShrink:0}}>{pct}%</span>
+                  </div>
+                  <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",textAlign:"center",marginTop:4}}>Detailed itinerary loading — tap items below to explore meanwhile</div>
+                </div>
+              );
+            })()}
 
             {/* City-pill strip — only in detailed view */}
             {!compactView && (() => {
@@ -6302,7 +6295,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 );
               });
             })()}
-            <div ref={logisticsRef}></div>
           </div>
 
           {/* ── MAGAZINE TAB ── */}
@@ -6699,8 +6691,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               {filteredMessages.map((m,i)=>{
                 if (m.role === "system-undo") {
                   const handleUndo = () => {
-                    if (m.undoData?.dismissedRouteId) {
-                      // Undo route dismiss — call BrainstormView's undo via ref
+                    if (m.undoData?.dismissedRouteIds) {
+                      // Undo bulk route dismiss
+                      for (const rid of m.undoData.dismissedRouteIds) undoDismissRef.current?.(rid);
+                      setChatMessages(prev => prev.filter(msg => msg.id !== m.id));
+                    } else if (m.undoData?.dismissedRouteId) {
+                      // Undo single route dismiss (legacy)
                       undoDismissRef.current?.(m.undoData.dismissedRouteId);
                       setChatMessages(prev => prev.filter(msg => msg.id !== m.id));
                     } else if (m.undoData?.dayId && m.undoData?.actSnap) {
@@ -6756,7 +6752,17 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                     )}
                     {isAI && m.hasChanges && !m.streaming && (
                       <button
-                        onClick={() => { setChatOpen(false); if (trip) setActiveBottomTab("itinerary"); else setPretripTab("brainstorm"); }}
+                        onClick={() => {
+                          setChatOpen(false);
+                          if (screen === "brainstorm") {
+                            setPretripTab("brainstorm");
+                            // Scroll to first changed route
+                            const targetId = m.changedRouteIds?.[0] || pretripSelectedRouteId;
+                            if (targetId) { setPretripSelectedRouteId(null); setTimeout(() => setPretripSelectedRouteId(targetId), 100); }
+                          } else {
+                            setActiveBottomTab("itinerary");
+                          }
+                        }}
                         style={{
                           marginTop: 8, display: "flex", alignItems: "center", gap: 6,
                           background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
