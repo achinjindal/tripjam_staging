@@ -16,6 +16,7 @@ if (import.meta.env.VITE_POSTHOG_KEY) {
     capture_pageleave: true,
     persistence: "localStorage",
   });
+  posthog.register({ app_env: import.meta.env.VITE_APP_ENV || "unknown" });
 }
 
 // ── URL helpers ──

@@ -2,80 +2,96 @@ import { test, expect } from "@playwright/test";
 import { login, snap } from "./helpers";
 
 /**
- * Full flow: create trip → generate plans → select → build itinerary → test Board tab
- * This is a long-running test (~3-4 min) that exercises the entire pipeline.
+ * Board tab tests — reuses an existing itinerary trip if available,
+ * only creates a new one if none exists. Saves ~$0.15 per run.
  */
 test.describe("Board tab (full flow)", () => {
-  test("full flow: create trip, build itinerary, test all Board widgets", async ({ page }) => {
+  test("test all Board widgets on an itinerary trip", async ({ page }) => {
     test.setTimeout(300000); // 5 min
     await login(page);
 
-    // ── Create trip ──
-    const createBtn = page.locator("button", { hasText: /new trip|create/i }).first();
-    await createBtn.click();
-    await expect(page.locator("text=/Where to/i").first()).toBeVisible({ timeout: 5000 });
-
-    // Step 0: destination
-    const destInput = page.locator("input[placeholder*='Bangkok']").first();
-    await destInput.fill("Tokyo");
-    await page.waitForTimeout(1500);
-    const suggestion = page.locator("[style*='cursor: pointer'][style*='font-weight']", { hasText: /Tokyo/i }).first();
-    if (await suggestion.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await suggestion.click();
-    } else {
-      await destInput.press("Enter");
-    }
-    await page.waitForTimeout(500);
-
-    // Dismiss any autocomplete overlay by clicking elsewhere
-    await page.locator("body").click({ position: { x: 10, y: 10 } });
-    await page.waitForTimeout(500);
-
-    // Advance through steps 0→1 (step 2 has Start Planning button)
-    for (let step = 0; step < 2; step++) {
-      const nextBtn = page.locator("button").filter({ hasText: /next|continue|→/i }).first();
-      if (await nextBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await nextBtn.click({ force: true });
-        await page.waitForTimeout(800);
+    // ── Try to open an existing itinerary trip first ──
+    const tripCards = page.locator("[style*='cursor: pointer'][style*='border-radius']");
+    let foundItinerary = false;
+    const cardCount = await tripCards.count();
+    for (let i = 0; i < cardCount; i++) {
+      const card = tripCards.nth(i);
+      const text = await card.textContent().catch(() => "");
+      if (text && /Day|days?|itinerary/i.test(text) && !/Planning/i.test(text)) {
+        await card.click();
+        await page.waitForTimeout(2000);
+        const boardTab = page.locator("button", { hasText: /Board/i }).first();
+        if (await boardTab.isVisible({ timeout: 3000 }).catch(() => false)) {
+          foundItinerary = true;
+          break;
+        }
+        await page.goBack();
+        await page.waitForTimeout(1000);
       }
     }
 
-    // Click Start Planning
-    const startBtn = page.locator("button", { hasText: /start planning/i }).first();
-    await expect(startBtn).toBeVisible({ timeout: 5000 });
-    await startBtn.click();
+    // ── If no existing itinerary, create one ──
+    if (!foundItinerary) {
+      // Go home if needed
+      if (await page.locator("text=/Your Trips|No trips yet/i").first().isVisible({ timeout: 1000 }).catch(() => false) === false) {
+        await page.goto("/");
+        await page.waitForTimeout(1000);
+      }
 
-    // Wait for plans to appear
-    await page.waitForFunction(
-      () => [...document.querySelectorAll("button")].filter(b => b.textContent?.trim() === "Select").length >= 2,
-      { timeout: 180000 }
-    );
-    await page.waitForTimeout(1000);
+      const createBtn = page.locator("button", { hasText: /new trip|create/i }).first();
+      await createBtn.click();
+      await expect(page.locator("text=/Where to/i").first()).toBeVisible({ timeout: 5000 });
 
-    // Select first plan
-    const selectBtn = page.locator("button", { hasText: /^Select$/ }).first();
-    await selectBtn.click();
-    await page.waitForTimeout(500);
+      const destInput = page.locator("input[placeholder*='Bangkok']").first();
+      await destInput.fill("Tokyo");
+      await page.waitForTimeout(1500);
+      const suggestion = page.locator("[style*='cursor: pointer'][style*='font-weight']", { hasText: /Tokyo/i }).first();
+      if (await suggestion.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await suggestion.click();
+      } else {
+        await destInput.press("Enter");
+      }
+      await page.waitForTimeout(500);
+      await page.locator("body").click({ position: { x: 10, y: 10 } });
+      await page.waitForTimeout(500);
 
-    // Click "Build My Itinerary" — opens pre-IG refinement sheet
-    const buildBtn = page.locator("button", { hasText: /Build My Itinerary/i }).first();
-    await expect(buildBtn).toBeVisible({ timeout: 5000 });
-    await buildBtn.click();
-    await page.waitForTimeout(500);
+      for (let step = 0; step < 2; step++) {
+        const nextBtn = page.locator("button").filter({ hasText: /next|continue|→/i }).first();
+        if (await nextBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+          await nextBtn.click({ force: true });
+          await page.waitForTimeout(800);
+        }
+      }
 
-    // Pre-IG sheet should be visible — click "Generate Itinerary"
-    const generateBtn = page.locator("button", { hasText: /Generate Itinerary/i }).first();
-    await expect(generateBtn).toBeVisible({ timeout: 3000 });
-    await generateBtn.click();
-    await page.waitForTimeout(1000);
+      const startBtn = page.locator("button", { hasText: /start planning/i }).first();
+      await expect(startBtn).toBeVisible({ timeout: 5000 });
+      await startBtn.click();
 
-    // Wait for itinerary generation to complete — look for Itinerary tab in bottom nav
-    // IG streams can take 1-2 minutes. The bottom nav appears only after IG completes.
-    await page.waitForFunction(
-      () => [...document.querySelectorAll("button")].some(b => /Itinerary/i.test(b.textContent || "")),
-      { timeout: 240000 }
-    );
-    await page.waitForTimeout(3000);
+      await page.waitForFunction(
+        () => [...document.querySelectorAll("button")].filter(b => b.textContent?.trim() === "Select").length >= 2,
+        { timeout: 180000 }
+      );
+      await page.waitForTimeout(1000);
+
+      await page.locator("button", { hasText: /^Select$/ }).first().click();
+      await page.waitForTimeout(500);
+
+      const buildBtn = page.locator("button", { hasText: /Build My Itinerary/i }).first();
+      await expect(buildBtn).toBeVisible({ timeout: 5000 });
+      await buildBtn.click();
+      await page.waitForTimeout(500);
+
+      const generateBtn = page.locator("button", { hasText: /Generate Itinerary/i }).first();
+      await expect(generateBtn).toBeVisible({ timeout: 3000 });
+      await generateBtn.click();
+      await page.waitForTimeout(1000);
+
+      await page.waitForFunction(
+        () => [...document.querySelectorAll("button")].some(b => /Itinerary/i.test(b.textContent || "")),
+        { timeout: 240000 }
+      );
+      await page.waitForTimeout(3000);
+    }
 
     await snap(page, "20-itinerary-loaded");
 
@@ -102,46 +118,37 @@ test.describe("Board tab (full flow)", () => {
     await page.waitForTimeout(1500); // debounce
     await expect(page.locator("text=/Saved/i").first()).toBeVisible({ timeout: 3000 });
     await snap(page, "22-notes-saved");
-    // Back
     await page.locator("button:visible", { hasText: /←/ }).first().click();
     await page.waitForTimeout(500);
 
     // ── Test To-do (should auto-generate) ──
     page.locator("text=/To-do/i").first().click();
     await page.waitForTimeout(1000);
-    // Wait for auto-generation or existing items
     const hasTodoContent = await page.locator("text=/Bookings|Documents|Packing|Health|Money|Day of travel|Generating/i").first()
       .isVisible({ timeout: 45000 }).catch(() => false);
     expect(hasTodoContent).toBe(true);
 
-    // If generating, wait for suggestions to appear
     if (await page.locator("text=/Generating/i").first().isVisible({ timeout: 1000 }).catch(() => false)) {
       await page.waitForSelector("text=/Suggestions/i", { timeout: 60000 });
     }
 
-    // Accept all suggestions if present
     const acceptAllBtn = page.locator("button", { hasText: /Accept all/i }).first();
     if (await acceptAllBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
       await acceptAllBtn.click();
       await page.waitForTimeout(1000);
     }
 
-    // Verify category headers exist in the todo list
     const categoryHeaders = page.locator("text=/📋|📄|🧳|🏥|💳|✈️/");
     const catCount = await categoryHeaders.count();
     expect(catCount).toBeGreaterThan(0);
 
-    // Add a manual item
     const todoInput = page.locator("input[placeholder*='Add an item']").first();
     await todoInput.fill("Buy travel adapter");
     await page.locator("button", { hasText: /\+/ }).last().click();
     await page.waitForTimeout(1000);
-    // Verify it appeared (may fail if RLS issue — log and continue)
     const manualTodoVisible = await page.locator("text=/Buy travel adapter/i").first().isVisible({ timeout: 3000 }).catch(() => false);
     if (!manualTodoVisible) console.warn("Manual todo insert may have failed (RLS)");
     await snap(page, "23-todo");
-
-    // Back
     await page.locator("button:visible", { hasText: /←/ }).first().click();
     await page.waitForTimeout(500);
 
@@ -149,22 +156,17 @@ test.describe("Board tab (full flow)", () => {
     page.locator("text=/Bookmarks/i").first().click();
     await page.waitForTimeout(500);
 
-    // Add a bookmark
     const titleInput = page.locator("input[placeholder*='Title']").first();
     const urlInput = page.locator("input[placeholder*='URL']").first();
     await titleInput.fill("Tokyo Hotel");
     await urlInput.fill("https://booking.com/hotel-tokyo");
     await page.waitForTimeout(300);
-    // Click the + button in the bookmarks form (the one next to URL input)
     const addBmBtn = page.locator("button").filter({ has: page.locator("text=/\\+/") }).last();
     await addBmBtn.click();
     await page.waitForTimeout(1000);
-    // Verify — may fail due to RLS, log and continue
     const bmVisible = await page.locator("text=/Tokyo Hotel/i").first().isVisible({ timeout: 3000 }).catch(() => false);
     if (!bmVisible) console.warn("Bookmark insert may have failed (RLS)");
     await snap(page, "24-bookmarks");
-
-    // Back
     await page.locator("button:visible", { hasText: /←/ }).first().click();
     await page.waitForTimeout(500);
 
@@ -172,11 +174,9 @@ test.describe("Board tab (full flow)", () => {
     page.locator("text=/Expenses/i").first().click();
     await page.waitForTimeout(500);
 
-    // Verify tabs exist
     await expect(page.locator("button", { hasText: /Planned/i }).first()).toBeVisible();
     await expect(page.locator("button", { hasText: /Actual/i }).first()).toBeVisible();
 
-    // Set budget
     const setBudget = page.locator("text=/Set a budget/i").first();
     if (await setBudget.isVisible({ timeout: 2000 }).catch(() => false)) {
       await setBudget.click();
@@ -188,7 +188,6 @@ test.describe("Board tab (full flow)", () => {
       await page.waitForTimeout(500);
     }
 
-    // Add a planned expense
     await page.locator("button", { hasText: /Add.*expense/i }).first().click();
     await page.waitForTimeout(300);
     await page.locator("input[placeholder*='What for']").first().fill("Flights");
@@ -200,22 +199,17 @@ test.describe("Board tab (full flow)", () => {
     const expenseVisible = await page.locator("text=/Flights/i").first().isVisible({ timeout: 3000 }).catch(() => false);
     if (!expenseVisible) console.warn("Expense insert may have failed (RLS)");
 
-    // Switch to Actual tab
     await page.locator("button", { hasText: /Actual/i }).first().click();
     await page.waitForTimeout(300);
     await snap(page, "25-expenses-complete");
-
-    // Back
     await page.locator("button:visible", { hasText: /←/ }).first().click();
     await page.waitForTimeout(500);
 
     // ── Test browser back ──
-    // Open Notes again
     page.locator("text=/Notes/i").first().click();
     await page.waitForTimeout(500);
     await expect(page.locator("textarea").first()).toBeVisible();
 
-    // Browser back should return to Board
     await page.goBack();
     await page.waitForTimeout(500);
     await expect(page.locator("text=/Expenses/i").first()).toBeVisible();

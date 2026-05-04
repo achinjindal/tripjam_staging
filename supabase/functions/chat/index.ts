@@ -170,7 +170,8 @@ Example (multi-action):
         return acc;
       }, []);
     const trimmed = cleanHistory[0]?.role === "assistant" ? cleanHistory.slice(1) : cleanHistory;
-    const messages = [...trimmed, { role: "user", content: message }];
+    const recent = trimmed.slice(-6); // Keep last 6 messages to cap input token cost
+    const messages = [...recent, { role: "user", content: message }];
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

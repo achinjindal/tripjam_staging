@@ -3996,9 +3996,6 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
     notes:         initialTrip.notes || "",
     ...(igReq.travelers    ? { travelers: String(igReq.travelers) } : {}),
     ...(igReq.styles       ? { styles: igReq.styles } : {}),
-    ...(igReq.budget       ? { budget: igReq.budget } : {}),
-    ...(igReq.pace         ? { pace: igReq.pace } : {}),
-    ...(igReq.morningStart ? { morningStart: igReq.morningStart } : {}),
     ...(igReq.arrivalTime  ? { arrivalTime: igReq.arrivalTime } : {}),
     ...(igReq.departureTime? { departureTime: igReq.departureTime } : {}),
     ...(igReq.arrivalMode  ? { arrivalMode: igReq.arrivalMode } : {}),
@@ -4008,7 +4005,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
   const _defaultStart = new Date(_today); _defaultStart.setDate(_today.getDate() + 15);
   const _defaultEnd   = new Date(_today); _defaultEnd.setDate(_today.getDate() + 20);
   const _fmt = (d) => d.toISOString().slice(0, 10);
-  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], budget:"mid", pace:"active", morningStart:"early", notes:"", arrivalCity:"", departureCity:"", baseLocation:"", ...prefill, ...(prefillForm || {}) });
+  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], notes:"", arrivalCity:"", departureCity:"", baseLocation:"", ...prefill, ...(prefillForm || {}) });
 
   // Re-apply prefillForm on any change (handles returning from brainstorm)
   useEffect(() => {
@@ -4065,7 +4062,6 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
 
 
   const styles  = ["History & Culture","Nature & Wildlife","Adventure & Outdoors","Food & Culinary","Relaxation & Wellness","Nightlife & Bars","Family & Kids","Photography & Scenery","Shopping & Markets"];
-  const budgets = [{key:"budget",label:"Budget 🏕️",sub:"Hostels, street food"},{key:"mid",label:"Mid-range 🏨",sub:"3★ hotels, restaurants"},{key:"luxury",label:"Luxury 🏰",sub:"5★ & fine dining"}];
 
   const handleGenerate = async () => {
     const needsBase = form.destinations.some(d => d.toLowerCase().includes("help me decide"));
@@ -4722,8 +4718,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       destinations: (initialTrip.destination || "").split(" → ").map(s => s.trim()).filter(Boolean),
       startDate: initialTrip.start_date || "", endDate: initialTrip.end_date || "",
       travelers: String(igReq.travelers || "2"), styles: igReq.styles || [],
-      budget: igReq.budget || "mid", pace: igReq.pace || "active",
-      morningStart: igReq.morningStart || "early",
       notes: initialTrip.notes || igReq.notes || "",
       arrivalCity: initialTrip.arrival_city || "", departureCity: initialTrip.departure_city || "",
       arrivalTime: igReq.arrivalTime || "", departureTime: igReq.departureTime || "",
@@ -4866,7 +4860,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
 
   const handleSetupComplete = async (form) => {
-    posthog.capture("setup_complete", { destinations: form.destinations, styles: form.styles, budget: form.budget, travelers: form.travelers });
+    posthog.capture("setup_complete", { destinations: form.destinations, styles: form.styles, travelers: form.travelers });
     setPendingForm(form);
     setFormEdited(true);
     setPretripTab("brainstorm");
@@ -4878,7 +4872,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       const fmtD = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const dateRange = (form.startDate && form.endDate) ? ` · ${fmtD(form.startDate)}–${fmtD(form.endDate)}` : "";
       const draftName = `${form.destinations.join(" → ")}${dateRange}`;
-      const igRequest = { destinations: form.destinations, numDays: form.startDate && form.endDate ? Math.max(1, Math.round((new Date(form.endDate) - new Date(form.startDate)) / 864e5) + 1) : null, travelers: form.travelers, styles: form.styles, budget: form.budget, pace: form.pace, morningStart: form.morningStart, notes: form.notes || null, startDate: form.startDate || null, endDate: form.endDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null, arrivalTime: form.arrivalTime || null, departureTime: form.departureTime || null, arrivalMode: form.arrivalMode || null, departureMode: form.departureMode || null };
+      const igRequest = { destinations: form.destinations, numDays: form.startDate && form.endDate ? Math.max(1, Math.round((new Date(form.endDate) - new Date(form.startDate)) / 864e5) + 1) : null, travelers: form.travelers, styles: form.styles, notes: form.notes || null, startDate: form.startDate || null, endDate: form.endDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null, arrivalTime: form.arrivalTime || null, departureTime: form.departureTime || null, arrivalMode: form.arrivalMode || null, departureMode: form.departureMode || null };
       const { error } = await supabase.from("trips").insert({
         id: draftId,
         name: draftName,
@@ -4912,7 +4906,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     const form = formOverride || pendingForm;
     if (!form) return;
     const selectedRoute = (votedItems || []).find(it => it.tier === 1 && it.vote === 1);
-    posthog.capture("build_itinerary", { destination: form.destinations?.join(" → "), route: selectedRoute?.title, budget: form.budget, pace: form.pace });
+    posthog.capture("build_itinerary", { destination: form.destinations?.join(" → "), route: selectedRoute?.title });
     setFormEdited(false);
     if (formOverride) setPendingForm(formOverride);
     const freshenedItems = (votedItems || []).map(item => {
@@ -6438,7 +6432,26 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
         }}>
           {/* Build CTA — brainstorm Route tab only, shown when route is selected */}
           {screen === "brainstorm" && pretripTab === "brainstorm" && pretripSelectedRouteId && (
-            <button onClick={() => setShowPreIgSheet(true)} style={{
+            <button onClick={async () => {
+              // Extract preferences from notes + chat history via LLM
+              const defaults = { budget: "mid", morningStart: "early", pace: "active" };
+              try {
+                const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/extract-preferences`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+                  body: JSON.stringify({ notes: pendingForm?.notes || "", chatHistory: chatHistory || [] }),
+                });
+                if (res.ok) {
+                  const prefs = await res.json();
+                  setPreIgForm({ budget: prefs.budget || defaults.budget, morningStart: prefs.morningStart || defaults.morningStart, pace: prefs.pace || defaults.pace, igNotes: "" });
+                } else {
+                  setPreIgForm({ ...defaults, igNotes: "" });
+                }
+              } catch {
+                setPreIgForm({ ...defaults, igNotes: "" });
+              }
+              setShowPreIgSheet(true);
+            }} style={{
               width: "100%", padding: "13px 0", borderRadius: 14, border: "none",
               background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`, color: "white",
               fontFamily: "'DM Serif Display',serif", fontSize: 16, cursor: "pointer",
