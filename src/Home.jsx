@@ -88,8 +88,15 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
         .from("trips").select("*").in("id", tripIds).order("created_at", { ascending: false });
 
       setTrips(tripsData || []);
+      // Cache for offline
+      try { localStorage.setItem("tripjam_trips", JSON.stringify(tripsData || [])); } catch {}
     } catch (err) {
       console.error("fetchData error:", err);
+      // Offline fallback
+      try {
+        const cached = localStorage.getItem("tripjam_trips");
+        if (cached) setTrips(JSON.parse(cached));
+      } catch {}
     } finally {
       setLoading(false);
     }

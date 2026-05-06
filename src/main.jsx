@@ -7,6 +7,19 @@ import Home from "./Home.jsx";
 import App from "./App.jsx";
 import TripPublicView from "./TripPublicView.jsx";
 
+// ── PWA update check — reload on new version ──
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.ready.then(registration => {
+    // Check for updates every 5 minutes
+    setInterval(() => registration.update(), 5 * 60 * 1000);
+    // Auto-reload when new service worker activates
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!refreshing) { refreshing = true; window.location.reload(); }
+    });
+  });
+}
+
 // ── PostHog ──
 if (import.meta.env.VITE_POSTHOG_KEY) {
   posthog.init(import.meta.env.VITE_POSTHOG_KEY, {

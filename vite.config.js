@@ -8,6 +8,9 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
+        cleanupOutdatedCaches: true,
+        skipWaiting: true,
+        clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,ico,svg,woff,woff2}', '**/icon-*.png', '**/apple-touch-icon.png', '**/google-maps-icon.png'],
         runtimeCaching: [
           {
