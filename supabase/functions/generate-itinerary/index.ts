@@ -37,14 +37,15 @@ Rules:
 - WEATHER: Avoid outdoor 12–16:00 in hot months when possible.
 - TIMING: Fixed-time experiences (sunrise, markets) override morning preference. Max 9-10h of activities per day.
 - COMMUTE: Characterful local transport where natural (tuk-tuk, longtail boat, vaporetto).
-- WISHLIST: 2–3 nearby local gems per day (specific named places only). Items are auto-validated via Google Places — only include places you're CERTAIN exist. Empty wishlist > invented entries.
+- WISHLIST: 2 nearby local gems per day (specific named places only). Items are auto-validated via Google Places — only include places you're CERTAIN exist. Empty wishlist > invented entries.
+- TRANSIT_TIP: For each day, include an optional "transit_tip" string with practical local transport advice. Max 1 sentence. Must be actionable — name the specific transit card to buy, the metro/bus lines for that day's route, or a day pass with price. Examples: "Use Suica card · Ginza + Hanzomon Lines · Day pass ¥600", "Navigo Easy card · M12, M1 today · Buy at any station", "Use contactless/Oyster · Zone 1-2 cap £7.70". Only include if the city has meaningful public transit AND the day involves 2+ activities that benefit from it. Omit for rural areas, beach days, single-venue days, or cities without public transit (e.g. Bali, rural Rajasthan).
 - SUMMARY: Top-level "summary" string, 2 sentences max.
 - CITIES: Top-level "cities" array, one per unique city: {"name":"...","writeup":"2–3 evocative sentences about this destination"}.
 
 IMPORTANT OUTPUT ORDER: Generate the "compact" array BEFORE the "days" array. The app renders compact immediately while days stream in.
 
 Return ONLY a raw JSON object. Start with { end with }. Structure:
-{"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"compact":[{"label":"Day 1","city":"...","hotel":"specific hotel name","highlights":[{"title":"Place 1","icon":"🏛"},{"title":"Place 2","icon":"🍜"},{"title":"Place 3","icon":"🌿"}],"description":"1 sentence day overview"}],"days":[{"label":"Day 1","city":"...","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","icon":"🏛️"}],"wishlist":[{"title":"...","geocode":"...","note":"...","icon":"..."}]}]}
+{"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"compact":[{"label":"Day 1","city":"...","hotel":"specific hotel name","highlights":[{"title":"Place 1","icon":"🏛"},{"title":"Place 2","icon":"🍜"},{"title":"Place 3","icon":"🌿"}],"description":"1 sentence day overview"}],"days":[{"label":"Day 1","city":"...","transit_tip":"Use Suica card · Ginza Line today","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","icon":"🏛️"}],"wishlist":[{"title":"...","geocode":"...","note":"...","icon":"..."}]}]}
 
 The "compact" array must have one entry per day with: label, city, hotel (specific name), highlights (3-4 objects with "title" and "icon" emoji), description (1 sentence). Keep it brief — this is a quick preview. Example highlight: {"title":"Tsukiji Market","icon":"🍜"}.`;
 
@@ -108,7 +109,6 @@ serve(async (req) => {
     }
 
     const notesNote = notes ? `TRAVELER NOTES: ${notes}. Factor this into every day of the itinerary.` : "";
-    const carNote = hasCar ? "CAR: Travelers have a private car for the entire trip. For inter-city legs, suggest driving with approximate drive time instead of train or bus. Within cities, they can drive to attractions but prefer walking or local transport where natural." : "";
     const travelMonth = startDate ? new Date(startDate).toLocaleString("en-US", { month: "long" }) : null;
 
     // Build route-constraint block ABOVE the main prompt so it takes precedence
@@ -185,7 +185,7 @@ ${r.points?.length ? `\nKey characteristics of this route the traveler values:\n
 Trip: ${travelers} travelers, ${stylesText} style, ${budgetLabel} budget.${travelMonth ? ` Travel dates: ${travelMonth}.` : ""}
 
 ${paceNote}
-${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDayNote}` : ""}${carNote ? `\n\n${carNote}` : ""}${notesNote ? `\n${notesNote}` : ""}${extraPrefs}`;
+${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDayNote}` : ""}${notesNote ? `\n${notesNote}` : ""}${extraPrefs}`;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -197,7 +197,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: Math.min(32000, numDays * 2500 + 3000),
+        max_tokens: Math.min(16000, numDays * 1800 + 2000),
         temperature: 0.8,
         stream: true,
         system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],

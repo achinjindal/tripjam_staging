@@ -3,7 +3,8 @@ import posthog from "posthog-js";
 import { supabase } from "./supabase";
 import BoardView, { LogisticsTab } from "./components/BoardView.jsx";
 import SetupForm from "./components/SetupForm.jsx";
-import { _photoCache, _usedPhotoUrls, _fetchPhoto, setActiveTripId, PLACES_PROXY, PLACES_HEADERS, extractPlace, geocodePlace, haversineMeters } from "./photos";
+import { T, PLACES_PROXY, PLACES_HEADERS } from "./theme";
+import { _photoCache, _usedPhotoUrls, _fetchPhoto, setActiveTripId, extractPlace, geocodePlace, haversineMeters } from "./photos";
 import { MapView, RouteMapView } from "./components/MapView.jsx";
 import { DestinationHero, FoodSpotlightCard, CityCard, MagazineHighlightCard, HotelSuggestionCard } from "./components/Magazine.jsx";
 
@@ -28,20 +29,6 @@ import html2canvas from "html2canvas";
 
 const DebugContext = createContext(false);
 
-/* ─── THEME ─────────────────────────────────────────────────────────── */
-const T = {
-  ink:    "#0F1923",
-  dusk:   "#1E2D3D",
-  ocean:  "#2563A8",
-  sky:    "#4A90D9",
-  sand:   "#F0E6D3",
-  warm:   "#FAF6F0",
-  terra:  "#C4622D",
-  gold:   "#D4A847",
-  moss:   "#3D7A5C",
-  mist:   "#8BA5BB",
-  chalk:  "#FFFFFF",
-};
 
 // _rgInFlight removed — generate() is now called imperatively, not via useEffect
 let _igInFlight = false;  // same for IG // prevent same photo showing on multiple activities
@@ -1578,9 +1565,8 @@ function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAl
                     <div onClick={()=>setMenuOpen(false)} style={{position:"fixed",inset:0,zIndex:99}}/>
                     <div style={{position:"absolute",right:0,top:22,zIndex:100,background:T.chalk,borderRadius:12,boxShadow:"0 4px 20px rgba(15,25,35,0.14)",border:`1px solid ${T.sand}`,minWidth:180,overflow:"hidden"}}>
                       {activity.type === "hotel" ? <>
-                        <button onClick={()=>{ setMenuOpen(false); onChangeHotel?.("own"); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>🏨 I've booked a hotel</button>
                         <button onClick={()=>{ setMenuOpen(false); onChangeHotel?.("suggest"); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>✨ Suggest a different hotel</button>
-                        <button onClick={()=>{ setMenuOpen(false); onRemove?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:"#e53e3e",cursor:"pointer"}}>Remove</button>
+                        <button onClick={()=>{ setMenuOpen(false); onChangeHotel?.("own"); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer"}}>🏨 Change hotel to…</button>
                       </> : <>
                         <button onClick={()=>{ setMenuOpen(false); onSuggestAlternatives?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>✨ Suggest alternatives</button>
                         <button onClick={()=>{ setMenuOpen(false); onReplace?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>🔄 Replace item</button>
@@ -1836,6 +1822,13 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
           </button>
         )}
       </div>
+
+      {/* Transit tip */}
+      {day.transit_tip && (
+        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 20px 8px",fontSize:11,color:"#7B5EA7",fontFamily:"Georgia,serif",background:"#F5F0FA",borderRadius:8,margin:"0 16px 8px"}}>
+          🚇 {day.transit_tip}
+        </div>
+      )}
 
       {/* Day description */}
       {day.description && showDesc && (
@@ -2542,7 +2535,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     const generationStartedAt = new Date().toISOString();
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 120000);
+      const timeout = setTimeout(() => controller.abort(), 180000); // 3 min for long trips
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-itinerary`,
         {
@@ -2713,6 +2706,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       console.error("AI generation failed:", e.message);
       console.error("Accumulated length:", accumulated.length);
       console.error("Accumulated tail:", accumulated.slice(-300));
+      if (compactShown) {
+        // Compact already loaded — stay on itinerary, stop loading bar, use compact data
+        setDetailedLoading(false);
+        setDetailedReady(true);
+        _igInFlight = false;
+        console.warn("Detailed IG failed, using compact itinerary as fallback");
+        return;
+      }
       setGenerateError(`Generation failed: ${e.message}. Please try again.`);
       setScreen("setup");
       _igInFlight = false;
@@ -2737,7 +2738,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       if (isEditing && !itinerary.name) return editingTrip.name;
       return `${itinerary.name || form.destinations.join(" → ")}${dateRange}`;
     })();
-    posthog.capture("itinerary_generated", { destination: igDestinations.join(" → "), days: savedDays.length });
+    posthog.capture("itinerary_generated", { destination: igDestinations.join(" → "), days: itinerary.days?.length || 0 });
     const tripPayload = {
       id: tripId,
       name: tripName,
@@ -2824,7 +2825,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
         const { data: dayData, error: dayErr } = await supabase
           .from("days")
-          .insert({ trip_id: tripData.id, label: day.label, date: isoDate, city: day.city, position: i, description: day.description || null, wishlist: day.wishlist?.length ? day.wishlist : null, hotel_options: day.hotelOptions?.length ? day.hotelOptions : null, hotel_check_in_time: day.hotelCheckInTime || null })
+          .insert({ trip_id: tripData.id, label: day.label, date: isoDate, city: day.city, position: i, description: day.description || null, wishlist: day.wishlist?.length ? day.wishlist : null, hotel_options: day.hotelOptions?.length ? day.hotelOptions : null, hotel_check_in_time: day.hotelCheckInTime || null, transit_tip: day.transit_tip || null })
           .select()
           .single();
 
@@ -4327,13 +4328,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 onChange={e=>{
                   setChatInput(e.target.value);
                   e.target.style.height = "auto";
-                  e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
+                  e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
                 }}
                 onKeyDown={e=>{
                   if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
                 }}
                 placeholder={screen === "brainstorm" ? "Ask about plans…" : "Ask anything about your trip…"}
-                style={{flex:1,padding:"11px 14px",borderRadius:18,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",background:T.warm,resize:"none",lineHeight:1.4,overflow:"hidden",display:"block"}}
+                rows={3}
+                style={{flex:1,padding:"11px 14px",borderRadius:18,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",background:T.warm,resize:"none",lineHeight:1.5,overflow:"hidden",display:"block",minHeight:66}}
               />
               <button onClick={sendChatMessage} disabled={chatLoading||!chatInput.trim()} style={{width:44,height:44,borderRadius:"50%",background:chatInput.trim()?T.ocean:T.sand,color:"white",border:"none",fontSize:18,cursor:chatInput.trim()?"pointer":"default",flexShrink:0}}>↑</button>
             </div>

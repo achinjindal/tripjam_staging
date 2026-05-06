@@ -96,6 +96,13 @@ Tests that create trips trigger AI calls (RG/IG) which cost real money (~$0.05-0
 - Use `page.locator("body").click({ position: { x: 10, y: 10 } })` to dismiss autocomplete dropdowns
 - When navigating setup steps, add extra waits and body clicks to handle autocomplete
 
+## Pre-flight checks (run BEFORE writing tests)
+
+1. **Build check**: Run `npm run build` — must pass with no errors
+2. **Duplicate definition check**: Run `grep -rn "const T = " src/` — T must be defined in exactly ONE file (theme.js). Same for PLACES_PROXY, PLACES_HEADERS.
+3. **Console error check**: After loading the app in the test browser, check for `ReferenceError` or `Cannot access X before initialization` errors. If found, investigate circular imports before proceeding with tests.
+4. **Import consistency**: Every file in src/components/ should import T from "../theme", NOT redefine it locally.
+
 ## Test patterns
 
 ```typescript

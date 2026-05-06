@@ -890,7 +890,6 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
     departureTime: trip.departure_time ? trip.departure_time.split("T")[1]?.substring(0,5) : "",
     departureMode: trip.departure_mode || "flight",
   });
-  const [hasCar, setHasCar] = useState(trip.has_car || false);
 
   useEffect(() => {
     setFlights({
@@ -901,7 +900,6 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
       departureTime: trip.departure_time ? trip.departure_time.split("T")[1]?.substring(0,5) : "",
       departureMode: trip.departure_mode || "flight",
     });
-    setHasCar(trip.has_car || false);
   }, [trip.id]);
   const [hotels, setHotels] = useState(
     cities.map(city => ({
@@ -925,14 +923,13 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
   });
   const hasChanges = saveStatus !== "saving" && (
     JSON.stringify(flights) !== JSON.stringify(saved) ||
-    hasCar !== (trip.has_car || false) ||
     hotelsChanged
   );
 
   const handleSaveAll = async () => {
     if (!hasChanges) return;
     setSaveStatus("saving");
-    await onSaveFlights({ ...flights, hasCar });
+    await onSaveFlights({ ...flights });
     await onSaveHotels(hotels);
     await onApplyHotels(hotels);
     setSaveStatus("done");
@@ -996,21 +993,6 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
           </div>
         </div>
 
-        {/* Car toggle */}
-        <div style={{marginBottom:14}}>
-          <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Getting around</div>
-          <div style={{display:"flex",gap:8}}>
-            {[{v:true,label:"🚗 We have a car"},{v:false,label:"🚌 Local transport"}].map(opt=>(
-              <button key={String(opt.v)} onClick={()=>setHasCar(opt.v)} style={{
-                flex:1, padding:"9px 6px", borderRadius:10,
-                border:`1.5px solid ${hasCar===opt.v?T.ocean:T.sand}`,
-                background:hasCar===opt.v?T.ocean:"transparent",
-                color:hasCar===opt.v?"white":T.mist,
-                fontFamily:"Georgia,serif", fontSize:12, cursor:"pointer", transition:"all 0.2s",
-              }}>{opt.label}</button>
-            ))}
-          </div>
-        </div>
 
       </div>
 

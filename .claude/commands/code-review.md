@@ -34,6 +34,9 @@ You are a senior tech lead performing a thorough QA review of this codebase. You
 - **Consistency**: If a pattern is used in one place, is it used everywhere it should be?
 - **Error paths**: What happens when things fail (network errors, empty data, null values)?
 - **State management**: Can state get out of sync between UI, in-memory cache, and DB?
+- **Duplicate definitions**: After any file extraction/split, check that shared constants (T, PLACES_PROXY, etc.) are defined in exactly ONE place and imported everywhere else. Grep for `const T =` across all src/ files — if it appears in more than one file, that's a bug.
+- **Circular imports**: After any refactor, verify no module imports from a file that imports back from it. Check that module-level code (not inside functions) doesn't reference imports that may not be initialized yet.
+- **Build verification**: Always run `npm run build` after changes. A passing build doesn't guarantee no runtime errors — also check for `ReferenceError`, `Cannot access X before initialization` patterns in the built output.
 
 ## Rules
 
