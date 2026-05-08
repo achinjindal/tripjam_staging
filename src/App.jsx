@@ -73,7 +73,7 @@ function PhotoStrip({ activity, city }) {
       if (cancelled) return;
       if (src) {
         _usedPhotoUrls.add(src);
-        if (activity?.id) supabase.from("activities").update({ photo_url: src }).eq("id", activity.id).then();
+        if (activity?.id && !String(activity.id).startsWith("c-")) supabase.from("activities").update({ photo_url: src }).eq("id", activity.id).then();
       }
       _photoCache[key] = src ?? null;
       setLiveUrl(src ?? null);
@@ -2194,7 +2194,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const [pretripDeepDiveCity, setPretripDeepDiveCity] = useState(null); // city for deep dive in pre-trip magazine
   const [showPreIgSheet, setShowPreIgSheet] = useState(false); // pre-IG refinement bottom sheet
   const [showReplaceConfirm, setShowReplaceConfirm] = useState(false); // confirm before replacing existing itinerary
-  const [showEditConfirm, setShowEditConfirm] = useState(null); // { changes: [...], forceRegen: bool, form: {...} }
+  const [showEditConfirm, setShowEditConfirm] = useState(null); // { changes: [...], isStructural: bool, form: {...} }
   const [preIgForm, setPreIgForm] = useState({ budget: "mid", morningStart: "early", pace: "active", igNotes: "" });
   const [magazineFilterRouteId, setMagazineFilterRouteId] = useState(null);
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
@@ -2558,13 +2558,19 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     const datesShifted = !durationChanged && (form.startDate !== old.startDate || form.endDate !== old.endDate);
     if (datesShifted) changes.push({ label: "Dates", old: `${fmtD(old.startDate)}–${fmtD(old.endDate)}`, new: `${fmtD(form.startDate)}–${fmtD(form.endDate)}` });
 
-    if ((form.notes || "") !== (old.notes || "")) changes.push({ label: "Notes", old: (old.notes || "").slice(0, 30) + ((old.notes || "").length > 30 ? "…" : "") || "none", new: (form.notes || "").slice(0, 30) + ((form.notes || "").length > 30 ? "…" : "") || "none" });
-    if ((form.arrivalCity || "") !== (old.arrivalCity || "")) changes.push({ label: "Arrival city", old: old.arrivalCity || "—", new: form.arrivalCity || "—" });
-    if ((form.departureCity || "") !== (old.departureCity || "")) changes.push({ label: "Departure city", old: old.departureCity || "—", new: form.departureCity || "—" });
-    if (String(form.travelers) !== String(old.travelers || "2")) changes.push({ label: "Travelers", old: String(old.travelers || "2"), new: String(form.travelers) });
-    if ((form.baseLocation || "") !== (old.baseLocation || "")) changes.push({ label: "Base city", old: old.baseLocation || "—", new: form.baseLocation || "—" });
+    const arrivalChanged = (form.arrivalCity || "") !== (old.arrivalCity || "");
+    const departureChanged = (form.departureCity || "") !== (old.departureCity || "");
+    const baseChanged = (form.baseLocation || "") !== (old.baseLocation || "");
 
-    // Nothing changed — return to routes silently
+    if ((form.notes || "") !== (old.notes || "")) changes.push({ label: "Notes", old: (old.notes || "").slice(0, 30) + ((old.notes || "").length > 30 ? "…" : "") || "none", new: (form.notes || "").slice(0, 30) + ((form.notes || "").length > 30 ? "…" : "") || "none" });
+    if (arrivalChanged) changes.push({ label: "Arrival city", old: old.arrivalCity || "—", new: form.arrivalCity || "—" });
+    if (departureChanged) changes.push({ label: "Departure city", old: old.departureCity || "—", new: form.departureCity || "—" });
+    if (baseChanged) changes.push({ label: "Base city", old: old.baseLocation || "—", new: form.baseLocation || "—" });
+
+    // Travelers change is silent — saved in pendingForm, no dialog interrupt
+    const travelersChanged = String(form.travelers) !== String(old.travelers || "2");
+
+    // Nothing material changed — return to routes silently (also covers travelers-only changes)
     if (changes.length === 0) {
       setPendingForm(form);
       setPretripTab("brainstorm");
@@ -2572,10 +2578,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       return;
     }
 
-    // Force regenerate for destinations or duration changes
-    const forceRegen = destsChanged || durationChanged;
+    // Structural changes invalidate current routes; soft changes (dates shifted, notes) are user's call
+    const isStructural = destsChanged || durationChanged || arrivalChanged || departureChanged || baseChanged;
 
-    setShowEditConfirm({ changes, forceRegen, form });
+    setShowEditConfirm({ changes, isStructural, form });
   };
 
   const handleBuildFromBrainstorm = (votedItems, formOverride = null) => {
@@ -4294,19 +4300,29 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
       {/* ── EDIT DETAILS CONFIRMATION ── */}
       {showEditConfirm && (() => {
-        const { changes, forceRegen, form } = showEditConfirm;
+        const { changes, isStructural, form } = showEditConfirm;
+        const handleDiscard = () => {
+          setShowEditConfirm(null);
+          setPretripTab("brainstorm");
+          setScreen("brainstorm");
+        };
         return (
           <div style={{position:"fixed",inset:0,zIndex:2000,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
             <div onClick={()=>setShowEditConfirm(null)} style={{position:"absolute",inset:0,background:"rgba(15,25,35,0.5)"}}/>
             <div style={{position:"relative",background:T.chalk,borderRadius:"20px 20px 0 0",padding:"24px 20px 20px",paddingBottom:"calc(20px + env(safe-area-inset-bottom, 0px))",animation:"slideUp 0.25s ease"}}>
+              <button onClick={()=>setShowEditConfirm(null)} aria-label="Close" style={{
+                position:"absolute",top:12,right:12,width:28,height:28,borderRadius:14,
+                border:"none",background:"transparent",color:T.mist,fontSize:18,cursor:"pointer",
+                display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1,
+              }}>✕</button>
               <div style={{width:36,height:4,borderRadius:2,background:T.sand,margin:"0 auto 16px"}}/>
               <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:T.ink,textAlign:"center",marginBottom:4}}>
-                {forceRegen ? "Routes will be regenerated" : "Details updated"}
+                {isStructural ? "These changes need new routes" : "Details updated"}
               </div>
               <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",textAlign:"center",lineHeight:1.5,marginBottom:16}}>
-                {forceRegen
-                  ? "These changes require new routes. Your current routes" + (editingTrip?.ig_response ? " and itinerary" : "") + " will be replaced."
-                  : "Your routes may still work — or you can regenerate for a better fit."}
+                {isStructural
+                  ? "Your current routes" + (editingTrip?.ig_response ? " and itinerary" : "") + " were built for different details. Generating new routes will replace them."
+                  : "Your changes might affect route choice. Generate new routes to apply, or discard to keep the current trip as-is."}
               </div>
               {/* Changes diff */}
               <div style={{background:T.warm,borderRadius:12,padding:"12px 14px",marginBottom:16,border:`1px solid ${T.sand}`}}>
@@ -4331,19 +4347,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               <div style={{fontSize:10,color:T.mist,textAlign:"center",marginBottom:10}}>
                 {pretripRoutes.filter(r => !r.dismissed).length} existing routes{editingTrip?.ig_response ? " & itinerary" : ""} will be replaced
               </div>
-              {forceRegen ? (
-                <button onClick={()=>setShowEditConfirm(null)} style={{
-                  width:"100%",padding:12,borderRadius:14,border:`2px solid ${T.sand}`,
-                  background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:14,cursor:"pointer",
-                }}>Cancel</button>
-              ) : (
-                <button onClick={() => { setShowEditConfirm(null); doSetupComplete(form, false); }} style={{
-                  width:"100%",padding:12,borderRadius:14,border:`2px solid ${T.ocean}`,
-                  background:"transparent",color:T.ocean,fontFamily:"Georgia,serif",fontSize:14,cursor:"pointer",
-                }}>Keep Current Routes</button>
-              )}
-              {forceRegen && <div style={{fontSize:10,color:T.mist,textAlign:"center",marginTop:6}}>Go back to edit form</div>}
-              {!forceRegen && <div style={{fontSize:10,color:T.mist,textAlign:"center",marginTop:6}}>Changes saved — routes stay as-is</div>}
+              <button onClick={handleDiscard} style={{
+                width:"100%",padding:12,borderRadius:14,border:`2px solid ${T.sand}`,
+                background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:14,cursor:"pointer",
+              }}>Discard Changes</button>
+              <div style={{fontSize:10,color:T.mist,textAlign:"center",marginTop:6}}>Your edits will be reverted</div>
             </div>
           </div>
         );

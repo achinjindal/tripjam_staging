@@ -20,6 +20,14 @@ supabase/.temp
 .vscode/
 *.swp
 
+# Claude Code worktrees
+.claude/worktrees/
+
+# E2E test artifacts (regenerated on every run)
+e2e/screenshots/
+test-results/
+playwright-report/
+
 # Logs
 npm-debug.log*
 
