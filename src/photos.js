@@ -53,7 +53,7 @@ export function makeQueue(delayMs, concurrency = 1) {
   });
 }
 
-export const wikiQueuedFetch = makeQueue(150, 5); // Wikimedia — 5 concurrent, 150ms stagger
+export const wikiQueuedFetch = makeQueue(300, 3); // Wikimedia — 3 concurrent, 300ms stagger (avoid 429s)
 
 export async function _fetchPhoto(geocode, city, type, hotelOpts) {
   const BAD_PATTERNS = /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive/i;
@@ -193,6 +193,9 @@ export function extractPlace(title) {
 
 const _geocodeCache = new Map();
 
+let _tripDestination = ""; // set by App.jsx — provides country/region context for geocoding
+export function setTripDestination(dest) { _tripDestination = dest || ""; }
+
 export async function geocodePlace(title, city, geocodeHint) {
   // If geocodeHint is raw coordinates "lat,lng", use directly
   if (geocodeHint) {
@@ -212,6 +215,10 @@ export async function geocodePlace(title, city, geocodeHint) {
   })() : place;
 
   // Geocode via places-proxy (Photon primary, cached in DB)
+  // Enrich city with trip destination for better geocoding (e.g. "Kuta" → "Kuta, Bali")
+  const enrichedCity = city && _tripDestination && !city.toLowerCase().includes(_tripDestination.toLowerCase().split(",")[0].split("→")[0].trim())
+    ? `${city}, ${_tripDestination.split("→")[0].trim()}`
+    : city;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
@@ -219,7 +226,7 @@ export async function geocodePlace(title, city, geocodeHint) {
       const tid = setTimeout(() => ctrl.abort(), 10000);
       const res = await fetch(`${PLACES_PROXY}?action=geocode`, {
         method: "POST", headers: PLACES_HEADERS,
-        body: JSON.stringify({ q: placeQ, city }),
+        body: JSON.stringify({ q: placeQ, city: enrichedCity }),
         signal: ctrl.signal,
       });
       clearTimeout(tid);

@@ -4,7 +4,7 @@ import { supabase } from "./supabase";
 import BoardView, { LogisticsTab } from "./components/BoardView.jsx";
 import SetupForm from "./components/SetupForm.jsx";
 import { T, PLACES_PROXY, PLACES_HEADERS } from "./theme";
-import { _photoCache, _usedPhotoUrls, _fetchPhoto, setActiveTripId, extractPlace, geocodePlace, haversineMeters } from "./photos";
+import { _photoCache, _usedPhotoUrls, _fetchPhoto, setActiveTripId, setTripDestination, extractPlace, geocodePlace, haversineMeters } from "./photos";
 import { MapView, RouteMapView } from "./components/MapView.jsx";
 import { DestinationHero, FoodSpotlightCard, CityCard, MagazineHighlightCard, HotelSuggestionCard } from "./components/Magazine.jsx";
 
@@ -313,10 +313,10 @@ function fmtTime(mins) {
 
 // Extract the core place name from a verbose activity title.
 
-function playDoneChime() {
+function playChime(short = false) {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const notes = [523.25, 659.25, 783.99, 1046.50]; // C5 E5 G5 C6
+    const notes = short ? [523.25, 783.99] : [523.25, 659.25, 783.99, 1046.50]; // short: C5 G5, full: C5 E5 G5 C6
     notes.forEach((freq, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -331,6 +331,7 @@ function playDoneChime() {
     });
   } catch { /* audio not available */ }
 }
+function playDoneChime() { playChime(false); }
 
 
 
@@ -711,7 +712,9 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                     streamedItems.push(itemWithId);
                     if (isAddingMore.current) {
                       setItems(prev => {
-                        const existing = (prev || []).filter(p => !streamedItems.some(s => s.id === p.id));
+                        // Filter by title to prevent duplicates (temp IDs won't match UUIDs)
+                        const newTitles = new Set(streamedItems.map(s => s.title?.toLowerCase()).filter(Boolean));
+                        const existing = (prev || []).filter(p => !newTitles.has(p.title?.toLowerCase()));
                         return [...existing, ...streamedItems];
                       });
                     } else {
@@ -767,8 +770,9 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
         const saved = (data || []).map(row => ({ ...row, ...(row.data || {}) }));
         if (saved.length) {
           if (isAddingMore.current) {
-            // Append new items to existing ones
-            setItems(prev => [...(prev || []).filter(it => !saved.some(s => s.id === it.id)), ...saved]);
+            // Append new items — dedup by title AND id to prevent duplicates
+            const savedTitles = new Set(saved.map(s => s.title?.toLowerCase()).filter(Boolean));
+            setItems(prev => [...(prev || []).filter(it => !saved.some(s => s.id === it.id) && !savedTitles.has(it.title?.toLowerCase())), ...saved]);
           } else {
             setItems(saved);
           }
@@ -826,7 +830,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
     if (!isPretripMode) return;
     const selected = tier1Items.find(it => (localVotes[it.id] || 0) === 1);
     onSelectionChange?.(selected?.id || null);
-  }, [localVotes, tier1Items.length]);
+  }, [localVotes, tier1Items.map(it => it.id).join("|")]);
   // Scroll the selected route card into view when external selection changes (e.g. after chat mutation)
   useEffect(() => {
     if (!externalSelectedId) return;
@@ -995,7 +999,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
             )}
           </div>
           {/* Generate new options */}
-          {!generating && (
+          {!generating && tier1Items.length > 0 && (
             tier1Items.length >= 12 ? (
               <div style={{ marginTop: 14, padding: "12px 16px", borderRadius: 12, background: T.chalk, border: `1.5px solid ${T.sand}`, textAlign: "center" }}>
                 <div style={{ fontSize: 13, color: T.ink, fontFamily: "Georgia,serif", marginBottom: 4 }}>Maximum 12 trip ideas reached</div>
@@ -2063,7 +2067,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const [screen,    setScreen]    = useState(isDraft ? "brainstorm" : initialScreen);
   const [setupStep, setSetupStep] = useState(0);
   const [trip,      setTrip]      = useState(initialTrip || SAMPLE_TRIP);
-  useEffect(() => { setActiveTripId(trip?.id || null); }, [trip?.id]);
+  useEffect(() => { setActiveTripId(trip?.id || null); setTripDestination(trip?.destination || ""); }, [trip?.id, trip?.destination]);
   const [days,      setDays]      = useState([]);
   const daysRef = useRef(days);
   useEffect(() => { daysRef.current = days; }, [days]);
@@ -2149,6 +2153,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const [magazineFilterCities, setMagazineFilterCities] = useState(null); // cities to filter magazine by (from "Tell me more")
   const [pretripDeepDiveCity, setPretripDeepDiveCity] = useState(null); // city for deep dive in pre-trip magazine
   const [showPreIgSheet, setShowPreIgSheet] = useState(false); // pre-IG refinement bottom sheet
+  const [showReplaceConfirm, setShowReplaceConfirm] = useState(false); // confirm before replacing existing itinerary
+  const [showEditConfirm, setShowEditConfirm] = useState(null); // { changes: [...], forceRegen: bool, form: {...} }
   const [preIgForm, setPreIgForm] = useState({ budget: "mid", morningStart: "early", pace: "active", igNotes: "" });
   const [magazineFilterRouteId, setMagazineFilterRouteId] = useState(null);
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
@@ -2412,31 +2418,44 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
 
 
-  const handleSetupComplete = async (form) => {
+  // Shorten destination list: "Osaka, Japan → Kyoto, Japan → Tokyo, Japan" → "Osaka → Kyoto → Tokyo (Japan)"
+  const shortenDests = (dests) => {
+    if (dests.length <= 1) return dests.join(" → ");
+    const parts = dests.map(d => d.split(/,\s*/));
+    if (parts.every(p => p.length >= 2)) {
+      const suffix = parts[0].slice(1).join(", ");
+      if (parts.every(p => p.slice(1).join(", ").toLowerCase() === suffix.toLowerCase())) {
+        return `${parts.map(p => p[0]).join(" → ")} (${suffix})`;
+      }
+    }
+    return dests.join(" → ");
+  };
+
+  const doSetupComplete = async (form, regenerate) => {
     posthog.capture("setup_complete", { destinations: form.destinations, styles: form.styles, travelers: form.travelers });
     setPendingForm(form);
     setFormEdited(true);
-    setPretripRoutes([]);
-    setPretripSelectedRouteId(null);
     setPretripTab("brainstorm");
     setScreen("brainstorm");
 
-    // Shorten destination list: "Osaka, Japan → Kyoto, Japan → Tokyo, Japan" → "Osaka → Kyoto → Tokyo (Japan)"
-    const shortenDests = (dests) => {
-      if (dests.length <= 1) return dests.join(" → ");
-      // Find common suffix (e.g. ", Japan")
-      const parts = dests.map(d => d.split(/,\s*/));
-      if (parts.every(p => p.length >= 2)) {
-        const suffix = parts[0].slice(1).join(", ");
-        if (parts.every(p => p.slice(1).join(", ").toLowerCase() === suffix.toLowerCase())) {
-          const cities = parts.map(p => p[0]);
-          return `${cities.join(" → ")} (${suffix})`;
+    if (regenerate) {
+      setPretripRoutes([]);
+      setPretripSelectedRouteId(null);
+      // If regenerating routes and trip had an itinerary, reset it
+      if (editingTrip?.ig_response) {
+        setDays([]);
+        setTrip(t => ({ ...t, ig_response: null }));
+        if (editingTrip.id) {
+          supabase.from("trips").update({ ig_response: null }).eq("id", editingTrip.id);
+          // Delete existing days + activities
+          const { data: existingDays } = await supabase.from("days").select("id").eq("trip_id", editingTrip.id);
+          const dayIds = (existingDays || []).map(d => d.id);
+          if (dayIds.length) await supabase.from("activities").delete().in("day_id", dayIds);
+          await supabase.from("days").delete().eq("trip_id", editingTrip.id);
         }
       }
-      return dests.join(" → ");
-    };
+    }
 
-    // Create or update draft trip in DB so it shows on the home page
     if (!editingTrip) {
       const draftId = crypto.randomUUID();
       const fmtD = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -2444,13 +2463,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       const draftName = `${shortenDests(form.destinations)}${dateRange}`;
       const igRequest = { destinations: form.destinations, numDays: form.startDate && form.endDate ? Math.max(1, Math.round((new Date(form.endDate) - new Date(form.startDate)) / 864e5) + 1) : null, travelers: form.travelers, styles: form.styles, notes: form.notes || null, startDate: form.startDate || null, endDate: form.endDate || null, arrivalCity: form.arrivalCity || null, departureCity: form.departureCity || null, arrivalTime: form.arrivalTime || null, departureTime: form.departureTime || null, arrivalMode: form.arrivalMode || null, departureMode: form.departureMode || null };
       const { error } = await supabase.from("trips").insert({
-        id: draftId,
-        name: draftName,
-        destination: shortenDests(form.destinations),
-        start_date: form.startDate,
-        end_date: form.endDate,
-        created_by: session.user.id,
-        ig_request: igRequest,
+        id: draftId, name: draftName, destination: shortenDests(form.destinations),
+        start_date: form.startDate, end_date: form.endDate, created_by: session.user.id, ig_request: igRequest,
         ...(form.notes && { notes: form.notes }),
         ...(form.arrivalCity && { arrival_city: form.arrivalCity }),
         ...(form.departureCity && { departure_city: form.departureCity }),
@@ -2464,12 +2478,64 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
         setEditingTrip({ id: draftId, name: draftName, destination: shortenDests(form.destinations), start_date: form.startDate, end_date: form.endDate, ig_request: igRequest });
         onUrlChange?.(`/trip/${draftId}/plans`);
       }
-      } else {
-        // Existing draft — update URL to plans
-        onUrlChange?.(`/trip/${editingTrip.id}/plans`);
-      }
-    // Trigger RG generation imperatively — NOT via useEffect
-    setTimeout(() => { triggerRgRef.current?.(); }, 0);
+    } else {
+      // Update existing trip with new form data
+      const updates = { start_date: form.startDate, end_date: form.endDate, notes: form.notes || null,
+        arrival_city: form.arrivalCity || null, departure_city: form.departureCity || null,
+        ...(form.arrivalTime && { arrival_time: `${form.startDate}T${form.arrivalTime}:00` }),
+        ...(form.departureTime && { departure_time: `${form.endDate}T${form.departureTime}:00` }),
+      };
+      await supabase.from("trips").update(updates).eq("id", editingTrip.id);
+      setEditingTrip(t => ({ ...t, ...updates }));
+      onUrlChange?.(`/trip/${editingTrip.id}/plans`);
+    }
+
+    if (regenerate) {
+      setTimeout(() => { triggerRgRef.current?.(); }, 0);
+    }
+  };
+
+  const handleSetupComplete = async (form) => {
+    // New trip — no change detection needed
+    if (!editingTrip || pretripRoutes.length === 0) {
+      return doSetupComplete(form, true);
+    }
+
+    // Detect changes against previous form
+    const old = pendingForm || {};
+    const calcDays = (s, e) => s && e ? Math.max(1, Math.round((new Date(e) - new Date(s)) / 864e5) + 1) : null;
+    const changes = [];
+    const fmtD = (iso) => iso ? new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—";
+
+    const destsChanged = (form.destinations || []).join(",").toLowerCase() !== (old.destinations || []).join(",").toLowerCase();
+    if (destsChanged) changes.push({ label: "Destinations", old: (old.destinations || []).join(" → "), new: form.destinations.join(" → ") });
+
+    const oldDays = calcDays(old.startDate, old.endDate);
+    const newDays = calcDays(form.startDate, form.endDate);
+    const durationChanged = oldDays !== newDays;
+    if (durationChanged) changes.push({ label: "Duration", old: oldDays ? `${oldDays} days` : "—", new: newDays ? `${newDays} days` : "—" });
+
+    const datesShifted = !durationChanged && (form.startDate !== old.startDate || form.endDate !== old.endDate);
+    if (datesShifted) changes.push({ label: "Dates", old: `${fmtD(old.startDate)}–${fmtD(old.endDate)}`, new: `${fmtD(form.startDate)}–${fmtD(form.endDate)}` });
+
+    if ((form.notes || "") !== (old.notes || "")) changes.push({ label: "Notes", old: (old.notes || "").slice(0, 30) + ((old.notes || "").length > 30 ? "…" : "") || "none", new: (form.notes || "").slice(0, 30) + ((form.notes || "").length > 30 ? "…" : "") || "none" });
+    if ((form.arrivalCity || "") !== (old.arrivalCity || "")) changes.push({ label: "Arrival city", old: old.arrivalCity || "—", new: form.arrivalCity || "—" });
+    if ((form.departureCity || "") !== (old.departureCity || "")) changes.push({ label: "Departure city", old: old.departureCity || "—", new: form.departureCity || "—" });
+    if (String(form.travelers) !== String(old.travelers || "2")) changes.push({ label: "Travelers", old: String(old.travelers || "2"), new: String(form.travelers) });
+    if ((form.baseLocation || "") !== (old.baseLocation || "")) changes.push({ label: "Base city", old: old.baseLocation || "—", new: form.baseLocation || "—" });
+
+    // Nothing changed — return to routes silently
+    if (changes.length === 0) {
+      setPendingForm(form);
+      setPretripTab("brainstorm");
+      setScreen("brainstorm");
+      return;
+    }
+
+    // Force regenerate for destinations or duration changes
+    const forceRegen = destsChanged || durationChanged;
+
+    setShowEditConfirm({ changes, forceRegen, form });
   };
 
   const handleBuildFromBrainstorm = (votedItems, formOverride = null) => {
@@ -2631,7 +2697,6 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                       setScreen("itinerary");
                       setCompactView(true);
                       setDetailedLoading(true);
-                      playDoneChime();
                     }
                   }
                 }
@@ -3348,15 +3413,17 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           />
         </div>
 
-        {/* RouteMapView mounted eagerly (hidden when not active) so geocoding starts in background */}
-        <div style={{flex: pretripTab === "map" ? 1 : 0, display: pretripTab === "map" ? "flex" : "none", flexDirection:"column", overflow:"hidden"}}>
-          <RouteMapView
-            routes={pretripRoutes}
-            selectedId={pretripSelectedRouteId}
-            onSelectRoute={setPretripSelectedRouteId}
-            destination={(pendingForm?.destinations || []).join(", ") || editingTrip?.destination || ""}
-          />
-        </div>
+        {/* RouteMapView — lazy mount so Leaflet initializes with proper container dimensions */}
+        {pretripTab === "map" && (
+          <div style={{flex: 1, display: "flex", flexDirection:"column", overflow:"hidden"}}>
+            <RouteMapView
+              routes={pretripRoutes}
+              selectedId={pretripSelectedRouteId}
+              onSelectRoute={setPretripSelectedRouteId}
+              destination={(pendingForm?.destinations || []).join(", ") || editingTrip?.destination || ""}
+            />
+          </div>
+        )}
 
         {/* Pre-IG Magazine tab */}
         {pretripTab === "magazine" && pretripDeepDiveCity && (() => {
@@ -3846,11 +3913,15 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           {/* Chat sheet is rendered at App root */}
           {/* ── MAP TAB ── */}
           {activeBottomTab === "map" && (
-            <MapView days={days} />
+            days.length > 0
+              ? <MapView days={days} />
+              : <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12,color:T.mist,fontFamily:"Georgia,serif",fontSize:14}}><span style={{fontSize:32}}>🗺️</span>Waiting for the itinerary to build…</div>
           )}
 
           {/* ── BOARD TAB ── */}
-          {activeBottomTab === "board" && (
+          {activeBottomTab === "board" && (days.length === 0 ? (
+            <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12,color:T.mist,fontFamily:"Georgia,serif",fontSize:14}}><span style={{fontSize:32}}>📋</span>Waiting for the itinerary to build…</div>
+          ) : (
             <div style={{flex:1,overflowY:"auto",paddingBottom:150,display:"flex",flexDirection:"column"}}>
               <BoardView
                 trip={trip}
@@ -3864,7 +3935,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 }}
               />
             </div>
-          )}
+          ))}
 
           {/* ── BOTTOM NAV ── */}
           <div style={{
@@ -4153,15 +4224,19 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
             {/* Generate button */}
             <button onClick={() => {
+              const hasExisting = editingTrip?.ig_response;
+              if (hasExisting) {
+                setShowReplaceConfirm(true);
+                return;
+              }
+              // No existing itinerary — generate directly
               setShowPreIgSheet(false);
-              // Merge preIgForm into pendingForm so IG picks it up
               const mergedForm = { ...(pendingForm || {}), budget: preIgForm.budget, morningStart: preIgForm.morningStart, pace: preIgForm.pace };
               if (preIgForm.igNotes.trim()) {
                 mergedForm.notes = ((pendingForm?.notes || "") + "\n" + preIgForm.igNotes.trim()).trim();
               }
               setPendingForm(mergedForm);
               const voted = (pretripRoutes || []).map(r => ({ ...r, tier: 1, vote: r.id === pretripSelectedRouteId ? 1 : 0 }));
-              // Small delay to let state settle
               setTimeout(() => handleBuildFromBrainstorm(voted, mergedForm), 50);
             }} style={{
               width:"100%",padding:16,borderRadius:16,border:"none",
@@ -4174,6 +4249,145 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           </div>
         </div>
       )}
+
+      {/* ── EDIT DETAILS CONFIRMATION ── */}
+      {showEditConfirm && (() => {
+        const { changes, forceRegen, form } = showEditConfirm;
+        return (
+          <div style={{position:"fixed",inset:0,zIndex:2000,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
+            <div onClick={()=>setShowEditConfirm(null)} style={{position:"absolute",inset:0,background:"rgba(15,25,35,0.5)"}}/>
+            <div style={{position:"relative",background:T.chalk,borderRadius:"20px 20px 0 0",padding:"24px 20px 20px",paddingBottom:"calc(20px + env(safe-area-inset-bottom, 0px))",animation:"slideUp 0.25s ease"}}>
+              <div style={{width:36,height:4,borderRadius:2,background:T.sand,margin:"0 auto 16px"}}/>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:T.ink,textAlign:"center",marginBottom:4}}>
+                {forceRegen ? "Routes will be regenerated" : "Details updated"}
+              </div>
+              <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",textAlign:"center",lineHeight:1.5,marginBottom:16}}>
+                {forceRegen
+                  ? "These changes require new routes. Your current routes" + (editingTrip?.ig_response ? " and itinerary" : "") + " will be replaced."
+                  : "Your routes may still work — or you can regenerate for a better fit."}
+              </div>
+              {/* Changes diff */}
+              <div style={{background:T.warm,borderRadius:12,padding:"12px 14px",marginBottom:16,border:`1px solid ${T.sand}`}}>
+                <div style={{fontSize:10,color:T.mist,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>What changed</div>
+                {changes.map((c, i) => (
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",fontSize:12,borderBottom:i < changes.length - 1 ? `1px solid ${T.sand}` : "none"}}>
+                    <span style={{color:T.mist,minWidth:75,flexShrink:0,fontSize:11}}>{c.label}</span>
+                    <span style={{color:"#e53e3e",textDecoration:"line-through",fontSize:11}}>{c.old}</span>
+                    <span style={{color:T.mist,flexShrink:0}}>→</span>
+                    <span style={{color:T.moss,fontWeight:600,fontSize:11}}>{c.new}</span>
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => { setShowEditConfirm(null); doSetupComplete(form, true); }} style={{
+                width:"100%",padding:14,borderRadius:14,border:"none",
+                background:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",
+                fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:"pointer",marginBottom:8,
+                boxShadow:"0 4px 16px rgba(37,99,168,0.3)",
+              }}>
+                Generate New Routes
+              </button>
+              <div style={{fontSize:10,color:T.mist,textAlign:"center",marginBottom:10}}>
+                {pretripRoutes.filter(r => !r.dismissed).length} existing routes{editingTrip?.ig_response ? " & itinerary" : ""} will be replaced
+              </div>
+              {forceRegen ? (
+                <button onClick={()=>setShowEditConfirm(null)} style={{
+                  width:"100%",padding:12,borderRadius:14,border:`2px solid ${T.sand}`,
+                  background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:14,cursor:"pointer",
+                }}>Cancel</button>
+              ) : (
+                <button onClick={() => { setShowEditConfirm(null); doSetupComplete(form, false); }} style={{
+                  width:"100%",padding:12,borderRadius:14,border:`2px solid ${T.ocean}`,
+                  background:"transparent",color:T.ocean,fontFamily:"Georgia,serif",fontSize:14,cursor:"pointer",
+                }}>Keep Current Routes</button>
+              )}
+              {forceRegen && <div style={{fontSize:10,color:T.mist,textAlign:"center",marginTop:6}}>Go back to edit form</div>}
+              {!forceRegen && <div style={{fontSize:10,color:T.mist,textAlign:"center",marginTop:6}}>Changes saved — routes stay as-is</div>}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── REPLACE ITINERARY CONFIRMATION ── */}
+      {showReplaceConfirm && (() => {
+        const igReq = editingTrip?.ig_request || {};
+        const selectedRoute = (pretripRoutes || []).find(r => r.id === pretripSelectedRouteId);
+        const oldRoute = igReq.votedRoute || (editingTrip?.ig_response?.name) || null;
+        const changes = [];
+        if (selectedRoute?.title && oldRoute && selectedRoute.title.toLowerCase() !== oldRoute.toLowerCase()) changes.push({ label: "Route", old: oldRoute, new: selectedRoute.title });
+        if (preIgForm.budget !== (igReq.budget || "mid")) changes.push({ label: "Budget", old: { budget: "Budget", mid: "Mid-range", luxury: "Luxury" }[igReq.budget || "mid"], new: { budget: "Budget", mid: "Mid-range", luxury: "Luxury" }[preIgForm.budget] });
+        if (preIgForm.pace !== (igReq.pace || "active")) changes.push({ label: "Pace", old: igReq.pace === "relaxed" ? "Relaxed" : "Active", new: preIgForm.pace === "relaxed" ? "Relaxed" : "Active" });
+        if (preIgForm.morningStart !== (igReq.morningStart || "early")) changes.push({ label: "Morning", old: igReq.morningStart === "late" ? "Late start" : "Early bird", new: preIgForm.morningStart === "late" ? "Late start" : "Early bird" });
+        if (pendingForm?.startDate !== igReq.startDate || pendingForm?.endDate !== igReq.endDate) {
+          const fmtD = (iso) => iso ? new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—";
+          changes.push({ label: "Dates", old: `${fmtD(igReq.startDate)}–${fmtD(igReq.endDate)}`, new: `${fmtD(pendingForm?.startDate)}–${fmtD(pendingForm?.endDate)}` });
+        }
+        if (String(pendingForm?.travelers) !== String(igReq.travelers || "2")) changes.push({ label: "Travelers", old: String(igReq.travelers || "2"), new: String(pendingForm?.travelers) });
+        const isRefresh = changes.length === 0;
+        return (
+          <div style={{position:"fixed",inset:0,zIndex:2000,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
+            <div onClick={()=>setShowReplaceConfirm(false)} style={{position:"absolute",inset:0,background:"rgba(15,25,35,0.5)"}}/>
+            <div style={{position:"relative",background:T.chalk,borderRadius:"20px 20px 0 0",padding:"24px 20px 20px",paddingBottom:"calc(20px + env(safe-area-inset-bottom, 0px))",animation:"slideUp 0.25s ease"}}>
+              <div style={{width:36,height:4,borderRadius:2,background:T.sand,margin:"0 auto 16px"}}/>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:T.ink,textAlign:"center",marginBottom:4}}>
+                {isRefresh ? "Refresh itinerary?" : "Regenerate itinerary?"}
+              </div>
+              <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",textAlign:"center",lineHeight:1.5,marginBottom:16}}>
+                {isRefresh
+                  ? "Same route and preferences — a fresh version will be generated with different activities, restaurants, and hotels."
+                  : "Your current itinerary will be replaced"}
+              </div>
+              {/* Changes diff */}
+              {changes.length > 0 ? (
+                <div style={{background:T.warm,borderRadius:12,padding:"12px 14px",marginBottom:16,border:`1px solid ${T.sand}`}}>
+                  <div style={{fontSize:10,color:T.mist,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>What's changing</div>
+                  {changes.map((c, i) => (
+                    <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",fontSize:12,borderBottom:i < changes.length - 1 ? `1px solid ${T.sand}` : "none"}}>
+                      <span style={{color:T.mist,minWidth:65,flexShrink:0}}>{c.label}</span>
+                      <span style={{color:"#e53e3e",textDecoration:"line-through"}}>{c.old}</span>
+                      <span style={{color:T.mist,flexShrink:0}}>→</span>
+                      <span style={{color:T.moss,fontWeight:600}}>{c.new}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{background:T.warm,borderRadius:12,padding:"10px 14px",marginBottom:16,border:`1px solid ${T.sand}`,textAlign:"center"}}>
+                  <span style={{fontSize:11,color:T.moss}}>✓ No changes to route or preferences</span>
+                </div>
+              )}
+              <button onClick={() => {
+                setShowReplaceConfirm(false);
+                setShowPreIgSheet(false);
+                const mergedForm = { ...(pendingForm || {}), budget: preIgForm.budget, morningStart: preIgForm.morningStart, pace: preIgForm.pace };
+                if (preIgForm.igNotes.trim()) {
+                  mergedForm.notes = ((pendingForm?.notes || "") + "\n" + preIgForm.igNotes.trim()).trim();
+                }
+                setPendingForm(mergedForm);
+                const voted = (pretripRoutes || []).map(r => ({ ...r, tier: 1, vote: r.id === pretripSelectedRouteId ? 1 : 0 }));
+                setTimeout(() => handleBuildFromBrainstorm(voted, mergedForm), 50);
+              }} style={{
+                width:"100%",padding:14,borderRadius:14,border:"none",
+                background:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",
+                fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:"pointer",
+                boxShadow:"0 4px 16px rgba(37,99,168,0.3)",marginBottom:8,
+              }}>
+                {isRefresh ? "Refresh Itinerary" : "Replace Itinerary"}
+              </button>
+              <div style={{fontSize:10,color:T.mist,textAlign:"center",marginBottom:10}}>Your current itinerary will be replaced</div>
+              <button onClick={() => {
+                setShowReplaceConfirm(false);
+                setShowPreIgSheet(false);
+                setScreen("itinerary");
+                setActiveBottomTab("itinerary");
+              }} style={{
+                width:"100%",padding:12,borderRadius:14,border:`2px solid ${T.sand}`,
+                background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:14,cursor:"pointer",
+              }}>
+                Keep Current Itinerary
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── CHAT SHEET (floating bottom sheet, rendered globally) ── */}
       {chatOpen && (screen === "itinerary" || screen === "brainstorm") && activeBottomTab !== "board" && (() => {

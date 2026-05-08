@@ -152,8 +152,8 @@ export function MapView({ days }) {
       {pins !== null && (
         <MapContainer center={center} zoom={13} style={{ flex: 1 }}>
           <TileLayer
-            url={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}@2x?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}`}
-            attribution='&copy; <a href="https://www.mapbox.com/about/maps/">Mapbox</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            url={import.meta.env.VITE_MAPBOX_TOKEN ? `https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}@2x?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}` : "https://tile.openstreetmap.org/{z}/{x}/{y}.png"}
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           />
           <FitBounds pins={visiblePins} fallback={center} />
           {visiblePins.map((pin, i) => (
@@ -279,8 +279,8 @@ export function RouteMapView({ routes, selectedId, onSelectRoute, destination })
       {!resolving && (
         <MapContainer center={center} zoom={6} style={{ flex: 1 }}>
           <TileLayer
-            url={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}@2x?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}`}
-            attribution='&copy; <a href="https://www.mapbox.com/about/maps/">Mapbox</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            url={import.meta.env.VITE_MAPBOX_TOKEN ? `https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}@2x?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}` : "https://tile.openstreetmap.org/{z}/{x}/{y}.png"}
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           />
           <FitBounds pins={allVisiblePins} fallback={center} />
           {visibleRoutes.map((route, i) => {

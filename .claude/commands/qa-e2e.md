@@ -72,20 +72,53 @@ Tests that create trips trigger AI calls (RG/IG) which cost real money (~$0.05-0
 ## Current coverage gaps (add tests for these when relevant)
 
 ### Recently added features needing coverage:
+
+#### Edit Details & Route Preservation
+- Nothing changed in edit form → returns to routes silently, no confirmation sheet
+- Destinations changed → confirmation sheet with diff, "Generate New Routes" + "Cancel"
+- Duration changed → confirmation sheet with diff, "Generate New Routes" + "Cancel"
+- Travelers changed → confirmation sheet with diff, "Generate New Routes" or "Keep Current Routes"
+- Dates shifted (same duration) → confirmation sheet with diff, "Generate New Routes" or "Keep Current Routes"
+- Notes changed → confirmation sheet with diff, "Generate New Routes" or "Keep Current Routes"
+- Arrival/departure city changed → confirmation sheet with diff, "Generate New Routes" or "Keep Current Routes"
+- Base city changed → confirmation sheet with diff, "Generate New Routes" or "Keep Current Routes"
+- "Keep Current Routes" → saves changes to DB, returns to routes, routes preserved
+- "Cancel" (destinations/duration) → reverts change, returns to edit form, routes untouched
+- Routes regenerated + trip had itinerary → itinerary reset (days + activities deleted, ig_response cleared)
+
+#### Itinerary Replace Confirmation
+- Generate itinerary → go back to Plans → select different route → Build → confirmation sheet shows diff
+- Generate itinerary → go back to Plans → same route, same params → Build → "Refresh itinerary?" (no diff)
+- Confirmation "Replace Itinerary" → old itinerary deleted, new one generated
+- Confirmation "Keep Current Itinerary" → navigates to existing itinerary view
+
+#### RG Page Fixes
+- "Show me more options" NOT visible before first route loads
+- "Build Itinerary" button visible when route is selected, even after dismissing other routes
+- Map loads correctly on production (lazy mount, OSM fallback for Mapbox)
+- Duplicate routes prevented when "Show more plans" clicked (title-based dedup)
+
+#### Transit & Transport
+- Transit tip renders below day header when present (purple bar with 🚇)
+- Transit tip not shown for rural/beach days
+- has_car toggle removed from Travel & Hotels widget
+- Hotel menu: "Suggest different hotel" + "Change hotel to…" (no "Remove" option)
+
+#### Other Features
 - Travel & Hotels widget in Board tab (moved from itinerary page)
 - Hotel autocomplete (CityInput with lodging type)
 - Pre-IG sheet preference extraction (extract-preferences endpoint)
 - Chat bulk dismiss (routeIds array)
-- Chat "View Updated Plans" navigates to correct route
-- IG progress bar (percentage display during detailed loading)
+- Chat "View Updated Plans" navigates to correct route, scrolls to modified route
+- IG progress bar (day-based percentage during detailed loading)
+- IG graceful fallback (if detailed stream fails after compact, stops progress bar, uses compact)
 - Destination name shortening ("Osaka, Japan → Kyoto, Japan" → "Osaka → Kyoto (Japan)")
-- Route clearing on re-edit (old routes disappear when regenerating)
-- Chat welcome message changes while routes are loading
-- TripAdvisor links use Google "I'm Feeling Lucky" redirect
+- Chat welcome message: "working on plans" while loading, "plans ready" after 2+ routes
 - Destination hero photo (Tourism in {country} Wikipedia fallback)
-- Magazine photo dedup (no duplicate photos across cards)
+- Magazine photo dedup (serialized fallback + relevance checks)
 - Offline mode (trip list and itinerary cached in localStorage)
 - PWA update (service worker auto-refreshes on new version)
+- Geocoding enriched with trip destination context (e.g. "Kuta" → "Kuta, Bali")
 
 ## Important
 

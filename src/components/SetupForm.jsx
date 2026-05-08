@@ -57,7 +57,7 @@ function DateRangePicker({ startDate, endDate, onChange }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <button onClick={prevMonth} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: T.mist, padding: "4px 10px", lineHeight: 1 }}>‹</button>
         <span style={{ fontFamily: "Georgia,serif", fontSize: 15, color: T.ink, fontWeight: 600 }}>{MONTHS[viewMonth]} {viewYear}</span>
-        <button onClick={nextMonth} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: T.mist, padding: "4px 10px", lineHeight: 1 }}>\u203A</button>
+        <button onClick={nextMonth} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: T.mist, padding: "4px 10px", lineHeight: 1 }}>›</button>
       </div>
 
       {/* Day headers */}

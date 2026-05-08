@@ -37,6 +37,9 @@ You are a senior tech lead performing a thorough QA review of this codebase. You
 - **Duplicate definitions**: After any file extraction/split, check that shared constants (T, PLACES_PROXY, etc.) are defined in exactly ONE place and imported everywhere else. Grep for `const T =` across all src/ files — if it appears in more than one file, that's a bug.
 - **Circular imports**: After any refactor, verify no module imports from a file that imports back from it. Check that module-level code (not inside functions) doesn't reference imports that may not be initialized yet.
 - **Build verification**: Always run `npm run build` after changes. A passing build doesn't guarantee no runtime errors — also check for `ReferenceError`, `Cannot access X before initialization` patterns in the built output.
+- **Data cascade**: When routes are regenerated, verify the itinerary (days + activities + ig_response) is also reset. When itinerary is regenerated, verify the old days/activities are deleted. Check that DB state and React state stay in sync.
+- **Confirmation flows**: Edit Details and Pre-IG sheet both have confirmation dialogs. Verify the correct sheet shows for each change type (destinations/duration → force regen, others → user chooses). Verify "Cancel" reverts changes, "Keep" saves changes but preserves routes/itinerary.
+- **Unicode/emoji**: After any file extraction or agent-written code, grep for `\\u[0-9a-f]{4}` in JSX files — escaped unicode sequences render as literal text instead of emojis.
 
 ## Rules
 
