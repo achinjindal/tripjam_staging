@@ -1380,6 +1380,26 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
         geocodePlace(to.title,   city, to.geocode),
       ]);
       if (cancelled) return;
+
+      // Check for LLM-provided transit data
+      const transit = from.transition || from.transition_data;
+      if (transit && transit.mode && transit.ride_mins) {
+        if (coordA && coordB) {
+          const dist = haversineMeters(coordA, coordB);
+          const rideFloor = Math.round(dist / 600);
+          const rideCeiling = Math.round(dist / 200);
+          const validatedRide = Math.max(rideFloor, Math.min(rideCeiling, transit.ride_mins));
+          const displayRide = Math.round(validatedRide / 5) * 5 || 5;
+          const result = { mode: transit.mode, walkMins: transit.walk_mins || 0, rideMins: displayRide };
+          if (!cancelled) { setCommute(result); onResolved?.(result.walkMins + result.rideMins, result.mode); }
+        } else {
+          const result = { mode: transit.mode, walkMins: transit.walk_mins || 0, rideMins: transit.ride_mins };
+          if (!cancelled) { setCommute(result); onResolved?.(result.walkMins + result.rideMins, result.mode); }
+        }
+        if (!cancelled) setLoading(false);
+        return;
+      }
+
       let reason = null;
       if (!coordA && !coordB) reason = `no coords for "${placeA}" or "${placeB}" in ${city}`;
       else if (!coordA) reason = `no coords for "${placeA}" in ${city}`;
@@ -1432,19 +1452,39 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
 
   const origin   = encodeURIComponent(from.geocode || `${extractPlace(from.title)} ${city}`);
   const dest     = encodeURIComponent(to.geocode   || `${extractPlace(to.title)} ${city}`);
-  const mapsUrl  = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=${commute.mode === "walk" ? "walking" : "driving"}`;
+  const isTransit = commute.mode === "metro" || commute.mode === "bus" || commute.mode === "ferry" || commute.mode === "tram";
+  const mapsUrl  = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=${isTransit ? "transit" : commute.mode === "walk" ? "walking" : "driving"}`;
+
+  const transitStyles = {
+    metro: { color: "#7B5EA7", background: "#F5F0FA", border: "1px solid #7B5EA7" },
+    bus:   { color: "#C4622D", background: "#FFF4E8", border: "1px solid #C4622D" },
+    ferry: { color: "#2563A8", background: "#EBF3FD", border: "1px solid #2563A8" },
+    tram:  { color: "#7B5EA7", background: "#F5F0FA", border: "1px solid #7B5EA7" },
+  };
+  const transitIcons = { metro: "🚇", bus: "🚌", ferry: "⛴️", tram: "🚊" };
+
+  let pillStyle, pillContent;
+  if (isTransit) {
+    pillStyle = transitStyles[commute.mode];
+    const icon = transitIcons[commute.mode];
+    pillContent = commute.walkMins > 0
+      ? `🚶 ${commute.walkMins} min + ${icon} ~${commute.rideMins} min`
+      : `${icon} ~${commute.rideMins} min`;
+  } else if (commute.mode === "walk") {
+    pillStyle = { color: T.moss, border: `1px solid ${T.moss}`, background: "#F4FAF7" };
+    pillContent = `🚶 ${fmtTime(commute.mins)} walk`;
+  } else {
+    pillStyle = { color: T.ocean, border: `1px solid ${T.ocean}`, background: "#EBF3FD" };
+    pillContent = `🚗 ${fmtTime(commute.mins)} drive`;
+  }
 
   return (
     <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 20px"}}>
       <div style={{flex:1,height:1,background:T.sand}}/>
       <a href={mapsUrl} target="_blank" rel="noopener noreferrer"
         style={{fontSize:11,fontFamily:"Georgia,serif",textDecoration:"none",whiteSpace:"nowrap",
-          padding:"3px 10px",borderRadius:20,
-          ...(commute.mode === "walk"
-            ? {color:T.moss,  border:`1px solid ${T.moss}`,  background:"#F4FAF7"}
-            : {color:T.ocean, border:`1px solid ${T.ocean}`, background:"#EBF3FD"}
-          )}}>
-        {commute.mode === "walk" ? "🚶" : "🚗"} {fmtTime(commute.mins)} {commute.mode === "walk" ? "walk" : "drive"}
+          padding:"3px 10px",borderRadius:20, ...pillStyle}}>
+        {pillContent}
       </a>
       <div style={{flex:1,height:1,background:T.sand}}/>
       {label && <span style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",whiteSpace:"nowrap",flexShrink:0}}>{label}</span>}
@@ -2904,6 +2944,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               duration: act.duration, note: act.note,
               confirmed: act.confirmed, icon: act.icon, package: act.package || null,
               position: j, added_by: session.user.id,
+              transition_data: act.transition || null,
             }).select().single().then(r => r.data)
           )
         );
@@ -3133,6 +3174,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             type: act.type, duration: act.duration, note: act.note, confirmed: act.confirmed ?? false, icon: act.icon,
             package: act.package || null, position: j, added_by: session.user.id,
             photo_url: (act.geocode && existingPhotoMap[act.geocode]) || null,
+            transition_data: act.transition || null,
           }));
           const { data: insertedActs } = await supabase.from("activities").insert(newActivities).select();
           if (updatedDay.wishlist) await supabase.from("days").update({ wishlist: updatedDay.wishlist }).eq("id", dayId);
