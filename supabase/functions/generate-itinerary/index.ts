@@ -48,7 +48,7 @@ Rules:
   cost_estimate: approximate cost with currency (e.g. "~¥13,320 (~$90)"). For driving, estimate fuel/toll or taxi fare.
   booking_tip: one practical tip (e.g. "Reserved seat recommended", "Book 2 days ahead")
   These fields are MANDATORY for all transit activities — never omit them.
-- WISHLIST: 2 nearby local gems per day (specific named places only). Items are auto-validated via Google Places — only include places you're CERTAIN exist. Empty wishlist > invented entries.
+- WISHLIST: 4-5 nearby local gems per day (specific named places only). Items are auto-validated via Google Places — only include places you're CERTAIN exist. Empty wishlist > invented entries. For EACH gem include a "near" field set to the EXACT title of the activity in the same day it's closest to (walking-distance ideally, otherwise on the natural route). The "near" value MUST match one of that day's activity titles verbatim.
 - TRANSIT_TIP: For each day, include an optional "transit_tip" string with practical local transport advice. Max 1 sentence. Must be actionable — name the specific transit card to buy, the metro/bus lines for that day's route, or a day pass with price. Examples: "Use Suica card · Ginza + Hanzomon Lines · Day pass ¥600", "Navigo Easy card · M12, M1 today · Buy at any station", "Use contactless/Oyster · Zone 1-2 cap £7.70". Only include if the city has meaningful public transit AND the day involves 2+ activities that benefit from it. Omit for rural areas, beach days, single-venue days, or cities without public transit (e.g. Bali, rural Rajasthan).
 - SUMMARY: Top-level "summary" string, 2 sentences max.
 - CITIES: Top-level "cities" array, one per unique city: {"name":"...","writeup":"2–3 evocative sentences about this destination"}.
@@ -56,7 +56,7 @@ Rules:
 IMPORTANT OUTPUT ORDER: Generate the "compact" array BEFORE the "days" array. The app renders compact immediately while days stream in.
 
 Return ONLY a raw JSON object. Start with { end with }. Structure:
-{"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"compact":[{"label":"Day 1","city":"...","hotel":"specific hotel name","highlights":[{"title":"Place 1","icon":"🏛"},{"title":"Place 2","icon":"🍜"},{"title":"Place 3","icon":"🌿"}],"description":"1 sentence day overview"}],"days":[{"label":"Day 1","city":"...","transit_tip":"Use Suica card · Ginza Line today","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","icon":"🏛️","transition":{"mode":"metro"}}],"wishlist":[{"title":"...","geocode":"...","note":"...","icon":"..."}]}]}
+{"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"compact":[{"label":"Day 1","city":"...","hotel":"specific hotel name","highlights":[{"title":"Place 1","icon":"🏛"},{"title":"Place 2","icon":"🍜"},{"title":"Place 3","icon":"🌿"}],"description":"1 sentence day overview"}],"days":[{"label":"Day 1","city":"...","transit_tip":"Use Suica card · Ginza Line today","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","icon":"🏛️","transition":{"mode":"metro"}}],"wishlist":[{"title":"...","geocode":"...","note":"...","icon":"...","near":"Activity Title from this day"}]}]}
 
 The "compact" array must have one entry per day with: label, city, hotel (specific name), highlights (3-4 objects with "title" and "icon" emoji), description (1 sentence). Keep it brief — this is a quick preview. Example highlight: {"title":"Tsukiji Market","icon":"🍜"}.`;
 
@@ -225,12 +225,24 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       throw new Error(`Anthropic error: ${err}`);
     }
 
+    // Estimate input tokens from request body size
+    const requestBodyStr = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: Math.min(16000, numDays * 1800 + 2000),
+      temperature: 0.8,
+      stream: true,
+      system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+      messages: [{ role: "user", content: userMessage }],
+    });
+    const estimatedInputTokens = Math.round(requestBodyStr.length / 4);
+
     // Forward text deltas as simple SSE stream
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
 
     (async () => {
+      let outputLength = 0;
       try {
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();
@@ -248,6 +260,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
             try {
               const event = JSON.parse(raw);
               if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+                outputLength += event.delta.text.length;
                 await writer.write(encoder.encode(`data: ${JSON.stringify(event.delta.text)}\n\n`));
               } else if (event.type === "error") {
                 console.error("Anthropic stream error:", JSON.stringify(event.error));
@@ -260,6 +273,25 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       } finally {
         await writer.write(encoder.encode("data: [DONE]\n\n"));
         await writer.close();
+
+        // Log LLM usage (fire-and-forget)
+        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": supabaseKey,
+            "Authorization": `Bearer ${supabaseKey}`,
+          },
+          body: JSON.stringify({
+            trip_id: null,
+            function_name: "generate-itinerary",
+            model: "claude-sonnet-4-6",
+            input_tokens: estimatedInputTokens,
+            output_tokens: Math.round(outputLength / 4),
+          }),
+        }).catch(() => {});
       }
     })();
 

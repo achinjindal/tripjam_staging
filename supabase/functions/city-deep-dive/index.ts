@@ -89,6 +89,32 @@ ${notes ? `Traveler notes: ${notes}` : ""}`;
       }
     }
 
+    // Log LLM usage (fire-and-forget, approximate tokens)
+    const requestBodyStr = JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 2048,
+      stream: true,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userMessage }],
+    });
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": supabaseKey,
+        "Authorization": `Bearer ${supabaseKey}`,
+      },
+      body: JSON.stringify({
+        trip_id: null,
+        function_name: "city-deep-dive",
+        model: "claude-haiku-4-5-20251001",
+        input_tokens: Math.round(requestBodyStr.length / 4),
+        output_tokens: Math.round(accumulated.length / 4),
+      }),
+    }).catch(() => {});
+
     const start = accumulated.indexOf("{");
     const end = accumulated.lastIndexOf("}");
     let data: any = {};

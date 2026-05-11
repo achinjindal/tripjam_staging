@@ -6,6 +6,7 @@ import Auth from "./Auth.jsx";
 import Home from "./Home.jsx";
 import App from "./App.jsx";
 import TripPublicView from "./TripPublicView.jsx";
+import AdminConsole from "./Admin.jsx";
 
 // ── PWA update check — reload on new version ──
 if ("serviceWorker" in navigator) {
@@ -48,6 +49,7 @@ function parseUrl(path = window.location.pathname) {
   // /trip/:id — authenticated trip view (UUID is a trip ID, not a share token)
   const tripMatch = path.match(/^\/trip\/([^/]+)$/);
   if (tripMatch) return { page: "trip", tripId: tripMatch[1] };
+  if (path === "/admin") return { page: "admin" };
   const newStepMatch = path.match(/^\/new(?:\/(\d))?$/);
   if (newStepMatch) return { page: "create", step: newStepMatch[1] ? parseInt(newStepMatch[1]) : 0 };
   return { page: "home" };
@@ -153,6 +155,18 @@ function Root() {
 
   if (session === undefined) return null;
   if (!session) return <Auth />;
+
+  // Admin console — check is_admin flag
+  if (route.page === "admin") {
+    const [isAdmin, setIsAdmin] = useState(null);
+    useEffect(() => {
+      supabase.from("profiles").select("is_admin").eq("id", session.user.id).single()
+        .then(({ data }) => setIsAdmin(data?.is_admin || false));
+    }, []);
+    if (isAdmin === null) return null;
+    if (!isAdmin) { pushUrl("/"); return null; }
+    return <AdminConsole session={session} onHome={() => { pushUrl("/"); window.location.reload(); }} />;
+  }
 
   if (screen === "home") {
     return (

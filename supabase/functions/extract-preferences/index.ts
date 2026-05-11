@@ -56,6 +56,25 @@ serve(async (req) => {
       messages: [{ role: "user", content: parts.join("\n\n") }],
     });
 
+    // Log LLM usage (fire-and-forget)
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": supabaseKey,
+        "Authorization": `Bearer ${supabaseKey}`,
+      },
+      body: JSON.stringify({
+        trip_id: null,
+        function_name: "extract-preferences",
+        model: "claude-haiku-4-5-20251001",
+        input_tokens: msg.usage?.input_tokens || 0,
+        output_tokens: msg.usage?.output_tokens || 0,
+      }),
+    }).catch(() => {});
+
     const text = msg.content[0]?.type === "text" ? msg.content[0].text : "{}";
     const parsed = JSON.parse(text);
 

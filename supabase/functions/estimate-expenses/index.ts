@@ -59,6 +59,25 @@ serve(async (req) => {
     const data = await response.json();
     const text = data.content[0].text.trim();
 
+    // Log LLM usage (fire-and-forget)
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": supabaseKey,
+        "Authorization": `Bearer ${supabaseKey}`,
+      },
+      body: JSON.stringify({
+        trip_id: trip?.id || null,
+        function_name: "estimate-expenses",
+        model: "claude-haiku-4-5-20251001",
+        input_tokens: data.usage?.input_tokens || 0,
+        output_tokens: data.usage?.output_tokens || 0,
+      }),
+    }).catch(() => {});
+
     let items = [];
     try {
       const start = text.indexOf("[");

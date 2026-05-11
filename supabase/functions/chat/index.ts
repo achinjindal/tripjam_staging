@@ -220,6 +220,32 @@ Example (multi-action):
       }
     }
 
+    // Log LLM usage (fire-and-forget, approximate tokens)
+    const requestBodyStr = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8192,
+      stream: true,
+      system: systemPrompt,
+      messages,
+    });
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": supabaseKey,
+        "Authorization": `Bearer ${supabaseKey}`,
+      },
+      body: JSON.stringify({
+        trip_id: trip?.id || null,
+        function_name: "chat",
+        model: "claude-sonnet-4-6",
+        input_tokens: Math.round(requestBodyStr.length / 4),
+        output_tokens: Math.round(accumulated.length / 4),
+      }),
+    }).catch(() => {});
+
     const start = accumulated.indexOf("{");
     const end = accumulated.lastIndexOf("}");
     let data: any = { message: "Done." };

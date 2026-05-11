@@ -122,11 +122,23 @@ serve(async (req) => {
       throw new Error("Anthropic error: " + err);
     }
 
+    // Estimate input tokens from request body size
+    const requestBodyStr = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 4000,
+      temperature: 0.7,
+      stream: true,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userMessage }],
+    });
+    const estimatedInputTokens = Math.round(requestBodyStr.length / 4);
+
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
 
     (async () => {
+      let outputLength = 0;
       try {
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();
@@ -144,6 +156,7 @@ serve(async (req) => {
             try {
               const event = JSON.parse(raw);
               if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+                outputLength += event.delta.text.length;
                 await writer.write(encoder.encode("data: " + JSON.stringify(event.delta.text) + "\n\n"));
               }
             } catch { /* ignore */ }
@@ -152,6 +165,25 @@ serve(async (req) => {
       } finally {
         await writer.write(encoder.encode("data: [DONE]\n\n"));
         await writer.close();
+
+        // Log LLM usage (fire-and-forget)
+        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": supabaseKey,
+            "Authorization": `Bearer ${supabaseKey}`,
+          },
+          body: JSON.stringify({
+            trip_id: null,
+            function_name: "generate-brainstorm",
+            model: "claude-sonnet-4-6",
+            input_tokens: estimatedInputTokens,
+            output_tokens: Math.round(outputLength / 4),
+          }),
+        }).catch(() => {});
       }
     })();
 
