@@ -934,6 +934,43 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
       departureMode: trip.departure_mode || "flight",
     });
   }, [trip.id]);
+
+  // Auto-resolve airport for first/last day's city when flight fields are empty.
+  // Uses bundled OurAirports dataset (free, ~98KB gzipped, lazy-loaded).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!trip.id) return; // SAMPLE_TRIP / pre-creation state
+      const needArrival   = !trip.arrival_city   && days[0]?.city                       && (trip.arrival_mode   || "flight") === "flight";
+      const needDeparture = !trip.departure_city && days[days.length - 1]?.city         && (trip.departure_mode || "flight") === "flight";
+      if (!needArrival && !needDeparture) return;
+      const { resolveAirportForCity } = await import("../airports.js");
+      const updates = {};
+      let arrivalAirportIata = null, departureAirportIata = null;
+      if (needArrival) {
+        const ap = await resolveAirportForCity(days[0].city);
+        if (ap) {
+          updates.arrivalCity = `${ap.name} (${ap.iata})`;
+          updates.arrivalTime = "12:00";
+          arrivalAirportIata = ap.iata;
+        }
+      }
+      if (needDeparture) {
+        const ap = await resolveAirportForCity(days[days.length - 1].city);
+        if (ap) {
+          updates.departureCity = `${ap.name} (${ap.iata})`;
+          updates.departureTime = "19:00";
+          departureAirportIata = ap.iata;
+        }
+      }
+      if (cancelled || (!arrivalAirportIata && !departureAirportIata)) return;
+      const next = { ...flights, ...updates };
+      setFlights(next);
+      // Auto-save: trip row already exists by the time this tab is reachable.
+      await onSaveFlights({ ...next, arrivalAirportIata, departureAirportIata });
+    })();
+    return () => { cancelled = true; };
+  }, [trip.id]);
   const [hotels, setHotels] = useState(
     cities.map(city => ({
       city,
@@ -1058,7 +1095,7 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
 }
 
 /* ─── BOARD VIEW (main) ──────────────────────────────────────────────── */
-function BoardView({ trip, onSaveNotes, days, onSaveFlights, onSaveHotels, onApplyHotels }) {
+function BoardView({ trip, onSaveNotes, days, onSaveFlights, onSaveHotels, onApplyHotels, initialSection = null, onInitialSectionConsumed }) {
   const [activeSection, setActiveSection] = useState(null);
   const [todoItems, setTodoItems] = useState(null);
   const [bookmarkCount, setBookmarkCount] = useState(null);
@@ -1068,6 +1105,14 @@ function BoardView({ trip, onSaveNotes, days, onSaveFlights, onSaveHotels, onApp
     setActiveSection(section);
     window.history.pushState({ boardSection: section }, "");
   };
+
+  // Deep-link: open a sub-section when parent requests it (e.g. clicking "Land at" jumps to Travel & Hotels).
+  useEffect(() => {
+    if (initialSection) {
+      openSection(initialSection);
+      onInitialSectionConsumed?.();
+    }
+  }, [initialSection]);
   useEffect(() => {
     const onPop = (e) => {
       if (activeSection) {

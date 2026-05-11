@@ -1731,7 +1731,7 @@ function TransportCarousel() {
   );
 }
 
-function DepartureTimeline({ departureTime, departureMode, onEdit }) {
+function DepartureTimeline({ departureTime, departureMode, onEdit, airportIata, destIata, destArrivalHHMM }) {
   const hhmm = departureTime ? departureTime.split("T")[1]?.substring(0, 5) : null;
   if (!hhmm) return null;
 
@@ -1742,6 +1742,7 @@ function DepartureTimeline({ departureTime, departureMode, onEdit }) {
   const leaveMM     = String(leaveCapped % 60).padStart(2, "0");
   const modeIcon    = departureMode === "train" ? "🚂" : departureMode === "road" ? "🚗" : departureMode === "bus" ? "🚌" : "✈️";
   const modeLabel   = departureMode === "train" ? "Train" : departureMode === "road" ? "Drive out" : departureMode === "bus" ? "Bus" : "Flight";
+  const showHomeLeg = !!destIata && destIata !== airportIata;
 
   return (
     <div style={{padding:"12px 20px 0"}}>
@@ -1754,14 +1755,22 @@ function DepartureTimeline({ departureTime, departureMode, onEdit }) {
           <span
             onClick={onEdit}
             style={onEdit ? {cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:3} : {}}
-          >{modeIcon} {modeLabel} {hhmm}</span>
+          >
+            {modeIcon} {showHomeLeg ? `${airportIata || modeLabel} → ${destIata}` : modeLabel} {hhmm}{airportIata ? ` from ${airportIata}` : ""}
+          </span>
+          {showHomeLeg && destArrivalHHMM && (
+            <>
+              <span style={{color:T.mist,fontSize:10}}>›</span>
+              <span style={{color:T.mist}}>Arrives ~{destArrivalHHMM} at {destIata}</span>
+            </>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function ArrivalTimeline({ arrivalTime, arrivalMode, onEditFlight }) {
+function ArrivalTimeline({ arrivalTime, arrivalMode, onEditFlight, airportIata, originIata, originDepartureHHMM }) {
   const arrivalHHMM = arrivalTime ? arrivalTime.split("T")[1]?.substring(0, 5) : null;
   if (!arrivalHHMM) return null;
 
@@ -1772,15 +1781,30 @@ function ArrivalTimeline({ arrivalTime, arrivalMode, onEditFlight }) {
   const readyMM    = String(readyTotal % 60).padStart(2, "0");
   const icon  = arrivalMode === "train" ? "🚂" : arrivalMode === "road" ? "🚗" : arrivalMode === "bus" ? "🚌" : "✈️";
   const verb  = arrivalMode === "train" ? "Arrive" : arrivalMode === "road" ? "Drive in" : arrivalMode === "bus" ? "Arrive" : "Land";
+  const showHomeLeg = !!originIata && originIata !== airportIata;
 
   return (
     <div style={{padding:"0 20px 12px"}}>
       <div style={{background:"#EBF5FF",borderRadius:RADIUS.md,padding:"10px 14px",border:"1px solid #C5DEFF"}}>
         <div style={{fontSize:12,fontFamily:"Georgia,serif",color:T.ink,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+          {showHomeLeg && (
+            <>
+              <span style={{color:T.mist}}>{icon} {originIata} → {airportIata}</span>
+              {originDepartureHHMM && (
+                <>
+                  <span style={{color:T.mist,fontSize:10}}>›</span>
+                  <span style={{color:T.mist}}>Departs ~{originDepartureHHMM}</span>
+                </>
+              )}
+              <span style={{color:T.mist,fontSize:10}}>›</span>
+            </>
+          )}
           <span
             onClick={onEditFlight}
             style={onEditFlight ? {cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:3} : {}}
-          >{icon} {verb} {arrivalHHMM}</span>
+          >
+            {showHomeLeg ? "" : `${icon} `}{verb} {arrivalHHMM}{airportIata ? ` at ${airportIata}` : ""}
+          </span>
           <span style={{color:T.mist}}>·</span>
           <span style={{fontWeight:600,color:T.moss}}>Exit by ~{readyHH}:{readyMM}</span>
         </div>
@@ -1900,7 +1924,7 @@ function DayCompact({ day, displayCity, onExpand, canExpand = true }) {
   );
 }
 
-function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, onSelectHotel, onAskTrippy, onCollapse = null }) {
+function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, arrivalAirportIata = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, departureAirportIata = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, onSelectHotel, onAskTrippy, onCollapse = null, originIata = null, originDepartureHHMM = null, destIata = null, destArrivalHHMM = null }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
 
@@ -1959,7 +1983,7 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
 
       {/* Arrival timeline */}
       {arrivalTime && (
-        <ArrivalTimeline arrivalTime={arrivalTime} arrivalMode={arrivalMode} onEditFlight={onEditFlight} />
+        <ArrivalTimeline arrivalTime={arrivalTime} arrivalMode={arrivalMode} onEditFlight={onEditFlight} airportIata={arrivalAirportIata} originIata={originIata} originDepartureHHMM={originDepartureHHMM} />
       )}
 
       {/* Arrival point → first activity transition */}
@@ -2073,7 +2097,7 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
 
       {/* Departure timeline (last day only) */}
       {departureTime && (
-        <DepartureTimeline departureTime={departureTime} departureMode={departureMode} onEdit={onEditDeparture} />
+        <DepartureTimeline departureTime={departureTime} departureMode={departureMode} onEdit={onEditDeparture} airportIata={departureAirportIata} destIata={destIata} destArrivalHHMM={destArrivalHHMM} />
       )}
     </div>
   );
@@ -2251,6 +2275,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   }, []);
 
   const [activeBottomTab, setActiveBottomTab] = useState(initialTab || "itinerary");
+  const [boardInitialSection, setBoardInitialSection] = useState(null);
 
   // Sync URL when screen/tab changes
   useEffect(() => {
@@ -2296,6 +2321,48 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       preloadDay(0);
     }
   }, [streamingDays, days.length, preloadDay]);
+
+  // Resolve user's home (base_location) → nearest airport IATA for rendering origin/destination flight info.
+  const [baseAirportIata, setBaseAirportIata] = useState(null);
+  // Estimated origin departure HH:MM (on Day 1) and destination arrival HH:MM (on last day) based on haversine + cruise speed.
+  const [originDepartureHHMM, setOriginDepartureHHMM] = useState(null);
+  const [destArrivalHHMM, setDestArrivalHHMM]         = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!trip?.base_location) {
+      setBaseAirportIata(null); setOriginDepartureHHMM(null); setDestArrivalHHMM(null);
+      return;
+    }
+    (async () => {
+      const { resolveAirportForCity, findAirportByIata } = await import("./airports.js");
+      const { haversineMeters } = await import("./photos");
+      const baseAp = await resolveAirportForCity(trip.base_location);
+      if (cancelled) return;
+      setBaseAirportIata(baseAp?.iata || null);
+      // Compute approximate origin departure / destination arrival times if we have base + arrival/departure IATAs.
+      const flightMins = (a, b) => {
+        if (!a || !b) return null;
+        const dKm = haversineMeters({lat:a.lat,lng:a.lng}, {lat:b.lat,lng:b.lng}) / 1000;
+        return Math.round(dKm / 800 * 60 + 90); // 800 km/h cruise + 90 min buffer
+      };
+      const addMins = (hhmm, mins, sign) => {
+        if (!hhmm || !mins) return null;
+        const [h, m] = hhmm.split(":").map(Number);
+        let total = h * 60 + m + sign * mins;
+        total = ((total % 1440) + 1440) % 1440;
+        return `${String(Math.floor(total/60)).padStart(2,"0")}:${String(total%60).padStart(2,"0")}`;
+      };
+      const arrAp = trip.arrival_airport_iata ? await findAirportByIata(trip.arrival_airport_iata) : null;
+      const depAp = trip.departure_airport_iata ? await findAirportByIata(trip.departure_airport_iata) : null;
+      if (cancelled) return;
+      const arrHHMM = trip.arrival_time ? trip.arrival_time.split("T")[1]?.substring(0,5) : null;
+      const depHHMM = trip.departure_time ? trip.departure_time.split("T")[1]?.substring(0,5) : null;
+      setOriginDepartureHHMM(baseAp && arrAp && arrHHMM ? addMins(arrHHMM, flightMins(baseAp, arrAp), -1) : null);
+      setDestArrivalHHMM(baseAp && depAp && depHHMM ? addMins(depHHMM, flightMins(depAp, baseAp), +1) : null);
+    })();
+    return () => { cancelled = true; };
+  }, [trip?.base_location, trip?.arrival_airport_iata, trip?.departure_airport_iata, trip?.arrival_time, trip?.departure_time]);
+
   const [pretripTab, setPretripTab] = useState("brainstorm"); // pre-trip bottom nav tab
   const [magazineFilterCities, setMagazineFilterCities] = useState(null); // cities to filter magazine by (from "Tell me more")
   const [pretripDeepDiveCity, setPretripDeepDiveCity] = useState(null); // city for deep dive in pre-trip magazine
@@ -2440,6 +2507,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const isJumping     = useRef(false);
   const undoDismissRef = useRef(null);
   const triggerRgRef = useRef(null); // imperative trigger for RG generation
+  const igAbortRef = useRef(null); // abort controller for in-flight IG generation
 
   const editActivity = (dayId, updated) => {
     setDays(prev=>prev.map(d=>d.id===dayId?{...d,activities:d.activities.map(a=>a.id===updated.id?updated:a)}:d));
@@ -2523,15 +2591,19 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     setSetupModal(null);
   };
 
-  const saveLogisticsFlights = async ({ arrivalCity, arrivalTime, arrivalMode, departureCity, departureTime, departureMode, hasCar }) => {
+  const saveLogisticsFlights = async ({ arrivalCity, arrivalTime, arrivalMode, departureCity, departureTime, departureMode, hasCar, arrivalAirportIata, departureAirportIata }) => {
     const arrival_time   = arrivalTime   ? `${trip.start_date}T${arrivalTime}:00`   : null;
     const departure_time = departureTime ? `${trip.end_date}T${departureTime}:00`   : null;
+    // If caller didn't pass an explicit IATA, derive from "Airport Name (XXX)" suffix; clear if no match.
+    const iataFromSuffix = (s) => { const m = (s || "").match(/\(([A-Z]{3})\)\s*$/); return m ? m[1] : null; };
+    const arrival_airport_iata   = arrivalAirportIata   !== undefined ? (arrivalAirportIata   || null) : iataFromSuffix(arrivalCity);
+    const departure_airport_iata = departureAirportIata !== undefined ? (departureAirportIata || null) : iataFromSuffix(departureCity);
     await supabase.from("trips").update({
-      arrival_city: arrivalCity || null, arrival_time, arrival_mode: arrivalMode || "flight",
-      departure_city: departureCity || null, departure_time, departure_mode: departureMode || "flight",
+      arrival_city: arrivalCity || null, arrival_time, arrival_mode: arrivalMode || "flight", arrival_airport_iata,
+      departure_city: departureCity || null, departure_time, departure_mode: departureMode || "flight", departure_airport_iata,
       has_car: hasCar || false,
     }).eq("id", trip.id);
-    setTrip(t => ({ ...t, arrival_city: arrivalCity || null, arrival_time, arrival_mode: arrivalMode, departure_city: departureCity || null, departure_time, departure_mode: departureMode, has_car: hasCar }));
+    setTrip(t => ({ ...t, arrival_city: arrivalCity || null, arrival_time, arrival_mode: arrivalMode, arrival_airport_iata, departure_city: departureCity || null, departure_time, departure_mode: departureMode, departure_airport_iata, has_car: hasCar }));
   };
 
   const saveLogisticsHotels = async (hotels) => {
@@ -2612,6 +2684,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       const { error } = await supabase.from("trips").insert({
         id: draftId, name: draftName, destination: shortenDests(form.destinations),
         start_date: form.startDate, end_date: form.endDate, created_by: session.user.id, ig_request: igRequest,
+        base_location: form.baseLocation || null,
         ...(form.notes && { notes: form.notes }),
         ...(form.arrivalCity && { arrival_city: form.arrivalCity }),
         ...(form.departureCity && { departure_city: form.departureCity }),
@@ -2628,6 +2701,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     } else {
       // Update existing trip with new form data
       const updates = { start_date: form.startDate, end_date: form.endDate, notes: form.notes || null,
+        base_location: form.baseLocation || null,
         arrival_city: form.arrivalCity || null, departure_city: form.departureCity || null,
         ...(form.arrivalTime && { arrival_time: `${form.startDate}T${form.arrivalTime}:00` }),
         ...(form.departureTime && { departure_time: `${form.endDate}T${form.departureTime}:00` }),
@@ -2755,6 +2829,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     const generationStartedAt = new Date().toISOString();
     try {
       const controller = new AbortController();
+      igAbortRef.current = controller;
       const timeout = setTimeout(() => controller.abort(), 180000); // 3 min for long trips
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-itinerary`,
@@ -2923,11 +2998,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       itinerary = parsed;
 
     } catch (e) {
+      // If user navigated away (abort), silently stop — don't redirect
+      if (e.name === "AbortError") {
+        console.log("IG generation aborted by user navigation");
+        _igInFlight = false;
+        return;
+      }
       console.error("AI generation failed:", e.message);
       console.error("Accumulated length:", accumulated.length);
       console.error("Accumulated tail:", accumulated.slice(-300));
       if (compactShown) {
-        // Compact already loaded — stay on itinerary, stop loading bar, use compact data
         setDetailedLoading(false);
         setDetailedReady(true);
         _igInFlight = false;
@@ -2972,6 +3052,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       ig_request: igRequest,
       ig_response: itinerary,
       ig_count: (editingTrip?.ig_count || 0) + 1,
+      base_location: form.baseLocation || null,
       ...(itinerary.summary    && { summary: itinerary.summary }),
       ...(form.notes           && { notes: form.notes }),
       ...(form.arrivalCity     && { arrival_city: form.arrivalCity }),
@@ -3810,8 +3891,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 <div style={{display:"flex",gap:8}}>
                   {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:RADIUS.full,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
                   <button onClick={()=>{
+                    // Abort any in-flight IG generation
+                    if (igAbortRef.current) { igAbortRef.current.abort(); igAbortRef.current = null; }
+                    _igInFlight = false;
+                    setDetailedLoading(false);
                     setEditingTrip(trip);
-                    // Prefill pendingForm from the trip so BrainstormView has context (destinations/styles/budget/etc.)
+                    // Prefill pendingForm from the trip so BrainstormView has context
                     const igReq = trip.ig_request || {};
                     setPendingForm({
                       destinations: igReq.destinations?.length ? igReq.destinations : (trip.destination || "").split(" → ").map(s => s.trim()).filter(Boolean),
@@ -3825,9 +3910,9 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                       notes: trip.notes || igReq.notes || "",
                       arrivalCity: trip.arrival_city || "",
                       departureCity: trip.departure_city || "",
-                      baseLocation: igReq.baseLocation || trip.arrival_city || "",
+                      baseLocation: trip.base_location || igReq.baseLocation || "",
                     });
-                    setFormEdited(false); // entering from Edit — load saved routes, don't regenerate
+                    setFormEdited(false);
                     setPretripTab("brainstorm");
                     setScreen("brainstorm");
                   }} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:RADIUS.full,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>Explore Other Plans</button>
@@ -4011,13 +4096,21 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                       arrivalTime={i === 0 ? (trip.arrival_time || (trip.start_date ? `${trip.start_date}T09:00:00` : null)) : null}
                       arrivalMode={i === 0 ? (trip.arrival_mode || "flight") : null}
                       arrivalCity={i === 0 ? trip.arrival_city : null}
+                      arrivalAirportIata={i === 0 ? (trip.arrival_airport_iata || null) : null}
+                      originIata={i === 0 ? baseAirportIata : null}
+                      originDepartureHHMM={i === 0 ? originDepartureHHMM : null}
                       onEditFlight={i === 0 ? () => {
+                        setBoardInitialSection("logistics");
                         setActiveBottomTab("board");
                       } : undefined}
                       departureTime={i === days.length - 1 ? (trip.departure_time || (trip.end_date ? `${trip.end_date}T22:00:00` : null)) : null}
                       departureMode={i === days.length - 1 ? (trip.departure_mode || "flight") : null}
                       departureCity={i === days.length - 1 ? (trip.departure_city || null) : null}
+                      departureAirportIata={i === days.length - 1 ? (trip.departure_airport_iata || null) : null}
+                      destIata={i === days.length - 1 ? baseAirportIata : null}
+                      destArrivalHHMM={i === days.length - 1 ? destArrivalHHMM : null}
                       onEditDeparture={i === days.length - 1 ? () => {
+                        setBoardInitialSection("logistics");
                         setActiveBottomTab("board");
                       } : undefined}
                       hotelActivity={startHotel}
@@ -4073,6 +4166,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               <BoardView
                 trip={trip}
                 days={days}
+                initialSection={boardInitialSection}
+                onInitialSectionConsumed={() => setBoardInitialSection(null)}
                 onSaveFlights={saveLogisticsFlights}
                 onSaveHotels={saveLogisticsHotels}
                 onApplyHotels={applyHotelsToItinerary}
