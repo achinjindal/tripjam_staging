@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect, createContext, useContext, Fragment, Component } from "react";
+import { useState, useRef, useEffect, useCallback, createContext, useContext, Fragment, Component } from "react";
 import posthog from "posthog-js";
 import { supabase } from "./supabase";
 import BoardView, { LogisticsTab } from "./components/BoardView.jsx";
 import SetupForm from "./components/SetupForm.jsx";
-import { T, PLACES_PROXY, PLACES_HEADERS } from "./theme";
+import { T, RADIUS, SHADOW, MOTION, PLACES_PROXY, PLACES_HEADERS } from "./theme";
 import { _photoCache, _usedPhotoUrls, _fetchPhoto, setActiveTripId, setTripDestination, extractPlace, geocodePlace, haversineMeters } from "./photos";
 import { MapView, RouteMapView } from "./components/MapView.jsx";
 import { DestinationHero, FoodSpotlightCard, CityCard, MagazineHighlightCard, HotelSuggestionCard } from "./components/Magazine.jsx";
@@ -19,7 +19,7 @@ class ErrorBoundary extends Component {
         <div style={{fontSize:36,marginBottom:12}}>😵</div>
         <div style={{fontSize:16,color:"#1A2B3C",marginBottom:8,fontFamily:"'DM Serif Display',serif"}}>Something went wrong</div>
         <div style={{fontSize:13,color:"#8BA5BB",marginBottom:16}}>Try refreshing the page</div>
-        <button onClick={()=>{ this.setState({ hasError: false }); window.location.reload(); }} style={{padding:"10px 20px",borderRadius:12,border:"none",background:"#2563A8",color:"white",fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer"}}>Refresh</button>
+        <button onClick={()=>{ this.setState({ hasError: false }); window.location.reload(); }} style={{padding:"10px 20px",borderRadius:RADIUS.lg,border:"none",background:"#2563A8",color:"white",fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer"}}>Refresh</button>
       </div>
     );
     return this.props.children;
@@ -60,11 +60,13 @@ function PhotoStrip({ activity, city }) {
   useEffect(() => {
     if ((stored && !broken) || !visible) return;
     if (!geocode) { setLiveUrl(null); return; }
+    const isHotel = activity?.type === "hotel";
     const key = `${geocode}||${city || ""}`;
     if (_photoCache[key] !== undefined) {
       const cached = _photoCache[key];
-      if (cached && _usedPhotoUrls.has(cached)) { setLiveUrl(null); return; }
-      if (cached) _usedPhotoUrls.add(cached);
+      // Hotels bypass the dedup — same hotel can appear in suggestion + itinerary
+      if (!isHotel && cached && _usedPhotoUrls.has(cached)) { setLiveUrl(null); return; }
+      if (cached && !isHotel) _usedPhotoUrls.add(cached);
       setLiveUrl(cached);
       return;
     }
@@ -72,7 +74,7 @@ function PhotoStrip({ activity, city }) {
     _fetchPhoto(geocode, city, activity?.type).then(src => {
       if (cancelled) return;
       if (src) {
-        _usedPhotoUrls.add(src);
+        if (!isHotel) _usedPhotoUrls.add(src);
         if (activity?.id && !String(activity.id).startsWith("c-")) supabase.from("activities").update({ photo_url: src }).eq("id", activity.id).then();
       }
       _photoCache[key] = src ?? null;
@@ -88,18 +90,18 @@ function PhotoStrip({ activity, city }) {
 
   const url = (!broken && stored) || liveUrl;
   if (url === undefined) return (
-    <div ref={ref} style={{marginTop:10,height:130,borderRadius:10,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
+    <div ref={ref} style={{marginTop:10,height:130,borderRadius:RADIUS.md,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
   );
   if (!url) {
     if (!debugMode) return null;
     return (
-      <div style={{marginTop:8,padding:"4px 8px",borderRadius:6,background:"#FFF5F5",border:"1px solid #FCCACA",fontSize:10,color:"#E05C5C",fontFamily:"monospace"}}>
+      <div style={{marginTop:8,padding:"4px 8px",borderRadius:RADIUS.sm,background:T.errorLight,border:`1px solid ${T.errorBorder}`,fontSize:10,color:T.error,fontFamily:"monospace"}}>
         ✗ no photo — "{activity?.geocode || activity?.title}"
       </div>
     );
   }
   return (
-    <div style={{marginTop:10,borderRadius:10,overflow:"hidden",height:130,background:T.sand,position:"relative"}}>
+    <div style={{marginTop:10,borderRadius:RADIUS.md,overflow:"hidden",height:130,background:T.sand,position:"relative"}}>
       <img src={url} alt={geocode} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} onError={() => { if (!broken) { setBroken(true); setLiveUrl(undefined); } }}/>
       {debugMode && (
         <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(0,0,0,0.55)",color:"#fff",fontSize:10,fontFamily:"monospace",padding:"3px 6px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
@@ -346,16 +348,16 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
   if (compact) {
     return (
       <div onClick={interactive ? onVote : undefined} style={{
-        background: hasError ? "#FFF0F0" : selected ? `linear-gradient(135deg, ${T.ocean}12, ${T.dusk}08)` : T.chalk,
-        borderRadius: 14, padding: "12px 12px 10px",
-        border: `2px solid ${hasError ? "#e53e3e" : selected ? T.ocean : T.sand}`,
+        background: hasError ? T.errorLight : selected ? `linear-gradient(135deg, ${T.ocean}12, ${T.dusk}08)` : T.chalk,
+        borderRadius: RADIUS.lg, padding: "12px 12px 10px",
+        border: `2px solid ${hasError ? T.error : selected ? T.ocean : T.sand}`,
         cursor: interactive ? "pointer" : "default",
         position: "relative", flex: 1, minWidth: 0,
       }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {routeLabel && <span style={{background:T.dusk,color:"white",fontSize:9,fontFamily:"Georgia,serif",fontWeight:700,borderRadius:5,padding:"1px 6px",letterSpacing:0.5}}>{routeLabel}</span>}
-            {item.recommended && showRecommended && <span style={{fontSize:9,fontFamily:"Georgia,serif",fontWeight:600,color:"#92400E",background:"#FEF3C7",borderRadius:10,padding:"1px 5px"}}>★</span>}
+            {item.recommended && showRecommended && <span style={{fontSize:9,fontFamily:"Georgia,serif",fontWeight:600,color:T.warning,background:T.warningLight,borderRadius:RADIUS.md,padding:"1px 5px"}}>★</span>}
           </div>
           {interactive && (
             <div style={{width:18,height:18,borderRadius:"50%",border:`2px solid ${selected?T.ocean:T.sand}`,background:selected?T.ocean:"transparent",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontSize:9,fontWeight:700,flexShrink:0}}>{selected && "✓"}</div>
@@ -364,7 +366,7 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
         <div style={{ fontSize: 18, marginBottom: 4 }}>{item.icon}</div>
         <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 13, color: T.ink, lineHeight: 1.2, marginBottom: 3 }}>{item.title}</div>
         {item.tagline && <div style={{ fontSize: 10, color: T.ocean, fontFamily: "Georgia,serif", lineHeight: 1.3 }}>{item.tagline}</div>}
-        {item.bestFor && <div style={{ fontSize: 9, color: "#16A34A", fontFamily: "Georgia,serif", marginTop: 4 }}>✓ {item.bestFor}</div>}
+        {item.bestFor && <div style={{ fontSize: 9, color: T.success, fontFamily: "Georgia,serif", marginTop: 4 }}>✓ {item.bestFor}</div>}
       </div>
     );
   }
@@ -372,9 +374,9 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
   // Full mode: expanded card with all details
   return (
     <div onClick={interactive ? onVote : undefined} style={{
-      background: hasError ? "#FFF0F0" : selected ? `linear-gradient(135deg, ${T.moss}08, ${T.moss}04)` : T.chalk,
-      borderRadius: 16, padding: "14px 16px",
-      border: `2px solid ${hasError ? "#e53e3e" : selected ? T.moss : T.sand}`,
+      background: hasError ? T.errorLight : selected ? `linear-gradient(135deg, ${T.moss}08, ${T.moss}04)` : T.chalk,
+      borderRadius: RADIUS.lg, padding: "14px 16px",
+      border: `2px solid ${hasError ? T.error : selected ? T.moss : T.sand}`,
       position: "relative",
       cursor: interactive ? "pointer" : "default",
     }}>
@@ -388,14 +390,14 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
           </div>
           {item.recommended && showRecommended && (
             <div style={{ marginTop: 2 }}>
-              <span style={{ fontSize: 10, fontFamily: "Georgia,serif", fontWeight: 600, color: "#92400E", background: "#FEF3C7", borderRadius: 20, padding: "1px 7px" }}>
+              <span style={{ fontSize: 10, fontFamily: "Georgia,serif", fontWeight: 600, color: T.warning, background: T.warningLight, borderRadius: RADIUS.full, padding: "1px 7px" }}>
                 ★ Recommended
               </span>
             </div>
           )}
         </div>
         {!interactive && selected && (
-          <span style={{ fontSize: 11, color: T.moss, background: "#DCFCE7", borderRadius: 20, padding: "2px 9px", fontFamily: "Georgia,serif", fontWeight: 600, flexShrink: 0 }}>
+          <span style={{ fontSize: 11, color: T.moss, background: T.successLight, borderRadius: RADIUS.full, padding: "2px 9px", fontFamily: "Georgia,serif", fontWeight: 600, flexShrink: 0 }}>
             ✓ Selected
           </span>
         )}
@@ -409,7 +411,7 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
             return (
               <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 4 }}>
                 <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", fontWeight: 600, minWidth: 38, marginTop: 1 }}>Day {i + 1}</div>
-                <div style={{ fontSize: 12, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.4 }}>{text}</div>
+                <div style={{ fontSize: 12, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.4 }}>{text.split(/\*\*(.+?)\*\*/).map((part, j) => j % 2 === 1 ? <strong key={j}>{part}</strong> : part)}</div>
               </div>
             );
           })}
@@ -424,7 +426,7 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
             const good = typeof pt === "object" ? pt.good : true;
             return (
               <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 3 }}>
-                <span style={{ fontSize: 10, color: good === false ? "#92400E" : T.ocean, marginTop: 2, flexShrink: 0 }}>
+                <span style={{ fontSize: 10, color: good === false ? T.warning : T.ocean, marginTop: 2, flexShrink: 0 }}>
                   {good === false ? "✗" : "✓"}
                 </span>
                 <span style={{ fontSize: 11, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.4 }}>{text}</span>
@@ -436,19 +438,19 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
       {/* Footer badges */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {item.bestFor && (
-          <span style={{ fontSize: 11, color: "#16A34A", fontFamily: "Georgia,serif", background: "#DCFCE7", borderRadius: 20, padding: "2px 9px" }}>
+          <span style={{ fontSize: 11, color: T.success, fontFamily: "Georgia,serif", background: T.successLight, borderRadius: RADIUS.full, padding: "2px 9px" }}>
             ✓ {item.bestFor}
           </span>
         )}
         {item.warning && (
-          <span style={{ fontSize: 11, color: "#92400E", fontFamily: "Georgia,serif", background: "#FEF3C7", borderRadius: 20, padding: "2px 9px" }}>
+          <span style={{ fontSize: 11, color: T.warning, fontFamily: "Georgia,serif", background: T.warningLight, borderRadius: RADIUS.full, padding: "2px 9px" }}>
             ⚠ {item.warning}
           </span>
         )}
       </div>
       {/* Error banner */}
       {hasError && (
-        <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: "#FEE2E2", border: "1px solid #FECACA", fontSize: 12, color: "#c53030", fontFamily: "Georgia,serif" }}>
+        <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: RADIUS.md, background: T.errorLight, border: `1px solid ${T.errorBorder}`, fontSize: 12, color: T.error, fontFamily: "Georgia,serif" }}>
           ⚠ {item._error} — try editing this plan again in chat
         </div>
       )}
@@ -456,7 +458,7 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
       {interactive && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
           <button onClick={(e) => { e.stopPropagation(); onVote?.(); }} style={{
-            padding: "7px 18px", borderRadius: 10, border: "none",
+            padding: "7px 18px", borderRadius: RADIUS.md, border: "none",
             background: selected ? T.moss : T.ocean,
             color: "white", fontFamily: "Georgia,serif", fontSize: 12, fontWeight: 600,
             cursor: "pointer",
@@ -465,14 +467,14 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
           </button>
           {onModify && (
             <button onClick={(e) => { e.stopPropagation(); onModify(); }} style={{
-              padding: "7px 12px", borderRadius: 10, border: "none",
+              padding: "7px 12px", borderRadius: RADIUS.md, border: "none",
               background: "none", color: T.ocean, fontFamily: "Georgia,serif", fontSize: 12,
               cursor: "pointer",
             }}>Modify</button>
           )}
           {onDismiss && (
             <button onClick={(e) => { e.stopPropagation(); onDismiss(); }} style={{
-              padding: "7px 12px", borderRadius: 10, border: "none",
+              padding: "7px 12px", borderRadius: RADIUS.md, border: "none",
               background: "none", color: T.mist, fontFamily: "Georgia,serif", fontSize: 12,
               cursor: "pointer",
             }}>
@@ -486,14 +488,14 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
         <div style={{ display: "flex", gap: 6, marginTop: interactive ? 6 : 10, paddingTop: 6, borderTop: `1px solid ${T.sand}` }}>
           {onTellMore && (
             <button onClick={(e) => { e.stopPropagation(); onTellMore(); }} style={{
-              flex: 1, padding: "7px 0", borderRadius: 10, border: `1.5px solid ${T.sand}`,
+              flex: 1, padding: "7px 0", borderRadius: RADIUS.md, border: `1.5px solid ${T.sand}`,
               background: "transparent", color: T.ocean, fontFamily: "Georgia,serif", fontSize: 11, fontWeight: 500,
               cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
             }}>📖 Tell me more</button>
           )}
           {onShowMap && (
             <button onClick={(e) => { e.stopPropagation(); onShowMap(); }} style={{
-              flex: 1, padding: "7px 0", borderRadius: 10, border: `1.5px solid ${T.sand}`,
+              flex: 1, padding: "7px 0", borderRadius: RADIUS.md, border: `1.5px solid ${T.sand}`,
               background: "transparent", color: T.ocean, fontFamily: "Georgia,serif", fontSize: 11, fontWeight: 500,
               cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
             }}>🗺 Show on map</button>
@@ -914,7 +916,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
               </div>
             </div>
             {onEditForm && (
-              <button onClick={onEditForm} style={{ background: T.sand, border: "none", borderRadius: 20, padding: "5px 11px", color: T.ink, fontSize: 12, cursor: "pointer", fontFamily: "Georgia,serif", fontWeight: 600 }}>
+              <button onClick={onEditForm} style={{ background: T.sand, border: "none", borderRadius: RADIUS.full, padding: "5px 11px", color: T.ink, fontSize: 12, cursor: "pointer", fontFamily: "Georgia,serif", fontWeight: 600 }}>
                 ✏️ Edit details
               </button>
             )}
@@ -935,10 +937,10 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
         {/* ── PRE-TRIP: route cards ── */}
         {isPretripMode && (<>
           {genError && (
-            <div style={{ margin: "12px 0", padding: "12px 16px", borderRadius: 12, background: "#FFF0F0", border: "1.5px solid #FECACA", fontSize: 13, color: "#c53030", fontFamily: "Georgia,serif", lineHeight: 1.5 }}>
+            <div style={{ margin: "12px 0", padding: "12px 16px", borderRadius: RADIUS.lg, background: T.errorLight, border: `1.5px solid ${T.errorBorder}`, fontSize: 13, color: T.error, fontFamily: "Georgia,serif", lineHeight: 1.5 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Couldn't load ideas</div>
-              <div style={{ fontSize: 11, color: "#e53e3e", fontFamily: "monospace", wordBreak: "break-all", marginBottom: 10 }}>{genError}</div>
-              <button onClick={generate} style={{ background: T.ocean, color: "white", border: "none", borderRadius: 8, padding: "7px 14px", fontFamily: "Georgia,serif", fontSize: 12, cursor: "pointer" }}>Try again</button>
+              <div style={{ fontSize: 11, color: T.error, fontFamily: "monospace", wordBreak: "break-all", marginBottom: 10 }}>{genError}</div>
+              <button onClick={generate} style={{ background: T.ocean, color: "white", border: "none", borderRadius: RADIUS.md, padding: "7px 14px", fontFamily: "Georgia,serif", fontSize: 12, cursor: "pointer" }}>Try again</button>
             </div>
           )}
           {items?.length === 0 && !generating && !loadingItems && !genError && (
@@ -981,9 +983,9 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
             {/* Skeleton cards while routes are streaming */}
             {generating && tier1Items.length > 0 && (
               [...Array(Math.min(4, 12 - tier1Items.length))].map((_, i) => (
-                <div key={`skel-${i}`} style={{ borderRadius: 16, padding: "14px 16px", border: `2px solid ${T.sand}`, background: T.chalk }}>
+                <div key={`skel-${i}`} style={{ borderRadius: RADIUS.lg, padding: "14px 16px", border: `2px solid ${T.sand}`, background: T.chalk }}>
                   <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-                    <div style={{ width: 24, height: 24, borderRadius: 6, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite" }} />
+                    <div style={{ width: 24, height: 24, borderRadius: RADIUS.sm, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite" }} />
                     <div style={{ flex: 1 }}>
                       <div style={{ width: "60%", height: 14, borderRadius: 4, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite", marginBottom: 6 }} />
                       <div style={{ width: "40%", height: 10, borderRadius: 4, background: T.sand, animation: "shimmer 1.5s ease-in-out infinite" }} />
@@ -1001,7 +1003,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
           {/* Generate new options */}
           {!generating && tier1Items.length > 0 && (
             tier1Items.length >= 12 ? (
-              <div style={{ marginTop: 14, padding: "12px 16px", borderRadius: 12, background: T.chalk, border: `1.5px solid ${T.sand}`, textAlign: "center" }}>
+              <div style={{ marginTop: 14, padding: "12px 16px", borderRadius: RADIUS.lg, background: T.chalk, border: `1.5px solid ${T.sand}`, textAlign: "center" }}>
                 <div style={{ fontSize: 13, color: T.ink, fontFamily: "Georgia,serif", marginBottom: 4 }}>Maximum 12 trip ideas reached</div>
                 <div style={{ fontSize: 12, color: T.mist, fontFamily: "Georgia,serif" }}>Dismiss some ideas to generate new ones</div>
               </div>
@@ -1010,7 +1012,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                 onClick={() => generate(true)}
                 style={{
                   marginTop: 14, width: "100%",
-                  padding: "11px 14px", borderRadius: 12,
+                  padding: "11px 14px", borderRadius: RADIUS.lg,
                   background: T.chalk, border: `1.5px dashed ${T.sand}`, color: T.ocean,
                   fontFamily: "Georgia,serif", fontSize: 13, fontWeight: 600,
                   cursor: "pointer",
@@ -1082,7 +1084,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
 
               {/* If you have extra time (wishlist roll-up) */}
               {wishlist.length > 0 && (
-                <div style={{ background: T.chalk, borderRadius: 14, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
+                <div style={{ background: T.chalk, borderRadius: RADIUS.lg, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
                   <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>If you have extra time</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {wishlist.map((w, i) => (
@@ -1102,7 +1104,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
               {loading && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "8px 0" }}>
                   {[0,1,2].map(i => (
-                    <div key={i} style={{ background: T.chalk, borderRadius: 14, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
+                    <div key={i} style={{ background: T.chalk, borderRadius: RADIUS.lg, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
                       <div style={{width:100,height:10,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:10,animationDelay:`${i*0.2}s`}}/>
                       <div style={{width:"90%",height:12,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:6,animationDelay:`${i*0.2+0.1}s`}}/>
                       <div style={{width:"70%",height:12,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",animationDelay:`${i*0.2+0.2}s`}}/>
@@ -1111,14 +1113,14 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                 </div>
               )}
               {errored && (
-                <div style={{ padding: "14px 16px", textAlign: "center", color: "#c53030", fontFamily: "Georgia,serif", fontSize: 13, background: "#FFF0F0", borderRadius: 10 }}>
+                <div style={{ padding: "14px 16px", textAlign: "center", color: T.error, fontFamily: "Georgia,serif", fontSize: 13, background: T.errorLight, borderRadius: 10 }}>
                   Couldn't load deep dive. <button onClick={() => loadCityDeepDive(deepDiveCity)} style={{ background: "none", border: "none", color: T.ocean, cursor: "pointer", textDecoration: "underline" }}>Retry</button>
                 </div>
               )}
 
               {/* Food specialties */}
               {data?.foodSpecialties?.length > 0 && (
-                <div style={{ background: T.chalk, borderRadius: 14, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
+                <div style={{ background: T.chalk, borderRadius: RADIUS.lg, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
                   <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>🍜 Food you should try</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {data.foodSpecialties.map((f, i) => (
@@ -1136,7 +1138,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
 
               {/* Weather */}
               {data?.weather && (
-                <div style={{ background: T.chalk, borderRadius: 14, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
+                <div style={{ background: T.chalk, borderRadius: RADIUS.lg, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
                   <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>🌤 Weather & season</div>
                   <div style={{ fontSize: 13, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.55 }}>{data.weather}</div>
                 </div>
@@ -1144,7 +1146,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
 
               {/* Getting around */}
               {data?.gettingAround && (
-                <div style={{ background: T.chalk, borderRadius: 14, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
+                <div style={{ background: T.chalk, borderRadius: RADIUS.lg, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
                   <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>🚕 Getting around</div>
                   <div style={{ fontSize: 13, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.55 }}>{data.gettingAround}</div>
                 </div>
@@ -1152,7 +1154,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
 
               {/* Etiquette */}
               {data?.etiquette?.length > 0 && (
-                <div style={{ background: T.chalk, borderRadius: 14, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
+                <div style={{ background: T.chalk, borderRadius: RADIUS.lg, padding: "14px 16px", border: `1px solid ${T.sand}` }}>
                   <div style={{ fontSize: 10, color: T.mist, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>🤝 Local etiquette</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     {data.etiquette.map((tip, i) => (
@@ -1179,7 +1181,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
 
               {/* Did you know */}
               {data?.didYouKnow && (
-                <div style={{ background: `linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`, borderRadius: 14, padding: "14px 16px", border: `1px solid ${T.ocean}22` }}>
+                <div style={{ background: `linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`, borderRadius: RADIUS.lg, padding: "14px 16px", border: `1px solid ${T.ocean}22` }}>
                   <div style={{ fontSize: 10, color: T.ocean, fontFamily: "Georgia,serif", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, fontWeight: 600 }}>💡 Did you know?</div>
                   <div style={{ fontSize: 13, color: T.ink, fontFamily: "Georgia,serif", lineHeight: 1.6, fontStyle: "italic" }}>{data.didYouKnow}</div>
                 </div>
@@ -1205,7 +1207,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
               )}
               <a href={`https://www.google.com/search?q=${encodeURIComponent("site:tripadvisor.com Tourism " + dest)}&btnI`} target="_blank" rel="noopener noreferrer" style={{
                 display:"inline-flex",alignItems:"center",gap:5,marginTop:12,
-                padding:"6px 12px",borderRadius:8,border:`1px solid ${T.moss}33`,
+                padding:"6px 12px",borderRadius:RADIUS.md,border:`1px solid ${T.moss}33`,
                 color:T.moss,fontFamily:"Georgia,serif",fontSize:11,fontWeight:600,textDecoration:"none",
               }}>
                 🗺 Explore {dest} on TripAdvisor
@@ -1331,9 +1333,9 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
                     key={i}
                     onClick={() => { setDeepDiveCity(item.city); loadCityDeepDive(item.city); }}
                     style={{
-                      flexShrink: 0, width: 150, borderRadius: 14, overflow: "hidden",
+                      flexShrink: 0, width: 150, borderRadius: RADIUS.lg, overflow: "hidden",
                       border: `1px solid ${T.sand}`, background: T.chalk, cursor: "pointer",
-                      boxShadow: "0 2px 8px rgba(15,25,35,0.04)",
+                      boxShadow: SHADOW.sm,
                     }}
                   >
                     <div style={{ height: 70, background: `linear-gradient(135deg, ${T.ocean}15, ${T.dusk}10)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -1375,30 +1377,13 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
       if (delay > 0) await new Promise(r => setTimeout(r, delay));
       const placeA = from.geocode || extractPlace(from.title);
       const placeB = to.geocode   || extractPlace(to.title);
+      // For transit activities, use geocodeEnd (destination) as the origin for the next leg
+      const fromGeocode = from.type === "transit" && from.geocodeEnd ? from.geocodeEnd : from.geocode;
       const [coordA, coordB] = await Promise.all([
-        geocodePlace(from.title, city, from.geocode),
+        geocodePlace(from.title, city, fromGeocode),
         geocodePlace(to.title,   city, to.geocode),
       ]);
       if (cancelled) return;
-
-      // Check for LLM-provided transit data
-      const transit = from.transition || from.transition_data;
-      if (transit && transit.mode && transit.ride_mins) {
-        if (coordA && coordB) {
-          const dist = haversineMeters(coordA, coordB);
-          const rideFloor = Math.round(dist / 600);
-          const rideCeiling = Math.round(dist / 200);
-          const validatedRide = Math.max(rideFloor, Math.min(rideCeiling, transit.ride_mins));
-          const displayRide = Math.round(validatedRide / 5) * 5 || 5;
-          const result = { mode: transit.mode, walkMins: transit.walk_mins || 0, rideMins: displayRide };
-          if (!cancelled) { setCommute(result); onResolved?.(result.walkMins + result.rideMins, result.mode); }
-        } else {
-          const result = { mode: transit.mode, walkMins: transit.walk_mins || 0, rideMins: transit.ride_mins };
-          if (!cancelled) { setCommute(result); onResolved?.(result.walkMins + result.rideMins, result.mode); }
-        }
-        if (!cancelled) setLoading(false);
-        return;
-      }
 
       let reason = null;
       if (!coordA && !coordB) reason = `no coords for "${placeA}" or "${placeB}" in ${city}`;
@@ -1406,14 +1391,16 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
       else if (!coordB) reason = `no coords for "${placeB}" in ${city}`;
       else {
         const dist = haversineMeters(coordA, coordB);
-        if (dist >= 100000) {
-          reason = `distance ${Math.round(dist/1000)}km > 100km (should not happen now)`;
+        if (dist >= 200000) {
+          reason = `distance ${Math.round(dist/1000)}km > 200km`;
         } else {
-          const road = dist * 1.4;
+          const road = dist * 1.3;
           const walkMins  = Math.max(1, Math.round(road / 80));
-          const driveMins = Math.max(1, Math.round(road / 350));
+          const driveMins = Math.max(1, Math.round(road / 400));
           const useWalk = !forceDrive && walkMins <= 20;
-          const result = { mode: useWalk ? "walk" : "drive", mins: useWalk ? walkMins : driveMins };
+          const transit = from.transition || from.transition_data;
+          const transitMode = transit?.mode;
+          const result = { mode: useWalk ? "walk" : "drive", mins: useWalk ? walkMins : driveMins, dist, transitMode };
           if (!cancelled) {
             setCommute(result);
             onResolved?.(result.mins, result.mode);
@@ -1437,40 +1424,35 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
   );
 
   if (!commute) {
-    if (!debugMode) return null;
+    // No coords — show a "Get directions" link using activity names
+    const fallbackOrigin = encodeURIComponent(from.geocode || `${extractPlace(from.title)} ${city}`);
+    const fallbackDest = encodeURIComponent(to.geocode || `${extractPlace(to.title)} ${city}`);
+    const transit = from.transition || from.transition_data;
+    const transitMode = transit?.mode;
+    const fallbackUrl = `https://www.google.com/maps/dir/?api=1&origin=${fallbackOrigin}&destination=${fallbackDest}&travelmode=${transitMode ? "transit" : "driving"}`;
+    const iconMap = { metro: "🚇", bus: "🚌", ferry: "⛴️", tram: "🚊" };
     return (
-      <div style={{padding:"2px 20px"}}>
-        <div style={{fontSize:10,color:"#E05C5C",fontFamily:"monospace",background:"#FFF5F5",
-          border:"1px solid #FCCACA",borderRadius:6,padding:"3px 8px",lineHeight:1.5}}>
-          ✗ {from.title} → {to.title}<br/>
-          <span style={{color:"#999"}}>extracted: "{debug?.placeA}" → "{debug?.placeB}"</span><br/>
-          <span style={{color:"#999"}}>{debug?.reason}</span>
-        </div>
+      <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 20px"}}>
+        <div style={{flex:1,height:1,background:T.sand}}/>
+        <a href={fallbackUrl} target="_blank" rel="noopener noreferrer"
+          style={{fontSize:11,fontFamily:"Georgia,serif",textDecoration:"none",whiteSpace:"nowrap",
+            padding:"3px 10px",borderRadius:RADIUS.full,color:T.ocean,border:`1px solid ${T.ocean}`,background:"#EBF3FD"}}>
+          {transitMode ? `${iconMap[transitMode] || "🚇"} Get directions →` : "📍 Get directions →"}
+        </a>
+        <div style={{flex:1,height:1,background:T.sand}}/>
+        {label && <span style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",whiteSpace:"nowrap",flexShrink:0}}>{label}</span>}
       </div>
     );
   }
 
-  const origin   = encodeURIComponent(from.geocode || `${extractPlace(from.title)} ${city}`);
+  const originGeocode = from.type === "transit" && from.geocodeEnd ? from.geocodeEnd : from.geocode;
+  const origin   = encodeURIComponent(originGeocode || `${extractPlace(from.title)} ${city}`);
   const dest     = encodeURIComponent(to.geocode   || `${extractPlace(to.title)} ${city}`);
-  const isTransit = commute.mode === "metro" || commute.mode === "bus" || commute.mode === "ferry" || commute.mode === "tram";
-  const mapsUrl  = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=${isTransit ? "transit" : commute.mode === "walk" ? "walking" : "driving"}`;
-
-  const transitStyles = {
-    metro: { color: "#7B5EA7", background: "#F5F0FA", border: "1px solid #7B5EA7" },
-    bus:   { color: "#C4622D", background: "#FFF4E8", border: "1px solid #C4622D" },
-    ferry: { color: "#2563A8", background: "#EBF3FD", border: "1px solid #2563A8" },
-    tram:  { color: "#7B5EA7", background: "#F5F0FA", border: "1px solid #7B5EA7" },
-  };
-  const transitIcons = { metro: "🚇", bus: "🚌", ferry: "⛴️", tram: "🚊" };
+  const mapsUrl  = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=${commute.mode === "walk" ? "walking" : "driving"}`;
+  const transitMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=transit`;
 
   let pillStyle, pillContent;
-  if (isTransit) {
-    pillStyle = transitStyles[commute.mode];
-    const icon = transitIcons[commute.mode];
-    pillContent = commute.walkMins > 0
-      ? `🚶 ${commute.walkMins} min + ${icon} ~${commute.rideMins} min`
-      : `${icon} ~${commute.rideMins} min`;
-  } else if (commute.mode === "walk") {
+  if (commute.mode === "walk") {
     pillStyle = { color: T.moss, border: `1px solid ${T.moss}`, background: "#F4FAF7" };
     pillContent = `🚶 ${fmtTime(commute.mins)} walk`;
   } else {
@@ -1478,14 +1460,26 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
     pillContent = `🚗 ${fmtTime(commute.mins)} drive`;
   }
 
+  const transitIcons = { metro: "\u{1F687}", bus: "\u{1F68C}", ferry: "\u26F4\uFE0F", tram: "\u{1F68A}" };
+  const showTransitIcon = commute.transitMode && commute.dist >= 500 && commute.dist <= 20000
+    && !(commute.mode === "walk" && commute.mins <= 12)
+    && !(commute.mode === "drive" && commute.mins <= 8);
+
   return (
     <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 20px"}}>
       <div style={{flex:1,height:1,background:T.sand}}/>
       <a href={mapsUrl} target="_blank" rel="noopener noreferrer"
         style={{fontSize:11,fontFamily:"Georgia,serif",textDecoration:"none",whiteSpace:"nowrap",
-          padding:"3px 10px",borderRadius:20, ...pillStyle}}>
+          padding:"3px 10px",borderRadius:RADIUS.full, ...pillStyle}}>
         {pillContent}
       </a>
+      {showTransitIcon && (
+        <a href={transitMapsUrl} target="_blank" rel="noopener noreferrer"
+          title={`Get ${commute.transitMode} directions`}
+          style={{fontSize:14,border:"none",background:"none",opacity:0.8,cursor:"pointer",textDecoration:"none",lineHeight:1}}>
+          {transitIcons[commute.transitMode]}
+        </a>
+      )}
       <div style={{flex:1,height:1,background:T.sand}}/>
       {label && <span style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",whiteSpace:"nowrap",flexShrink:0}}>{label}</span>}
     </div>
@@ -1520,42 +1514,121 @@ function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAl
   const saveEdit = () => { onEdit(draft); setEditing(false); };
   const cancelEdit = () => { setDraft({...activity}); setEditing(false); };
 
+  // Rich inter-city transit card
+  if (activity.type === "transit" && activity.service) {
+    const isFerry = /ferry|boat/i.test(activity.service);
+    const borderColor = isFerry ? "#2563A8" : "#7B5EA7";
+    const transitIcon = isFerry ? "\u26F4\uFE0F" : activity.icon || "\u{1F682}";
+    const rome2rioUrl = activity.from_station && activity.to_station
+      ? `https://www.rome2rio.com/s/${encodeURIComponent(activity.from_station)}/${encodeURIComponent(activity.to_station)}`
+      : null;
+    return (
+      <div style={{ display:"flex", gap:0, padding:"0 20px" }}>
+        <div style={{ width:40, flexShrink:0, display:"flex", flexDirection:"column", alignItems:"center" }}>
+          <div style={{
+            width:38, height:38, borderRadius:"50%",
+            background:ts.bg, border:`2.5px solid ${ts.color}`,
+            display:"flex", alignItems:"center", justifyContent:"center",
+            fontSize:17, flexShrink:0,
+          }}>{activity.icon}</div>
+        </div>
+        <div style={{
+          flex:1, background:T.chalk, borderRadius:RADIUS.lg,
+          padding:"13px 15px", marginBottom:2, marginLeft:10,
+          boxShadow:SHADOW.sm,
+          border:`1px solid ${T.sand}`,
+          borderLeft:`4px solid ${borderColor}`,
+          position:"relative",
+        }}>
+          {/* Header: icon + service name | duration */}
+          <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6}}>
+            <div style={{display:"flex", alignItems:"center", gap:6}}>
+              <span style={{fontSize:15}}>{transitIcon}</span>
+              <span style={{fontFamily:"'DM Serif Display',serif",fontSize:14,color:T.ink,fontWeight:600}}>{activity.service}</span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:5}}>
+              {activity.transit_duration && <span style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif"}}>⏱ {activity.transit_duration}</span>}
+              {onAskTrippy && <button onClick={()=>onAskTrippy(activity.title)} style={{background:"transparent",border:"none",cursor:"pointer",fontSize:13,padding:"0 1px",lineHeight:1,color:T.ocean,opacity:0.6}} title="Ask Trippy">💬</button>}
+              <div style={{position:"relative"}}>
+                <button onClick={()=>setMenuOpen(m=>!m)} style={{background:"transparent",border:"none",cursor:"pointer",fontSize:16,padding:"0 3px",color:T.mist,lineHeight:1}}>⋯</button>
+                {menuOpen && (
+                  <>
+                    <div onClick={()=>setMenuOpen(false)} style={{position:"fixed",inset:0,zIndex:99}}/>
+                    <div style={{position:"absolute",right:0,top:22,zIndex:100,background:T.chalk,borderRadius:RADIUS.lg,boxShadow:SHADOW.md,border:`1px solid ${T.sand}`,minWidth:180,overflow:"hidden"}}>
+                      <button onClick={()=>{ setMenuOpen(false); onAskTrippy?.(activity.title); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer"}}>💬 Ask Trippy</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+          {/* Route line */}
+          {activity.from_station && activity.to_station && (
+            <div style={{fontSize:12,color:T.ink,fontFamily:"Georgia,serif",marginBottom:4}}>
+              {activity.from_station} → {activity.to_station}
+            </div>
+          )}
+          {/* Booking tip */}
+          {activity.booking_tip && (
+            <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",fontStyle:"italic",marginBottom:4}}>
+              💡 {activity.booking_tip}
+            </div>
+          )}
+          {/* Cost + Rome2Rio */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            {activity.cost_estimate && (
+              <span style={{fontSize:12,color:"#2E7D32",fontFamily:"Georgia,serif",fontWeight:600}}>{activity.cost_estimate}</span>
+            )}
+            {rome2rioUrl && (
+              <a href={rome2rioUrl} target="_blank" rel="noopener noreferrer"
+                style={{fontSize:11,color:T.ocean,fontFamily:"Georgia,serif",textDecoration:"none"}}>
+                Compare options on Rome2Rio →
+              </a>
+            )}
+          </div>
+          {/* Time label */}
+          <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",marginTop:6}}>{activity.time}</div>
+        </div>
+      </div>
+    );
+  }
+
   if (editing) {
     return (
       <div style={{padding:"0 20px",marginBottom:2}}>
-        <div style={{background:T.chalk,borderRadius:16,padding:14,border:`1.5px solid ${T.ocean}`,boxShadow:"0 2px 14px rgba(15,25,35,0.07)"}}>
+        <div style={{background:T.chalk,borderRadius:RADIUS.lg,padding:14,border:`1.5px solid ${T.ocean}`,boxShadow:SHADOW.sm}}>
           <div style={{display:"flex",gap:8,marginBottom:8}}>
             <input value={draft.time} onChange={e=>setDraft(d=>({...d,time:e.target.value}))}
               placeholder="Time"
-              style={{width:100,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none"}}/>
+              style={{width:100,padding:"8px 10px",borderRadius:RADIUS.md,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none"}}/>
             <input value={draft.title} onChange={e=>setDraft(d=>({...d,title:e.target.value}))}
               placeholder="Activity name"
-              style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none"}}/>
+              style={{flex:1,padding:"8px 10px",borderRadius:RADIUS.md,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none"}}/>
           </div>
           <div style={{display:"flex",gap:8,marginBottom:8}}>
             <select value={draft.type} onChange={e=>setDraft(d=>({...d,type:e.target.value}))}
-              style={{flex:1,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",background:T.chalk}}>
+              style={{flex:1,padding:"8px 10px",borderRadius:RADIUS.md,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",background:T.chalk}}>
               {Object.entries(typeStyle).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
             </select>
             <input value={draft.duration} onChange={e=>setDraft(d=>({...d,duration:e.target.value}))}
               placeholder="Duration (e.g. 2h)"
-              style={{width:120,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none"}}/>
+              style={{width:120,padding:"8px 10px",borderRadius:RADIUS.md,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none"}}/>
           </div>
           <input value={draft.note} onChange={e=>setDraft(d=>({...d,note:e.target.value}))}
             placeholder="Note (optional)"
-            style={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",marginBottom:8}}/>
+            style={{width:"100%",padding:"8px 10px",borderRadius:RADIUS.md,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",marginBottom:8}}/>
           <input value={draft.geocode || ""} onChange={e=>setDraft(d=>({...d,geocode:e.target.value}))}
             placeholder={draft.type === "transit" ? "Departure (e.g. CSMT Mumbai)" : "Map pin (e.g. Gateway of India Pier Mumbai)"}
-            style={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",marginBottom:8}}/>
+            style={{width:"100%",padding:"8px 10px",borderRadius:RADIUS.md,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",marginBottom:8}}/>
           {draft.type === "transit" && (
             <input value={draft.geocode_end || ""} onChange={e=>setDraft(d=>({...d,geocode_end:e.target.value}))}
               placeholder="Arrival (e.g. Pune Junction)"
-              style={{width:"100%",padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",marginBottom:10}}/>
+              style={{width:"100%",padding:"8px 10px",borderRadius:RADIUS.md,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",marginBottom:10}}/>
           )}
           {draft.type !== "transit" && <div style={{marginBottom:10}}/>}
           <div style={{display:"flex",gap:8}}>
-            <button onClick={saveEdit} style={{flex:1,background:T.ocean,color:"white",border:"none",borderRadius:10,padding:"9px 0",fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer"}}>Save</button>
-            <button onClick={cancelEdit} style={{flex:1,background:T.sand,color:T.ink,border:"none",borderRadius:10,padding:"9px 0",fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer"}}>Cancel</button>
+            <button onClick={saveEdit} style={{flex:1,background:T.ocean,color:"white",border:"none",borderRadius:RADIUS.md,padding:"9px 0",fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer"}}>Save</button>
+            <button onClick={cancelEdit} style={{flex:1,background:T.sand,color:T.ink,border:"none",borderRadius:RADIUS.md,padding:"9px 0",fontFamily:"Georgia,serif",fontSize:13,cursor:"pointer"}}>Cancel</button>
           </div>
         </div>
       </div>
@@ -1575,9 +1648,9 @@ function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAl
       </div>
       {/* Card */}
       <div style={{
-        flex:1, background:T.chalk, borderRadius:16,
+        flex:1, background:T.chalk, borderRadius:RADIUS.lg,
         padding:"13px 15px", marginBottom:2, marginLeft:10,
-        boxShadow:"0 2px 14px rgba(15,25,35,0.07)",
+        boxShadow:SHADOW.sm,
         border:`1px solid ${T.sand}`,
         position:"relative",
         borderRight: activity.confirmed ? `4px solid ${T.moss}` : `1px solid ${T.sand}`,
@@ -1587,7 +1660,7 @@ function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAl
             <div style={{display:"flex", alignItems:"center", gap:7, marginBottom:4}}>
               <span style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",letterSpacing:0.5}}>{activity.time}</span>
               {(() => { const ps = activity.package ? packageColor(activity.package) : ts; return (
-              <span style={{background:ps.bg,color:ps.color,fontSize:10,borderRadius:20,padding:"1px 7px",fontFamily:"Georgia,serif",fontWeight:600}}>
+              <span style={{background:ps.bg,color:ps.color,fontSize:10,borderRadius:RADIUS.full,padding:"1px 7px",fontFamily:"Georgia,serif",fontWeight:600}}>
                 {activity.package ? activity.package.replace(/-/g, " ").toUpperCase() : ts.label.toUpperCase()}
               </span>
               ); })()}
@@ -1607,7 +1680,7 @@ function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAl
                 {menuOpen && (
                   <>
                     <div onClick={()=>setMenuOpen(false)} style={{position:"fixed",inset:0,zIndex:99}}/>
-                    <div style={{position:"absolute",right:0,top:22,zIndex:100,background:T.chalk,borderRadius:12,boxShadow:"0 4px 20px rgba(15,25,35,0.14)",border:`1px solid ${T.sand}`,minWidth:180,overflow:"hidden"}}>
+                    <div style={{position:"absolute",right:0,top:22,zIndex:100,background:T.chalk,borderRadius:RADIUS.lg,boxShadow:SHADOW.md,border:`1px solid ${T.sand}`,minWidth:180,overflow:"hidden"}}>
                       {activity.type === "hotel" ? <>
                         <button onClick={()=>{ setMenuOpen(false); onChangeHotel?.("suggest"); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>✨ Suggest a different hotel</button>
                         <button onClick={()=>{ setMenuOpen(false); onChangeHotel?.("own"); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer"}}>🏨 Change hotel to…</button>
@@ -1615,7 +1688,7 @@ function ActivityCard({ activity, city, onEdit, onRemove, onReplace, onSuggestAl
                         <button onClick={()=>{ setMenuOpen(false); onSuggestAlternatives?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>✨ Suggest alternatives</button>
                         <button onClick={()=>{ setMenuOpen(false); onReplace?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>🔄 Replace item</button>
                         <button onClick={()=>{ setMenuOpen(false); setEditing(true); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>✎ Edit item</button>
-                        <button onClick={()=>{ setMenuOpen(false); onRemove?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:"#e53e3e",cursor:"pointer"}}>Remove</button>
+                        <button onClick={()=>{ setMenuOpen(false); onRemove?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.error,cursor:"pointer"}}>Remove</button>
                       </>}
                     </div>
                   </>
@@ -1672,7 +1745,7 @@ function DepartureTimeline({ departureTime, departureMode, onEdit }) {
 
   return (
     <div style={{padding:"12px 20px 0"}}>
-      <div style={{background:"#EBF5FF",borderRadius:10,padding:"10px 14px",border:"1px solid #C5DEFF"}}>
+      <div style={{background:"#EBF5FF",borderRadius:RADIUS.md,padding:"10px 14px",border:"1px solid #C5DEFF"}}>
         <div style={{fontSize:12,fontFamily:"Georgia,serif",color:T.ink,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
           <span style={{fontWeight:600,color:T.moss}}>Leave ~{leaveHH}:{leaveMM}</span>
           <span style={{color:T.mist,fontSize:10}}>›</span>
@@ -1702,16 +1775,14 @@ function ArrivalTimeline({ arrivalTime, arrivalMode, onEditFlight }) {
 
   return (
     <div style={{padding:"0 20px 12px"}}>
-      <div style={{background:"#EBF5FF",borderRadius:10,padding:"10px 14px",border:"1px solid #C5DEFF"}}>
+      <div style={{background:"#EBF5FF",borderRadius:RADIUS.md,padding:"10px 14px",border:"1px solid #C5DEFF"}}>
         <div style={{fontSize:12,fontFamily:"Georgia,serif",color:T.ink,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
           <span
             onClick={onEditFlight}
             style={onEditFlight ? {cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:3} : {}}
           >{icon} {verb} {arrivalHHMM}</span>
-          <span style={{color:T.mist,fontSize:10}}>›</span>
-          <span style={{color:T.mist}}>~90 min to settle in</span>
-          <span style={{color:T.mist,fontSize:10}}>›</span>
-          <span style={{fontWeight:600,color:T.moss}}>Ready ~{readyHH}:{readyMM}</span>
+          <span style={{color:T.mist}}>·</span>
+          <span style={{fontWeight:600,color:T.moss}}>Exit by ~{readyHH}:{readyMM}</span>
         </div>
       </div>
     </div>
@@ -1756,7 +1827,7 @@ function WishlistSection({ items, city }) {
 }
 
 /* ─── COMPACT DAY VIEW ────────────────────────────────────────────── */
-function DayCompact({ day, displayCity, onExpand }) {
+function DayCompact({ day, displayCity, onExpand, canExpand = true }) {
   const acts = day.activities || [];
   const hotel = acts.find(a => a.type === "hotel");
   const transit = acts.find(a => a.type === "transit");
@@ -1781,14 +1852,14 @@ function DayCompact({ day, displayCity, onExpand }) {
   const mapsLink = (text, city) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${text} ${city || day.city}`)}`;
 
   return (
-    <div style={{ marginBottom: 8, background: T.chalk, borderRadius: 14, border: `1px solid ${T.sand}`, padding: "12px 14px" }}>
-      {/* Day header — clickable to expand */}
-      <div onClick={onExpand} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, cursor: "pointer" }}>
+    <div style={{ marginBottom: 8, background: T.chalk, borderRadius: RADIUS.lg, border: `1px solid ${T.sand}`, padding: "12px 14px" }}>
+      {/* Day header — clickable to expand if detailed data is ready */}
+      <div onClick={canExpand ? onExpand : undefined} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, cursor: canExpand ? "pointer" : "default" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ background: T.ocean, color: "white", borderRadius: 8, padding: "3px 10px", fontFamily: "'DM Serif Display',serif", fontSize: 12 }}>{day.label}</div>
+          <div style={{ background: T.ocean, color: "white", borderRadius: RADIUS.md, padding: "3px 10px", fontFamily: "'DM Serif Display',serif", fontSize: 12 }}>{day.label}</div>
           <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, color: T.ink }}>{displayCity || day.city}</div>
         </div>
-        <span style={{ fontSize: 10, color: T.mist }}>▼</span>
+        {canExpand ? <span style={{ fontSize: 10, color: T.mist }}>▼</span> : !canExpand && <span style={{width:8,height:8,border:`1.5px solid ${T.sand}`,borderTopColor:T.ocean,borderRadius:"50%",animation:"spin 0.8s linear infinite",display:"inline-block"}}></span>}
       </div>
 
       {/* Transit */}
@@ -1829,7 +1900,7 @@ function DayCompact({ day, displayCity, onExpand }) {
   );
 }
 
-function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, onSelectHotel, onAskTrippy }) {
+function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, onSelectHotel, onAskTrippy, onCollapse = null }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
 
@@ -1846,7 +1917,7 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
         position:"sticky", top:0, zIndex:10,
         background:`linear-gradient(to bottom, ${T.warm} 85%, transparent)`,
       }}>
-        <div style={{background:T.ocean,color:"white",borderRadius:10,padding:"5px 13px",fontFamily:"'DM Serif Display',serif",fontSize:14}}>{day.label}</div>
+        <div style={{background:T.ocean,color:"white",borderRadius:RADIUS.md,padding:"5px 13px",fontFamily:"'DM Serif Display',serif",fontSize:14}}>{day.label}</div>
         <div style={{flex:1}}>
           <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,lineHeight:1}}>{displayCity || day.city}</div>
           <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginTop:2}}>{day.date} · {total} activities</div>
@@ -1854,14 +1925,17 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
         {dayMapsUrl && (
           <a href={dayMapsUrl} target="_blank" rel="noopener noreferrer"
             style={{fontSize:12,color:T.ocean,textDecoration:"none",background:"#EBF3FD",
-              borderRadius:20,padding:"4px 11px",fontFamily:"Georgia,serif",flexShrink:0,whiteSpace:"nowrap"}}>
+              borderRadius:RADIUS.full,padding:"4px 11px",fontFamily:"Georgia,serif",flexShrink:0,whiteSpace:"nowrap"}}>
             <img src="/google-maps-icon.png" alt="" style={{width:12,height:12,objectFit:"contain"}}/> Route
           </a>
+        )}
+        {onCollapse && (
+          <span onClick={onCollapse} style={{fontSize:10,color:T.mist,cursor:"pointer",flexShrink:0}}>▲</span>
         )}
         {day.description && (
           <button onClick={()=>setShowDesc(s=>!s)} title="About this day"
             style={{background:showDesc?"#EBF3FD":"transparent",border:`1.5px solid ${showDesc?T.ocean:T.sand}`,
-              borderRadius:20,padding:"4px 10px",cursor:"pointer",fontSize:13,color:showDesc?T.ocean:T.mist,flexShrink:0,lineHeight:1}}>
+              borderRadius:RADIUS.full,padding:"4px 10px",cursor:"pointer",fontSize:13,color:showDesc?T.ocean:T.mist,flexShrink:0,lineHeight:1}}>
             📖
           </button>
         )}
@@ -1869,14 +1943,14 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
 
       {/* Transit tip */}
       {day.transit_tip && (
-        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 20px 8px",fontSize:11,color:"#7B5EA7",fontFamily:"Georgia,serif",background:"#F5F0FA",borderRadius:8,margin:"0 16px 8px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 20px 8px",fontSize:11,color:"#7B5EA7",fontFamily:"Georgia,serif",background:"#F5F0FA",borderRadius:RADIUS.md,margin:"0 16px 8px"}}>
           🚇 {day.transit_tip}
         </div>
       )}
 
       {/* Day description */}
       {day.description && showDesc && (
-        <div style={{margin:"0 20px 12px",padding:"12px 16px",background:"#F5F9FF",borderRadius:12,border:`1px solid #D6E8FF`}}>
+        <div style={{margin:"0 20px 12px",padding:"12px 16px",background:"#F5F9FF",borderRadius:RADIUS.lg,border:`1px solid #D6E8FF`}}>
           <div style={{fontSize:13,color:T.dusk,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.7}}>
             {day.description}
           </div>
@@ -2020,9 +2094,9 @@ function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
   }, [suggestion.geocode]);
   return (
     <div style={{
-      flexShrink:0, width:148, borderRadius:12, overflow:"hidden",
+      flexShrink:0, width:148, borderRadius:RADIUS.lg, overflow:"hidden",
       border:`1px solid ${T.sand}`, background:T.chalk,
-      boxShadow:"0 2px 8px rgba(15,25,35,0.08)",
+      boxShadow:SHADOW.sm,
     }}>
       <div onClick={onSelect} style={{cursor:"pointer"}}>
         {(!loaded || photoUrl) && (
@@ -2037,9 +2111,9 @@ function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
         </div>
       </div>
       <div style={{padding:"0 8px 8px",display:"flex",gap:5}}>
-        <button onClick={onKnowMore} style={{flex:1,padding:"5px 0",borderRadius:8,border:`1px solid ${T.sand}`,background:"transparent",fontFamily:"Georgia,serif",fontSize:10,color:T.mist,cursor:"pointer"}}>Know more</button>
+        <button onClick={onKnowMore} style={{flex:1,padding:"5px 0",borderRadius:RADIUS.md,border:`1px solid ${T.sand}`,background:"transparent",fontFamily:"Georgia,serif",fontSize:10,color:T.mist,cursor:"pointer"}}>Know more</button>
         <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(suggestion.geocode || suggestion.title)}`} target="_blank" rel="noopener noreferrer"
-          style={{display:"flex",alignItems:"center",justifyContent:"center",width:26,borderRadius:8,border:`1px solid ${T.sand}`,textDecoration:"none",flexShrink:0}}>
+          style={{display:"flex",alignItems:"center",justifyContent:"center",width:26,borderRadius:RADIUS.md,border:`1px solid ${T.sand}`,textDecoration:"none",flexShrink:0}}>
           <img src="/google-maps-icon.png" alt="Maps" style={{width:13,height:13,objectFit:"contain"}}/>
         </a>
       </div>
@@ -2058,11 +2132,11 @@ function HotelCard({ hotel, selected, onSelect }) {
   }, [hotel.geocode]);
   return (
     <div onClick={onSelect} style={{
-      flexShrink:0, width:150, borderRadius:14, overflow:"hidden",
+      flexShrink:0, width:150, borderRadius:RADIUS.lg, overflow:"hidden",
       border:`2px solid ${selected ? T.ocean : T.sand}`,
       background:T.chalk, cursor:"pointer",
-      boxShadow: selected ? `0 0 0 3px ${T.ocean}33` : "0 2px 8px rgba(15,25,35,0.08)",
-      transition:"all 0.15s",
+      boxShadow: selected ? `0 0 0 3px ${T.ocean}33` : SHADOW.sm,
+      transition:`all ${MOTION.normal}`,
     }}>
       {(!loaded || photoUrl) && (
         <div style={{height:95, background:T.sand, overflow:"hidden", position:"relative"}}>
@@ -2170,6 +2244,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             } catch {}
           }
           setLoading(false);
+          // Pre-load Day 1 for existing trips
+          setTimeout(() => preloadDay(0), 100);
         });
     }
   }, []);
@@ -2187,8 +2263,39 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     }
   }, [screen, activeBottomTab, trip?.id]);
   const [compactView, setCompactView] = useState(true); // start in compact mode
+  const [collapsedDays, setCollapsedDays] = useState(new Set()); // per-day collapse in detailed view
   const [detailedLoading, setDetailedLoading] = useState(false); // true while full IG loads in background
   const [detailedReady, setDetailedReady] = useState(initialScreen === "itinerary"); // true if opening existing trip
+  const preloadedDaysRef = useRef(new Set()); // track which day indices have been pre-loaded
+
+  // Pre-load a day's geocoding + photos (warms caches for TransitionRow + PhotoStrip)
+  const preloadDay = useCallback((dayIndex) => {
+    if (preloadedDaysRef.current.has(dayIndex)) return;
+    const day = daysRef.current[dayIndex];
+    if (!day?.activities?.length) return;
+    preloadedDaysRef.current.add(dayIndex);
+    const acts = day.activities;
+    // Pre-geocode all activities
+    for (const act of acts) {
+      if (act.geocode && act.type !== "transit") {
+        geocodePlace(act.title, day.city, act.geocode);
+      }
+    }
+    // Pre-fetch photos
+    for (const act of acts) {
+      if (act.type !== "transit" && act.type !== "hotel" && !act.photo_url) {
+        const key = act.geocode || act.title;
+        if (key) _fetchPhoto(key, day.city, act.type || "sight");
+      }
+    }
+  }, []);
+
+  // When streamingDays increases, pre-load the first ready day (Day 1)
+  useEffect(() => {
+    if (streamingDays >= 1 && days.length >= 1) {
+      preloadDay(0);
+    }
+  }, [streamingDays, days.length, preloadDay]);
   const [pretripTab, setPretripTab] = useState("brainstorm"); // pre-trip bottom nav tab
   const [magazineFilterCities, setMagazineFilterCities] = useState(null); // cities to filter magazine by (from "Tell me more")
   const [pretripDeepDiveCity, setPretripDeepDiveCity] = useState(null); // city for deep dive in pre-trip magazine
@@ -2610,6 +2717,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     let genLogId = null; // track this generation's log row
     setGenerateError("");
     setStreamingDays(0);
+    preloadedDaysRef.current = new Set();
     setAllDaysPlanned(false);
     setDetailedLoading(false);
     setDetailedReady(false);
@@ -2727,15 +2835,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                         ? `${compactData.name} · ${fmt(form.startDate)}–${fmt(form.endDate)}`
                         : editingTrip?.name || igDestinations.join(" → ");
                       const compactDates = (form.startDate && form.endDate) ? `${fmt(form.startDate)} – ${fmt(form.endDate)}, ${new Date(form.endDate).getFullYear()}` : "";
+                      const originalDest = editingTrip?.destination || (form.destinations || []).join(" → ");
                       setTrip(prev => ({
-                        ...prev, name: compactTripName, destination: igDestinations.join(" → "),
+                        ...prev, name: compactTripName, destination: originalDest,
                         dates: compactDates,
                         travelers: parseInt(form.travelers) || prev.travelers || null,
                         ig_response: compactData,
                       }));
                       if (capturedTripId) {
                         const compactReadyAt = new Date().toISOString();
-                        supabase.from("trips").update({ name: compactTripName, destination: igDestinations.join(" → "), ig_response: compactData, compact_ready_at: compactReadyAt, generation_started_at: generationStartedAt }).eq("id", capturedTripId);
+                        supabase.from("trips").update({ name: compactTripName, destination: originalDest, ig_response: compactData, compact_ready_at: compactReadyAt, generation_started_at: generationStartedAt }).eq("id", capturedTripId);
                         supabase.from("generation_log").insert({ trip_id: capturedTripId, generation_started_at: generationStartedAt, compact_ready_at: compactReadyAt }).select("id").single().then(({ data }) => { if (data) genLogId = data.id; });
                       }
                       setDays(compactDays);
@@ -2853,7 +2962,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     const tripPayload = {
       id: tripId,
       name: tripName,
-      destination: igDestinations.join(" → "),
+      destination: editingTrip?.destination || (form.destinations || []).join(" → "),
       start_date: form.startDate,
       end_date: form.endDate,
       created_by: session.user.id,
@@ -3369,7 +3478,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             <TransportCarousel />
             <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:T.ink,textAlign:"center"}}>Building your itinerary…</div>
             {generateError
-              ? <div style={{padding:"12px 16px",borderRadius:12,background:"#FFF0F0",border:"1.5px solid #e53e3e",fontSize:13,color:"#c53030",fontFamily:"Georgia,serif",textAlign:"center",maxWidth:300}}>
+              ? <div style={{padding:"12px 16px",borderRadius:RADIUS.lg,background:T.errorLight,border:`1.5px solid ${T.error}`,fontSize:13,color:T.error,fontFamily:"Georgia,serif",textAlign:"center",maxWidth:300}}>
                   ⚠️ {generateError}
                 </div>
               : allDaysPlanned
@@ -3389,14 +3498,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           <div style={{background:`linear-gradient(160deg,${T.dusk},${T.ocean})`,padding:"44px 20px 36px",color:"white",position:"relative",overflow:"hidden"}}>
             <div style={{position:"absolute",top:-50,right:-50,width:200,height:200,borderRadius:"50%",background:"rgba(255,255,255,0.04)",pointerEvents:"none"}}/>
             <div style={{position:"relative",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
+              {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:RADIUS.full,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
             </div>
             <div style={{fontFamily:"'DM Serif Display',serif",fontSize:34,lineHeight:1.2,marginBottom:10}}>Plan your next<br/>adventure ✈️</div>
             <div style={{fontSize:14,opacity:0.7,fontFamily:"Georgia,serif"}}>AI-powered itineraries, built for you</div>
           </div>
           <div style={{padding:"28px 0 0"}}>
             {generateError && (
-              <div style={{margin:"0 20px 16px",padding:"12px 16px",borderRadius:12,background:"#FFF0F0",border:"1.5px solid #e53e3e",fontSize:13,color:"#c53030",fontFamily:"Georgia,serif"}}>
+              <div style={{margin:"0 20px 16px",padding:"12px 16px",borderRadius:RADIUS.lg,background:T.errorLight,border:`1.5px solid ${T.error}`,fontSize:13,color:T.error,fontFamily:"Georgia,serif"}}>
                 {generateError}
               </div>
             )}
@@ -3501,7 +3610,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 </div>
               )}
               {data?.foodSpecialties?.length > 0 && (
-                <div style={{background:T.chalk,borderRadius:14,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
+                <div style={{background:T.chalk,borderRadius:RADIUS.lg,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
                   <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🍜 Food you should try</div>
                   {data.foodSpecialties.map((f, i) => (
                     <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:8}}>
@@ -3513,19 +3622,19 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 </div>
               )}
               {data?.weather && (
-                <div style={{background:T.chalk,borderRadius:14,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
+                <div style={{background:T.chalk,borderRadius:RADIUS.lg,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
                   <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>🌤 Weather & season</div>
                   <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.55}}>{data.weather}</div>
                 </div>
               )}
               {data?.gettingAround && (
-                <div style={{background:T.chalk,borderRadius:14,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
+                <div style={{background:T.chalk,borderRadius:RADIUS.lg,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
                   <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>🚕 Getting around</div>
                   <div style={{fontSize:13,color:T.ink,fontFamily:"Georgia,serif",lineHeight:1.55}}>{data.gettingAround}</div>
                 </div>
               )}
               {data?.etiquette?.length > 0 && (
-                <div style={{background:T.chalk,borderRadius:14,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
+                <div style={{background:T.chalk,borderRadius:RADIUS.lg,padding:"14px 16px",border:`1px solid ${T.sand}`,marginBottom:16}}>
                   <div style={{fontSize:10,color:T.mist,fontFamily:"Georgia,serif",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🤝 Local etiquette</div>
                   {data.etiquette.map((tip, i) => (
                     <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:4}}>
@@ -3538,7 +3647,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               {loading && (
                 <div style={{display:"flex",flexDirection:"column",gap:12}}>
                   {[0,1,2].map(i => (
-                    <div key={i} style={{background:T.chalk,borderRadius:14,padding:"14px 16px",border:`1px solid ${T.sand}`}}>
+                    <div key={i} style={{background:T.chalk,borderRadius:RADIUS.lg,padding:"14px 16px",border:`1px solid ${T.sand}`}}>
                       <div style={{width:100,height:10,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:10}}/>
                       <div style={{width:"90%",height:12,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite",marginBottom:6}}/>
                       <div style={{width:"70%",height:12,borderRadius:4,background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
@@ -3547,7 +3656,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 </div>
               )}
               {errored && (
-                <div style={{padding:"14px 16px",textAlign:"center",color:"#c53030",fontFamily:"Georgia,serif",fontSize:13,background:"#FFF0F0",borderRadius:10}}>
+                <div style={{padding:"14px 16px",textAlign:"center",color:T.error,fontFamily:"Georgia,serif",fontSize:13,background:T.errorLight,borderRadius:RADIUS.md}}>
                   Couldn't load details. <button onClick={() => loadCityDeepDiveApp(ddCity)} style={{background:"none",border:"none",color:T.ocean,cursor:"pointer",textDecoration:"underline"}}>Retry</button>
                 </div>
               )}
@@ -3577,7 +3686,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               </div>
               {magazineFilterCities && (
                 <button onClick={() => { setMagazineFilterCities(null); setMagazineFilterRouteId(null); }} style={{
-                  background:T.sand,border:"none",borderRadius:20,padding:"5px 11px",color:T.ink,fontSize:11,cursor:"pointer",fontFamily:"Georgia,serif"
+                  background:T.sand,border:"none",borderRadius:RADIUS.full,padding:"5px 11px",color:T.ink,fontSize:11,cursor:"pointer",fontFamily:"Georgia,serif"
                 }}>Show all</button>
               )}
             </div>
@@ -3607,7 +3716,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                     )}
                     <a href={`https://www.google.com/search?q=${encodeURIComponent("site:tripadvisor.com Tourism " + dest)}&btnI`} target="_blank" rel="noopener noreferrer" style={{
                       display:"inline-flex",alignItems:"center",gap:5,marginTop:12,
-                      padding:"8px 14px",borderRadius:10,border:`1px solid ${T.moss}33`,
+                      padding:"8px 14px",borderRadius:RADIUS.md,border:`1px solid ${T.moss}33`,
                       color:T.moss,fontFamily:"Georgia,serif",fontSize:12,fontWeight:600,textDecoration:"none",
                     }}>
                       🗺 Explore {dest} on TripAdvisor
@@ -3669,7 +3778,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               <button key={key} onClick={()=>{ setPretripTab(key); if (key !== "magazine") { setMagazineFilterCities(null); setMagazineFilterRouteId(null); } }} style={{
                 flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:3,
                 padding:"10px 0 8px", border:"none", background:"none", cursor:"pointer",
-                color: active ? T.ocean : T.mist, transition:"color 0.15s", position:"relative",
+                color: active ? T.ocean : T.mist, transition:`color ${MOTION.normal}`, position:"relative",
               }}>
                 {active && <div style={{position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:32,height:2.5,borderRadius:"0 0 2px 2px",background:T.ocean}}/>}
                 <span style={{fontSize:20}}>{icon}</span>
@@ -3699,7 +3808,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               <div style={{position:"absolute",top:-30,right:-30,width:130,height:130,borderRadius:"50%",background:"rgba(255,255,255,0.04)",pointerEvents:"none"}}/>
               <div style={{position:"relative",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
                 <div style={{display:"flex",gap:8}}>
-                  {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
+                  {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:RADIUS.full,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
                   <button onClick={()=>{
                     setEditingTrip(trip);
                     // Prefill pendingForm from the trip so BrainstormView has context (destinations/styles/budget/etc.)
@@ -3721,32 +3830,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                     setFormEdited(false); // entering from Edit — load saved routes, don't regenerate
                     setPretripTab("brainstorm");
                     setScreen("brainstorm");
-                  }} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>Explore Other Plans</button>
+                  }} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:RADIUS.full,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>Explore Other Plans</button>
                 </div>
-                <button onClick={()=>setShowShare(true)} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:20,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>📤 Share</button>
+                <button onClick={()=>setShowShare(true)} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:RADIUS.full,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>📤 Share</button>
               </div>
               <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,lineHeight:1.2,marginBottom:4}}>{trip.name}</div>
               <div style={{fontSize:13,opacity:0.75,fontFamily:"Georgia,serif"}}>📅 {trip.dates || (trip.start_date && trip.end_date ? `${new Date(trip.start_date).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(trip.end_date).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}` : "")}{trip.travelers ? ` · 👤 ${trip.travelers} traveler${trip.travelers > 1 ? "s" : ""}` : ""}</div>
             </div>
 
-            {/* Compact / Detailed toggle — sticky segmented control */}
-            <div style={{position:"sticky",top:0,zIndex:9,display:"flex",alignItems:"center",justifyContent:"center",gap:8,padding:"8px 16px",background:T.warm}}>
-              <div style={{display:"flex",borderRadius:10,border:`1px solid ${T.sand}`,overflow:"hidden",background:T.chalk}}>
-                <button onClick={()=>setCompactView(true)} style={{
-                  padding:"6px 16px",border:"none",fontSize:12,fontFamily:"Georgia,serif",fontWeight:600,cursor:"pointer",
-                  background:compactView?T.ocean:"transparent",color:compactView?"white":T.mist,
-                }}>Compact</button>
-                <button onClick={()=>{ if (detailedReady) setCompactView(false); }} style={{
-                  padding:"6px 16px",border:"none",fontSize:12,fontFamily:"Georgia,serif",fontWeight:600,
-                  cursor:detailedReady?"pointer":"not-allowed",
-                  background:!compactView?T.ocean:"transparent",color:!compactView?"white":detailedReady?T.mist:`${T.mist}66`,
-                  display:"flex",alignItems:"center",gap:4,
-                }}>
-                  Detailed
-                  {detailedLoading && <span style={{width:8,height:8,border:`1.5px solid ${T.sand}`,borderTopColor:T.ocean,borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>}
-                </button>
-              </div>
-            </div>
 
             {/* Refining banner with progress — shown while detailed IG streams in background */}
             {detailedLoading && (() => {
@@ -3796,12 +3887,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                           flexShrink:0,
                           display:"flex", alignItems:"center", gap:5,
                           padding:"5px 13px",
-                          borderRadius:20,
+                          borderRadius:RADIUS.full,
                           border:`1.5px solid ${active ? T.ocean : T.sand}`,
                           background: active ? T.ocean : T.chalk,
                           color: active ? "white" : T.mist,
                           fontSize:12, fontFamily:"Georgia,serif",
-                          cursor:"pointer", transition:"all 0.22s",
+                          cursor:"pointer", transition:`all ${MOTION.normal}`,
                           fontWeight: active ? 700 : 400,
                           boxShadow: active ? "0 2px 8px rgba(37,99,168,0.28)" : "none",
                           whiteSpace:"nowrap",
@@ -3853,21 +3944,28 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
                 return (
                   <div key={day.id} ref={el=>{ dayRefs.current[i]=el; }}>
-                    {compactView ? (
-                      <DayCompact day={day} displayCity={(() => {
+                    {compactView || collapsedDays.has(day.id) ? (
+                      <DayCompact day={day} canExpand={detailedReady || i < streamingDays} displayCity={(() => {
                         const hCity = hotelPerDay[i]?.city;
                         if (!hCity) return day.city;
                         return hCity === day.city ? day.city : `${day.city} (${hCity})`;
                       })()} onExpand={() => {
-                        setCompactView(false);
+                        if (compactView) {
+                          setCompactView(false);
+                          const allOtherIds = new Set(days.filter(d => d.id !== day.id).map(d => d.id));
+                          setCollapsedDays(allOtherIds);
+                        } else {
+                          setCollapsedDays(prev => { const next = new Set(prev); next.delete(day.id); return next; });
+                        }
                         setActiveDay(i);
-                        // Wait for detailed view to render, then scroll
+                        // Pre-load current day (if not already) + next day
+                        preloadDay(i);
+                        if (i + 1 < days.length) preloadDay(i + 1);
                         const tryScroll = (attempts = 0) => {
                           requestAnimationFrame(() => {
                             const el = dayRefs.current[i];
                             if (el && scrollRef.current) {
                               const top = el.offsetTop;
-                              // If top is 0 and not the first day, layout isn't ready yet
                               if (top === 0 && i > 0 && attempts < 10) {
                                 setTimeout(() => tryScroll(attempts + 1), 100);
                                 return;
@@ -3882,6 +3980,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                     <DaySection
                       day={day}
                       dayIndex={i}
+                      onCollapse={() => setCollapsedDays(prev => new Set(prev).add(day.id))}
                       onEditActivity={editActivity}
                       onRemoveActivity={removeActivity}
                       onReplaceActivity={(act) => {
@@ -4010,7 +4109,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                   background:"none",
                   cursor:"pointer",
                   color: active ? T.ocean : T.mist,
-                  transition:"color 0.15s",
+                  transition:`color ${MOTION.normal}`,
                   position:"relative",
                 }}>
                   {active && <div style={{position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:32,height:2.5,borderRadius:"0 0 2px 2px",background:T.ocean}}/>}
@@ -4073,7 +4172,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                         a.click();
                       }
                     },"image/png");
-                  }} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:14,border:`1.5px solid ${T.sand}`,background:"white",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:600}}>
+                  }} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:RADIUS.lg,border:`1.5px solid ${T.sand}`,background:"white",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:600}}>
                     <span style={{fontSize:24}}>🖼</span>
                     <div style={{textAlign:"left"}}>
                       <div>Share as image</div>
@@ -4095,7 +4194,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                     ].filter(l=>l!==undefined).join("\n");
                     navigator.clipboard.writeText(text);
                     setShowShare(false);
-                  }} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:14,border:`1.5px solid ${T.sand}`,background:"white",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:600}}>
+                  }} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:RADIUS.lg,border:`1.5px solid ${T.sand}`,background:"white",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:600}}>
                     <span style={{fontSize:24}}>📋</span>
                     <div style={{textAlign:"left"}}>
                       <div>Copy as text</div>
@@ -4121,7 +4220,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                       alert("Link copied!");
                     }
                     setShowShare(false);
-                  }} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:14,border:`1.5px solid ${T.sand}`,background:"white",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:600}}>
+                  }} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:RADIUS.lg,border:`1.5px solid ${T.sand}`,background:"white",cursor:"pointer",fontFamily:"Georgia,serif",fontSize:14,color:T.ink,fontWeight:600}}>
                     <span style={{fontSize:24}}>🔗</span>
                     <div style={{textAlign:"left"}}>
                       <div>Share link</div>
@@ -4166,10 +4265,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               }
               setShowPreIgSheet(true);
             }} style={{
-              width: "100%", padding: "13px 0", borderRadius: 14, border: "none",
+              width: "100%", padding: "13px 0", borderRadius: RADIUS.lg, border: "none",
               background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`, color: "white",
               fontFamily: "'DM Serif Display',serif", fontSize: 16, cursor: "pointer",
-              boxShadow: "0 4px 20px rgba(15,25,35,0.2)", marginBottom: 8,
+              boxShadow: SHADOW.lg, marginBottom: 8,
             }}>
               Build My Itinerary →
             </button>
@@ -4196,7 +4295,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           <div style={{
             position:"relative",width:"100%",maxWidth:430,
             background:T.warm,borderRadius:"20px 20px 0 0",
-            boxShadow:"0 -4px 30px rgba(15,25,35,0.15)",
+            boxShadow:SHADOW.lg,
             padding:"20px 20px",paddingBottom:"calc(20px + env(safe-area-inset-bottom, 0px))",
             animation:"fadeUp 0.25s ease",
             maxHeight:"85vh",overflowY:"auto",
@@ -4213,10 +4312,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               <div style={{display:"flex",gap:8}}>
                 {[{key:"budget",label:"Budget",icon:"🏕️"},{key:"mid",label:"Mid-range",icon:"🏨"},{key:"luxury",label:"Luxury",icon:"🏰"}].map(b=>(
                   <button key={b.key} onClick={()=>setPreIgForm(f=>({...f,budget:b.key}))} style={{
-                    flex:1,padding:"10px 8px",borderRadius:12,cursor:"pointer",textAlign:"center",
+                    flex:1,padding:"10px 8px",borderRadius:RADIUS.lg,cursor:"pointer",textAlign:"center",
                     border:`2px solid ${preIgForm.budget===b.key?T.terra:T.sand}`,
                     background:preIgForm.budget===b.key?"#FFF4EE":T.chalk,
-                    transition:"all 0.2s",
+                    transition:`all ${MOTION.normal}`,
                   }}>
                     <div style={{fontSize:20,marginBottom:2}}>{b.icon}</div>
                     <div style={{fontFamily:"Georgia,serif",fontSize:12,color:T.ink,fontWeight:preIgForm.budget===b.key?700:400}}>{b.label}</div>
@@ -4231,10 +4330,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               <div style={{display:"flex",gap:8}}>
                 {[{key:"early",icon:"🌅",label:"Early bird",sub:"Out by 8–9am"},{key:"late",icon:"☕",label:"Slow starter",sub:"Out by 11am"}].map(({key,icon,label,sub})=>(
                   <button key={key} onClick={()=>setPreIgForm(f=>({...f,morningStart:key}))} style={{
-                    flex:1,padding:"10px 12px",borderRadius:12,cursor:"pointer",textAlign:"left",
+                    flex:1,padding:"10px 12px",borderRadius:RADIUS.lg,cursor:"pointer",textAlign:"left",
                     border:`2px solid ${preIgForm.morningStart===key?T.ocean:T.sand}`,
                     background:preIgForm.morningStart===key?"#EBF3FD":T.chalk,
-                    transition:"all 0.2s",
+                    transition:`all ${MOTION.normal}`,
                   }}>
                     <div style={{fontFamily:"Georgia,serif",fontSize:13,color:preIgForm.morningStart===key?T.ocean:T.ink,fontWeight:preIgForm.morningStart===key?700:400}}>{icon} {label}</div>
                     <div style={{fontFamily:"Georgia,serif",fontSize:11,color:T.mist,marginTop:2}}>{sub}</div>
@@ -4249,10 +4348,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               <div style={{display:"flex",gap:8}}>
                 {[{key:"relaxed",icon:"🌿",label:"Relaxed",sub:"Downtime to breathe"},{key:"active",icon:"⚡",label:"Active",sub:"Cover more ground"}].map(({key,icon,label,sub})=>(
                   <button key={key} onClick={()=>setPreIgForm(f=>({...f,pace:key}))} style={{
-                    flex:1,padding:"10px 12px",borderRadius:12,cursor:"pointer",textAlign:"left",
+                    flex:1,padding:"10px 12px",borderRadius:RADIUS.lg,cursor:"pointer",textAlign:"left",
                     border:`2px solid ${preIgForm.pace===key?T.ocean:T.sand}`,
                     background:preIgForm.pace===key?"#EBF3FD":T.chalk,
-                    transition:"all 0.2s",
+                    transition:`all ${MOTION.normal}`,
                   }}>
                     <div style={{fontFamily:"Georgia,serif",fontSize:13,color:preIgForm.pace===key?T.ocean:T.ink,fontWeight:preIgForm.pace===key?700:400}}>{icon} {label}</div>
                     <div style={{fontFamily:"Georgia,serif",fontSize:11,color:T.mist,marginTop:2}}>{sub}</div>
@@ -4263,11 +4362,11 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
             {/* Free text */}
             <div style={{marginBottom:20}}>
-              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:T.ink,marginBottom:8}}>Anything specific?</div>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:T.ink,marginBottom:8}}>Any additional detail?</div>
               <textarea value={preIgForm.igNotes} onChange={e=>setPreIgForm(f=>({...f,igNotes:e.target.value}))}
                 placeholder="e.g. prefer boutique hotels, want a cooking class, no long drives, vegetarian food options…"
                 rows={3}
-                style={{width:"100%",padding:"10px 12px",borderRadius:12,border:`1.5px solid ${preIgForm.igNotes?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",resize:"none",boxSizing:"border-box",background:T.chalk}}/>
+                style={{width:"100%",padding:"10px 12px",borderRadius:RADIUS.lg,border:`1.5px solid ${preIgForm.igNotes?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",resize:"none",boxSizing:"border-box",background:T.chalk}}/>
             </div>
 
             {/* Generate button */}
@@ -4287,7 +4386,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               const voted = (pretripRoutes || []).map(r => ({ ...r, tier: 1, vote: r.id === pretripSelectedRouteId ? 1 : 0 }));
               setTimeout(() => handleBuildFromBrainstorm(voted, mergedForm), 50);
             }} style={{
-              width:"100%",padding:16,borderRadius:16,border:"none",
+              width:"100%",padding:16,borderRadius:RADIUS.lg,border:"none",
               background:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",
               fontFamily:"'DM Serif Display',serif",fontSize:18,cursor:"pointer",
               boxShadow:"0 6px 22px rgba(37,99,168,0.4)",
@@ -4311,7 +4410,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             <div onClick={()=>setShowEditConfirm(null)} style={{position:"absolute",inset:0,background:"rgba(15,25,35,0.5)"}}/>
             <div style={{position:"relative",background:T.chalk,borderRadius:"20px 20px 0 0",padding:"24px 20px 20px",paddingBottom:"calc(20px + env(safe-area-inset-bottom, 0px))",animation:"slideUp 0.25s ease"}}>
               <button onClick={()=>setShowEditConfirm(null)} aria-label="Close" style={{
-                position:"absolute",top:12,right:12,width:28,height:28,borderRadius:14,
+                position:"absolute",top:12,right:12,width:28,height:28,borderRadius:RADIUS.lg,
                 border:"none",background:"transparent",color:T.mist,fontSize:18,cursor:"pointer",
                 display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1,
               }}>✕</button>
@@ -4325,19 +4424,19 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                   : "Your changes might affect route choice. Generate new routes to apply, or discard to keep the current trip as-is."}
               </div>
               {/* Changes diff */}
-              <div style={{background:T.warm,borderRadius:12,padding:"12px 14px",marginBottom:16,border:`1px solid ${T.sand}`}}>
+              <div style={{background:T.warm,borderRadius:RADIUS.lg,padding:"12px 14px",marginBottom:16,border:`1px solid ${T.sand}`}}>
                 <div style={{fontSize:10,color:T.mist,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>What changed</div>
                 {changes.map((c, i) => (
                   <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",fontSize:12,borderBottom:i < changes.length - 1 ? `1px solid ${T.sand}` : "none"}}>
                     <span style={{color:T.mist,minWidth:75,flexShrink:0,fontSize:11}}>{c.label}</span>
-                    <span style={{color:"#e53e3e",textDecoration:"line-through",fontSize:11}}>{c.old}</span>
+                    <span style={{color:T.error,textDecoration:"line-through",fontSize:11}}>{c.old}</span>
                     <span style={{color:T.mist,flexShrink:0}}>→</span>
                     <span style={{color:T.moss,fontWeight:600,fontSize:11}}>{c.new}</span>
                   </div>
                 ))}
               </div>
               <button onClick={() => { setShowEditConfirm(null); doSetupComplete(form, true); }} style={{
-                width:"100%",padding:14,borderRadius:14,border:"none",
+                width:"100%",padding:14,borderRadius:RADIUS.lg,border:"none",
                 background:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",
                 fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:"pointer",marginBottom:8,
                 boxShadow:"0 4px 16px rgba(37,99,168,0.3)",
@@ -4348,7 +4447,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 {pretripRoutes.filter(r => !r.dismissed).length} existing routes{editingTrip?.ig_response ? " & itinerary" : ""} will be replaced
               </div>
               <button onClick={handleDiscard} style={{
-                width:"100%",padding:12,borderRadius:14,border:`2px solid ${T.sand}`,
+                width:"100%",padding:12,borderRadius:RADIUS.lg,border:`2px solid ${T.sand}`,
                 background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:14,cursor:"pointer",
               }}>Discard Changes</button>
               <div style={{fontSize:10,color:T.mist,textAlign:"center",marginTop:6}}>Your edits will be reverted</div>
@@ -4388,19 +4487,19 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               </div>
               {/* Changes diff */}
               {changes.length > 0 ? (
-                <div style={{background:T.warm,borderRadius:12,padding:"12px 14px",marginBottom:16,border:`1px solid ${T.sand}`}}>
+                <div style={{background:T.warm,borderRadius:RADIUS.lg,padding:"12px 14px",marginBottom:16,border:`1px solid ${T.sand}`}}>
                   <div style={{fontSize:10,color:T.mist,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>What's changing</div>
                   {changes.map((c, i) => (
                     <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",fontSize:12,borderBottom:i < changes.length - 1 ? `1px solid ${T.sand}` : "none"}}>
                       <span style={{color:T.mist,minWidth:65,flexShrink:0}}>{c.label}</span>
-                      <span style={{color:"#e53e3e",textDecoration:"line-through"}}>{c.old}</span>
+                      <span style={{color:T.error,textDecoration:"line-through"}}>{c.old}</span>
                       <span style={{color:T.mist,flexShrink:0}}>→</span>
                       <span style={{color:T.moss,fontWeight:600}}>{c.new}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div style={{background:T.warm,borderRadius:12,padding:"10px 14px",marginBottom:16,border:`1px solid ${T.sand}`,textAlign:"center"}}>
+                <div style={{background:T.warm,borderRadius:RADIUS.lg,padding:"10px 14px",marginBottom:16,border:`1px solid ${T.sand}`,textAlign:"center"}}>
                   <span style={{fontSize:11,color:T.moss}}>✓ No changes to route or preferences</span>
                 </div>
               )}
@@ -4415,7 +4514,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 const voted = (pretripRoutes || []).map(r => ({ ...r, tier: 1, vote: r.id === pretripSelectedRouteId ? 1 : 0 }));
                 setTimeout(() => handleBuildFromBrainstorm(voted, mergedForm), 50);
               }} style={{
-                width:"100%",padding:14,borderRadius:14,border:"none",
+                width:"100%",padding:14,borderRadius:RADIUS.lg,border:"none",
                 background:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",
                 fontFamily:"'DM Serif Display',serif",fontSize:15,cursor:"pointer",
                 boxShadow:"0 4px 16px rgba(37,99,168,0.3)",marginBottom:8,
@@ -4429,7 +4528,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 setScreen("itinerary");
                 setActiveBottomTab("itinerary");
               }} style={{
-                width:"100%",padding:12,borderRadius:14,border:`2px solid ${T.sand}`,
+                width:"100%",padding:12,borderRadius:RADIUS.lg,border:`2px solid ${T.sand}`,
                 background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:14,cursor:"pointer",
               }}>
                 Keep Current Itinerary
@@ -4448,7 +4547,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           {!isBrainstorm && <div onClick={()=>setChatOpen(false)} style={{position:"absolute",inset:0,background:"rgba(15,25,35,0.45)",animation:"fadeUp 0.2s ease",pointerEvents:"all"}}/>}
           {/* On brainstorm: no scrim, touches pass through to routes behind */}
           {/* Sheet — half height on brainstorm, full on itinerary */}
-          <div style={{position:"relative",width:"100%",maxWidth:430,height:isBrainstorm?"50dvh":"85dvh",background:T.warm,borderRadius:"18px 18px 0 0",boxShadow:"0 -8px 30px rgba(0,0,0,0.22)",display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideUp 0.25s ease",pointerEvents:"all"}}>
+          <div style={{position:"relative",width:"100%",maxWidth:430,height:isBrainstorm?"50dvh":"85dvh",background:T.warm,borderRadius:"18px 18px 0 0",boxShadow:SHADOW.lg,display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideUp 0.25s ease",pointerEvents:"all"}}>
             {/* Drag handle */}
             <div style={{padding:"8px 0 4px",display:"flex",justifyContent:"center",flexShrink:0,background:`linear-gradient(135deg,${T.dusk},${T.ocean})`}}>
               <div style={{width:38,height:4,borderRadius:4,background:"rgba(255,255,255,0.4)"}}/>
@@ -4469,7 +4568,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               {filteredMessages.filter(m => m.role !== "system-undo").length === 0 && (
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   <div style={{display:"flex",justifyContent:"flex-start"}}>
-                    <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",borderLeft:`3px solid ${T.ocean}`}}>
+                    <div style={{maxWidth:"90%",background:T.chalk,color:T.ink,borderRadius:"18px 18px 18px 4px",padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.6,boxShadow:SHADOW.sm,borderLeft:`3px solid ${T.ocean}`}}>
                       {screen === "brainstorm"
                         ? pretripRoutes.filter(r => r.title && !r.dismissed).length >= 2
                           ? "I've put together some trip plans for you. Ask me anything — compare plans, tweak a specific one, or tell me what matters most to you."
@@ -4484,7 +4583,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                       : ["Change Day 1 hotel","Add a beach day","Make Day 3 morning relaxed"]
                     ).map(s=>(
                       <button key={s} onClick={()=>{ setChatInput(s); setTimeout(() => chatInputRef.current?.focus(), 50); }} style={{
-                        background:"transparent",border:`1px solid ${T.ocean}`,borderRadius:10,padding:"6px 14px",
+                        background:"transparent",border:`1px solid ${T.ocean}`,borderRadius:RADIUS.md,padding:"6px 14px",
                         fontSize:13,fontFamily:"Georgia,serif",fontWeight:500,color:T.ocean,cursor:"pointer",
                       }}>{s}</button>
                     ))}
@@ -4508,9 +4607,9 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                   };
                   return (
                     <div key={m.id || i} style={{display:"flex",justifyContent:"center",margin:"6px 0"}}>
-                      <div style={{background:T.sand,borderRadius:12,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.mist,display:"flex",alignItems:"center",gap:10}}>
+                      <div style={{background:T.sand,borderRadius:RADIUS.lg,padding:"8px 14px",fontSize:12,fontFamily:"Georgia,serif",color:T.mist,display:"flex",alignItems:"center",gap:10}}>
                         <span>{m.content}</span>
-                        <button onClick={handleUndo} style={{background:"none",border:`1px solid ${T.mist}`,borderRadius:8,padding:"2px 10px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer"}}>Undo</button>
+                        <button onClick={handleUndo} style={{background:"none",border:`1px solid ${T.mist}`,borderRadius:RADIUS.md,padding:"2px 10px",fontSize:12,fontFamily:"Georgia,serif",color:T.ink,cursor:"pointer"}}>Undo</button>
                       </div>
                     </div>
                   );
@@ -4532,7 +4631,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                       color: isOwn ? "white" : T.ink,
                       borderRadius: isOwn ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
                       padding:"10px 14px",fontSize:13,fontFamily:"Georgia,serif",lineHeight:1.5,
-                      boxShadow:"0 1px 4px rgba(0,0,0,0.06)",
+                      boxShadow:SHADOW.sm,
                       borderLeft: isAI ? `3px solid ${T.ocean}` : "none",
                     }}>
                       {m.streaming && !m.content ? <span style={{color:T.mist,letterSpacing:2}}>···</span> : renderMentions(m.content||"")}
@@ -4569,10 +4668,10 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                         style={{
                           marginTop: 8, display: "flex", alignItems: "center", gap: 6,
                           background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
-                          color: "white", border: "none", borderRadius: 10,
+                          color: "white", border: "none", borderRadius: RADIUS.md,
                           padding: "8px 14px", fontFamily: "Georgia,serif", fontSize: 12,
                           cursor: "pointer", fontWeight: 600,
-                          boxShadow: "0 2px 8px rgba(15,25,35,0.15)",
+                          boxShadow: SHADOW.md,
                         }}
                       >
                         {trip ? "🗺️ View Updated Itinerary" : "💡 View Updated Plans"}
@@ -4628,18 +4727,18 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                   <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:4}}>Landing time (Day 1)</div>
                   <input type="time" value={flightsForm.arrivalTime}
                     onChange={e=>setFlightsForm(f=>({...f,arrivalTime:e.target.value}))}
-                    style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${T.sand}`,
+                    style={{width:"100%",padding:"11px 14px",borderRadius:RADIUS.md,border:`1.5px solid ${T.sand}`,
                       fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
                 </div>
                 <div style={{flex:1}}>
                   <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",marginBottom:4}}>Departure time (last day)</div>
                   <input type="time" value={flightsForm.departureTime}
                     onChange={e=>setFlightsForm(f=>({...f,departureTime:e.target.value}))}
-                    style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${T.sand}`,
+                    style={{width:"100%",padding:"11px 14px",borderRadius:RADIUS.md,border:`1.5px solid ${T.sand}`,
                       fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",boxSizing:"border-box"}}/>
                 </div>
               </div>
-              <button onClick={saveFlights} style={{width:"100%",padding:14,borderRadius:14,border:"none",
+              <button onClick={saveFlights} style={{width:"100%",padding:14,borderRadius:RADIUS.lg,border:"none",
                 background:`linear-gradient(135deg,${T.ocean},${T.dusk})`,color:"white",
                 fontFamily:"'DM Serif Display',serif",fontSize:16,cursor:"pointer"}}>Save flights</button>
             </>}

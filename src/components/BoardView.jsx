@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { T, PLACES_PROXY, PLACES_HEADERS } from "../theme";
+import { T, RADIUS, SHADOW, MOTION, PLACES_PROXY, PLACES_HEADERS } from "../theme";
 import { supabase } from "../supabase";
 
 /* ─── BOARD VIEW ─────────────────────────────────────────────────────── */
@@ -247,14 +247,14 @@ function TodoView({ trip, onBack }) {
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               {suggestions.length > 0 && (
-                <button onClick={acceptAll} style={{ fontSize: 11, color: T.moss, fontFamily: "Georgia,serif", background: "none", border: `1px solid ${T.moss}`, borderRadius: 20, padding: "3px 10px", cursor: "pointer" }}>
+                <button onClick={acceptAll} style={{ fontSize: 11, color: T.moss, fontFamily: "Georgia,serif", background: "none", border: `1px solid ${T.moss}`, borderRadius: RADIUS.full, padding: "3px 10px", cursor: "pointer" }}>
                   Accept all
                 </button>
               )}
               <button onClick={() => generateTodos()} disabled={generating} style={{
                 fontSize: 11, color: "white", fontFamily: "Georgia,serif",
                 background: generating ? T.sand : T.ocean, border: "none",
-                borderRadius: 20, padding: "3px 10px", cursor: generating ? "default" : "pointer",
+                borderRadius: RADIUS.full, padding: "3px 10px", cursor: generating ? "default" : "pointer",
               }}>
                 {generating ? "Generating…" : "✨ Generate"}
               </button>
@@ -281,7 +281,7 @@ function TodoView({ trip, onBack }) {
                   {items.map((item, globalIdx) => {
                     const idx = suggestions.indexOf(item);
                     return (
-                      <div key={globalIdx} style={{ display: "flex", alignItems: "center", gap: 8, background: "#F0F7FF", border: `1px solid #C8DFFE`, borderRadius: 10, padding: "10px 12px", marginBottom: 6 }}>
+                      <div key={globalIdx} style={{ display: "flex", alignItems: "center", gap: 8, background: "#F0F7FF", border: `1px solid #C8DFFE`, borderRadius: RADIUS.md, padding: "10px 12px", marginBottom: 6 }}>
                         <div style={{ flex: 1 }}>
                           <div style={{ fontSize: 13, fontFamily: "Georgia,serif", color: T.ink, lineHeight: 1.4 }}>{item.text}</div>
                           {item.due_date && <div style={{ fontSize: 10, color: T.ocean, fontFamily: "Georgia,serif", marginTop: 3 }}>⏰ {item.due_date}</div>}
@@ -306,7 +306,7 @@ function TodoView({ trip, onBack }) {
           onChange={e => setNewText(e.target.value)}
           onKeyDown={e => e.key === "Enter" && addManual()}
           placeholder="Add an item…"
-          style={{ flex: 1, padding: "10px 14px", borderRadius: 22, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm }}
+          style={{ flex: 1, padding: "10px 14px", borderRadius: RADIUS.full, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm }}
         />
         <button onClick={addManual} disabled={!newText.trim()} style={{ width: 40, height: 40, borderRadius: "50%", background: newText.trim() ? T.ocean : T.sand, color: "white", border: "none", fontSize: 18, cursor: newText.trim() ? "pointer" : "default" }}>+</button>
       </div>
@@ -444,7 +444,7 @@ function BookmarksView({ trip, onBack }) {
             value={title}
             onChange={e => setTitle(e.target.value)}
             placeholder="Title (e.g. Flight to Tokyo)"
-            style={{ padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm }}
+            style={{ padding: "10px 14px", borderRadius: RADIUS.lg, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm }}
           />
           <div style={{ display: "flex", gap: 8 }}>
             <input
@@ -452,7 +452,7 @@ function BookmarksView({ trip, onBack }) {
               onChange={e => setUrl(e.target.value)}
               onKeyDown={e => e.key === "Enter" && (editing ? saveEdit() : addBookmark())}
               placeholder="URL (e.g. booking.com/...)"
-              style={{ flex: 1, padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm }}
+              style={{ flex: 1, padding: "10px 14px", borderRadius: RADIUS.lg, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm }}
             />
             <button onClick={editing ? saveEdit : addBookmark} disabled={!title.trim() || !url.trim()} style={{
               width: 40, height: 40, borderRadius: "50%", border: "none", fontSize: 18, cursor: (title.trim() && url.trim()) ? "pointer" : "default",
@@ -617,7 +617,7 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
         {expenses.filter(e => e.is_planned).length === 0 && (
           <button onClick={generateEstimate} disabled={generating} style={{
             background: generating ? T.sand : T.ocean, color: "white", border: "none",
-            borderRadius: 20, padding: "7px 14px", fontSize: 12,
+            borderRadius: RADIUS.full, padding: "7px 14px", fontSize: 12,
             fontFamily: "Georgia,serif", cursor: generating ? "default" : "pointer",
           }}>
             {generating ? "Estimating…" : "✨ Estimate"}
@@ -632,8 +632,8 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <span style={{ fontSize: 13, fontFamily: "Georgia,serif", color: T.mist }}>Budget $</span>
               <input value={budgetInput} onChange={e => setBudgetInput(e.target.value)} onKeyDown={e => e.key === "Enter" && saveBudget()}
-                autoFocus style={{ width: 100, padding: "6px 10px", borderRadius: 8, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 14, color: T.ink, outline: "none" }} />
-              <button onClick={saveBudget} style={{ background: T.ocean, color: "white", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontFamily: "Georgia,serif", cursor: "pointer" }}>Save</button>
+                autoFocus style={{ width: 100, padding: "6px 10px", borderRadius: RADIUS.md, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 14, color: T.ink, outline: "none" }} />
+              <button onClick={saveBudget} style={{ background: T.ocean, color: "white", border: "none", borderRadius: RADIUS.md, padding: "6px 12px", fontSize: 12, fontFamily: "Georgia,serif", cursor: "pointer" }}>Save</button>
               <button onClick={() => setEditingBudget(false)} style={{ background: "none", border: "none", fontSize: 12, color: T.mist, cursor: "pointer", fontFamily: "Georgia,serif" }}>Cancel</button>
             </div>
           ) : (
@@ -642,12 +642,12 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
                     <span style={{ fontSize: 12, fontFamily: "Georgia,serif", color: T.mist }}>Budget</span>
-                    <span style={{ fontSize: 13, fontFamily: "Georgia,serif", fontWeight: 600, color: (totalPlanned > budget) ? "#DC2626" : T.ink }}>
+                    <span style={{ fontSize: 13, fontFamily: "Georgia,serif", fontWeight: 600, color: (totalPlanned > budget) ? T.error : T.ink }}>
                       ${totalPlanned.toLocaleString()} / ${budget.toLocaleString()}
                     </span>
                   </div>
                   <div style={{ height: 6, borderRadius: 3, background: T.sand, overflow: "hidden" }}>
-                    <div style={{ height: "100%", borderRadius: 3, background: (totalPlanned / budget) > 1 ? "#DC2626" : (totalPlanned / budget) > 0.8 ? "#D97706" : T.moss, width: `${Math.min(100, (totalPlanned / budget) * 100)}%`, transition: "width 0.3s" }} />
+                    <div style={{ height: "100%", borderRadius: 3, background: (totalPlanned / budget) > 1 ? T.error : (totalPlanned / budget) > 0.8 ? T.warning : T.moss, width: `${Math.min(100, (totalPlanned / budget) * 100)}%`, transition: `width ${MOTION.slow}` }} />
                   </div>
                   {totalActual > 0 && (
                     <div style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif", marginTop: 4 }}>
@@ -667,7 +667,7 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
           <div style={{ padding: "0 16px 12px" }}>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {categoryTotals.map(({ cat, planned, actual }) => (
-                <div key={cat} style={{ display: "flex", alignItems: "center", gap: 4, background: T.chalk, border: `1px solid ${T.sand}`, borderRadius: 10, padding: "4px 10px" }}>
+                <div key={cat} style={{ display: "flex", alignItems: "center", gap: 4, background: T.chalk, border: `1px solid ${T.sand}`, borderRadius: RADIUS.md, padding: "4px 10px" }}>
                   <span style={{ fontSize: 12 }}>{EXPENSE_ICONS[cat]}</span>
                   <span style={{ fontSize: 11, fontFamily: "Georgia,serif", color: T.ink }}>${(tab === "planned" ? planned : actual).toLocaleString()}</span>
                 </div>
@@ -677,14 +677,14 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
         )}
 
         {/* Tab switch */}
-        <div style={{ display: "flex", margin: "0 16px 12px", background: T.sand, borderRadius: 10, padding: 2 }}>
+        <div style={{ display: "flex", margin: "0 16px 12px", background: T.sand, borderRadius: RADIUS.md, padding: 2 }}>
           {[{ key: "planned", label: `Planned ($${totalPlanned.toLocaleString()})` }, { key: "actual", label: `Actual ($${totalActual.toLocaleString()})` }].map(({ key, label }) => (
             <button key={key} onClick={() => { setTab(key); setAddIsPlanned(key === "planned"); }} style={{
-              flex: 1, padding: "8px 0", borderRadius: 8, border: "none",
+              flex: 1, padding: "8px 0", borderRadius: RADIUS.md, border: "none",
               background: tab === key ? T.chalk : "transparent",
               color: tab === key ? T.ink : T.mist,
               fontFamily: "Georgia,serif", fontSize: 12, fontWeight: tab === key ? 600 : 400,
-              cursor: "pointer", boxShadow: tab === key ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+              cursor: "pointer", boxShadow: tab === key ? SHADOW.sm : "none",
             }}>{label}</button>
           ))}
         </div>
@@ -730,7 +730,7 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
                         {(exp.currency || "USD") === "USD" ? "$" : exp.currency + " "}{Number(exp.amount).toLocaleString()}
                       </div>
                       <button onClick={() => startEditExpense(exp)} style={{ background: "none", border: "none", fontSize: 13, color: T.ocean, cursor: "pointer", padding: "2px 4px", flexShrink: 0 }}>✏️</button>
-                      <button onClick={() => deleteExpense(exp)} style={{ background: "none", border: `1px solid #FECACA`, borderRadius: 6, fontSize: 12, color: "#DC2626", cursor: "pointer", padding: "2px 6px", flexShrink: 0 }}>✕</button>
+                      <button onClick={() => deleteExpense(exp)} style={{ background: "none", border: `1px solid ${T.errorBorder}`, borderRadius: RADIUS.sm, fontSize: 12, color: T.error, cursor: "pointer", padding: "2px 6px", flexShrink: 0 }}>✕</button>
                     </div>
                   ))}
                 </div>
@@ -750,21 +750,21 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
             </div>
           )}
           <input value={addTitle} onChange={e => setAddTitle(e.target.value)} placeholder="What for?" autoFocus
-            style={{ width: "100%", padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm, boxSizing: "border-box", marginBottom: 8 }} />
+            style={{ width: "100%", padding: "10px 14px", borderRadius: RADIUS.lg, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm, boxSizing: "border-box", marginBottom: 8 }} />
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <select value={addCurrency} onChange={e => setAddCurrency(e.target.value)}
-              style={{ width: 80, padding: "10px 8px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm, appearance: "none", textAlign: "center" }}>
+              style={{ width: 80, padding: "10px 8px", borderRadius: RADIUS.lg, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm, appearance: "none", textAlign: "center" }}>
               {["USD","EUR","GBP","INR","JPY","AUD","CAD","SGD","AED","THB","IDR","MYR","VND","KRW","CHF","SEK","NOK","DKK","NZD","ZAR","BRL","MXN","TRY","SAR","QAR","PHP","TWD","HKD","CNY","CZK","PLN","HUF","ILS","EGP","MAD","LKR","NPR","MMK","KHR","LAK"].map(c => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
             <input value={addAmount} onChange={e => setAddAmount(e.target.value)} placeholder="Amount" type="number" inputMode="decimal"
-              style={{ flex: 1, padding: "10px 14px", borderRadius: 12, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm, textAlign: "right" }} />
+              style={{ flex: 1, padding: "10px 14px", borderRadius: RADIUS.lg, border: `1.5px solid ${T.sand}`, fontFamily: "Georgia,serif", fontSize: 13, color: T.ink, outline: "none", background: T.warm, textAlign: "right" }} />
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
             {EXPENSE_CATEGORIES.map(cat => (
               <button key={cat} onClick={() => setAddCategory(cat)} style={{
-                padding: "5px 10px", borderRadius: 8, border: `1.5px solid ${addCategory === cat ? EXPENSE_COLORS[cat] : T.sand}`,
+                padding: "5px 10px", borderRadius: RADIUS.md, border: `1.5px solid ${addCategory === cat ? EXPENSE_COLORS[cat] : T.sand}`,
                 background: addCategory === cat ? EXPENSE_COLORS[cat] + "15" : "transparent",
                 color: addCategory === cat ? EXPENSE_COLORS[cat] : T.mist,
                 fontSize: 11, fontFamily: "Georgia,serif", cursor: "pointer",
@@ -772,9 +772,9 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
             ))}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={cancelAdd} style={{ flex: 1, padding: "10px 0", borderRadius: 12, border: `1.5px solid ${T.sand}`, background: "transparent", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13, cursor: "pointer" }}>Cancel</button>
+            <button onClick={cancelAdd} style={{ flex: 1, padding: "10px 0", borderRadius: RADIUS.lg, border: `1.5px solid ${T.sand}`, background: "transparent", color: T.mist, fontFamily: "Georgia,serif", fontSize: 13, cursor: "pointer" }}>Cancel</button>
             <button onClick={addExpense} disabled={!addTitle.trim() || !addAmount} style={{
-              flex: 1, padding: "10px 0", borderRadius: 12, border: "none",
+              flex: 1, padding: "10px 0", borderRadius: RADIUS.lg, border: "none",
               background: (addTitle.trim() && addAmount) ? T.ocean : T.sand, color: "white",
               fontFamily: "Georgia,serif", fontSize: 13, cursor: (addTitle.trim() && addAmount) ? "pointer" : "default",
             }}>{editingExpense ? "Save" : "Add"}</button>
@@ -783,7 +783,7 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
       ) : (
         <div style={{ padding: "10px 16px", paddingBottom: "calc(10px + env(safe-area-inset-bottom, 0px))", borderTop: `1px solid ${T.sand}`, background: T.chalk, flexShrink: 0 }}>
           <button onClick={() => { setEditingExpense(null); setShowAdd(true); }} style={{
-            width: "100%", padding: "12px 0", borderRadius: 12, border: `1.5px dashed ${T.sand}`,
+            width: "100%", padding: "12px 0", borderRadius: RADIUS.lg, border: `1.5px dashed ${T.sand}`,
             background: "transparent", color: T.ocean, fontFamily: "Georgia,serif", fontSize: 13, cursor: "pointer",
           }}>+ Add {tab === "planned" ? "planned" : "actual"} expense</button>
         </div>
@@ -804,11 +804,11 @@ function ModePills({ value, onChange }) {
     <div style={{display:"flex",gap:6,marginBottom:8}}>
       {TRAVEL_MODES.map(m => (
         <button key={m.id} onClick={()=>onChange(m.id)} style={{
-          flex:1, padding:"6px 2px", borderRadius:8,
+          flex:1, padding:"6px 2px", borderRadius:RADIUS.md,
           border:`1.5px solid ${value===m.id?T.ocean:T.sand}`,
           background:value===m.id?T.ocean:"transparent",
           color:value===m.id?"white":T.mist,
-          fontFamily:"Georgia,serif", fontSize:11, cursor:"pointer", transition:"all 0.2s",
+          fontFamily:"Georgia,serif", fontSize:11, cursor:"pointer", transition:`all ${MOTION.normal}`,
         }}>{m.label}</button>
       ))}
     </div>
@@ -816,31 +816,57 @@ function ModePills({ value, onChange }) {
 }
 
 /* ─── CITY INPUT ─────────────────────────────────────────────────────── */
+const _cityAutocompleteCache = new Map();
+
 function CityInput({ value, onChange, placeholder, inputStyle, airportOnly = false, hotelCity = null }) {
   const [suggs, setSuggs] = useState([]);
   const [show, setShow]   = useState(false);
+  const [loading, setLoading] = useState(false);
   const timer = useRef(null);
+  const abortRef = useRef(null);
 
   const handleChange = (val) => {
     onChange(val);
-    if (val.trim().length < 3) { setSuggs([]); setShow(false); return; }
+    if (val.trim().length < 1) { setSuggs([]); setShow(false); setLoading(false); return; }
+    const types = airportOnly ? "airport" : (hotelCity ? "lodging" : "");
+    const q = hotelCity ? `${val} ${hotelCity}` : val;
+    const cacheKey = `${q.trim().toLowerCase()}|${types}`;
+    const cached = _cityAutocompleteCache.get(cacheKey);
+    if (cached) {
+      setSuggs(cached);
+      setShow(cached.length > 0);
+      setLoading(false);
+      return;
+    }
+    setShow(true);
+    setLoading(true);
     clearTimeout(timer.current);
+    abortRef.current?.abort();
     timer.current = setTimeout(async () => {
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
       try {
-        const body = { q: hotelCity ? `${val} ${hotelCity}` : val };
-        if (airportOnly) body.types = "airport";
-        else if (hotelCity) body.types = "lodging";
-        const res  = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
+        const body = { q };
+        if (types) body.types = types;
+        const res = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
           method: "POST",
           headers: PLACES_HEADERS,
           body: JSON.stringify(body),
+          signal: ctrl.signal,
         });
         const data = await res.json();
         const items = (data.suggestions || []).slice(0, 6);
+        _cityAutocompleteCache.set(cacheKey, items);
+        if (ctrl.signal.aborted) return;
         setSuggs(items);
         setShow(items.length > 0);
-      } catch { setSuggs([]); }
-    }, 300);
+        setLoading(false);
+      } catch (err) {
+        if (err.name === "AbortError") return;
+        setSuggs([]);
+        setLoading(false);
+      }
+    }, 200);
   };
 
   const pick = (s) => {
@@ -848,6 +874,7 @@ function CityInput({ value, onChange, placeholder, inputStyle, airportOnly = fal
     onChange(fmt?.mainText?.text || s.placePrediction?.text?.text || "");
     setSuggs([]);
     setShow(false);
+    setLoading(false);
   };
 
   return (
@@ -859,8 +886,14 @@ function CityInput({ value, onChange, placeholder, inputStyle, airportOnly = fal
         placeholder={placeholder}
         style={inputStyle}
       />
-      {show && suggs.length > 0 && (
-        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:T.chalk,border:`1.5px solid ${T.sand}`,borderRadius:10,zIndex:200,boxShadow:"0 4px 14px rgba(0,0,0,0.10)",overflow:"hidden"}}>
+      {show && (loading || suggs.length > 0) && (
+        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:T.chalk,border:`1.5px solid ${T.sand}`,borderRadius:RADIUS.md,zIndex:200,boxShadow:SHADOW.md,overflow:"hidden"}}>
+          {loading && suggs.length === 0 && (
+            <div style={{padding:"9px 12px",fontFamily:"Georgia,serif",fontSize:12,color:T.mist,display:"flex",alignItems:"center",gap:8}}>
+              <span style={{display:"inline-block",width:10,height:10,borderRadius:"50%",border:`2px solid ${T.sand}`,borderTopColor:T.ocean,animation:"spin 0.7s linear infinite"}}/>
+              Searching…
+            </div>
+          )}
           {suggs.map((s,i) => {
             const fmt = s.placePrediction?.structuredFormat;
             const main = fmt?.mainText?.text || s.placePrediction?.text?.text || "";
@@ -937,7 +970,7 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
   };
 
   const inputStyle = (filled) => ({
-    width:"100%", padding:"10px 12px", borderRadius:10,
+    width:"100%", padding:"10px 12px", borderRadius:RADIUS.md,
     border:`1.5px solid ${filled ? T.ocean : T.sand}`,
     fontFamily:"Georgia,serif", fontSize:13, color:T.ink,
     outline:"none", boxSizing:"border-box", background:"white",
@@ -952,7 +985,7 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
     <div style={{padding:"20px 16px 100px",display:"flex",flexDirection:"column",gap:16}}>
 
       {/* Travel */}
-      <div style={{background:T.chalk,borderRadius:14,padding:16,border:`1.5px solid ${T.sand}`}}>
+      <div style={{background:T.chalk,borderRadius:RADIUS.lg,padding:16,border:`1.5px solid ${T.sand}`}}>
         <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:14}}>🧭 Travel</div>
 
         {/* Arrival */}
@@ -964,7 +997,7 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
             airportOnly={flights.arrivalMode === "flight"}
             inputStyle={{...inputStyle(flights.arrivalCity),marginBottom:8}}/>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <div style={{flex:1,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7"}}>
+            <div style={{flex:1,padding:"10px 12px",borderRadius:RADIUS.md,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7"}}>
               {dateLabel(trip.start_date)}
             </div>
             {flights.arrivalMode !== "road" && (
@@ -983,7 +1016,7 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
             airportOnly={flights.departureMode === "flight"}
             inputStyle={{...inputStyle(flights.departureCity),marginBottom:8}}/>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <div style={{flex:1,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7"}}>
+            <div style={{flex:1,padding:"10px 12px",borderRadius:RADIUS.md,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:12,color:T.mist,background:"#f7f7f7"}}>
               {dateLabel(trip.end_date)}
             </div>
             {flights.departureMode !== "road" && (
@@ -997,7 +1030,7 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
       </div>
 
       {/* Hotels */}
-      <div style={{background:T.chalk,borderRadius:14,padding:16,border:`1.5px solid ${T.sand}`}}>
+      <div style={{background:T.chalk,borderRadius:RADIUS.lg,padding:16,border:`1.5px solid ${T.sand}`}}>
         <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:T.ink,marginBottom:14}}>🏨 Hotels</div>
         {hotels.map((h, i) => (
           <div key={h.city} style={{marginBottom:i < hotels.length-1 ? 12 : 16}}>
@@ -1012,12 +1045,12 @@ function LogisticsTab({ trip, days, onSaveFlights, onSaveHotels, onApplyHotels }
 
       <div style={{position:"sticky",bottom:0,padding:"12px 0 8px",background:T.warm}}>
         <button onClick={handleSaveAll} disabled={!hasChanges} style={{
-          width:"100%",padding:"12px 0",borderRadius:12,border:"none",
+          width:"100%",padding:"12px 0",borderRadius:RADIUS.lg,border:"none",
           background: saveStatus==="done" ? T.moss : !hasChanges ? T.sand : `linear-gradient(135deg,${T.ocean},${T.dusk})`,
           color: !hasChanges ? T.mist : "white",
           fontFamily:"'DM Serif Display',serif",fontSize:15,
           cursor: hasChanges ? "pointer" : "default",
-          transition:"background 0.3s",
+          transition:`background ${MOTION.slow}`,
         }}>{saveStatus==="saving" ? "Saving…" : saveStatus==="done" ? "✓ Saved" : "Save and update itinerary"}</button>
       </div>
     </div>
@@ -1092,7 +1125,7 @@ function BoardView({ trip, onSaveNotes, days, onSaveFlights, onSaveHotels, onApp
     <div style={{ padding: "16px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
 
       {/* ── TRAVEL & HOTELS ── */}
-      <div onClick={() => openSection("logistics")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
+      <div onClick={() => openSection("logistics")} style={{ background: T.chalk, borderRadius: RADIUS.lg, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
           <div style={{ fontSize: 24, flexShrink: 0 }}>🧭</div>
           <div style={{ flex: 1 }}>
@@ -1106,7 +1139,7 @@ function BoardView({ trip, onSaveNotes, days, onSaveFlights, onSaveHotels, onApp
       </div>
 
       {/* ── EXPENSES ── */}
-      <div onClick={() => openSection("expenses")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
+      <div onClick={() => openSection("expenses")} style={{ background: T.chalk, borderRadius: RADIUS.lg, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
           <div style={{ fontSize: 24, flexShrink: 0 }}>💸</div>
           <div style={{ flex: 1 }}>
@@ -1118,7 +1151,7 @@ function BoardView({ trip, onSaveNotes, days, onSaveFlights, onSaveHotels, onApp
       </div>
 
       {/* ── NOTES ── */}
-      <div onClick={() => openSection("notes")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
+      <div onClick={() => openSection("notes")} style={{ background: T.chalk, borderRadius: RADIUS.lg, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
           <div style={{ fontSize: 24, flexShrink: 0 }}>📝</div>
           <div style={{ flex: 1 }}>
@@ -1136,7 +1169,7 @@ function BoardView({ trip, onSaveNotes, days, onSaveFlights, onSaveHotels, onApp
       </div>
 
       {/* ── TO-DO ── */}
-      <div onClick={() => openSection("todo")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
+      <div onClick={() => openSection("todo")} style={{ background: T.chalk, borderRadius: RADIUS.lg, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
           <div style={{ fontSize: 24, flexShrink: 0 }}>✅</div>
           <div style={{ flex: 1 }}>
@@ -1175,7 +1208,7 @@ function BoardView({ trip, onSaveNotes, days, onSaveFlights, onSaveHotels, onApp
       </div>
 
       {/* ── BOOKMARKS ── */}
-      <div onClick={() => openSection("bookmarks")} style={{ background: T.chalk, borderRadius: 16, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
+      <div onClick={() => openSection("bookmarks")} style={{ background: T.chalk, borderRadius: RADIUS.lg, border: `1px solid ${T.sand}`, cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px 10px" }}>
           <div style={{ fontSize: 24, flexShrink: 0 }}>🔖</div>
           <div style={{ flex: 1 }}>

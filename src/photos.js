@@ -55,6 +55,43 @@ export function makeQueue(delayMs, concurrency = 1) {
 
 export const wikiQueuedFetch = makeQueue(300, 3); // Wikimedia — 3 concurrent, 300ms stagger (avoid 429s)
 
+/**
+ * Fetch a representative photo for an activity/place using free Wikipedia/Commons sources.
+ *
+ * Hotels take a different path: TripAdvisor/Google via the places-proxy edge function.
+ * Everything else flows through 4 tiers, returning the first acceptable photo:
+ *
+ *   Tier 1 — Wikipedia article matching `geocode` exactly (with redirects). Returns the
+ *            article's hero image (`prop=pageimages`) if the page title is relevant. No
+ *            filename check — exact-title matches with redirects are authoritative, and
+ *            many valid hero images have filenames that don't repeat the place name
+ *            (e.g. "Wat Phra Yai" article uses "Big_Buddha_Koh_Samui.jpg").
+ *   Tier 2 — Same as Tier 1 with the city stripped from the geocode tail (geocodes often
+ *            arrive as "<place> <city>"). Same relaxed filename rule.
+ *   Tier 3 — Wikipedia full-text search across `<geocode> <city>`. Top 5 results, person
+ *            pages filtered out via description regex. Top 2 results bypass page-title
+ *            relevance but still require filename relevance — riskier than exact match,
+ *            so the filename check stays.
+ *   Tier 4 — Wikimedia Commons file search (much larger pool than article hero images).
+ *            Filters obvious non-photos by title (svg/logo/flag/icon/map/category).
+ *
+ * Filtering:
+ *   - `good()` rejects portraits, already-used URLs, and bad asset types (svg/pdf, maps,
+ *     flags, logos, skyline/panorama/aerial, etc.) via BAD_PATTERNS.
+ *   - `pageRelevant()` requires the article title to share a non-stopword token with the
+ *     geocode (with city words excluded to prevent "<city> X" articles passing on city alone).
+ *   - `photoFilenameRelevant()` requires the photo filename to share a token with the geocode
+ *     when the filename has more than 2 meaningful words. Used in Tier 3 only.
+ *
+ * Concurrency & dedup:
+ *   - `_photoCache` is keyed by `geocode||city` and short-circuits repeat lookups in the
+ *     same session. Set to `null` on entry to mark in-flight (prevents racing duplicates).
+ *   - `_usedPhotoUrls` tracks photos already shown so we don't repeat them across activities.
+ *   - `wikiQueuedFetch` serializes Wikipedia/Commons requests through a small queue to
+ *     stay within polite-use limits.
+ *
+ * Returns the photo URL or `null` if no acceptable photo was found.
+ */
 export async function _fetchPhoto(geocode, city, type, hotelOpts) {
   const BAD_PATTERNS = /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive/i;
   const good = (url) => url && !_isPortrait(url) && !_usedPhotoUrls.has(url) && !BAD_PATTERNS.test(url);
@@ -76,7 +113,9 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
       .trim() || geocode;
   })() : geocode;
 
-  // Hotels: TripAdvisor primary (via server), Google fallback, Wikipedia last
+  // Hotels: TripAdvisor primary (via server). Skip the _usedPhotoUrls dedup —
+  // the same hotel legitimately appears in suggestion cards (Magazine/chat) AND
+  // the itinerary check-in activity, and should show the same photo in both.
   if (type === "hotel") {
     try {
       const res = await fetch(`${PLACES_PROXY}?action=hotel-photo`, {
@@ -84,7 +123,10 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
         body: JSON.stringify({ q: geocodeQ, city, tripId: hotelOpts?.tripId || _activeTripId, context: hotelOpts?.context || "itinerary" }),
       });
       const { url: photoUrl } = await res.json();
-      if (good(photoUrl)) { _usedPhotoUrls.add(photoUrl); _photoCache[cacheKey] = photoUrl; return photoUrl; }
+      if (photoUrl && !_isPortrait(photoUrl) && !BAD_PATTERNS.test(photoUrl)) {
+        _photoCache[cacheKey] = photoUrl;
+        return photoUrl;
+      }
     } catch { /* hotel-photo endpoint unavailable */ }
     _photoCache[cacheKey] = null;
     return null;
@@ -115,13 +157,16 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
     return relevanceTokens.some(rt => fileWords.some(fw => fw.includes(rt) || rt.includes(fw)));
   };
 
-  // Tier 1: Wikipedia exact title lookup
+  // Tier 1: Wikipedia exact title lookup. Trust the article's hero image when the
+  // page title is relevant — exact-title matches with redirects are authoritative,
+  // and the filename check would reject valid hero images whose filenames don't
+  // happen to contain the geocode tokens (e.g. Wat Phra Yai → Big_Buddha_Koh_Samui.jpg).
   const data1 = await wikiQueuedFetch(
     `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(geocode)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`
   );
   const page1 = Object.values(data1?.query?.pages || {})[0];
   const src = page1?.thumbnail?.source;
-  if (good(src) && pageRelevant(page1?.title) && photoFilenameRelevant(src)) { _usedPhotoUrls.add(src); _photoCache[cacheKey] = src; return src; }
+  if (good(src) && pageRelevant(page1?.title)) { _usedPhotoUrls.add(src); _photoCache[cacheKey] = src; return src; }
 
   // Tier 2: Wikipedia exact lookup with city stripped (geocode often has city appended)
   if (city) {
@@ -132,7 +177,7 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
       );
       const page2 = Object.values(data2?.query?.pages || {})[0];
       const src2 = page2?.thumbnail?.source;
-      if (good(src2) && pageRelevant(page2?.title) && photoFilenameRelevant(src2)) { _usedPhotoUrls.add(src2); _photoCache[cacheKey] = src2; return src2; }
+      if (good(src2) && pageRelevant(page2?.title)) { _usedPhotoUrls.add(src2); _photoCache[cacheKey] = src2; return src2; }
     }
   }
 

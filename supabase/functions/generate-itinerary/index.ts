@@ -28,7 +28,7 @@ Rules:
 - RELIABILITY: Prefer long-established venues unlikely to have closed.
 - DAY TRIPS: Single transit activity covers round-trip. OMIT geocodeEnd (geocode = base city). Duration = full round-trip. No separate "Return" activity. Next activity must start within 1h of day-trip end — no 3h+ gaps.
 - PACKAGE: Same-experience activities share a "package" kebab-case ID (e.g. "halong-cruise"). Suppresses duplicate transit/pins/photos.
-- FIELDS: note max 10 words. city = most specific neighbourhood/town (not country). geocode = the EXACT real-world name of the place as it appears on Google Maps — used for map pins and navigation. MUST be a real searchable place name. Do NOT combine, abbreviate, or invent place names. WRONG: "Shibuya Scramble Crossing" (doesn't exist). RIGHT: "Shibuya Crossing" or "Shibuya Scramble Square". WRONG: "Golden Temple Complex". RIGHT: "Golden Temple". If unsure, use the simplest well-known name. Each activity MUST have a DIFFERENT geocode. NEVER use the city/region/park name as geocode.
+- FIELDS: note max 10 words. city = ONE short neighbourhood or area name (not country, not a list). WRONG: "Tsukiji / Akihabara / Ueno, Tokyo". RIGHT: "Asakusa" or "Shibuya" or "Central Tokyo". Keep it to 1-2 words max. geocode = the EXACT real-world name of the place as it appears on Google Maps — used for map pins and navigation. MUST be a real searchable place name. Do NOT combine, abbreviate, or invent place names. WRONG: "Shibuya Scramble Crossing" (doesn't exist). RIGHT: "Shibuya Crossing" or "Shibuya Scramble Square". WRONG: "Golden Temple Complex". RIGHT: "Golden Temple". If unsure, use the simplest well-known name. Each activity MUST have a DIFFERENT geocode. NEVER use the city/region/park name as geocode.
 - TRANSIT GEOCODE: geocode=origin, geocodeEnd=destination. Train/flight/boat: use station/airport/pier name. Road: city name OK. Day-trip round-trips: omit geocodeEnd.
 - MULTI-DESTINATION: Transit activity on first day of each new city.
 - DEFAULT START/END: No arrival/departure city given → assume largest city within the destination region (Rajasthan→Jaipur, Sri Lanka→Colombo). Not external gateways.
@@ -37,11 +37,17 @@ Rules:
 - WEATHER: Avoid outdoor 12–16:00 in hot months when possible.
 - TIMING: Fixed-time experiences (sunrise, markets) override morning preference. Max 9-10h of activities per day.
 - COMMUTE: Characterful local transport where natural (tuk-tuk, longtail boat, vaporetto).
-- TRANSITION: For each activity (except the last of the day), include an optional "transition" object describing how to get to the NEXT activity. Only include for cities with meaningful public transit (metro/BTS/subway/tram/ferry). Omit for rural areas, beach destinations, or when walking is best (<1.5km between activities).
-  Fields: mode ("metro"|"bus"|"ferry"|"tram"), walk_mins (integer — TOTAL walking time for BOTH ends combined: walk to station + walk from station to next destination), ride_mins (integer — time ON the vehicle only, not including walking. Round UP to nearest 5 min).
-  Do NOT include line names, station names, or transfer details.
-  CRITICAL: walk_mins is BOTH walks combined. If 5 min to station and 3 min from exit, walk_mins=8. ride_mins is vehicle time only.
-  Example: {"mode":"metro","walk_mins":8,"ride_mins":15}
+- TRANSITION: For each activity (except the last of the day), include an optional "transition" object when public transit is a practical option to reach the NEXT activity. Only include for cities with meaningful public transit. Omit for rural areas, beach destinations, or very short distances (<500m).
+  Fields: mode ("metro"|"bus"|"ferry"|"tram")
+  Example: {"mode":"metro"}
+- INTER-CITY TRANSIT: EVERY activity with type:"transit" MUST include these extra fields:
+  service: specific service name (e.g. "Shinkansen Nozomi", "Odakyu Romancecar", "Blue Star Ferry", "TGV inOui", "FlixBus"). For driving, use "Private car" or "Taxi".
+  from_station: departure station/port/airport/city name
+  to_station: arrival station/port/airport/city name
+  transit_duration: approximate journey time (e.g. "2h 15m", "1.5h")
+  cost_estimate: approximate cost with currency (e.g. "~¥13,320 (~$90)"). For driving, estimate fuel/toll or taxi fare.
+  booking_tip: one practical tip (e.g. "Reserved seat recommended", "Book 2 days ahead")
+  These fields are MANDATORY for all transit activities — never omit them.
 - WISHLIST: 2 nearby local gems per day (specific named places only). Items are auto-validated via Google Places — only include places you're CERTAIN exist. Empty wishlist > invented entries.
 - TRANSIT_TIP: For each day, include an optional "transit_tip" string with practical local transport advice. Max 1 sentence. Must be actionable — name the specific transit card to buy, the metro/bus lines for that day's route, or a day pass with price. Examples: "Use Suica card · Ginza + Hanzomon Lines · Day pass ¥600", "Navigo Easy card · M12, M1 today · Buy at any station", "Use contactless/Oyster · Zone 1-2 cap £7.70". Only include if the city has meaningful public transit AND the day involves 2+ activities that benefit from it. Omit for rural areas, beach days, single-venue days, or cities without public transit (e.g. Bali, rural Rajasthan).
 - SUMMARY: Top-level "summary" string, 2 sentences max.
@@ -50,7 +56,7 @@ Rules:
 IMPORTANT OUTPUT ORDER: Generate the "compact" array BEFORE the "days" array. The app renders compact immediately while days stream in.
 
 Return ONLY a raw JSON object. Start with { end with }. Structure:
-{"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"compact":[{"label":"Day 1","city":"...","hotel":"specific hotel name","highlights":[{"title":"Place 1","icon":"🏛"},{"title":"Place 2","icon":"🍜"},{"title":"Place 3","icon":"🌿"}],"description":"1 sentence day overview"}],"days":[{"label":"Day 1","city":"...","transit_tip":"Use Suica card · Ginza Line today","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","icon":"🏛️","transition":{"mode":"metro","walk_mins":8,"ride_mins":15}}],"wishlist":[{"title":"...","geocode":"...","note":"...","icon":"..."}]}]}
+{"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"compact":[{"label":"Day 1","city":"...","hotel":"specific hotel name","highlights":[{"title":"Place 1","icon":"🏛"},{"title":"Place 2","icon":"🍜"},{"title":"Place 3","icon":"🌿"}],"description":"1 sentence day overview"}],"days":[{"label":"Day 1","city":"...","transit_tip":"Use Suica card · Ginza Line today","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","icon":"🏛️","transition":{"mode":"metro"}}],"wishlist":[{"title":"...","geocode":"...","note":"...","icon":"..."}]}]}
 
 The "compact" array must have one entry per day with: label, city, hotel (specific name), highlights (3-4 objects with "title" and "icon" emoji), description (1 sentence). Keep it brief — this is a quick preview. Example highlight: {"title":"Tsukiji Market","icon":"🍜"}.`;
 

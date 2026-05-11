@@ -1,19 +1,8 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
+import { T, RADIUS, SHADOW, MOTION } from "./theme";
 
 const FACE_ICONS = ["👦", "👧", "🧑", "👨", "👩", "🧔", "👱", "🧓", "🥸", "😎"];
-
-const T = {
-  ink:   "#0F1923",
-  dusk:  "#1E2D3D",
-  ocean: "#2563A8",
-  sky:   "#4A90D9",
-  mist:  "#8BA5BB",
-  chalk: "#FFFFFF",
-  terra: "#C4622D",
-  moss:  "#3D7A5C",
-  gold:  "#D4A847",
-};
 
 function tripStatus(startDate, endDate, igResponse) {
   // Draft = RG done but no IG yet (ig_response is null)
@@ -111,13 +100,13 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
   return (
     <div style={{
       minHeight: "100vh",
-      background: "#F7F8FA",
-      fontFamily: "'Inter', 'Segoe UI', sans-serif",
+      background: T.bgPage,
+      fontFamily: "Georgia, serif",
     }}>
       {/* Header */}
       <div style={{
         background: T.chalk,
-        borderBottom: "1px solid #E8EAF0",
+        borderBottom: `1px solid ${T.border}`,
         padding: "0 24px",
         height: 60,
         display: "flex",
@@ -129,15 +118,15 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 20 }}>✈️</span>
-          <span style={{ fontWeight: 700, fontSize: 16, color: T.ink }}>TripJam</span>
+          <span style={{ fontFamily: "'DM Serif Display', serif", fontWeight: 700, fontSize: 16, color: T.ink }}>TripJam</span>
         </div>
 
         {/* Avatar + menu */}
         <div style={{ position: "relative" }}>
           <button onClick={() => setShowMenu(!showMenu)} style={{
-            background: "#F0F2F5",
+            background: T.bgPage,
             border: "none",
-            borderRadius: 20,
+            borderRadius: RADIUS.full,
             padding: "6px 12px 6px 8px",
             display: "flex",
             alignItems: "center",
@@ -157,8 +146,8 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
               right: 0,
               top: 42,
               background: T.chalk,
-              borderRadius: 10,
-              boxShadow: "0 4px 20px rgba(0,0,0,0.12)",
+              borderRadius: RADIUS.md,
+              boxShadow: SHADOW.md,
               padding: "6px 0",
               minWidth: 140,
               zIndex: 100,
@@ -171,7 +160,7 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
                 textAlign: "left",
                 cursor: "pointer",
                 fontSize: 13,
-                color: "#E05C5C",
+                color: T.error,
                 fontWeight: 500,
               }}>
                 Sign out
@@ -187,7 +176,7 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
         {/* Page title + new trip button (hidden in empty state — CTA is in the empty card) */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28 }}>
           <div>
-            <h1 style={{ fontSize: 22, fontWeight: 700, color: T.ink, margin: 0 }}>Your Trips</h1>
+            <h1 style={{ fontFamily: "'DM Serif Display', serif", fontSize: 22, fontWeight: 700, color: T.ink, margin: 0 }}>Your Trips</h1>
             {!loading && trips.length > 0 && (
               <p style={{ fontSize: 13, color: T.mist, margin: "4px 0 0" }}>{trips.length} trip{trips.length !== 1 ? "s" : ""}</p>
             )}
@@ -197,7 +186,7 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
               background: T.ocean,
               color: T.chalk,
               border: "none",
-              borderRadius: 10,
+              borderRadius: RADIUS.md,
               padding: "10px 18px",
               fontSize: 14,
               fontWeight: 600,
@@ -205,6 +194,7 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
               display: "flex",
               alignItems: "center",
               gap: 6,
+              transition: `all ${MOTION.normal}`,
             }}>
               <span style={{ fontSize: 16 }}>+</span> New Trip
             </button>
@@ -224,21 +214,22 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
             textAlign: "center",
             padding: "64px 24px",
             background: T.chalk,
-            borderRadius: 16,
-            border: "1px solid #E8EAF0",
+            borderRadius: RADIUS.lg,
+            border: `1px solid ${T.border}`,
           }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>🗺️</div>
-            <h2 style={{ fontSize: 18, fontWeight: 600, color: T.ink, margin: "0 0 8px" }}>No trips yet</h2>
+            <h2 style={{ fontFamily: "'DM Serif Display', serif", fontSize: 18, fontWeight: 600, color: T.ink, margin: "0 0 8px" }}>No trips yet</h2>
             <p style={{ fontSize: 14, color: T.mist, margin: "0 0 24px" }}>Create your first trip and start planning together.</p>
             <button onClick={onCreateTrip} style={{
               background: T.ocean,
               color: T.chalk,
               border: "none",
-              borderRadius: 10,
+              borderRadius: RADIUS.md,
               padding: "12px 24px",
               fontSize: 14,
               fontWeight: 600,
               cursor: "pointer",
+              transition: `all ${MOTION.normal}`,
             }}>
               Create a Trip
             </button>
@@ -256,23 +247,26 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
               return (
                 <div key={trip.id} onClick={() => status.label === "Planning" ? onEditTrip(trip) : onOpenTrip(trip)} style={{
                   background: T.chalk,
-                  borderRadius: 14,
-                  border: "1px solid #E8EAF0",
+                  borderRadius: RADIUS.lg,
+                  border: `1px solid ${T.border}`,
                   padding: "20px 22px",
                   cursor: "pointer",
-                  transition: "box-shadow 0.15s, transform 0.15s",
+                  boxShadow: SHADOW.sm,
+                  transition: `all ${MOTION.normal}`,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
                   gap: 16,
                 }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.boxShadow = "0 4px 20px rgba(0,0,0,0.08)";
+                    e.currentTarget.style.boxShadow = SHADOW.md;
                     e.currentTarget.style.transform = "translateY(-1px)";
+                    e.currentTarget.style.borderColor = T.mist;
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.boxShadow = "none";
+                    e.currentTarget.style.boxShadow = SHADOW.sm;
                     e.currentTarget.style.transform = "none";
+                    e.currentTarget.style.borderColor = T.border;
                   }}
                 >
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -285,7 +279,7 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
                         fontWeight: 600,
                         color: status.color,
                         background: `${status.color}18`,
-                        borderRadius: 6,
+                        borderRadius: RADIUS.sm,
                         padding: "2px 8px",
                         whiteSpace: "nowrap",
                       }}>
@@ -304,7 +298,7 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
                     <div style={{ position: "relative" }}>
                       <button
                         onClick={(e) => { e.stopPropagation(); setInfoOpenId(infoOpenId === trip.id ? null : trip.id); }}
-                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#CCC", padding: "4px", lineHeight: 1 }}
+                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: T.disabled, padding: "4px", lineHeight: 1 }}
                         title="Trip info"
                       >ⓘ</button>
                       {infoOpenId === trip.id && (
@@ -312,8 +306,8 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
                           <div onClick={(e) => { e.stopPropagation(); setInfoOpenId(null); }} style={{ position: "fixed", inset: 0, zIndex: 99 }} />
                           <div style={{
                             position: "absolute", right: 0, top: 28, zIndex: 100,
-                            background: T.chalk, borderRadius: 10, boxShadow: "0 4px 20px rgba(0,0,0,0.13)",
-                            border: "1px solid #E8EAF0", padding: "10px 14px", minWidth: 210, whiteSpace: "nowrap",
+                            background: T.chalk, borderRadius: RADIUS.md, boxShadow: SHADOW.md,
+                            border: `1px solid ${T.border}`, padding: "10px 14px", minWidth: 210, whiteSpace: "nowrap",
                           }}>
                             <div style={{ fontSize: 11, color: T.mist, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Trip info</div>
                             <div style={{ fontSize: 12, color: T.ink, marginBottom: 4 }}>
@@ -328,13 +322,13 @@ export default function Home({ session, onOpenTrip, onCreateTrip, onEditTrip }) 
                     </div>
                     <button
                       onClick={(e) => { e.stopPropagation(); onEditTrip(trip); }}
-                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#CCC", padding: "4px" }}
+                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: T.disabled, padding: "4px" }}
                       title="Edit trip"
                     >✏️</button>
                     <button
                       onClick={(e) => deleteTrip(e, trip.id)}
                       disabled={deletingId === trip.id}
-                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#CCC", padding: "4px", opacity: deletingId === trip.id ? 0.4 : 1 }}
+                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: T.disabled, padding: "4px", opacity: deletingId === trip.id ? 0.4 : 1 }}
                       title="Delete trip"
                     >🗑️</button>
                   </div>

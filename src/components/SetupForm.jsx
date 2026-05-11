@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { T, PLACES_PROXY, PLACES_HEADERS } from "../theme";
+import { T, RADIUS, SHADOW, MOTION, PLACES_PROXY, PLACES_HEADERS } from "../theme";
 import { CityInput } from "./BoardView.jsx";
 
 function DateRangePicker({ startDate, endDate, onChange }) {
@@ -38,11 +38,11 @@ function DateRangePicker({ startDate, endDate, onChange }) {
     <div style={{ marginBottom: 18 }}>
       {/* Selected range display */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 12 }}>
-        <span style={{ padding: "6px 14px", borderRadius: 20, background: startDate ? T.ocean : T.sand, color: startDate ? "white" : T.mist, fontFamily: "Georgia,serif", fontSize: 13 }}>
+        <span style={{ padding: "6px 14px", borderRadius: RADIUS.full, background: startDate ? T.ocean : T.sand, color: startDate ? "white" : T.mist, fontFamily: "Georgia,serif", fontSize: 13 }}>
           {startDate ? fmtShort(startDate) : "Arrival"}
         </span>
         <span style={{ color: T.mist, fontSize: 16 }}>→</span>
-        <span style={{ padding: "6px 14px", borderRadius: 20, background: endDate ? T.ocean : T.sand, color: endDate ? "white" : T.mist, fontFamily: "Georgia,serif", fontSize: 13 }}>
+        <span style={{ padding: "6px 14px", borderRadius: RADIUS.full, background: endDate ? T.ocean : T.sand, color: endDate ? "white" : T.mist, fontFamily: "Georgia,serif", fontSize: 13 }}>
           {endDate ? fmtShort(endDate) : "Departure"}
         </span>
         {numDays && <span style={{ fontFamily: "Georgia,serif", fontSize: 12, color: T.mist }}>{numDays} days</span>}
@@ -76,13 +76,13 @@ function DateRangePicker({ startDate, endDate, onChange }) {
           const isPast = iso < todayISO;
           const isBeforeStart = phase === "end" && startDate && iso < startDate;
 
-          let bg = "transparent", color = (isPast || isBeforeStart) ? T.sand : T.ink, radius = "8px";
+          let bg = "transparent", color = (isPast || isBeforeStart) ? T.sand : T.ink, radius = RADIUS.md;
           if (isStart || isEnd) { bg = T.ocean; color = "white"; }
           else if (inRange) { bg = "rgba(37,99,168,0.12)"; radius = "0"; }
 
           // Extend range bg to edges for start/end
-          const startEdge = isStart && endDate ? { borderRadius: "8px 0 0 8px" } : {};
-          const endEdge = isEnd && startDate ? { borderRadius: "0 8px 8px 0" } : {};
+          const startEdge = isStart && endDate ? { borderRadius: `${RADIUS.md}px 0 0 ${RADIUS.md}px` } : {};
+          const endEdge = isEnd && startDate ? { borderRadius: `0 ${RADIUS.md}px ${RADIUS.md}px 0` } : {};
           const rangeStyle = inRange ? { borderRadius: 0 } : {};
 
           return (
@@ -90,8 +90,8 @@ function DateRangePicker({ startDate, endDate, onChange }) {
               textAlign: "center", padding: "9px 0", cursor: "pointer",
               fontFamily: "Georgia,serif", fontSize: 13, fontWeight: isToday ? 700 : 400,
               color, background: bg, borderRadius: radius,
-              ...(isStart && endDate ? { borderRadius: "8px 0 0 8px" } : {}),
-              ...(isEnd ? { borderRadius: "0 8px 8px 0" } : {}),
+              ...(isStart && endDate ? { borderRadius: `${RADIUS.md}px 0 0 ${RADIUS.md}px` } : {}),
+              ...(isEnd ? { borderRadius: `0 ${RADIUS.md}px ${RADIUS.md}px 0` } : {}),
               ...(inRange ? { borderRadius: 0 } : {}),
               userSelect: "none",
             }}>
@@ -136,6 +136,15 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  // Pre-warm places-proxy edge function so first autocomplete keystroke isn't a cold start
+  useEffect(() => {
+    fetch(`${PLACES_PROXY}?action=autocomplete`, {
+      method: "POST",
+      headers: PLACES_HEADERS,
+      body: JSON.stringify({ q: "lo" }),
+    }).catch(() => {});
+  }, []);
   const igReq = initialTrip?.ig_request || {};
   const prefill = initialTrip ? {
     destinations:  initialTrip.destination ? initialTrip.destination.split(" → ") : [],
@@ -171,27 +180,56 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
   const [destError, setDestError] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [showSugg, setShowSugg]   = useState(false);
+  const [destLoading, setDestLoading] = useState(false);
   const inputRef  = useRef(null);
   const destTimer = useRef(null);
+  const destAbortRef = useRef(null);
+  const destCacheRef = useRef(new Map());
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
 
   const handleDestChange = (val) => {
     setDestInput(val);
     setDestError("");
-    if (val.trim().length < 2) { setSuggestions([]); setShowSugg(false); return; }
+    if (val.trim().length < 1) {
+      setSuggestions([]); setShowSugg(false); setDestLoading(false);
+      destAbortRef.current?.abort();
+      clearTimeout(destTimer.current);
+      return;
+    }
+    const cacheKey = val.trim().toLowerCase();
+    const cached = destCacheRef.current.get(cacheKey);
+    if (cached) {
+      setSuggestions(cached);
+      setShowSugg(cached.length > 0);
+      setDestLoading(false);
+      return;
+    }
+    setShowSugg(true);
+    setDestLoading(true);
     clearTimeout(destTimer.current);
+    destAbortRef.current?.abort();
     destTimer.current = setTimeout(async () => {
+      const ctrl = new AbortController();
+      destAbortRef.current = ctrl;
       try {
-        const res  = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
+        const res = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
           method: "POST", headers: PLACES_HEADERS,
           body: JSON.stringify({ q: val }),
+          signal: ctrl.signal,
         });
         const data = await res.json();
-        const suggestions = (data.suggestions || []).slice(0, 8);
-        setSuggestions(suggestions);
-        setShowSugg(suggestions.length > 0);
-      } catch { setSuggestions([]); }
-    }, 300);
+        const items = (data.suggestions || []).slice(0, 8);
+        destCacheRef.current.set(cacheKey, items);
+        if (ctrl.signal.aborted) return;
+        setSuggestions(items);
+        setShowSugg(items.length > 0);
+        setDestLoading(false);
+      } catch (err) {
+        if (err.name === "AbortError") return;
+        setSuggestions([]);
+        setDestLoading(false);
+      }
+    }, 200);
   };
 
   const addDestination = (name, currentDests) => {
@@ -236,7 +274,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
       {form.destinations.length > 0 && (
         <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
           {form.destinations.map((d, i) => (
-            <div key={d} style={{display:"flex",alignItems:"center",gap:6,background:T.ocean,color:"white",borderRadius:20,padding:"6px 12px",fontSize:13,fontFamily:"Georgia,serif"}}>
+            <div key={d} style={{display:"flex",alignItems:"center",gap:6,background:T.ocean,color:"white",borderRadius:RADIUS.full,padding:"6px 12px",fontSize:13,fontFamily:"Georgia,serif"}}>
               {i > 0 && <span style={{opacity:0.6,marginRight:2}}>→</span>}
               {d}
               <button onClick={()=>removeDestination(i)} style={{background:"none",border:"none",color:"white",cursor:"pointer",fontSize:14,lineHeight:1,padding:0,opacity:0.7}}>×</button>
@@ -251,10 +289,16 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
           onFocus={()=>destInput && suggestions.length && setShowSugg(true)}
           onKeyDown={e=>{ if(e.key==="Enter" && destInput.trim()) addDestination(destInput.trim()); }}
           placeholder={form.destinations.length === 0 ? "e.g. Bangkok, Kyoto, Rajasthan…" : "Add another destination…"}
-          style={{width:"100%",padding:"14px 16px",borderRadius:14,border:`2px solid ${destError?"#e53e3e":destInput?T.ocean:T.sand}`,
-            fontFamily:"Georgia,serif",fontSize:15,color:T.ink,background:T.chalk,outline:"none",transition:"border 0.2s"}}/>
-        {showSugg && suggestions.length > 0 && (
-          <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:T.chalk,border:`1.5px solid ${T.sand}`,borderRadius:12,overflow:"hidden",zIndex:100,boxShadow:"0 4px 18px rgba(0,0,0,0.10)",maxHeight:300,overflowY:"auto"}}>
+          style={{width:"100%",padding:"14px 16px",borderRadius:RADIUS.lg,border:`2px solid ${destError?T.error:destInput?T.ocean:T.sand}`,
+            fontFamily:"Georgia,serif",fontSize:15,color:T.ink,background:T.chalk,outline:"none",transition:`border ${MOTION.normal}`}}/>
+        {showSugg && (destLoading || suggestions.length > 0) && (
+          <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:T.chalk,border:`1.5px solid ${T.sand}`,borderRadius:RADIUS.lg,overflow:"hidden",zIndex:100,boxShadow:"0 4px 18px rgba(0,0,0,0.10)",maxHeight:300,overflowY:"auto"}}>
+            {destLoading && suggestions.length === 0 && (
+              <div style={{padding:"12px 16px",fontFamily:"Georgia,serif",fontSize:13,color:T.mist,display:"flex",alignItems:"center",gap:10}}>
+                <span style={{display:"inline-block",width:12,height:12,borderRadius:"50%",border:`2px solid ${T.sand}`,borderTopColor:T.ocean,animation:"spin 0.7s linear infinite"}}/>
+                Searching destinations…
+              </div>
+            )}
             {suggestions.map((s,i) => {
               const main = s.placePrediction?.structuredFormat?.mainText?.text || s.placePrediction?.text?.text || "";
               const secondary = s.placePrediction?.structuredFormat?.secondaryText?.text || "";
@@ -279,7 +323,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
           return (
             <button key={d} onClick={()=>addDestination(name)} style={{
               background:sel?T.ocean:T.sand, color:sel?"white":T.ink,
-              border:"none",borderRadius:20,padding:"6px 14px",
+              border:"none",borderRadius:RADIUS.full,padding:"6px 14px",
               fontSize:13,cursor:"pointer",fontFamily:"Georgia,serif",
             }}>{d}</button>
           );
@@ -288,7 +332,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
       {form.destinations.length === 0 && (
         <button onClick={()=>{ addDestination("Help me decide"); setStep(1); }} style={{
           display:"flex",alignItems:"center",justifyContent:"center",gap:6,
-          width:"100%",marginTop:12,padding:"13px 0",borderRadius:14,
+          width:"100%",marginTop:12,padding:"13px 0",borderRadius:RADIUS.lg,
           border:`2px solid ${T.ocean}44`,
           background:`linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,
           color:T.ocean,
@@ -330,7 +374,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
         </div>
         <CityInput value={form.baseLocation} onChange={v=>set("baseLocation",v)}
           placeholder="Your home city"
-          inputStyle={{width:"100%",padding:"11px 14px",borderRadius:12,border:`1.5px solid ${form.baseLocation?T.ocean:destError&&isOpenToIdeas&&!form.baseLocation?T.terra:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
+          inputStyle={{width:"100%",padding:"11px 14px",borderRadius:RADIUS.lg,border:`1.5px solid ${form.baseLocation?T.ocean:destError&&isOpenToIdeas&&!form.baseLocation?T.terra:T.sand}`,fontFamily:"Georgia,serif",fontSize:13,color:T.ink,outline:"none",boxSizing:"border-box",background:T.chalk}}/>
       </div>
 
       <div style={{marginBottom:22}}>
@@ -340,16 +384,16 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
         <textarea value={form.notes} onChange={e=>set("notes",e.target.value)}
           placeholder="e.g. we love scuba diving, prefer boutique hotels, travelling with two kids under 10, no long drives, love trying local street food…"
           rows={6}
-          style={{width:"100%",padding:"14px 16px",borderRadius:14,border:`1.5px solid ${form.notes?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",resize:"none",boxSizing:"border-box",background:T.chalk,lineHeight:1.6}}/>
+          style={{width:"100%",padding:"14px 16px",borderRadius:RADIUS.lg,border:`1.5px solid ${form.notes?T.ocean:T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",resize:"none",boxSizing:"border-box",background:T.chalk,lineHeight:1.6}}/>
       </div>
 <button onClick={handleGenerate} disabled={generating} style={{
-        width:"100%",padding:16,borderRadius:16,border:"none",
+        width:"100%",padding:16,borderRadius:RADIUS.lg,border:"none",
         cursor:generating?"not-allowed":"pointer",
         background:generating?T.sand:`linear-gradient(135deg,${T.ocean},${T.dusk})`,
         color:generating?T.mist:"white",
         fontFamily:"'DM Serif Display',serif",fontSize:18,
         boxShadow:generating?"none":"0 6px 22px rgba(37,99,168,0.4)",
-        transition:"all 0.3s",marginTop:8,
+        transition:`all ${MOTION.slow}`,marginTop:8,
       }}>{generating?"✨ Generating your itinerary…":"Start Planning ✨"}</button>
     </div>
     ); })(),
@@ -357,16 +401,21 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
 
   return (
     <div style={{padding:"0 20px",paddingBottom:80}}>
-      {/* Progress dots */}
-      <div style={{display:"flex",justifyContent:"center",gap:8,marginBottom:28}}>
-        {stepViews.map((_,i)=>(
-          <div key={i} style={{width:i===step?26:8,height:8,borderRadius:4,background:i<=step?T.ocean:T.sand,transition:"all 0.3s"}}/>
-        ))}
+      {/* Back button + Progress dots */}
+      <div style={{display:"flex",alignItems:"center",marginBottom:28}}>
+        {step > 0 ? (
+          <button onClick={()=>setStep(s=>s-1)} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:T.mist,padding:"0 8px 0 0",lineHeight:1}}>←</button>
+        ) : <div style={{width:28}}/>}
+        <div style={{flex:1,display:"flex",justifyContent:"center",gap:8}}>
+          {stepViews.map((_,i)=>(
+            <div key={i} style={{width:i===step?26:8,height:8,borderRadius:RADIUS.sm,background:i<=step?T.ocean:T.sand,transition:`all ${MOTION.slow}`}}/>
+          ))}
+        </div>
+        <div style={{width:28}}/>
       </div>
       {stepViews[step]}
-      {destError && <div style={{color:"#e53e3e",fontSize:13,fontFamily:"Georgia,serif",marginTop:8,textAlign:"center"}}>{destError}</div>}
+      {destError && <div style={{color:T.error,fontSize:13,fontFamily:"Georgia,serif",marginTop:8,textAlign:"center"}}>{destError}</div>}
       <div style={{display:"flex",gap:10,marginTop:24}}>
-        {step>0 && <button onClick={()=>setStep(s=>s-1)} style={{flex:1,padding:14,borderRadius:14,border:`2px solid ${T.sand}`,background:"transparent",color:T.mist,fontFamily:"Georgia,serif",fontSize:15,cursor:"pointer"}}>← Back</button>}
         {step<stepViews.length-1 && (
           <button onClick={()=>{
             if (step === 0) {
@@ -390,7 +439,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
               return next;
             });
           }} style={{
-            flex:2,padding:14,borderRadius:14,border:"none",cursor:"pointer",
+            flex:2,padding:14,borderRadius:RADIUS.lg,border:"none",cursor:"pointer",
             background:T.ocean,color:"white",
             fontFamily:"'DM Serif Display',serif",fontSize:16,
             opacity:1,
