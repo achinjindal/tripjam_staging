@@ -2457,8 +2457,15 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput,   setChatInput]   = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatAttention, setChatAttention] = useState(false);
   const chatBottomRef = useRef(null);
   const chatInputRef  = useRef(null);
+  const getChatPlaceholder = () => {
+    if (screen === "brainstorm") return pretripRoutes.filter(r => r.title && !r.dismissed).length >= 2 ? "Ask Trippy to tweak any plan" : "Trippy's cooking up some plans…";
+    return detailedReady
+      ? ["Swap a restaurant? Change the hotel? Just ask", "What would make this trip perfect?", "Trippy knows all the local secrets…"][Math.floor(Math.random() * 3)]
+      : "Your itinerary is brewing…";
+  };
   // chatFilter removed — no group features in phase 1
   // mention/tagging removed — phase 1 is AI-only chat
   useEffect(() => {
@@ -3165,6 +3172,9 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     setDetailedLoading(false);
     setDetailedReady(true);
     playDoneChime();
+    // Pulse the chat mascot to draw attention
+    setChatAttention(true);
+    setTimeout(() => setChatAttention(false), 3000);
     _igInFlight = false;
     // Log generation timing — update by trip_id as fallback since genLogId may not be set yet
     if (genLogId) {
@@ -3536,6 +3546,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
         @keyframes fadeUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
         @keyframes pulse{0%,100%{opacity:0.3;transform:scale(0.8);}50%{opacity:1;transform:scale(1);}}
         @keyframes shimmer{0%,100%{opacity:0.45;}50%{opacity:0.75;}}
+        @keyframes chatPulse{0%,100%{transform:scale(1);}50%{transform:scale(1.18);}}
         @keyframes blink{0%,100%{opacity:1;}50%{opacity:0;}}
         @keyframes slideIn{0%{opacity:0;transform:translateX(40px) scale(0.7);}20%{opacity:1;transform:translateX(0) scale(1);}80%{opacity:1;transform:translateX(0) scale(1);}100%{opacity:0;transform:translateX(-40px) scale(0.7);}}
         @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
@@ -4370,12 +4381,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           )}
           {/* Input row */}
           <div style={{ display: "flex", gap: 8, alignItems: screen === "brainstorm" ? "flex-end" : "center" }}>
-            <div onClick={() => { setChatOpen(true); setChatUnread(false); }} style={{ width: screen === "brainstorm" ? 40 : 28, height: screen === "brainstorm" ? 40 : 28, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: `1.5px solid ${T.ocean}33`, marginBottom: screen === "brainstorm" ? 2 : 0, cursor: "pointer" }}>
+            <div onClick={() => { setChatOpen(true); setChatUnread(false); setChatAttention(false); }} style={{ width: screen === "brainstorm" ? 40 : 28, height: screen === "brainstorm" ? 40 : 28, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: `1.5px solid ${T.ocean}33`, marginBottom: screen === "brainstorm" ? 2 : 0, cursor: "pointer", animation: chatAttention ? "chatPulse 0.6s ease-in-out 5" : "none" }}>
               <img src="/mascot.png?v=5" alt="Trippy" style={{ width: screen === "brainstorm" ? 52 : 36, height: screen === "brainstorm" ? 52 : 36, objectFit: "cover", objectPosition: "50% 35%", marginTop: screen === "brainstorm" ? -6 : -4, marginLeft: screen === "brainstorm" ? -6 : -4 }}/>
             </div>
             <div onClick={() => { setChatOpen(true); setChatUnread(false); setTimeout(() => chatInputRef.current?.focus(), 100); }}
               style={{ flex: 1, padding: screen === "brainstorm" ? "10px 14px" : "9px 14px", borderRadius: screen === "brainstorm" ? 14 : 18, border: `1.5px solid ${T.sand}`, background: T.warm, fontFamily: "Georgia,serif", fontSize: 13, color: T.mist, cursor: "text", minHeight: screen === "brainstorm" ? 44 : "auto" }}>
-              {chatUnread ? "New suggestions available…" : (screen === "brainstorm" ? "Compare plans, ask questions, request changes…" : "Ask anything about your trip…")}
+              {chatUnread ? "Your itinerary is ready! Want to fine-tune anything?" : (() => {
+                const lastAI = [...chatMessages].reverse().find(m => m.role === "assistant" && m.content);
+                if (lastAI) return `Trippy: ${lastAI.content.slice(0, 50)}${lastAI.content.length > 50 ? "…" : ""}`;
+                return getChatPlaceholder();
+              })()}
             </div>
           </div>
         </div>
@@ -4675,7 +4690,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                   <div style={{display:"flex",flexWrap:"wrap",gap:6,padding:"4px 0"}}>
                     {(screen === "brainstorm"
                       ? [`Reduce hotel switches in P2`,`Add a beach day in P3`,`Suggest best nature spots in ${(pendingForm?.destinations?.[0] || trip?.destination?.split("→")[0]?.trim() || "this destination")}?`]
-                      : ["Change Day 1 hotel","Add a beach day","Make Day 3 morning relaxed"]
+                      : (() => {
+                          const d1Hotel = days[0]?.activities?.find(a => a.type === "hotel");
+                          const dest = trip?.destination?.split("→")[0]?.trim() || "this destination";
+                          const pills = [];
+                          if (d1Hotel) pills.push(`Swap ${d1Hotel.title.replace(/^Check in at /i, "")} for something else`);
+                          else pills.push("Change Day 1 hotel");
+                          pills.push(`What's a must-do in ${dest}?`);
+                          pills.push("Make Day 3 more relaxed");
+                          return pills;
+                        })()
                     ).map(s=>(
                       <button key={s} onClick={()=>{ setChatInput(s); setTimeout(() => chatInputRef.current?.focus(), 50); }} style={{
                         background:"transparent",border:`1px solid ${T.ocean}`,borderRadius:RADIUS.md,padding:"6px 14px",
@@ -4731,6 +4755,23 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                     }}>
                       {m.streaming && !m.content ? <span style={{color:T.mist,letterSpacing:2}}>···</span> : renderMentions(m.content||"")}
                       {m.streaming && m.content && <span style={{display:"inline-block",width:2,height:"1em",background:T.ink,marginLeft:2,verticalAlign:"text-bottom",animation:"blink 1s step-end infinite"}}/>}
+                      {/* Place link-outs for AI messages mentioning places */}
+                      {isAI && !m.streaming && m.content && (() => {
+                        const allPlaces = (daysRef.current || []).flatMap(d => (d.activities || []).filter(a => a.type !== "transit" && a.type !== "hotel").map(a => ({ title: a.title, geocode: a.geocode, city: d.city })));
+                        const mentioned = allPlaces.filter(p => m.content.toLowerCase().includes(p.title.toLowerCase().split(",")[0].toLowerCase()));
+                        if (mentioned.length === 0) return null;
+                        const unique = mentioned.filter((p, i, arr) => arr.findIndex(q => q.title === p.title) === i).slice(0, 3);
+                        return (
+                          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:8,paddingTop:6,borderTop:`1px solid ${T.sand}`}}>
+                            {unique.map((p, pi) => (
+                              <a key={pi} href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.geocode || p.title)}+${encodeURIComponent(p.city || "")}`} target="_blank" rel="noopener noreferrer"
+                                style={{fontSize:10,color:T.ocean,textDecoration:"none",background:`${T.ocean}08`,padding:"3px 8px",borderRadius:RADIUS.sm,fontFamily:"Georgia,serif",display:"inline-flex",alignItems:"center",gap:3}}>
+                                📍 {p.title}
+                              </a>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
                     {isAI && m.suggestions?.length > 0 && (
                       <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginTop:6,maxWidth:"90vw"}}>
@@ -4791,7 +4832,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 onKeyDown={e=>{
                   if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
                 }}
-                placeholder={screen === "brainstorm" ? "Ask about plans…" : "Ask anything about your trip…"}
+                placeholder={screen === "brainstorm" ? "Ask about plans…" : "Ask Trippy anything…"}
                 rows={3}
                 style={{flex:1,padding:"11px 14px",borderRadius:18,border:`1.5px solid ${T.sand}`,fontFamily:"Georgia,serif",fontSize:14,color:T.ink,outline:"none",background:T.warm,resize:"none",lineHeight:1.5,overflow:"hidden",display:"block",minHeight:66}}
               />
