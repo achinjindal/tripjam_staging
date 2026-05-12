@@ -290,7 +290,12 @@ async function handleGeocode(req: Request): Promise<Response> {
   const MAX_DISTANCE_KM = isCountryBias ? 1500 : 200;
   // Build query variations
   const dehyphenated = q.replace(/-/g, " "); // "Senso-ji" → "Senso ji"
-  const noSuffix = q.replace(/\s+(temple|shrine|mosque|church|cathedral|market|road|street|beach|fort|palace|museum|park|garden|square|bridge|tower|station)$/i, "");
+  // Strip generic place suffixes AND activity-type suffixes iteratively, so multi-suffix
+  // titles like "La Latina Neighbourhood Walk" shed both layers ("Walk" → "Neighbourhood") → "La Latina".
+  const SUFFIX_RE = /\s+(temple|shrine|mosque|church|cathedral|market|road|street|beach|fort|palace|museum|park|garden|square|bridge|tower|station|walk|tour|crawl|hike|trip|trail|experience|cruise|exploration|stroll|wander|visit|neighbourhood|neighborhood)$/i;
+  let noSuffix = q;
+  let prev;
+  do { prev = noSuffix; noSuffix = noSuffix.replace(SUFFIX_RE, ""); } while (noSuffix !== prev);
   const photonQueries = [
     `${q} ${mainCity}`,                                               // place + main city (best)
     q,                                                                 // just the place name
@@ -342,9 +347,11 @@ async function handleGeocode(req: Request): Promise<Response> {
     }
   }
 
-  // 5. No result — cache miss with 1-day TTL
+  // 5. No result — cache miss with short TTL (5 min). A 1-day TTL was poisoning trips:
+  // a single transient failure for a hard-to-geocode place would keep returning null for 24h,
+  // making the client's "Get directions" fallback persistent even after the underlying issue cleared.
   incrementUsage("geocode", "miss", today()).catch(() => {});
-  cacheSet(cacheKey, "geocode", { lat: null, lng: null }, "miss", 1).catch(() => {});
+  cacheSet(cacheKey, "geocode", { lat: null, lng: null }, "miss", 5 / 1440).catch(() => {});
   return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
 }
 
