@@ -3,7 +3,7 @@ import { T, RADIUS, SHADOW, MOTION, PLACES_PROXY, PLACES_HEADERS } from "../them
 import { CityInput } from "./BoardView.jsx";
 
 function DateRangePicker({ startDate, endDate, onChange }) {
-  const todayISO = new Date().toISOString().slice(0, 12);
+  const todayISO = new Date().toISOString().slice(0, 10);
   const initDate = startDate || todayISO;
   const [viewYear, setViewYear] = useState(() => parseInt(initDate.slice(0, 4)));
   const [viewMonth, setViewMonth] = useState(() => parseInt(initDate.slice(5, 7)) - 1);
@@ -14,14 +14,21 @@ function DateRangePicker({ startDate, endDate, onChange }) {
   const toISO = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   const fmtShort = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
-  const firstDow = new Date(viewYear, viewMonth, 1).getDay();
-  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
-  const cells = [...Array(firstDow).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => toISO(viewYear, viewMonth, i + 1))];
+  // Two months
+  const m1 = { year: viewYear, month: viewMonth };
+  const m2 = viewMonth === 11 ? { year: viewYear + 1, month: 0 } : { year: viewYear, month: viewMonth + 1 };
+
+  const buildCells = (y, m) => {
+    const firstDow = new Date(y, m, 1).getDay();
+    const dim = new Date(y, m + 1, 0).getDate();
+    return [...Array(firstDow).fill(null), ...Array.from({ length: dim }, (_, i) => toISO(y, m, i + 1))];
+  };
 
   const prevMonth = () => { if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); } else setViewMonth(m => m - 1); };
   const nextMonth = () => { if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); } else setViewMonth(m => m + 1); };
 
   const handleDay = (iso) => {
+    if (iso < todayISO) return;
     if (!startDate || (startDate && endDate)) {
       onChange(iso, "");
     } else {
@@ -34,72 +41,73 @@ function DateRangePicker({ startDate, endDate, onChange }) {
   const phase = !startDate || (startDate && endDate) ? "start" : "end";
   const numDays = startDate && endDate ? Math.round((new Date(endDate) - new Date(startDate)) / 864e5) + 1 : null;
 
+  const renderGrid = (cells) => (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
+      {cells.map((iso, i) => {
+        if (!iso) return <div key={i} />;
+        const isStart = iso === startDate;
+        const isEnd = iso === endDate;
+        const inRange = startDate && endDate && iso > startDate && iso < endDate;
+        const isToday = iso === todayISO;
+        const isPast = iso < todayISO;
+        const isBeforeStart = phase === "end" && startDate && iso < startDate;
+
+        let bg = "transparent", color = (isPast || isBeforeStart) ? T.disabled : T.ink, radius = RADIUS.md;
+        if (isStart || isEnd) { bg = T.ocean; color = "white"; }
+        else if (inRange) { bg = "rgba(37,99,168,0.12)"; radius = "0"; }
+
+        return (
+          <div key={iso} onClick={() => handleDay(iso)} style={{
+            textAlign: "center", padding: "8px 0", cursor: isPast ? "default" : "pointer",
+            fontFamily: "Georgia,serif", fontSize: 13, fontWeight: isToday ? 700 : 400,
+            color, background: bg, borderRadius: radius,
+            ...(isStart && endDate ? { borderRadius: `${RADIUS.md}px 0 0 ${RADIUS.md}px` } : {}),
+            ...(isEnd ? { borderRadius: `0 ${RADIUS.md}px ${RADIUS.md}px 0` } : {}),
+            ...(inRange ? { borderRadius: 0 } : {}),
+            userSelect: "none",
+          }}>
+            {iso.slice(8).replace(/^0/, "")}
+            {isToday && !isStart && !isEnd && <div style={{ width: 3, height: 3, borderRadius: "50%", background: T.ocean, margin: "1px auto 0" }} />}
+          </div>
+        );
+      })}
+    </div>
+  );
+
   return (
     <div style={{ marginBottom: 18 }}>
-      {/* Selected range display */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 12 }}>
-        <span style={{ padding: "6px 14px", borderRadius: RADIUS.full, background: startDate ? T.ocean : T.sand, color: startDate ? "white" : T.mist, fontFamily: "Georgia,serif", fontSize: 13 }}>
-          {startDate ? fmtShort(startDate) : "Arrival"}
-        </span>
-        <span style={{ color: T.mist, fontSize: 16 }}>→</span>
-        <span style={{ padding: "6px 14px", borderRadius: RADIUS.full, background: endDate ? T.ocean : T.sand, color: endDate ? "white" : T.mist, fontFamily: "Georgia,serif", fontSize: 13 }}>
-          {endDate ? fmtShort(endDate) : "Departure"}
-        </span>
-        {numDays && <span style={{ fontFamily: "Georgia,serif", fontSize: 12, color: T.mist }}>{numDays} days</span>}
+      {/* Month 1 header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <button onClick={prevMonth} style={{ background: T.sand, border: "none", cursor: "pointer", fontSize: 18, color: T.ink, padding: "4px 10px", lineHeight: 1, borderRadius: RADIUS.md, minWidth: 36, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
+        <span style={{ fontFamily: "Georgia,serif", fontSize: 14, color: T.ink, fontWeight: 600 }}>{MONTHS[m1.month]} {m1.year}</span>
+        <div style={{ width: 36 }} />
       </div>
-
-      {/* Hint */}
-      <div style={{ fontFamily: "Georgia,serif", fontSize: 12, color: T.mist, textAlign: "center", marginBottom: 10 }}>
-        {phase === "start" ? "Tap arrival date" : "Tap departure date"}
-      </div>
-
-      {/* Month nav */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-        <button onClick={prevMonth} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: T.mist, padding: "4px 10px", lineHeight: 1 }}>‹</button>
-        <span style={{ fontFamily: "Georgia,serif", fontSize: 15, color: T.ink, fontWeight: 600 }}>{MONTHS[viewMonth]} {viewYear}</span>
-        <button onClick={nextMonth} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: T.mist, padding: "4px 10px", lineHeight: 1 }}>›</button>
-      </div>
-
-      {/* Day headers */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", marginBottom: 2 }}>
         {DAY_HEADERS.map(d => <div key={d} style={{ textAlign: "center", fontFamily: "Georgia,serif", fontSize: 11, color: T.mist, padding: "2px 0" }}>{d}</div>)}
       </div>
+      {renderGrid(buildCells(m1.year, m1.month))}
 
-      {/* Calendar grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
-        {cells.map((iso, i) => {
-          if (!iso) return <div key={i} />;
-          const isStart = iso === startDate;
-          const isEnd = iso === endDate;
-          const inRange = startDate && endDate && iso > startDate && iso < endDate;
-          const isToday = iso === todayISO;
-          const isPast = iso < todayISO;
-          const isBeforeStart = phase === "end" && startDate && iso < startDate;
+      {/* Separator */}
+      <div style={{ height: 1, background: T.sand, margin: "8px 0" }} />
 
-          let bg = "transparent", color = (isPast || isBeforeStart) ? T.sand : T.ink, radius = RADIUS.md;
-          if (isStart || isEnd) { bg = T.ocean; color = "white"; }
-          else if (inRange) { bg = "rgba(37,99,168,0.12)"; radius = "0"; }
+      {/* Month 2 header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <div style={{ width: 36 }} />
+        <span style={{ fontFamily: "Georgia,serif", fontSize: 14, color: T.ink, fontWeight: 600 }}>{MONTHS[m2.month]} {m2.year}</span>
+        <button onClick={nextMonth} style={{ background: T.sand, border: "none", cursor: "pointer", fontSize: 18, color: T.ink, padding: "4px 10px", lineHeight: 1, borderRadius: RADIUS.md, minWidth: 36, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", marginBottom: 2 }}>
+        {DAY_HEADERS.map(d => <div key={`2-${d}`} style={{ textAlign: "center", fontFamily: "Georgia,serif", fontSize: 11, color: T.mist, padding: "2px 0" }}>{d}</div>)}
+      </div>
+      {renderGrid(buildCells(m2.year, m2.month))}
 
-          // Extend range bg to edges for start/end
-          const startEdge = isStart && endDate ? { borderRadius: `${RADIUS.md}px 0 0 ${RADIUS.md}px` } : {};
-          const endEdge = isEnd && startDate ? { borderRadius: `0 ${RADIUS.md}px ${RADIUS.md}px 0` } : {};
-          const rangeStyle = inRange ? { borderRadius: 0 } : {};
-
-          return (
-            <div key={iso} onClick={() => handleDay(iso)} style={{
-              textAlign: "center", padding: "9px 0", cursor: "pointer",
-              fontFamily: "Georgia,serif", fontSize: 13, fontWeight: isToday ? 700 : 400,
-              color, background: bg, borderRadius: radius,
-              ...(isStart && endDate ? { borderRadius: `${RADIUS.md}px 0 0 ${RADIUS.md}px` } : {}),
-              ...(isEnd ? { borderRadius: `0 ${RADIUS.md}px ${RADIUS.md}px 0` } : {}),
-              ...(inRange ? { borderRadius: 0 } : {}),
-              userSelect: "none",
-            }}>
-              {iso.slice(8).replace(/^0/, "")}
-              {isToday && !isStart && !isEnd && <div style={{ width: 3, height: 3, borderRadius: "50%", background: T.ocean, margin: "1px auto 0" }} />}
-            </div>
-          );
-        })}
+      {/* Bottom: day count or hint */}
+      <div style={{ textAlign: "center", marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.sand}` }}>
+        {numDays ? (
+          <span style={{ fontSize: 12, color: T.moss, fontWeight: 600, background: T.successLight, padding: "4px 12px", borderRadius: RADIUS.sm }}>{fmtShort(startDate)} → {fmtShort(endDate)} · {numDays} days</span>
+        ) : (
+          <span style={{ fontSize: 12, color: T.mist }}>{phase === "start" ? "Tap your arrival date" : "Tap your departure date"}</span>
+        )}
       </div>
     </div>
   );
@@ -163,11 +171,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
     ...(igReq.arrivalMode  ? { arrivalMode: igReq.arrivalMode } : {}),
     ...(igReq.departureMode? { departureMode: igReq.departureMode } : {}),
   } : {};
-  const _today = new Date();
-  const _defaultStart = new Date(_today); _defaultStart.setDate(_today.getDate() + 15);
-  const _defaultEnd   = new Date(_today); _defaultEnd.setDate(_today.getDate() + 22);
-  const _fmt = (d) => d.toISOString().slice(0, 10);
-  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:_fmt(_defaultStart), endDate:_fmt(_defaultEnd), travelers:"2", styles:[], notes:"", arrivalCity:"", departureCity:"", baseLocation:"", ...prefill, ...(prefillForm || {}) });
+  const [form, setForm]           = useState({ destinations:[], destinationCountryCodes:[], startDate:"", endDate:"", travelers:"2", styles:[], notes:"", arrivalCity:"", departureCity:"", baseLocation:"", ...prefill, ...(prefillForm || {}) });
 
   // Re-apply prefillForm on any change (handles returning from brainstorm)
   useEffect(() => {
@@ -405,7 +409,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
       {/* Back button + Progress dots */}
       <div style={{display:"flex",alignItems:"center",marginBottom:28}}>
         {step > 0 ? (
-          <button onClick={()=>setStep(s=>s-1)} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:T.mist,padding:"0 8px 0 0",lineHeight:1}}>←</button>
+          <button onClick={()=>setStep(s=>s-1)} style={{background:T.sand,border:"none",cursor:"pointer",fontSize:18,color:T.ink,padding:"6px 10px",lineHeight:1,borderRadius:RADIUS.md,minWidth:36,minHeight:36,display:"flex",alignItems:"center",justifyContent:"center"}}>←</button>
         ) : <div style={{width:28}}/>}
         <div style={{flex:1,display:"flex",justifyContent:"center",gap:8}}>
           {stepViews.map((_,i)=>(

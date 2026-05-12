@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { T, RADIUS, SHADOW, MOTION } from "../theme";
-import { _fetchPhoto, _usedPhotoUrls, _isPortrait, _enqueueMagazineFallback } from "../photos";
+import { _fetchPhoto, _usedPhotoUrls, _isPortrait, _enqueueMagazineFallback, wikiQueuedFetch } from "../photos";
 
 export function DestinationHero({ dest, isLoading, data, children }) {
   const [photoUrl, setPhotoUrl] = useState(null);
@@ -10,22 +10,19 @@ export function DestinationHero({ dest, isLoading, data, children }) {
     (async () => {
       try {
         const BAD = /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|panorama|blank|in_Indonesia|location|special_marker/i;
-        // Try Wikipedia exact
-        const res = await fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(dest)}&prop=pageimages&format=json&pithumbsize=900&redirects=1&origin=*`);
-        const d = await res.json();
+        // Try Wikipedia exact (queued so we share the global Wikimedia rate-limit cooldown)
+        const d = await wikiQueuedFetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(dest)}&prop=pageimages&format=json&pithumbsize=900&redirects=1&origin=*`);
         const page = Object.values(d?.query?.pages || {})[0];
         const src = page?.thumbnail?.source;
         if (src && !BAD.test(src)) { setPhotoUrl(src); setPhotoLoaded(true); return; }
         // Fallback 1: search destination name
-        const res2 = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(dest)}&gsrlimit=3&prop=pageimages&pithumbsize=900&format=json&origin=*`);
-        const d2 = await res2.json();
+        const d2 = await wikiQueuedFetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(dest)}&gsrlimit=3&prop=pageimages&pithumbsize=900&format=json&origin=*`);
         for (const p of Object.values(d2?.query?.pages || {})) {
           const s = p?.thumbnail?.source;
           if (s && !BAD.test(s)) { setPhotoUrl(s); setPhotoLoaded(true); return; }
         }
         // Fallback 2: search "Tourism in {dest}" — country pages often have flag as main image
-        const res3 = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent("Tourism in " + dest)}&gsrlimit=5&prop=pageimages&pithumbsize=900&format=json&origin=*`);
-        const d3 = await res3.json();
+        const d3 = await wikiQueuedFetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent("Tourism in " + dest)}&gsrlimit=5&prop=pageimages&pithumbsize=900&format=json&origin=*`);
         for (const p of Object.values(d3?.query?.pages || {})) {
           const s = p?.thumbnail?.source;
           if (s && !BAD.test(s)) { setPhotoUrl(s); setPhotoLoaded(true); return; }
@@ -96,14 +93,13 @@ export function CityCard({ city, cityDays, writeup, onDeepDive, deepDive, childr
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(city)}&prop=pageimages&format=json&pithumbsize=800&redirects=1&origin=*`);
-        const data = await res.json();
+        // Queued so we share the global Wikimedia rate-limit cooldown — direct fetches were 429ing.
+        const data = await wikiQueuedFetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(city)}&prop=pageimages&format=json&pithumbsize=800&redirects=1&origin=*`);
         const page = Object.values(data?.query?.pages || {})[0];
         const src = page?.thumbnail?.source;
         const BAD = /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|panorama|blank|in_Indonesia|location/i;
         if (src && !BAD.test(src)) { setPhotoUrl(src); setPhotoLoaded(true); return; }
-        const res2 = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(city)}&gsrlimit=3&prop=pageimages&pithumbsize=800&format=json&origin=*`);
-        const data2 = await res2.json();
+        const data2 = await wikiQueuedFetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(city)}&gsrlimit=3&prop=pageimages&pithumbsize=800&format=json&origin=*`);
         for (const p of Object.values(data2?.query?.pages || {})) {
           const s = p?.thumbnail?.source;
           if (s && !BAD.test(s)) { setPhotoUrl(s); setPhotoLoaded(true); return; }
@@ -234,8 +230,10 @@ export function MagazineHighlightCard({ item, city, inItinerary = false, masonry
       _enqueueMagazineFallback(async () => {
         try {
           const q = searchKey;
-          const res = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(q + (city ? " " + city : ""))}&gsrlimit=5&prop=pageimages|description&pithumbsize=700&format=json&origin=*`);
-          const data = await res.json();
+          // Route through wikiQueuedFetch so this respects the global Wikimedia rate-limit
+          // cooldown — direct fetches here were a major contributor to the 429 storms.
+          const data = await wikiQueuedFetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(q + (city ? " " + city : ""))}&gsrlimit=5&prop=pageimages|description&pithumbsize=700&format=json&origin=*`);
+          if (!data) { if (!cancelled) setLoaded(true); return; }
           const BAD = /\.(svg|pdf)(\.|$)|map|marker|flag|logo|icon|coat.of.arms|skyline|panorama|regulation|nintendo|game.boy|console/i;
           const PERSON = /\b(born|politician|actor|actress|singer|player|wrestler|athlete|writer|emperor|empress|manga|anime|artist|novelist|musician|composer|director|comedian|model|journalist|general|admiral|voice actor)\b/i;
           // Relevance: page title or description must relate to the search term

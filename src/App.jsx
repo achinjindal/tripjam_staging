@@ -506,11 +506,13 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
   );
 }
 
-function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditForm = null, onOpenChat = null, onDismissRoute = null, onModifyRoute = null, undoDismissRef = null, triggerGenerateRef = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null, onTellMore = null, onShowMap = null, onAskTrippy = null }) {
+function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditForm = null, onOpenChat = null, onDismissRoute = null, onModifyRoute = null, undoDismissRef = null, triggerGenerateRef = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null, onTellMore = null, onShowMap = null, onAskTrippy = null, onGeneratingChange = null }) {
   const [items, setItems] = useState(null); // null = not started, [] = empty, [...] = loaded
   const [loadingItems, setLoadingItems] = useState(false);
   const [localVotes, setLocalVotes] = useState({}); // { [tempId]: 1|-1|0 } — pre-trip mode votes
   const [generating, setGenerating] = useState(false);
+  // Bubble RG loading state up so the parent (chat sheet, etc.) can react.
+  useEffect(() => { onGeneratingChange?.(generating); }, [generating]);
   const [activeCategory, setActiveCategory] = useState("All");
   const [genError, setGenError] = useState(null);
   const [ideaCount, setIdeaCount] = useState(12);
@@ -2466,6 +2468,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const [preIgForm, setPreIgForm] = useState({ budget: "mid", morningStart: "early", pace: "active", igNotes: "" });
   const [magazineFilterRouteId, setMagazineFilterRouteId] = useState(null);
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
+  const [routesGenerating, setRoutesGenerating] = useState(false); // true while RG (brainstorm) is in flight — used to hide chat suggestions
   const [fabPos, setFabPos] = useState({ right: 0, bottom: 140 }); // draggable FAB position, flush right
   const fabDragRef = useRef({ dragging: false, startX: 0, startY: 0, startRight: 0, startBottom: 0 });
   const [pretripRoutes, setPretripRoutes] = useState([]); // tier 1 routes for pre-trip map
@@ -3698,8 +3701,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
         <div style={{flex:1,overflowY:"auto"}}>
           <div style={{background:`linear-gradient(160deg,${T.dusk},${T.ocean})`,padding:"44px 20px 36px",color:"white",position:"relative",overflow:"hidden"}}>
             <div style={{position:"absolute",top:-50,right:-50,width:200,height:200,borderRadius:"50%",background:"rgba(255,255,255,0.04)",pointerEvents:"none"}}/>
-            <div style={{position:"relative",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:RADIUS.full,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>← Trips</button>}
+            <div style={{position:"relative",display:"flex",justifyContent:"flex-end",alignItems:"center",marginBottom:14}}>
+              {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:RADIUS.full,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>All Trips</button>}
             </div>
             <div style={{fontFamily:"'DM Serif Display',serif",fontSize:34,lineHeight:1.2,marginBottom:10}}>Plan your next<br/>adventure ✈️</div>
             <div style={{fontSize:14,opacity:0.7,fontFamily:"Georgia,serif"}}>AI-powered itineraries, built for you</div>
@@ -3732,6 +3735,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             session={session}
             pendingForm={pendingForm}
             triggerGenerateRef={triggerRgRef}
+            onGeneratingChange={setRoutesGenerating}
             editTripId={editingTrip?.id || null}
             onBuild={handleBuildFromBrainstorm}
             onBack={() => setScreen("setup")}
@@ -4270,7 +4274,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
           {/* ── MAGAZINE TAB ── */}
           {activeBottomTab === "brainstorm" && (
-            <BrainstormView trip={trip} session={session} days={days} onAskTrippy={(title) => {
+            <BrainstormView trip={trip} session={session} days={days} onGeneratingChange={setRoutesGenerating} onAskTrippy={(title) => {
               setChatInput(`Tell me about "${title}"`);
               setChatOpen(true); setChatUnread(false);
               setTimeout(() => chatInputRef.current?.focus(), 50);
@@ -4902,7 +4906,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                         );
                       })()}
                     </div>
-                    {isAI && m.suggestions?.length > 0 && (
+                    {isAI && m.suggestions?.length > 0 && !routesGenerating && !(streamingDays > 0 && !allDaysPlanned) && (
                       <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginTop:6,maxWidth:"90vw"}}>
                         {m.suggestions.map((s, si) => (
                           s.type === "hotel"

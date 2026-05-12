@@ -156,15 +156,8 @@ function Root() {
   if (session === undefined) return null;
   if (!session) return <Auth />;
 
-  // Admin console — check is_admin flag
+  // Admin console — auth check is inside the component
   if (route.page === "admin") {
-    const [isAdmin, setIsAdmin] = useState(null);
-    useEffect(() => {
-      supabase.from("profiles").select("is_admin").eq("id", session.user.id).single()
-        .then(({ data }) => setIsAdmin(data?.is_admin || false));
-    }, []);
-    if (isAdmin === null) return null;
-    if (!isAdmin) { pushUrl("/"); return null; }
     return <AdminConsole session={session} onHome={() => { pushUrl("/"); window.location.reload(); }} />;
   }
 

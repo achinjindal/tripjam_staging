@@ -26,6 +26,7 @@ function fmtNum(n) {
 }
 
 export default function AdminConsole({ session, onHome }) {
+  const [isAdmin, setIsAdmin] = useState(null);
   const [tab, setTab] = useState("users");
   const [users, setUsers] = useState([]);
   const [trips, setTrips] = useState([]);
@@ -36,8 +37,19 @@ export default function AdminConsole({ session, onHome }) {
   const [tripDetail, setTripDetail] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Check admin access
+  useEffect(() => {
+    supabase.from("profiles").select("is_admin").eq("id", session.user.id).single()
+      .then(({ data }) => {
+        const admin = data?.is_admin || false;
+        setIsAdmin(admin);
+        if (!admin) onHome();
+      });
+  }, []);
+
   // Load users
   useEffect(() => {
+    if (!isAdmin) return;
     (async () => {
       setLoading(true);
       const { data: profiles } = await supabase.from("profiles").select("*").order("created_at", { ascending: false });
@@ -126,6 +138,9 @@ export default function AdminConsole({ session, onHome }) {
   const totalCost = llmUsage.reduce((s, u) => s + calcCost(u.model, u.input_tokens, u.output_tokens), 0);
   const totalInput = llmUsage.reduce((s, u) => s + u.input_tokens, 0);
   const totalOutput = llmUsage.reduce((s, u) => s + u.output_tokens, 0);
+
+  if (isAdmin === null) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:T.bgPage,color:T.mist,fontFamily:"Georgia,serif"}}>Checking access…</div>;
+  if (!isAdmin) return null;
 
   return (
     <div style={{ minHeight: "100vh", background: T.bgPage, fontFamily: "Georgia, serif" }}>

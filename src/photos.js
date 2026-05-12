@@ -31,8 +31,18 @@ export function _isPortrait(url) {
 export function makeQueue(delayMs, concurrency = 1) {
   const q = [];
   let active = 0;
-  const run = () => {
+  // Cool-down for the entire queue when the upstream rate-limits us (Wikimedia 429s).
+  // While in cool-down, tasks remain queued but the runner pauses — once it expires,
+  // we resume at the normal pace. Saves a thundering-herd retry storm.
+  let cooldownUntil = 0;
+  const run = async () => {
     while (active < concurrency && q.length > 0) {
+      const now = Date.now();
+      if (now < cooldownUntil) {
+        // Sleep just long enough for the cooldown to clear, then resume.
+        setTimeout(run, cooldownUntil - now + 50);
+        return;
+      }
       active++;
       const task = q.shift();
       task().finally(() => { active--; run(); });
@@ -45,7 +55,14 @@ export function makeQueue(delayMs, concurrency = 1) {
         const tid = setTimeout(() => ctrl.abort(), 6000);
         const res = await fetch(url, { signal: ctrl.signal });
         clearTimeout(tid);
-        resolve(res.ok ? await res.json() : null);
+        if (res.status === 429) {
+          // Rate-limited. Honor Retry-After if present (in seconds), else default 30s.
+          const retryAfter = parseInt(res.headers.get("Retry-After") || "30", 10);
+          cooldownUntil = Math.max(cooldownUntil, Date.now() + Math.min(retryAfter, 60) * 1000);
+          resolve(null);
+        } else {
+          resolve(res.ok ? await res.json() : null);
+        }
       } catch { resolve(null); }
       if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
     });
@@ -53,7 +70,7 @@ export function makeQueue(delayMs, concurrency = 1) {
   });
 }
 
-export const wikiQueuedFetch = makeQueue(300, 3); // Wikimedia — 3 concurrent, 300ms stagger (avoid 429s)
+export const wikiQueuedFetch = makeQueue(400, 2); // Wikimedia — 2 concurrent, 400ms stagger (avoid 429s)
 
 /**
  * Fetch a representative photo for an activity/place using free Wikipedia/Commons sources.
