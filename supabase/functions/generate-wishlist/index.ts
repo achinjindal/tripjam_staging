@@ -23,7 +23,7 @@ serve(async (req) => {
   }
 
   try {
-    const { days } = await req.json();
+    const { days, tripId } = await req.json();
 
     // Build a compact summary of each day's area and existing activities
     const daysSummary = days.map((d: any) =>
@@ -73,7 +73,7 @@ Already in the itinerary (exclude these): ${allActivities}`;
         "Authorization": `Bearer ${supabaseKey}`,
       },
       body: JSON.stringify({
-        trip_id: null,
+        trip_id: tripId || null,
         function_name: "generate-wishlist",
         model: "claude-haiku-4-5-20251001",
         input_tokens: data.usage?.input_tokens || 0,

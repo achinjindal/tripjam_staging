@@ -68,7 +68,7 @@ serve(async (req) => {
   try {
     const body = await req.json();
     console.log("Request body:", JSON.stringify(body));
-    const { destinations, numDays, travelers, styles, budget, pace, morningStart, notes, startDate, arrivalCity, arrivalTime, arrivalMode, departureCity, departureTime, departureMode, hasCar, votedItems } = body;
+    const { destinations, numDays, travelers, styles, budget, pace, morningStart, notes, startDate, arrivalCity, arrivalTime, arrivalMode, departureCity, departureTime, departureMode, hasCar, votedItems, tripId } = body;
 
     const budgetLabel = { budget: "budget (hostels, street food)", mid: "mid-range (3-star hotels, local restaurants)", luxury: "luxury (5-star hotels, fine dining)" }[budget] || "mid-range";
     const stylesText = styles.join(", ");
@@ -285,7 +285,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
             "Authorization": `Bearer ${supabaseKey}`,
           },
           body: JSON.stringify({
-            trip_id: null,
+            trip_id: tripId || null,
             function_name: "generate-itinerary",
             model: "claude-sonnet-4-6",
             input_tokens: estimatedInputTokens,

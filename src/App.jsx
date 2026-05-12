@@ -588,6 +588,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
           budget: igReq.budget,
           notes: igReq.notes || trip?.notes || null,
           tripDays,
+          tripId: trip?.id || null,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -672,6 +673,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
           existingPlans: addMore ? (items || []).filter(it => it.tier === 1).map(it => it.title) : null,
           baseLocation: igReq.baseLocation || null,
           numPlans: addMore ? Math.min(4, 12 - (items || []).filter(it => it.tier === 1 && !it.dismissed).length) : 4,
+          tripId: trip?.id || null,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2493,6 +2495,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           styles: igReq.styles,
           budget: igReq.budget,
           notes: igReq.notes || trip?.notes || null,
+          tripId: trip?.id || null,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2924,6 +2927,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       arrivalMode: form.arrivalMode || "flight",
       departureMode: form.departureMode || "flight",
       votedItems: votedItems || null,
+      tripId: trip?.id || null,
     };
 
     // ── Single call: streams compact first, then full days ──
@@ -4478,7 +4482,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                 const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/extract-preferences`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-                  body: JSON.stringify({ notes: pendingForm?.notes || "", chatHistory: chatHistory || [] }),
+                  body: JSON.stringify({ notes: pendingForm?.notes || "", chatHistory: chatHistory || [], tripId: trip?.id || null }),
                 });
                 if (res.ok) {
                   const prefs = await res.json();

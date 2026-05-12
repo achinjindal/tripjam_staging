@@ -26,7 +26,7 @@ serve(async (req) => {
   }
 
   try {
-    const { notes, chatHistory } = await req.json();
+    const { notes, chatHistory, tripId } = await req.json();
 
     // Build user message from available context
     const parts: string[] = [];
@@ -67,7 +67,7 @@ serve(async (req) => {
         "Authorization": `Bearer ${supabaseKey}`,
       },
       body: JSON.stringify({
-        trip_id: null,
+        trip_id: tripId || null,
         function_name: "extract-preferences",
         model: "claude-haiku-4-5-20251001",
         input_tokens: msg.usage?.input_tokens || 0,

@@ -36,7 +36,7 @@ serve(async (req) => {
   }
 
   try {
-    const { city, country, travelMonth, styles, budget, notes, tripDays } = await req.json();
+    const { city, country, travelMonth, styles, budget, notes, tripDays, tripId } = await req.json();
     if (!city) throw new Error("city is required");
 
     const userMessage = `Deep dive on: ${city}${country ? `, ${country}` : ""}.
@@ -107,7 +107,7 @@ ${notes ? `Traveler notes: ${notes}` : ""}`;
         "Authorization": `Bearer ${supabaseKey}`,
       },
       body: JSON.stringify({
-        trip_id: null,
+        trip_id: tripId || null,
         function_name: "city-deep-dive",
         model: "claude-haiku-4-5-20251001",
         input_tokens: Math.round(requestBodyStr.length / 4),

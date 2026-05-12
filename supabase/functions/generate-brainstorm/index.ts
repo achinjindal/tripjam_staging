@@ -68,7 +68,7 @@ serve(async (req) => {
   }
 
   try {
-    const { destinations: rawDest, styles, budget, travelMonth, numDays, arrivalCity, departureCity, notes, existingPlans, baseLocation, numPlans: rawNumPlans } = await req.json();
+    const { destinations: rawDest, styles, budget, travelMonth, numDays, arrivalCity, departureCity, notes, existingPlans, baseLocation, numPlans: rawNumPlans, tripId } = await req.json();
     const numPlans = Math.max(1, Math.min(4, rawNumPlans || 4));
 
     const destinations = rawDest?.length ? rawDest : ["Help me decide"];
@@ -177,7 +177,7 @@ serve(async (req) => {
             "Authorization": `Bearer ${supabaseKey}`,
           },
           body: JSON.stringify({
-            trip_id: null,
+            trip_id: tripId || null,
             function_name: "generate-brainstorm",
             model: "claude-sonnet-4-6",
             input_tokens: estimatedInputTokens,

@@ -71,10 +71,11 @@ export default function AdminConsole({ session, onHome }) {
       setTrips(allTrips || []);
       setLoading(false);
     })();
-  }, []);
+  }, [isAdmin]);
 
   // Load LLM usage
   useEffect(() => {
+    if (!isAdmin) return;
     (async () => {
       const { data } = await supabase.from("llm_usage").select("*").order("created_at", { ascending: false }).limit(1000);
       setLlmUsage(data || []);
@@ -92,7 +93,7 @@ export default function AdminConsole({ session, onHome }) {
       });
       setDailyUsage(Object.values(byDay).sort((a, b) => b.day.localeCompare(a.day)));
     })();
-  }, []);
+  }, [isAdmin]);
 
   // Load trip detail
   const loadTripDetail = async (tripId) => {
@@ -297,22 +298,28 @@ export default function AdminConsole({ session, onHome }) {
                     <th style={thStyle}>User</th>
                     <th style={thStyle}>Trips</th>
                     <th style={thStyle}>Chats</th>
+                    <th style={thStyle}>Credit</th>
                     <th style={thStyle}>Last Active</th>
                     <th style={thStyle}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map(u => (
+                  {users.map(u => {
+                    const userTrips = trips.filter(t => t.created_by === u.id);
+                    const userCost = llmUsage.filter(r => userTrips.some(t => t.id === r.trip_id)).reduce((s, r) => s + calcCost(r.model, r.input_tokens, r.output_tokens), 0);
+                    return (
                     <tr key={u.id}>
                       <td style={tdStyle}>{u.face_icon || "👤"} {u.username}</td>
                       <td style={tdStyle}>{u.tripCount}</td>
                       <td style={tdStyle}>{u.chatCount}</td>
+                      <td style={tdStyle}>{fmtCost(userCost)}</td>
                       <td style={tdStyle}>{fmtDate(u.lastTrip)}</td>
                       <td style={tdStyle}>
                         <button onClick={() => setSelectedUser(u)} style={{ background: T.ocean, color: T.chalk, border: "none", borderRadius: RADIUS.sm, padding: "3px 8px", fontSize: 11, cursor: "pointer" }}>View</button>
                       </td>
                     </tr>
-                  ))}
+                  );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -331,12 +338,14 @@ export default function AdminConsole({ session, onHome }) {
                   <th style={thStyle}>Dates</th>
                   <th style={thStyle}>Status</th>
                   <th style={thStyle}>IG</th>
+                  <th style={thStyle}>Credit</th>
                   <th style={thStyle}>Created</th>
                 </tr>
               </thead>
               <tbody>
                 {trips.map(t => {
                   const status = t.ig_response ? "Built" : "Planning";
+                  const tripCost = llmUsage.filter(u => u.trip_id === t.id).reduce((s, u) => s + calcCost(u.model, u.input_tokens, u.output_tokens), 0);
                   return (
                     <tr key={t.id}>
                       <td style={tdStyle}>{t.name?.slice(0, 30)}</td>
@@ -344,6 +353,7 @@ export default function AdminConsole({ session, onHome }) {
                       <td style={tdStyle}>{fmtDate(t.start_date)} – {fmtDate(t.end_date)}</td>
                       <td style={{ ...tdStyle, color: status === "Built" ? T.moss : T.gold }}>{status}</td>
                       <td style={tdStyle}>{t.ig_count || 0}×</td>
+                      <td style={tdStyle}>{fmtCost(tripCost)}</td>
                       <td style={tdStyle}>{fmtDate(t.created_at)}</td>
                     </tr>
                   );
