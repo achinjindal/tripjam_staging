@@ -6,41 +6,52 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 ## Tech Stack
 - **Frontend:** React 18 (JSX) + Vite 8, single-page app, no router library (History API for URL routing)
 - **Backend:** Supabase (Postgres, Auth, Edge Functions, RLS, Realtime)
-- **AI:** Anthropic Claude API — Sonnet 4.6 for route generation & chat, Haiku 4.5 for todos/expenses
-- **Maps:** Leaflet + react-leaflet, Nominatim geocoding, OSRM routing
-- **Photos:** Wikipedia/Wikimedia Commons (free, no API key)
-- **Analytics:** PostHog
-- **Mobile:** Capacitor (Android APK), vite-plugin-pwa
-- **Testing:** Playwright E2E
+- **AI:** Anthropic Claude API — Sonnet 4.6 for RG/IG/chat, Haiku 4.5 for todos/expenses/deep-dives/preferences
+- **Maps:** Leaflet + react-leaflet, Photon/Nominatim geocoding (with trip destination enrichment)
+- **Photos:** Wikipedia/Wikimedia Commons (free, serialized queue 3 concurrent / 300ms)
+- **Places:** Google Places API (autocomplete, hotel search with lodging type)
+- **Analytics:** PostHog (tagged with app_env for staging/production filtering)
+- **Mobile:** Capacitor (Android APK), vite-plugin-pwa (auto-update, 5-min check interval)
+- **Testing:** Playwright E2E (sequential, workers: 1)
+- **Hosting:** Vercel (frontend auto-deploy), Supabase (backend/DB/functions)
 
 ## Project Structure
 ```
 src/
-  App.jsx          — Main UI (~7000+ lines, all views and logic)
-  main.jsx         — Entry point, Supabase init, PostHog init
-  Auth.jsx         — Login/signup
-  Home.jsx         — Trip list
+  App.jsx            — Main UI (~5000 lines, core state + views)
+  main.jsx           — Entry point, Supabase init, PostHog init, URL routing
+  Auth.jsx           — Login/signup (serif fonts, design system tokens)
+  Home.jsx           — Trip list (card hover, warm palette)
+  Admin.jsx          — Admin console (/admin, is_admin gated)
   TripPublicView.jsx — Read-only shared trip view
-  JoinView.jsx     — Join trip via invite link
-  supabase.js      — Supabase client
+  JoinView.jsx       — Join trip via invite link
+  supabase.js        — Supabase client
+  theme.js           — Design system: T colors, TYPE, SPACE, RADIUS, SHADOW, MOTION
+  photos.js          — Photo fetch, caching, dedup, geocoding, haversine
+  context.js         — DebugContext
+
+  components/
+    BoardView.jsx    — Notes, Todos, Bookmarks, Expenses, Travel & Hotels, LogisticsTab
+    SetupForm.jsx    — 3-step wizard, DateRangePicker, CityInput, ModePills
+    Magazine.jsx     — DestinationHero, CityCard, MagazineHighlightCard, FoodSpotlightCard
+    MapView.jsx      — FitBounds, MapView (itinerary), RouteMapView (brainstorm)
 
 supabase/
-  functions/       — Edge Functions (Deno, TypeScript)
-    generate-brainstorm/  — Route Generation (RG): 4 route options
-    generate-itinerary/   — Itinerary Generation (IG): day-by-day plan
-    chat/                 — Unified chat endpoint (action-based)
-    chat-brainstorm/      — Legacy brainstorm chat (deprecated)
-    chat-trip/            — Legacy trip chat (deprecated)
-    city-deep-dive/       — Magazine deep dive content
+  functions/         — Edge Functions (Deno, TypeScript)
+    generate-brainstorm/  — Route Generation (RG): 4 route options with **bold** day text
+    generate-itinerary/   — Itinerary Generation (IG): day-by-day plan with transit tips + transitions
+    chat/                 — Unified chat endpoint (action-based, 6 message history cap)
+    city-deep-dive/       — Magazine deep dive content (anti-hallucination prompt)
     places-proxy/         — Geocoding proxy (Photon + Nominatim)
-    generate-todos/       — AI todo suggestions
+    generate-todos/       — AI todo suggestions with due dates
     estimate-expenses/    — AI budget estimation
+    extract-preferences/  — Pre-IG preference extraction (Haiku)
     generate-wishlist/    — Wishlist generation
-  migrations/      — Postgres migrations (chronological)
+  migrations/        — Postgres migrations (chronological)
 
-e2e/               — Playwright E2E tests
-  helpers.ts       — Login, createTrip, snap utilities
-  *.spec.ts        — Test suites
+e2e/                 — Playwright E2E tests
+  helpers.ts         — Login, snap utilities
+  *.spec.ts          — Test suites (board, chat, interactions, magazine, geocoding, etc.)
 ```
 
 ## Commands
@@ -52,37 +63,54 @@ npm run dev                    # Vite on localhost:5173
 npm run build                  # Production build
 npm run build:android          # Build + Capacitor sync
 
-# E2E tests (requires dev server running or uses webServer config)
+# E2E tests
 npx playwright test            # Run all tests (sequential, workers: 1)
 npx playwright test e2e/smoke.spec.ts   # Run specific file
-npx playwright show-trace <path>        # View test trace on failure
 
 # Supabase
-npx supabase functions serve   # Local edge functions
-npx supabase db push           # Apply migrations
+npm run deploy:functions:staging    # Deploy edge functions to staging
+npm run deploy:functions:prod       # Deploy edge functions to production
+npm run db:push:staging             # Apply migrations to staging
+npm run db:push:prod                # Apply migrations to production
 ```
 
 ## Internal Nomenclature
 - **RG** — Route Generation. Pre-IG step where 4 route options are generated.
-- **IG** — Itinerary Generation. Full day-by-day plan from selected route.
-- **Magazine** — Destination guide tab (highlights, deep dives, food, tips).
-- **Board** — Tab with Notes, To-dos, Bookmarks, Expenses widgets.
-- **Pre-IG sheet** — Bottom sheet shown after route selection, before IG (budget, pace, morning preference).
+- **IG** — Itinerary Generation. Full day-by-day plan from selected route. Two phases: compact (fast) then detailed (streaming).
+- **Magazine** — Destination guide tab (highlights, deep dives, food, tips). Lazy-loaded: destination + top 2 cities on route load, rest on Magazine open.
+- **Board** — Tab with Notes, To-dos, Bookmarks, Expenses, Travel & Hotels widgets.
+- **Pre-IG sheet** — Bottom sheet shown after route selection, before IG (budget, pace, morning preference, transport).
+- **Transit tips** — Per-day actionable public transport advice (e.g. "Use Suica card · Day pass ¥600").
 
 ## Architecture Notes
-- App.jsx is a single large file containing all views and state. No component library or state management.
+- App.jsx split into components: BoardView, SetupForm, Magazine, MapView + shared modules (theme, photos, context).
+- Design system in theme.js: T (colors + semantic states), TYPE (6-level typography), RADIUS (4 values), SHADOW (3 levels), MOTION (3 speeds).
 - Auth uses username + password only (no email). Fake email = `username@tripjam.app`.
-- Trip ID generated client-side (`crypto.randomUUID()`) to avoid RLS issues on insert+select.
-- Home page uses 3 flat Supabase queries (not nested joins — RLS caused 500s).
-- Unified chat uses action-based responses: LLM returns `actions[]` array, client dispatcher maps action types to state mutations.
-- Route labels (P1, P2...) are computed at render time from display index, never stored.
-- Photos use Wikipedia with person-page filtering and portrait URL detection.
-- Geocoding: Photon primary, Nominatim fallback. Nominatim used for bias city resolution (Photon returns wrong results from Supabase datacenter).
+- Trip ID generated client-side (`crypto.randomUUID()`) to avoid RLS issues.
+- Unified chat uses action-based responses: LLM returns `actions[]` array with support for bulk dismiss (routeIds array).
+- Route labels (P1, P2...) computed at render time from display index, never stored.
+- Geocoding enriched with trip destination context (e.g. "Kuta" → "Kuta, Bali") to avoid wrong-continent results.
+- Photos: 4-tier Wikipedia lookup with person-page filtering, serialized Magazine fallback to prevent duplicates.
+- TransitionRow: haversine walk/drive pill + optional transit icon (🚇/🚌/⛴️) linking to Google Maps transit. No LLM time estimates.
+- Inter-city transit cards: rich cards with service name, stations, duration, cost, Rome2Rio link.
+- Edit Details flow: smart change detection with confirmation sheet. Destinations/duration force regenerate, other changes user chooses.
+- Itinerary replace confirmation: shows parameter diff before overwriting existing itinerary.
+- Per-day collapse/expand in detailed view (no Compact/Detailed toggle).
+- Pre-loading: Day 1 geocoded/photos cached when streamingDays >= 1. Expanding Day N triggers Day N+1 pre-load.
+- Offline: trip list + days cached in localStorage.
+- LLM usage logged to llm_usage table (all edge functions, fire-and-forget).
+
+## Admin Console
+- Route: `/admin` — gated by `is_admin` boolean on profiles table
+- Tabs: Users, Trips, Credits (by function/model), Daily Usage
+- Shows: trip counts, chat counts, IG timing, activity breakdown, token usage, cost estimates
+- Cost rates: Sonnet $3/$15 per M tokens, Haiku $0.80/$4 per M tokens
 
 ## Testing
 - Playwright config: `workers: 1` (sequential) — API-dependent tests can't run in parallel.
 - Test user: `qa-tester` / `qaTest123!`
-- Tests use real Supabase (not mocked). Some tests create trips and call AI, so they're slow.
+- Tests use real Supabase (not mocked). Board tests create trips via serial setup fixture.
+- QA skills: `/code-review` (static analysis), `/qa-e2e` (browser tests with cost tracking).
 
 ## Environments
 Two Supabase projects — local dev and staging share one, production is isolated.
@@ -93,28 +121,18 @@ Two Supabase projects — local dev and staging share one, production is isolate
 | **Used by** | `npm run dev`, E2E tests, Vercel preview | `npm run build`, Vercel production, APK |
 | **Env file** | `.env` | `.env.production` |
 
-- `npm run dev` → staging (`.env`)
-- `npm run build` / `vite build` → production (`.env.production`, Vite loads this automatically in production mode)
-- E2E tests always hit staging
-
-```bash
-# Deploy edge functions
-npm run deploy:functions:staging
-npm run deploy:functions:prod
-
-# Apply DB migrations
-npm run db:push:staging
-npm run db:push:prod
-```
-
 ## Deployment
 - Vercel auto-deploys on push. Preview deploys use staging Supabase, production deploys use production Supabase.
 - **Do not push to any remote without explicit user approval.** Every remote auto-deploys.
+- **Do not make code changes without user approval.** Discuss first, implement after approval. Exception: clear bug fixes can be applied directly.
 - GitHub Actions APK build points to production (via GitHub Secrets).
+- Always deploy edge functions separately to each environment.
+- After any file extraction/split, verify no duplicate `const T =` definitions and no escaped unicode (`\\u` sequences).
 
 ## Supabase Edge Functions
 - Runtime: Deno (TypeScript)
-- All use `Anthropic` SDK from `npm:@anthropic-ai/sdk`
+- All use Anthropic API via direct fetch or `npm:@anthropic-ai/sdk`
 - CORS headers required on every response
 - Environment vars: `ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
+- All functions log token usage to `llm_usage` table (fire-and-forget)
 - Deploy to each environment separately — changes to staging don't affect production

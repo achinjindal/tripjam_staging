@@ -40,6 +40,12 @@ You are a senior tech lead performing a thorough QA review of this codebase. You
 - **Data cascade**: When routes are regenerated, verify the itinerary (days + activities + ig_response) is also reset. When itinerary is regenerated, verify the old days/activities are deleted. Check that DB state and React state stay in sync.
 - **Confirmation flows**: Edit Details and Pre-IG sheet both have confirmation dialogs. Verify the correct sheet shows for each change type (destinations/duration → force regen, others → user chooses). Verify "Cancel" reverts changes, "Keep" saves changes but preserves routes/itinerary.
 - **Unicode/emoji**: After any file extraction or agent-written code, grep for `\\u[0-9a-f]{4}` in JSX files — escaped unicode sequences render as literal text instead of emojis.
+- **Design system tokens**: After any UI change, verify hardcoded colors/radius/shadows use T.xxx, RADIUS.xxx, SHADOW.xxx, MOTION.xxx from theme.js. No new hardcoded hex colors (#FFF0F0 etc.) — use semantic tokens (T.errorLight).
+- **Transit consistency**: TransitionRow must always show haversine walk/drive pill. Transit icon only when LLM provides mode AND distance 500m-20km AND commute >12min walk or >8min drive. Inter-city transit cards must have service field.
+- **Abort handling**: When user navigates away during IG generation, verify igAbortRef.current.abort() is called and the catch block handles AbortError silently (no redirect).
+- **Pre-loading**: Verify Day 1 pre-loads on streamingDays >= 1, expanding Day N triggers Day N+1, preloadedDaysRef tracks what's loaded.
+- **LLM usage logging**: All edge functions must log to llm_usage table (fire-and-forget). Streaming functions approximate tokens (chars/4), non-streaming use exact usage from Anthropic response.
+- **Admin access**: /admin route must check is_admin on profiles. Non-admin users must be redirected.
 
 ## Rules
 

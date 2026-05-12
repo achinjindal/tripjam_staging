@@ -1364,36 +1364,56 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
 
 /* ─── TRANSITION ROW ────────────────────────────────────────────────── */
 function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = false, initialCommute = null, onResolved = null }) {
-  const [commute, setCommute] = useState(initialCommute);
-  const [loading, setLoading] = useState(!initialCommute);
+  // Validate stored value before trusting it. Cross-city transits (Tokyo→Kyoto) can legitimately
+  // be hours; in-city pairs above ~60 min are almost certainly stale poisoned values from before
+  // the 30km cap landed. Force live re-compute so the system self-heals over time — the new
+  // computation either succeeds with a correct pill or falls through to "Get directions".
+  const isCrossCityTransit = from?.type === "transit" || to?.type === "transit";
+  const storedLooksReasonable = initialCommute && initialCommute.mins > 0 &&
+    (isCrossCityTransit || initialCommute.mins <= 60);
+  const seedCommute = storedLooksReasonable ? initialCommute : null;
+
+  const [commute, setCommute] = useState(seedCommute);
+  const [loading, setLoading] = useState(!seedCommute);
   const [debug, setDebug] = useState(null);
   const debugMode = useContext(DebugContext);
 
   useEffect(() => {
-    // Use stored value if it looks reasonable. Recalculate suspicious 1-min values (likely from bad geocodes).
-    if (initialCommute && initialCommute.mins > 1) return;
+    if (storedLooksReasonable) return;
     let cancelled = false;
     async function load() {
-      if (delay > 0) await new Promise(r => setTimeout(r, delay));
       const placeA = from.geocode || extractPlace(from.title);
       const placeB = to.geocode   || extractPlace(to.title);
       // For transit activities, use geocodeEnd (destination) as the origin for the next leg
       const fromGeocode = from.type === "transit" && from.geocodeEnd ? from.geocodeEnd : from.geocode;
-      const [coordA, coordB] = await Promise.all([
-        geocodePlace(from.title, city, fromGeocode),
-        geocodePlace(to.title,   city, to.geocode),
-      ]);
-      if (cancelled) return;
-
-      let reason = null;
-      if (!coordA && !coordB) reason = `no coords for "${placeA}" or "${placeB}" in ${city}`;
-      else if (!coordA) reason = `no coords for "${placeA}" in ${city}`;
-      else if (!coordB) reason = `no coords for "${placeB}" in ${city}`;
-      else {
-        const dist = haversineMeters(coordA, coordB);
-        if (dist >= 200000) {
-          reason = `distance ${Math.round(dist/1000)}km > 200km`;
-        } else {
+      // Retry with backoff so a cold-start timeout doesn't immediately drop us to the "Get directions"
+      // fallback — that's the failure state, not a loading state. Keep the `···` showing while we retry.
+      let lastReason = null;
+      const MAX_ATTEMPTS = 3;
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        if (attempt === 0 && delay > 0) await new Promise(r => setTimeout(r, delay));
+        if (attempt > 0) await new Promise(r => setTimeout(r, 2500 * attempt));
+        if (cancelled) return;
+        const [coordA, coordB] = await Promise.all([
+          geocodePlace(from.title, city, fromGeocode),
+          geocodePlace(to.title,   city, to.geocode),
+        ]);
+        if (cancelled) return;
+        if (!coordA && !coordB) lastReason = `no coords for "${placeA}" or "${placeB}" in ${city}`;
+        else if (!coordA) lastReason = `no coords for "${placeA}" in ${city}`;
+        else if (!coordB) lastReason = `no coords for "${placeB}" in ${city}`;
+        else {
+          const dist = haversineMeters(coordA, coordB);
+          // Cross-city transit activities (Tokyo→Kyoto etc.) can legitimately be hundreds of km;
+          // in-city transitions beyond ~30km are almost certainly bad geocodes ("Calle Cava Baja"
+          // mis-resolving to a suburb when both activities are in central Madrid). For the latter,
+          // showing "3h 40m drive" misleads — fall through to "Get directions" which links to Maps.
+          const isCrossCityTransit = from.type === "transit" || to.type === "transit";
+          const cap = isCrossCityTransit ? 200000 : 30000;
+          if (dist >= cap) {
+            lastReason = `distance ${Math.round(dist/1000)}km exceeds ${isCrossCityTransit ? "200km" : "in-city 30km"} cap — likely bad geocode`;
+            break; // permanent — too far, no retry
+          }
           const road = dist * 1.3;
           const walkMins  = Math.max(1, Math.round(road / 80));
           const driveMins = Math.max(1, Math.round(road / 400));
@@ -1403,12 +1423,18 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
           const result = { mode: useWalk ? "walk" : "drive", mins: useWalk ? walkMins : driveMins, dist, transitMode };
           if (!cancelled) {
             setCommute(result);
+            setDebug({ placeA, placeB, reason: null });
+            setLoading(false);
             onResolved?.(result.mins, result.mode);
           }
+          return;
         }
       }
-      if (!cancelled) setDebug({ placeA, placeB, reason });
-      if (!cancelled) setLoading(false);
+      // All retries exhausted — commit to the "Get directions" fallback
+      if (!cancelled) {
+        setDebug({ placeA, placeB, reason: lastReason });
+        setLoading(false);
+      }
     }
     load();
     return () => { cancelled = true; };
@@ -1814,38 +1840,80 @@ function ArrivalTimeline({ arrivalTime, arrivalMode, onEditFlight, airportIata, 
 }
 
 /* ─── DAY SECTION ────────────────────────────────────────────────────── */
-function WishlistSection({ items, city }) {
-  const [open, setOpen] = useState(false);
+function GemCard({ gem, city, activities, onAdd, onDismiss, onAskTrippy }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [photoLoaded, setPhotoLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    _fetchPhoto(gem.geocode || gem.title, city, "sight").then(url => {
+      if (!cancelled) { setPhotoUrl(url); setPhotoLoaded(true); }
+    }).catch(() => { if (!cancelled) setPhotoLoaded(true); });
+    return () => { cancelled = true; };
+  }, [gem.geocode, gem.title, city]);
+  const nearMatches = gem.near && (activities || []).some(a => a.title === gem.near);
+  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${gem.geocode || gem.title} ${city}`)}`;
   return (
-    <div style={{margin:"8px 20px 0"}}>
-      <button onClick={()=>setOpen(o=>!o)} style={{
-        width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
-        background:open?"#FFF8F0":"#FDF6EE",border:`1.5px solid ${T.sand}`,
-        borderRadius:open?"14px 14px 0 0":14,padding:"10px 14px",cursor:"pointer",
-      }}>
-        <span style={{fontFamily:"Georgia,serif",fontSize:13,color:T.terra,fontWeight:600}}>✨ Local gems on the way</span>
-        <span style={{fontSize:11,color:T.mist}}>{open ? "▲" : `${items.length} spots  ▼`}</span>
-      </button>
-      {open && (
-        <div style={{background:"#FDF6EE",border:`1.5px solid ${T.sand}`,borderTop:"none",borderRadius:"0 0 14px 14px",padding:"4px 0 8px"}}>
-          {items.map((item, i) => {
-            const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${item.geocode || item.title} ${city}`)}`;
-            return (
-              <a key={i} href={mapsUrl} target="_blank" rel="noopener noreferrer" style={{
-                display:"flex",alignItems:"flex-start",gap:10,padding:"8px 14px",
-                textDecoration:"none",borderBottom: i < items.length-1 ? `1px solid ${T.sand}` : "none",
-              }}>
-                <span style={{fontSize:20,flexShrink:0,marginTop:1}}>{item.icon}</span>
-                <div>
-                  <div style={{fontSize:13,fontWeight:600,color:T.ink,fontFamily:"Georgia,serif"}}>{item.title}</div>
-                  <div style={{fontSize:11,color:T.mist,fontFamily:"Georgia,serif",marginTop:2}}>{item.note}</div>
+    <div style={{display:"flex",gap:12,padding:"10px 12px",background:T.chalk,border:`1px solid ${T.sand}`,borderRadius:RADIUS.lg,position:"relative"}}>
+      <a href={mapsUrl} target="_blank" rel="noopener noreferrer" style={{flexShrink:0,width:64,height:64,borderRadius:RADIUS.md,overflow:"hidden",background:T.sand,display:"flex",alignItems:"center",justifyContent:"center",textDecoration:"none"}}>
+        {photoUrl ? (
+          <img src={photoUrl} alt={gem.title} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+        ) : !photoLoaded ? (
+          <div style={{width:"100%",height:"100%",background:T.sand,animation:"shimmer 1.5s ease-in-out infinite"}}/>
+        ) : (
+          <span style={{fontSize:26}}>{gem.icon || "📍"}</span>
+        )}
+      </a>
+      <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:2}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:6}}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:14,color:T.ink,lineHeight:1.25,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}}>
+            {gem.icon ? `${gem.icon} ` : ""}{gem.title}
+          </div>
+          <div style={{position:"relative",flexShrink:0}}>
+            <button onClick={()=>setMenuOpen(m=>!m)} style={{background:"transparent",border:"none",cursor:"pointer",fontSize:16,padding:"0 3px",color:T.mist,lineHeight:1}}>⋯</button>
+            {menuOpen && (
+              <>
+                <div onClick={()=>setMenuOpen(false)} style={{position:"fixed",inset:0,zIndex:99}}/>
+                <div style={{position:"absolute",right:0,top:22,zIndex:100,background:T.chalk,borderRadius:RADIUS.lg,boxShadow:SHADOW.md,border:`1px solid ${T.sand}`,minWidth:180,overflow:"hidden"}}>
+                  <button onClick={()=>{ setMenuOpen(false); onAdd?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>➕ Add to Itinerary</button>
+                  <button onClick={()=>{ setMenuOpen(false); onAskTrippy?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>💬 Ask Trippy</button>
+                  <button onClick={()=>{ setMenuOpen(false); onDismiss?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.error,cursor:"pointer"}}>🗑 Dismiss</button>
                 </div>
-                <img src="/google-maps-icon.png" alt="Maps" style={{width:14,height:14,objectFit:"contain",flexShrink:0,alignSelf:"center",marginLeft:"auto"}} />
-              </a>
-            );
-          })}
+              </>
+            )}
+          </div>
         </div>
-      )}
+        {gem.note && (
+          <div style={{fontSize:12,color:T.mist,fontFamily:"Georgia,serif",lineHeight:1.35,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>
+            {gem.note}
+          </div>
+        )}
+        {nearMatches && (
+          <div style={{fontSize:11,color:T.ocean,fontFamily:"Georgia,serif",marginTop:2}}>
+            📍 Near {gem.near}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WishlistSection({ items, city, activities, onAddToItinerary, onDismiss, onAskTrippy }) {
+  const visible = (items || []).filter(it => !it.dismissed);
+  if (!visible.length) return null;
+  return (
+    <div style={{padding:"4px 20px 8px"}}>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:14,color:T.ink,marginBottom:8}}>
+        ✨ Local gems · {visible.length} nearby
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {visible.map((gem, i) => (
+          <GemCard key={gem.id || i} gem={gem} city={city} activities={activities}
+            onAdd={()=>onAddToItinerary?.(gem)}
+            onDismiss={()=>onDismiss?.(gem)}
+            onAskTrippy={()=>onAskTrippy?.(gem.title)}/>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1924,7 +1992,7 @@ function DayCompact({ day, displayCity, onExpand, canExpand = true }) {
   );
 }
 
-function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, arrivalAirportIata = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, departureAirportIata = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, onSelectHotel, onAskTrippy, onCollapse = null, originIata = null, originDepartureHHMM = null, destIata = null, destArrivalHHMM = null }) {
+function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onReplaceActivity, onSuggestAlternatives, onChangeHotel, arrivalTime = null, arrivalMode = null, arrivalCity = null, arrivalAirportIata = null, onEditFlight, departureTime = null, departureMode = null, departureCity = null, departureAirportIata = null, onEditDeparture, hotelActivity = null, hotelCity = null, endHotelActivity = null, displayCity = null, onSelectHotel, onAskTrippy, onCollapse = null, originIata = null, originDepartureHHMM = null, destIata = null, destArrivalHHMM = null, onAddGemToItinerary, onDismissGem }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
 
@@ -2081,7 +2149,16 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
       })()}
 
       {/* Wishlist */}
-      {day.wishlist?.length > 0 && <WishlistSection items={day.wishlist} city={day.city} />}
+      {day.wishlist?.some(w => !w.dismissed) && (
+        <WishlistSection
+          items={day.wishlist}
+          city={day.city}
+          activities={day.activities || []}
+          onAddToItinerary={(gem) => onAddGemToItinerary?.(day, gem)}
+          onDismiss={(gem) => onDismissGem?.(day, gem)}
+          onAskTrippy={onAskTrippy}
+        />
+      )}
 
       {/* Last activity / hotel → departure point */}
       {departureTime && departureCity && day.activities.length > 0 && (
@@ -2235,17 +2312,25 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     if (initialScreen === "itinerary" && initialTrip?.id) {
       const processDays = (data) => {
         const seenPhotos = new Set();
-        const allDays = (data || []).map(d => ({
-          ...d,
-          activities: (d.activities || []).sort((a, b) => a.position - b.position).map(a => {
-            if (a.photo_url) {
-              if (seenPhotos.has(a.photo_url)) return { ...a, photo_url: null };
-              seenPhotos.add(a.photo_url);
-              _usedPhotoUrls.add(a.photo_url);
-            }
-            return a;
-          }),
-        }));
+        const allDays = (data || []).map(d => {
+          // Lazy-backfill stable IDs on wishlist gems so dismiss/undo can target individual items.
+          let wishlist = d.wishlist;
+          if (Array.isArray(wishlist) && wishlist.some(w => !w.id)) {
+            wishlist = wishlist.map(w => w.id ? w : { ...w, id: crypto.randomUUID() });
+          }
+          return {
+            ...d,
+            wishlist,
+            activities: (d.activities || []).sort((a, b) => a.position - b.position).map(a => {
+              if (a.photo_url) {
+                if (seenPhotos.has(a.photo_url)) return { ...a, photo_url: null };
+                seenPhotos.add(a.photo_url);
+                _usedPhotoUrls.add(a.photo_url);
+              }
+              return a;
+            }),
+          };
+        });
         const seen = new Set();
         return allDays.filter(d => { if (seen.has(d.label)) return false; seen.add(d.label); return true; });
       };
@@ -2258,6 +2343,15 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
           if (data?.length) {
             const deduped = processDays(data);
             setDays(deduped);
+            // Persist any newly-generated gem IDs (fire-and-forget; idempotent)
+            for (let i = 0; i < deduped.length; i++) {
+              const orig = data[i];
+              const next = deduped[i];
+              const origNeedsBackfill = Array.isArray(orig?.wishlist) && orig.wishlist.some(w => !w.id);
+              if (origNeedsBackfill) {
+                supabase.from("days").update({ wishlist: next.wishlist }).eq("id", next.id).then(() => {});
+              }
+            }
             // Cache for offline viewing
             try { localStorage.setItem(`tripjam_days_${initialTrip.id}`, JSON.stringify(deduped)); } catch {}
           } else if (error || !data?.length) {
@@ -3268,6 +3362,21 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
   const filteredMessages = chatMessages;
 
+  // Dismiss a local gem (used by both Dismiss menu item and Add-to-Itinerary auto-dismiss).
+  // Soft-delete via dismissed:true flag in days.wishlist jsonb; emits a chat system-undo row.
+  const dismissGemPersist = async (day, gem, reasonLabel) => {
+    if (!gem?.id) return;
+    const next = (day.wishlist || []).map(w => w.id === gem.id ? { ...w, dismissed: true } : w);
+    setDays(prev => prev.map(d => d.id === day.id ? { ...d, wishlist: next } : d));
+    await supabase.from("days").update({ wishlist: next }).eq("id", day.id);
+    setChatMessages(prev => [...prev, {
+      role: "system-undo",
+      content: reasonLabel,
+      undoData: { dismissedGemId: gem.id, dayId: day.id },
+      id: `undo-gem-${Date.now()}`,
+    }]);
+  };
+
   const sendChatDirect = async (message) => {
     if (!message.trim() || chatLoading) return;
     const userMsg = { role: "user", content: message.trim(), user_id: session.user.id };
@@ -4090,6 +4199,13 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                         setChatUnread(false);
                         sendChatDirect(`Suggest 2-3 alternatives to "${act.title}" for the same time slot, without making any changes yet`);
                       }}
+                      onAddGemToItinerary={(d, gem) => {
+                        setChatOpen(true);
+                        setChatUnread(false);
+                        sendChatDirect(`Please add ${gem.title} to the itinerary on ${d.label} at a suitable time.`);
+                        dismissGemPersist(d, gem, `Added "${gem.title}" to itinerary.`);
+                      }}
+                      onDismissGem={(d, gem) => dismissGemPersist(d, gem, `"${gem.title}" dismissed.`)}
                       onChangeHotel={(dayId, act, mode) => {
                         const dayLabel = days.find(d => d.id === dayId)?.label || "this day";
                         if (mode === "own") {
@@ -4711,7 +4827,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               )}
               {filteredMessages.map((m,i)=>{
                 if (m.role === "system-undo") {
-                  const handleUndo = () => {
+                  const handleUndo = async () => {
                     if (m.undoData?.dismissedRouteIds) {
                       // Undo bulk route dismiss
                       for (const rid of m.undoData.dismissedRouteIds) undoDismissRef.current?.(rid);
@@ -4719,6 +4835,19 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
                     } else if (m.undoData?.dismissedRouteId) {
                       // Undo single route dismiss (legacy)
                       undoDismissRef.current?.(m.undoData.dismissedRouteId);
+                      setChatMessages(prev => prev.filter(msg => msg.id !== m.id));
+                    } else if (m.undoData?.dismissedGemId && m.undoData?.dayId) {
+                      // Undo gem dismiss (also fires for Add-to-Itinerary auto-dismiss; the AI-created
+                      // activity, if any, stays — user manages it through normal activity controls).
+                      const dayId = m.undoData.dayId;
+                      const gemId = m.undoData.dismissedGemId;
+                      let nextWishlist = null;
+                      setDays(prev => prev.map(d => {
+                        if (d.id !== dayId) return d;
+                        nextWishlist = (d.wishlist || []).map(w => w.id === gemId ? { ...w, dismissed: false } : w);
+                        return { ...d, wishlist: nextWishlist };
+                      }));
+                      if (nextWishlist) await supabase.from("days").update({ wishlist: nextWishlist }).eq("id", dayId);
                       setChatMessages(prev => prev.filter(msg => msg.id !== m.id));
                     } else if (m.undoData?.dayId && m.undoData?.actSnap) {
                       undoRemoveActivity(m.undoData.dayId, m.undoData.actSnap);

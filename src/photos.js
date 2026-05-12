@@ -247,11 +247,20 @@ export async function geocodePlace(title, city, geocodeHint) {
     const m = geocodeHint.trim().match(/^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$/);
     if (m) return { lat: parseFloat(m[1]), lng: parseFloat(m[2]) };
   }
-  const place = geocodeHint || extractPlace(title);
-  const cacheKey = `${place}|${city}`;
-  if (_geocodeCache.has(cacheKey)) return _geocodeCache.get(cacheKey);
-  // Strip leading/trailing city from geocode to avoid doubled query (e.g. "Hanoi La Siesta Classic Ma May" + city "Hanoi")
-  const placeQ = city ? (() => {
+
+  // Build candidate place strings to try, in order of confidence.
+  // 1) The LLM-provided geocode hint — best when it's a real searchable name
+  // 2) extractPlace(title) — strips activity-type words (walk/tour/crawl) from the title.
+  //    Catches the case where the LLM stored a non-geocodable activity phrase like
+  //    "La Latina Neighbourhood Walk" — extractPlace yields "La Latina Neighbourhood" which Photon finds.
+  const hint = geocodeHint?.trim() || "";
+  const extracted = extractPlace(title || "")?.trim() || "";
+  const candidates = [];
+  if (hint) candidates.push(hint);
+  if (extracted && extracted.toLowerCase() !== hint.toLowerCase()) candidates.push(extracted);
+  if (!candidates.length) return null;
+
+  const stripCity = (place) => city ? (() => {
     const esc = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return place
       .replace(new RegExp(`^${esc}\\s+`, "i"), "")
@@ -259,30 +268,42 @@ export async function geocodePlace(title, city, geocodeHint) {
       .trim() || place;
   })() : place;
 
-  // Geocode via places-proxy (Photon primary, cached in DB)
   // Enrich city with trip destination for better geocoding (e.g. "Kuta" → "Kuta, Bali")
   const enrichedCity = city && _tripDestination && !city.toLowerCase().includes(_tripDestination.toLowerCase().split(",")[0].split("→")[0].trim())
     ? `${city}, ${_tripDestination.split("→")[0].trim()}`
     : city;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
-      const ctrl = new AbortController();
-      const tid = setTimeout(() => ctrl.abort(), 10000);
-      const res = await fetch(`${PLACES_PROXY}?action=geocode`, {
-        method: "POST", headers: PLACES_HEADERS,
-        body: JSON.stringify({ q: placeQ, city: enrichedCity }),
-        signal: ctrl.signal,
-      });
-      clearTimeout(tid);
-      const { lat, lng } = await res.json();
-      if (lat && lng) {
-        const result = { lat, lng };
-        _geocodeCache.set(cacheKey, result);
-        return result;
-      }
-      break;
-    } catch { /* timeout or network error — retry */ }
+
+  for (const candidate of candidates) {
+    const cacheKey = `${candidate}|${city}`;
+    if (_geocodeCache.has(cacheKey)) {
+      const cached = _geocodeCache.get(cacheKey);
+      if (cached) return cached;
+      continue; // (we don't cache nulls in-memory, but be defensive)
+    }
+    const placeQ = stripCity(candidate);
+    // Up to 2 attempts per candidate. Retry on EXCEPTIONS (timeout / network)
+    // AND on empty {lat:null} responses — a single transient miss shouldn't bail out the candidate.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 10000);
+        const res = await fetch(`${PLACES_PROXY}?action=geocode`, {
+          method: "POST", headers: PLACES_HEADERS,
+          body: JSON.stringify({ q: placeQ, city: enrichedCity }),
+          signal: ctrl.signal,
+        });
+        clearTimeout(tid);
+        const { lat, lng } = await res.json();
+        if (lat && lng) {
+          const result = { lat, lng };
+          _geocodeCache.set(cacheKey, result);
+          return result;
+        }
+        // null response — fall through to retry (was a `break` before)
+      } catch { /* timeout or network error — retry */ }
+    }
+    // Both attempts failed for this candidate — move on to the next one
   }
   // Don't cache nulls — allow retry on next view (server caches misses with short TTL)
   return null;

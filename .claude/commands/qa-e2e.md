@@ -104,21 +104,64 @@ Tests that create trips trigger AI calls (RG/IG) which cost real money (~$0.05-0
 - has_car toggle removed from Travel & Hotels widget
 - Hotel menu: "Suggest different hotel" + "Change hotel to…" (no "Remove" option)
 
+#### Transit v4
+- TransitionRow always shows haversine walk/drive pill (no LLM time estimates)
+- Transit icon (🚇/🚌/⛴️/🚊) shown next to pill when LLM provides mode AND distance 500m-20km AND walk >12min or drive >8min
+- Transit icon links to Google Maps with travelmode=transit
+- No transit icon for <500m or >20km distances
+- Inter-city transit cards: rich card with service name, stations, duration, cost, Rome2Rio link
+- Transit cards have no Google Maps pin link, no photo, menu only shows "Ask Trippy"
+- TransitionRow uses geocodeEnd for transit activities (not geocode/origin)
+- "Get directions" fallback when geocoding fails (text-based Google Maps link)
+
+#### Per-Day Collapse/Expand
+- Compact/Detailed toggle removed
+- Each day has ▲ collapse button in detailed view, ▼ expand in compact
+- Expanding one day collapses all others (from compact view)
+- Day expand gated by detailed data readiness (spinner until day's detailed data streamed)
+- Pre-loading: Day 1 pre-loaded when streamingDays >= 1, expanding Day N pre-loads Day N+1
+
+#### Chat Refinements
+- Fun contextual placeholder text (varies by screen + state)
+- Last AI message preview in collapsed chat bar
+- Place link-outs: AI messages mentioning itinerary places get tappable 📍 Google Maps links
+- Post-IG Trippy mascot pulse animation (5x for 3 seconds)
+- Contextual suggestion pills using actual hotel name and destination
+- IG stream aborted when user clicks "Explore Other Plans" (prevents broken state)
+
+#### Design System
+- theme.js expanded: semantic colors (error/success/warning), TYPE scale, RADIUS (4 values), SHADOW (3 levels), MOTION
+- Auth.jsx: Inter → Georgia/DM Serif Display (consistent with rest of app)
+- Home.jsx: cool grays → warm palette, card hover lift
+- All files: hardcoded colors/radius/shadows/transitions → design tokens
+- Buttons: consistent padding, radius, min-height 44px across app
+
+#### Admin Console
+- /admin route gated by is_admin flag on profiles table
+- Tabs: Users (drill into trips), Trips, Credits (by function/model), Daily Usage
+- LLM usage tracked in llm_usage table (all edge functions log tokens)
+- Cost calculation: Sonnet $3/$15, Haiku $0.80/$4 per M tokens
+
 #### Other Features
-- Travel & Hotels widget in Board tab (moved from itinerary page)
+- Travel & Hotels widget in Board tab
 - Hotel autocomplete (CityInput with lodging type)
-- Pre-IG sheet preference extraction (extract-preferences endpoint)
+- Pre-IG sheet preference extraction + "Any additional detail?" text box
 - Chat bulk dismiss (routeIds array)
 - Chat "View Updated Plans" navigates to correct route, scrolls to modified route
-- IG progress bar (day-based percentage during detailed loading)
-- IG graceful fallback (if detailed stream fails after compact, stops progress bar, uses compact)
+- IG graceful fallback (if detailed stream fails after compact, uses compact)
 - Destination name shortening ("Osaka, Japan → Kyoto, Japan" → "Osaka → Kyoto (Japan)")
-- Chat welcome message: "working on plans" while loading, "plans ready" after 2+ routes
+- Destination preserved as original input (not overwritten with route cities)
 - Destination hero photo (Tourism in {country} Wikipedia fallback)
 - Magazine photo dedup (serialized fallback + relevance checks)
-- Offline mode (trip list and itinerary cached in localStorage)
-- PWA update (service worker auto-refreshes on new version)
+- Offline mode (trip list + itinerary cached in localStorage)
+- PWA update (service worker skipWaiting, clientsClaim, 5-min check, auto-reload)
 - Geocoding enriched with trip destination context (e.g. "Kuta" → "Kuta, Bali")
+- Route card day text supports **bold** markdown (sparingly, 1-2 key words per day)
+- Arrival card simplified: "✈️ Land 09:00 · Exit by ~10:30"
+- Setup form back button at top (next to progress dots)
+- Hotel menu: "Suggest different hotel" + "Change hotel to…" (no Remove)
+- Board/Map tabs show "Waiting for itinerary" during IG
+- Favicon added to index.html
 
 ## Important
 
