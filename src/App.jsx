@@ -506,7 +506,7 @@ function RouteCard({ item, vs, onVote, interactive, showRecommended = true, rout
   );
 }
 
-function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditForm = null, onOpenChat = null, onDismissRoute = null, onModifyRoute = null, undoDismissRef = null, triggerGenerateRef = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null, onTellMore = null, onShowMap = null, onAskTrippy = null, onGeneratingChange = null }) {
+function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditForm = null, onOpenChat = null, onDismissRoute = null, onModifyRoute = null, undoDismissRef = null, triggerGenerateRef = null, days = [], onItemsChange, onSelectionChange, externalSelectedId, externalRoutes, editTripId = null, onTellMore = null, onShowMap = null, onAskTrippy = null, onGeneratingChange = null, deepDiveCache: externalDeepDiveCache = null, loadCityDeepDive: externalLoadDeepDive = null }) {
   const [items, setItems] = useState(null); // null = not started, [] = empty, [...] = loaded
   const [loadingItems, setLoadingItems] = useState(false);
   const [localVotes, setLocalVotes] = useState({}); // { [tempId]: 1|-1|0 } — pre-trip mode votes
@@ -517,7 +517,9 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
   const [genError, setGenError] = useState(null);
   const [ideaCount, setIdeaCount] = useState(12);
   const [deepDiveCity, setDeepDiveCity] = useState(null); // city name when deep dive is open
-  const [deepDiveCache, setDeepDiveCache] = useState({}); // { [city]: { foodSpecialties, weather, ... } | "loading" | "error" }
+  const [_localDeepDiveCache, _setLocalDeepDiveCache] = useState({}); // fallback when no external cache
+  const deepDiveCache = externalDeepDiveCache || _localDeepDiveCache;
+  const setDeepDiveCache = externalDeepDiveCache ? () => {} : _setLocalDeepDiveCache; // no-op if using external
   const routeCardRefs = useRef({}); // { [routeId]: HTMLElement } for scroll-into-view
   const editTripIdRef = useRef(editTripId); // track latest for async generate()
   editTripIdRef.current = editTripId;
@@ -568,36 +570,40 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
     }
   });
 
-  async function loadCityDeepDive(city) {
+  function loadCityDeepDive(city) {
+    if (externalLoadDeepDive) return externalLoadDeepDive(city);
+    // Fallback: standalone mode (second BrainstormView instance without shared cache)
     if (!city) return;
     const existing = deepDiveCache[city];
-    if (existing && existing !== "error") return; // cached or loading
-    setDeepDiveCache(prev => ({ ...prev, [city]: "loading" }));
-    try {
-      const travelMonth = trip?.start_date ? new Date(trip.start_date).toLocaleString("en-US", { month: "long" }) : null;
-      const igReq = trip?.ig_request || {};
-      const tripDays = (days || []).filter(d => (d.city || "").toLowerCase() === city.toLowerCase()).length;
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/city-deep-dive`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
-        body: JSON.stringify({
-          city,
-          country: trip?.destination || null,
-          travelMonth,
-          styles: igReq.styles,
-          budget: igReq.budget,
-          notes: igReq.notes || trip?.notes || null,
-          tripDays,
-          tripId: trip?.id || null,
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setDeepDiveCache(prev => ({ ...prev, [city]: data }));
-    } catch (e) {
-      console.warn("city-deep-dive failed:", e.message);
-      setDeepDiveCache(prev => ({ ...prev, [city]: "error" }));
-    }
+    if (existing && existing !== "error") return;
+    _setLocalDeepDiveCache(prev => ({ ...prev, [city]: "loading" }));
+    (async () => {
+      try {
+        const travelMonth = trip?.start_date ? new Date(trip.start_date).toLocaleString("en-US", { month: "long" }) : null;
+        const igReq = trip?.ig_request || {};
+        const tripDays = (days || []).filter(d => (d.city || "").toLowerCase() === city.toLowerCase()).length;
+        const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/city-deep-dive`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+          body: JSON.stringify({
+            city,
+            country: trip?.destination || null,
+            travelMonth,
+            styles: igReq.styles,
+            budget: igReq.budget,
+            notes: igReq.notes || trip?.notes || null,
+            tripDays,
+            tripId: trip?.id || null,
+          }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        _setLocalDeepDiveCache(prev => ({ ...prev, [city]: data }));
+      } catch (e) {
+        console.warn("city-deep-dive failed:", e.message);
+        _setLocalDeepDiveCache(prev => ({ ...prev, [city]: "error" }));
+      }
+    })();
   }
 
   async function loadSavedBrainstorm(tripId) {
@@ -2471,6 +2477,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
   const [magazineFilterRouteId, setMagazineFilterRouteId] = useState(null);
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
   const [routesGenerating, setRoutesGenerating] = useState(false); // true while RG (brainstorm) is in flight — used to hide chat suggestions
+  const [setupDestinations, setSetupDestinations] = useState([]); // current destinations during SetupForm — drives contextual hero copy
   const [fabPos, setFabPos] = useState({ right: 0, bottom: 140 }); // draggable FAB position, flush right
   const fabDragRef = useRef({ dragging: false, startX: 0, startY: 0, startRight: 0, startBottom: 0 });
   const [pretripRoutes, setPretripRoutes] = useState([]); // tier 1 routes for pre-trip map
@@ -3708,8 +3715,32 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             <div style={{position:"relative",display:"flex",justifyContent:"flex-end",alignItems:"center",marginBottom:14}}>
               {onHome && <button onClick={onHome} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:RADIUS.full,padding:"4px 13px",color:"white",fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>All Trips</button>}
             </div>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:34,lineHeight:1.2,marginBottom:10}}>Plan your next<br/>adventure ✈️</div>
-            <div style={{fontSize:14,opacity:0.7,fontFamily:"Georgia,serif"}}>AI-powered itineraries, built for you</div>
+            {(() => {
+              // Contextual hero: changes based on the user's destination selection in SetupForm.
+              const real = (setupDestinations || []).filter(d => !d.toLowerCase().includes("help me decide"));
+              const helpMeDecide = (setupDestinations || []).some(d => d.toLowerCase().includes("help me decide"));
+              let title, subline = null;
+              if (real.length === 0 && helpMeDecide) {
+                title = <>The world is your<br/>oyster 🌍</>;
+                subline = "Tell us how you travel — we'll find your match";
+              } else if (real.length === 0) {
+                title = <>Plan your next<br/>adventure ✈️</>;
+              } else if (real.length === 1) {
+                title = <>We're going to<br/>{real[0]}! ✈️</>;
+              } else if (real.length === 2) {
+                title = <>We're going to<br/>{real[0]} & {real[1]}! ✈️</>;
+              } else if (real.length === 3) {
+                title = <>We're going to<br/>{real[0]}, {real[1]} & {real[2]}! ✈️</>;
+              } else {
+                title = <>We're going to<br/>{real[0]}, {real[1]}, {real[2]} & beyond! ✈️</>;
+              }
+              return (
+                <>
+                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:34,lineHeight:1.2,marginBottom:subline?10:0}}>{title}</div>
+                  {subline && <div style={{fontSize:14,opacity:0.7,fontFamily:"Georgia,serif"}}>{subline}</div>}
+                </>
+              );
+            })()}
           </div>
           <div style={{padding:"28px 0 0"}}>
             {generateError && (
@@ -3722,6 +3753,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               onGenerate={handleSetupComplete}
               initialTrip={editingTrip || (initialScreen==="setup" && initialTrip?.destination ? initialTrip : null)}
               onStepChange={(s) => { setSetupStep(s); if (onUrlChange && !editingTrip) onUrlChange(`/new/${s}`); }}
+              onDestinationsChange={setSetupDestinations}
               prefillForm={pendingForm}
               initialStep={setupStep}
             />
@@ -3741,6 +3773,8 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
             triggerGenerateRef={triggerRgRef}
             onGeneratingChange={setRoutesGenerating}
             editTripId={editingTrip?.id || null}
+            deepDiveCache={deepDiveCacheApp}
+            loadCityDeepDive={loadCityDeepDiveApp}
             onBuild={handleBuildFromBrainstorm}
             onBack={() => setScreen("setup")}
             onEditForm={editingTrip ? () => { setSetupStep(0); setScreen("setup"); } : null}
@@ -3936,11 +3970,21 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
               {(() => {
                 // Collect all unique cities — optionally filtered by route
                 const filterSet = magazineFilterCities ? new Set(magazineFilterCities.map(c => c.toLowerCase())) : null;
+                // Exclude cities that match the destination (already shown as DestinationHero)
+                const rawDests = (pendingForm?.destinations || []).filter(d => !d.toLowerCase().includes("help me decide"));
+                const destName = editingTrip?.destination || (rawDests.length ? rawDests.join(", ") : "");
+                const destWords = destName.toLowerCase().split(/[\s,]+/).filter(Boolean);
+                const isDestMatch = (city) => {
+                  const cl = city.toLowerCase();
+                  return cl === destName.toLowerCase() || destWords.some(w => w.length > 3 && cl.includes(w)) || cl.includes(destName.toLowerCase());
+                };
                 const allCities = [];
                 const seen = new Set();
                 for (const route of pretripRoutes) {
+                  if (route.dismissed) continue; // skip dismissed routes
                   for (const c of (route.city || "").split(",").map(s => s.trim()).filter(Boolean)) {
                     if (filterSet && !filterSet.has(c.toLowerCase())) continue;
+                    if (isDestMatch(c)) continue; // already shown as destination hero
                     if (!seen.has(c.toLowerCase())) { seen.add(c.toLowerCase()); allCities.push({ city: c, fromRoute: route.title }); }
                   }
                 }
@@ -4278,7 +4322,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
 
           {/* ── MAGAZINE TAB ── */}
           {activeBottomTab === "brainstorm" && (
-            <BrainstormView trip={trip} session={session} days={days} onGeneratingChange={setRoutesGenerating} onAskTrippy={(title) => {
+            <BrainstormView trip={trip} session={session} days={days} onGeneratingChange={setRoutesGenerating} deepDiveCache={deepDiveCacheApp} loadCityDeepDive={loadCityDeepDiveApp} onAskTrippy={(title) => {
               setChatInput(`Tell me about "${title}"`);
               setChatOpen(true); setChatUnread(false);
               setTimeout(() => chatInputRef.current?.focus(), 50);

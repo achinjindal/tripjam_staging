@@ -4,9 +4,6 @@ import { CityInput } from "./BoardView.jsx";
 
 function DateRangePicker({ startDate, endDate, onChange }) {
   const todayISO = new Date().toISOString().slice(0, 10);
-  const initDate = startDate || todayISO;
-  const [viewYear, setViewYear] = useState(() => parseInt(initDate.slice(0, 4)));
-  const [viewMonth, setViewMonth] = useState(() => parseInt(initDate.slice(5, 7)) - 1);
 
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const DAY_HEADERS = ["Su","Mo","Tu","We","Th","Fr","Sa"];
@@ -14,18 +11,19 @@ function DateRangePicker({ startDate, endDate, onChange }) {
   const toISO = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   const fmtShort = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
-  // Two months
-  const m1 = { year: viewYear, month: viewMonth };
-  const m2 = viewMonth === 11 ? { year: viewYear + 1, month: 0 } : { year: viewYear, month: viewMonth + 1 };
+  // 12 months stacked from current month — user scrolls through them inside the container.
+  const today = new Date();
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const y = today.getFullYear() + Math.floor((today.getMonth() + i) / 12);
+    const m = (today.getMonth() + i) % 12;
+    return { year: y, month: m };
+  });
 
   const buildCells = (y, m) => {
     const firstDow = new Date(y, m, 1).getDay();
     const dim = new Date(y, m + 1, 0).getDate();
     return [...Array(firstDow).fill(null), ...Array.from({ length: dim }, (_, i) => toISO(y, m, i + 1))];
   };
-
-  const prevMonth = () => { if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); } else setViewMonth(m => m - 1); };
-  const nextMonth = () => { if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); } else setViewMonth(m => m + 1); };
 
   const handleDay = (iso) => {
     if (iso < todayISO) return;
@@ -41,68 +39,80 @@ function DateRangePicker({ startDate, endDate, onChange }) {
   const phase = !startDate || (startDate && endDate) ? "start" : "end";
   const numDays = startDate && endDate ? Math.round((new Date(endDate) - new Date(startDate)) / 864e5) + 1 : null;
 
-  const renderGrid = (cells) => (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
-      {cells.map((iso, i) => {
-        if (!iso) return <div key={i} />;
-        const isStart = iso === startDate;
-        const isEnd = iso === endDate;
-        const inRange = startDate && endDate && iso > startDate && iso < endDate;
-        const isToday = iso === todayISO;
-        const isPast = iso < todayISO;
-        const isBeforeStart = phase === "end" && startDate && iso < startDate;
+  // On mount, scroll so the month containing startDate (or the current month) is in view.
+  const scrollRef = useRef(null);
+  const monthRefs = useRef({});
+  useEffect(() => {
+    if (!scrollRef.current) return;
+    const targetIso = startDate || todayISO;
+    const key = targetIso.slice(0, 7);
+    const el = monthRefs.current[key];
+    if (el) el.scrollIntoView({ block: "start", behavior: "auto" });
+  }, []);
 
-        let bg = "transparent", color = (isPast || isBeforeStart) ? T.disabled : T.ink, radius = RADIUS.md;
-        if (isStart || isEnd) { bg = T.ocean; color = "white"; }
-        else if (inRange) { bg = "rgba(37,99,168,0.12)"; radius = "0"; }
+  const renderMonth = ({ year, month }) => {
+    const key = `${year}-${String(month + 1).padStart(2, "0")}`;
+    return (
+      <div key={key} ref={el => { if (el) monthRefs.current[key] = el; }} style={{ marginBottom: 12 }}>
+        <div style={{ fontFamily: "Georgia,serif", fontSize: 14, color: T.ink, fontWeight: 600, textAlign: "center", marginBottom: 4 }}>
+          {MONTHS[month]} {year}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", marginBottom: 2 }}>
+          {DAY_HEADERS.map(d => <div key={`${key}-${d}`} style={{ textAlign: "center", fontFamily: "Georgia,serif", fontSize: 11, color: T.mist, padding: "2px 0" }}>{d}</div>)}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
+          {buildCells(year, month).map((iso, i) => {
+            if (!iso) return <div key={i} />;
+            const isStart = iso === startDate;
+            const isEnd = iso === endDate;
+            const inRange = startDate && endDate && iso > startDate && iso < endDate;
+            const isToday = iso === todayISO;
+            const isPast = iso < todayISO;
+            const isBeforeStart = phase === "end" && startDate && iso < startDate;
 
-        return (
-          <div key={iso} onClick={() => handleDay(iso)} style={{
-            textAlign: "center", padding: "8px 0", cursor: isPast ? "default" : "pointer",
-            fontFamily: "Georgia,serif", fontSize: 13, fontWeight: isToday ? 700 : 400,
-            color, background: bg, borderRadius: radius,
-            ...(isStart && endDate ? { borderRadius: `${RADIUS.md}px 0 0 ${RADIUS.md}px` } : {}),
-            ...(isEnd ? { borderRadius: `0 ${RADIUS.md}px ${RADIUS.md}px 0` } : {}),
-            ...(inRange ? { borderRadius: 0 } : {}),
-            userSelect: "none",
-          }}>
-            {iso.slice(8).replace(/^0/, "")}
-            {isToday && !isStart && !isEnd && <div style={{ width: 3, height: 3, borderRadius: "50%", background: T.ocean, margin: "1px auto 0" }} />}
-          </div>
-        );
-      })}
-    </div>
-  );
+            let bg = "transparent", color = (isPast || isBeforeStart) ? T.disabled : T.ink, radius = RADIUS.md;
+            if (isStart || isEnd) { bg = T.ocean; color = "white"; }
+            else if (inRange) { bg = "rgba(37,99,168,0.12)"; radius = "0"; }
+
+            return (
+              <div key={iso} onClick={() => handleDay(iso)} style={{
+                textAlign: "center", padding: "8px 0", cursor: isPast ? "default" : "pointer",
+                fontFamily: "Georgia,serif", fontSize: 13, fontWeight: isToday ? 700 : 400,
+                color, background: bg, borderRadius: radius,
+                ...(isStart && endDate ? { borderRadius: `${RADIUS.md}px 0 0 ${RADIUS.md}px` } : {}),
+                ...(isEnd ? { borderRadius: `0 ${RADIUS.md}px ${RADIUS.md}px 0` } : {}),
+                ...(inRange ? { borderRadius: 0 } : {}),
+                userSelect: "none",
+              }}>
+                {iso.slice(8).replace(/^0/, "")}
+                {isToday && !isStart && !isEnd && <div style={{ width: 3, height: 3, borderRadius: "50%", background: T.ocean, margin: "1px auto 0" }} />}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  // Roughly 1.5 months visible: one full month (~230px including header) + half of next.
+  const CALENDAR_HEIGHT = 340;
 
   return (
-    <div style={{ marginBottom: 18 }}>
-      {/* Month 1 header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-        <button onClick={prevMonth} style={{ background: T.sand, border: "none", cursor: "pointer", fontSize: 18, color: T.ink, padding: "4px 10px", lineHeight: 1, borderRadius: RADIUS.md, minWidth: 36, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
-        <span style={{ fontFamily: "Georgia,serif", fontSize: 14, color: T.ink, fontWeight: 600 }}>{MONTHS[m1.month]} {m1.year}</span>
-        <div style={{ width: 36 }} />
+    <div style={{ marginBottom: 12 }}>
+      {/* Scrollable month list — 1.5 months visible at a time */}
+      <div ref={scrollRef} style={{
+        height: CALENDAR_HEIGHT,
+        overflowY: "auto",
+        border: `1px solid ${T.sand}`,
+        borderRadius: RADIUS.lg,
+        padding: "8px 10px 0",
+        background: T.chalk,
+      }}>
+        {months.map(renderMonth)}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", marginBottom: 2 }}>
-        {DAY_HEADERS.map(d => <div key={d} style={{ textAlign: "center", fontFamily: "Georgia,serif", fontSize: 11, color: T.mist, padding: "2px 0" }}>{d}</div>)}
-      </div>
-      {renderGrid(buildCells(m1.year, m1.month))}
-
-      {/* Separator */}
-      <div style={{ height: 1, background: T.sand, margin: "8px 0" }} />
-
-      {/* Month 2 header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-        <div style={{ width: 36 }} />
-        <span style={{ fontFamily: "Georgia,serif", fontSize: 14, color: T.ink, fontWeight: 600 }}>{MONTHS[m2.month]} {m2.year}</span>
-        <button onClick={nextMonth} style={{ background: T.sand, border: "none", cursor: "pointer", fontSize: 18, color: T.ink, padding: "4px 10px", lineHeight: 1, borderRadius: RADIUS.md, minWidth: 36, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", marginBottom: 2 }}>
-        {DAY_HEADERS.map(d => <div key={`2-${d}`} style={{ textAlign: "center", fontFamily: "Georgia,serif", fontSize: 11, color: T.mist, padding: "2px 0" }}>{d}</div>)}
-      </div>
-      {renderGrid(buildCells(m2.year, m2.month))}
 
       {/* Bottom: day count or hint */}
-      <div style={{ textAlign: "center", marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.sand}` }}>
+      <div style={{ textAlign: "center", marginTop: 10 }}>
         {numDays ? (
           <span style={{ fontSize: 12, color: T.moss, fontWeight: 600, background: T.successLight, padding: "4px 12px", borderRadius: RADIUS.sm }}>{fmtShort(startDate)} → {fmtShort(endDate)} · {numDays} days</span>
         ) : (
@@ -115,7 +125,7 @@ function DateRangePicker({ startDate, endDate, onChange }) {
 
 /* ─── SETUP FORM ─────────────────────────────────────────────────────── */
 
-function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, initialStep = 0 }) {
+function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, initialStep = 0, onDestinationsChange = null }) {
   const [step, setStep]           = useState(initialStep);
   useEffect(() => { setStep(initialStep); }, [initialStep]);
   const [generating, setGen]      = useState(false);
@@ -126,6 +136,7 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
 
   // Notify parent of step changes
   useEffect(() => { onStepChange?.(step); }, [step]);
+
 
   // Sync browser history with form steps so back button works.
   // When returning from brainstorm (initialStep > 0), push entries for all prior steps so
@@ -191,6 +202,10 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
   const destAbortRef = useRef(null);
   const destCacheRef = useRef(new Map());
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  // Notify parent whenever destinations change so the page hero can become contextual.
+  useEffect(() => { onDestinationsChange?.(form.destinations); }, [form.destinations]);
+
 
   const handleDestChange = (val) => {
     setDestInput(val);
@@ -350,20 +365,23 @@ function SetupForm({ onGenerate, initialTrip, onStepChange, prefillForm = null, 
 
     /* 1 – dates & travelers */
     <div key={1} style={{animation:"fadeUp 0.3s ease"}}>
-      <div style={{textAlign:"center",fontSize:36,marginBottom:8}}>📅</div>
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:T.ink,textAlign:"center",marginBottom:20}}>Trip details</div>
+      <div style={{textAlign:"center",fontSize:32,marginBottom:6}}>📅</div>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:T.ink,textAlign:"center",marginBottom:14}}>Trip details</div>
+      {/* Travelers — placed above calendar so calendar can be a fixed-height scroll area */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:14,marginBottom:14,padding:"8px 12px",borderRadius:RADIUS.lg,border:`1px solid ${T.sand}`,background:T.chalk}}>
+        <span style={{fontFamily:"Georgia,serif",fontSize:13,color:T.ink,fontWeight:600}}>Travelers</span>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <button onClick={()=>set("travelers",String(Math.max(1,+form.travelers-1)))} style={{width:34,height:34,borderRadius:"50%",border:`2px solid ${T.sand}`,background:T.chalk,fontSize:18,cursor:"pointer",lineHeight:1}}>−</button>
+          <span style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:T.ink,minWidth:28,textAlign:"center"}}>{form.travelers}</span>
+          <button onClick={()=>set("travelers",String(Math.min(12,+form.travelers+1)))} style={{width:34,height:34,borderRadius:"50%",border:"none",background:T.ocean,color:"white",fontSize:18,cursor:"pointer",lineHeight:1}}>+</button>
+          <span style={{fontFamily:"Georgia,serif",fontSize:12,color:T.mist,minWidth:48}}>{+form.travelers===1?"solo":"travelers"}</span>
+        </div>
+      </div>
       <DateRangePicker
         startDate={form.startDate}
         endDate={form.endDate}
         onChange={(start, end) => { set("startDate", start); set("endDate", end); }}
       />
-      <div style={{fontFamily:"Georgia,serif",fontSize:13,color:T.mist,marginBottom:10}}>Travelers</div>
-      <div style={{display:"flex",alignItems:"center",gap:18}}>
-        <button onClick={()=>set("travelers",String(Math.max(1,+form.travelers-1)))} style={{width:42,height:42,borderRadius:"50%",border:`2px solid ${T.sand}`,background:T.chalk,fontSize:22,cursor:"pointer"}}>−</button>
-        <span style={{fontFamily:"'DM Serif Display',serif",fontSize:32,color:T.ink,minWidth:44,textAlign:"center"}}>{form.travelers}</span>
-        <button onClick={()=>set("travelers",String(Math.min(12,+form.travelers+1)))} style={{width:42,height:42,borderRadius:"50%",border:"none",background:T.ocean,color:"white",fontSize:22,cursor:"pointer"}}>+</button>
-        <span style={{fontFamily:"Georgia,serif",fontSize:14,color:T.mist}}>{+form.travelers===1?"solo":"travelers"}</span>
-      </div>
     </div>,
 
     /* 2 – style */

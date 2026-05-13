@@ -54,7 +54,6 @@ ${notes ? `Traveler notes: ${notes}` : ""}`;
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 2048,
-        stream: true,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userMessage }],
       }),
@@ -65,38 +64,10 @@ ${notes ? `Traveler notes: ${notes}` : ""}`;
       throw new Error(`Anthropic error: ${err}`);
     }
 
-    // Stream-accumulate to avoid Supabase EarlyDrop timeout on long responses
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let accumulated = "";
-    let lineBuffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      lineBuffer += decoder.decode(value, { stream: true });
-      const lines = lineBuffer.split("\n");
-      lineBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const raw = line.slice(6).trim();
-        if (raw === "[DONE]") continue;
-        try {
-          const event = JSON.parse(raw);
-          if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
-            accumulated += event.delta.text;
-          }
-        } catch { /* skip */ }
-      }
-    }
+    const result = await response.json();
+    const accumulated = result.content[0].text;
 
-    // Log LLM usage (fire-and-forget, approximate tokens)
-    const requestBodyStr = JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
-      stream: true,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userMessage }],
-    });
+    // Log LLM usage (fire-and-forget, actual tokens)
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
@@ -110,8 +81,8 @@ ${notes ? `Traveler notes: ${notes}` : ""}`;
         trip_id: tripId || null,
         function_name: "city-deep-dive",
         model: "claude-haiku-4-5-20251001",
-        input_tokens: Math.round(requestBodyStr.length / 4),
-        output_tokens: Math.round(accumulated.length / 4),
+        input_tokens: result.usage?.input_tokens || 0,
+        output_tokens: result.usage?.output_tokens || 0,
       }),
     }).catch(() => {});
 
