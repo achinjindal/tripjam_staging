@@ -36,6 +36,7 @@ export default function AdminConsole({ session, onHome }) {
   const [dailyUsage, setDailyUsage] = useState([]);
   const [tripDetail, setTripDetail] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [creditTxns, setCreditTxns] = useState([]);
 
   // Check admin access
   useEffect(() => {
@@ -92,6 +93,15 @@ export default function AdminConsole({ session, onHome }) {
         byDay[day].cost += calcCost(row.model, row.input_tokens, row.output_tokens);
       });
       setDailyUsage(Object.values(byDay).sort((a, b) => b.day.localeCompare(a.day)));
+    })();
+
+    (async () => {
+      const { data } = await supabase
+        .from("credit_transactions")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(500);
+      setCreditTxns(data || []);
     })();
   }, [isAdmin]);
 
@@ -298,7 +308,8 @@ export default function AdminConsole({ session, onHome }) {
                     <th style={thStyle}>User</th>
                     <th style={thStyle}>Trips</th>
                     <th style={thStyle}>Chats</th>
-                    <th style={thStyle}>Credit</th>
+                    <th style={thStyle}>Balance</th>
+                    <th style={thStyle}>Spent ($)</th>
                     <th style={thStyle}>Last Active</th>
                     <th style={thStyle}>Actions</th>
                   </tr>
@@ -307,11 +318,14 @@ export default function AdminConsole({ session, onHome }) {
                   {users.map(u => {
                     const userTrips = trips.filter(t => t.created_by === u.id);
                     const userCost = llmUsage.filter(r => userTrips.some(t => t.id === r.trip_id)).reduce((s, r) => s + calcCost(r.model, r.input_tokens, r.output_tokens), 0);
+                    const bal = u.credits ?? 0;
+                    const balColor = bal <= 0 ? T.error || T.gold : bal < 10 ? T.gold : T.moss;
                     return (
                     <tr key={u.id}>
                       <td style={tdStyle}>{u.face_icon || "👤"} {u.username}</td>
                       <td style={tdStyle}>{u.tripCount}</td>
                       <td style={tdStyle}>{u.chatCount}</td>
+                      <td style={{ ...tdStyle, color: balColor, fontWeight: 600 }}>{bal}</td>
                       <td style={tdStyle}>{fmtCost(userCost)}</td>
                       <td style={tdStyle}>{fmtDate(u.lastTrip)}</td>
                       <td style={tdStyle}>
@@ -403,6 +417,70 @@ export default function AdminConsole({ session, onHome }) {
                       </tr>
                     ));
                   })()}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Credit balances */}
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 13, color: T.mist, marginBottom: 8 }}>User Balances</div>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={thStyle}>User</th>
+                    <th style={thStyle}>Balance</th>
+                    <th style={thStyle}>Total Spent</th>
+                    <th style={thStyle}>Last Txn</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map(u => {
+                    const txns = creditTxns.filter(t => t.user_id === u.id);
+                    const spent = txns.filter(t => t.amount < 0).reduce((s, t) => s - t.amount, 0);
+                    const last = txns[0]?.created_at || null;
+                    return (
+                      <tr key={u.id}>
+                        <td style={tdStyle}>{u.face_icon || "👤"} {u.username}</td>
+                        <td style={{ ...tdStyle, fontWeight: 600 }}>{u.credits ?? 0}</td>
+                        <td style={tdStyle}>{spent}</td>
+                        <td style={tdStyle}>{fmtDate(last)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Recent transactions */}
+            <div>
+              <div style={{ fontSize: 13, color: T.mist, marginBottom: 8 }}>Recent Transactions ({creditTxns.length})</div>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={thStyle}>When</th>
+                    <th style={thStyle}>User</th>
+                    <th style={thStyle}>Reason</th>
+                    <th style={thStyle}>Δ</th>
+                    <th style={thStyle}>Balance</th>
+                    <th style={thStyle}>LLM Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {creditTxns.slice(0, 100).map(t => {
+                    const u = users.find(x => x.id === t.user_id);
+                    return (
+                      <tr key={t.id}>
+                        <td style={tdStyle}>{fmtDate(t.created_at)}</td>
+                        <td style={tdStyle}>{u?.username || t.user_id.slice(0, 8)}</td>
+                        <td style={tdStyle}>{t.reason}</td>
+                        <td style={{ ...tdStyle, color: t.amount < 0 ? T.error || T.gold : T.moss, fontWeight: 600 }}>
+                          {t.amount > 0 ? `+${t.amount}` : t.amount}
+                        </td>
+                        <td style={tdStyle}>{t.balance_after}</td>
+                        <td style={tdStyle}>{t.llm_cost_usd ? fmtCost(t.llm_cost_usd) : "—"}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

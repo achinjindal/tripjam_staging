@@ -9,8 +9,8 @@
     "preview": "vite preview",
     "deploy:functions:staging": "supabase functions deploy --project-ref wlrzvwjdrjpfqcwgmzch",
     "deploy:functions:prod": "supabase functions deploy --project-ref viyvdqwwnbbqjuwiuzbh",
-    "db:push:staging": "supabase db push --project-ref wlrzvwjdrjpfqcwgmzch",
-    "db:push:prod": "supabase db push --project-ref viyvdqwwnbbqjuwiuzbh"
+    "db:push:staging": "supabase link --project-ref wlrzvwjdrjpfqcwgmzch && supabase db push",
+    "db:push:prod": "supabase link --project-ref viyvdqwwnbbqjuwiuzbh && supabase db push"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
