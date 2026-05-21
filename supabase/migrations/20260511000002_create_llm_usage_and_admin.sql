@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 );
 
 ALTER TABLE llm_usage ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Service role full access" ON llm_usage;
 CREATE POLICY "Service role full access" ON llm_usage FOR ALL USING (true);
+DROP POLICY IF EXISTS "Admins can read llm_usage" ON llm_usage;
 CREATE POLICY "Admins can read llm_usage" ON llm_usage FOR SELECT USING (
   EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND is_admin = true)
 );
