@@ -1877,7 +1877,7 @@ function GemCard({ gem, city, activities, onAdd, onDismiss, onAskTrippy }) {
       <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:2}}>
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:6}}>
           <div style={{fontFamily:"'DM Serif Display',serif",fontSize:14,color:T.ink,lineHeight:1.25,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}}>
-            {gem.icon ? `${gem.icon} ` : ""}{gem.title}
+            {gem.title}
           </div>
           <div style={{position:"relative",flexShrink:0}}>
             <button onClick={()=>setMenuOpen(m=>!m)} style={{background:"transparent",border:"none",cursor:"pointer",fontSize:16,padding:"0 3px",color:T.mist,lineHeight:1}}>⋯</button>
@@ -1886,6 +1886,7 @@ function GemCard({ gem, city, activities, onAdd, onDismiss, onAskTrippy }) {
                 <div onClick={()=>setMenuOpen(false)} style={{position:"fixed",inset:0,zIndex:99}}/>
                 <div style={{position:"absolute",right:0,top:22,zIndex:100,background:T.chalk,borderRadius:RADIUS.lg,boxShadow:SHADOW.md,border:`1px solid ${T.sand}`,minWidth:180,overflow:"hidden"}}>
                   <button onClick={()=>{ setMenuOpen(false); onAdd?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>➕ Add to Itinerary</button>
+                  <a href={mapsUrl} target="_blank" rel="noopener noreferrer" onClick={()=>setMenuOpen(false)} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`,textDecoration:"none",boxSizing:"border-box"}}>📍 Open in Google Maps</a>
                   <button onClick={()=>{ setMenuOpen(false); onAskTrippy?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.ink,cursor:"pointer",borderBottom:`1px solid ${T.sand}`}}>💬 Ask Trippy</button>
                   <button onClick={()=>{ setMenuOpen(false); onDismiss?.(); }} style={{display:"block",width:"100%",textAlign:"left",padding:"11px 16px",background:"none",border:"none",fontFamily:"Georgia,serif",fontSize:13,color:T.error,cursor:"pointer"}}>🗑 Dismiss</button>
                 </div>
