@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { authenticateUser, unauthorized, outOfCredits, deductCredits } from "../_shared/credits.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,6 +12,10 @@ serve(async (req) => {
   }
 
   try {
+    const user = await authenticateUser(req);
+    if (!user) return unauthorized(corsHeaders);
+    if (user.credits <= 0) return outOfCredits(corsHeaders, user.credits);
+
     const { screen, trip, routes, days, form, message, history } = await req.json();
 
     // ── Build context based on current screen ──
@@ -228,6 +233,8 @@ Example (multi-action):
       system: systemPrompt,
       messages,
     });
+    const inputTokens = Math.round(requestBodyStr.length / 4);
+    const outputTokens = Math.round(accumulated.length / 4);
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
@@ -241,10 +248,19 @@ Example (multi-action):
         trip_id: trip?.id || null,
         function_name: "chat",
         model: "claude-sonnet-4-6",
-        input_tokens: Math.round(requestBodyStr.length / 4),
-        output_tokens: Math.round(accumulated.length / 4),
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
       }),
     }).catch(() => {});
+
+    deductCredits({
+      userId: user.id,
+      model: "claude-sonnet-4-6",
+      inputTokens,
+      outputTokens,
+      functionName: "chat",
+      tripId: trip?.id || null,
+    });
 
     const start = accumulated.indexOf("{");
     const end = accumulated.lastIndexOf("}");

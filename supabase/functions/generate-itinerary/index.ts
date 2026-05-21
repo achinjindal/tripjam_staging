@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { authenticateUser, unauthorized, outOfCredits, deductCredits } from "../_shared/credits.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -66,6 +67,10 @@ serve(async (req) => {
   }
 
   try {
+    const user = await authenticateUser(req);
+    if (!user) return unauthorized(corsHeaders);
+    if (user.credits <= 0) return outOfCredits(corsHeaders, user.credits);
+
     const body = await req.json();
     console.log("Request body:", JSON.stringify(body));
     const { destinations, numDays, travelers, styles, budget, pace, morningStart, notes, startDate, arrivalCity, arrivalTime, arrivalMode, departureCity, departureTime, departureMode, hasCar, votedItems, tripId } = body;
@@ -275,6 +280,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
         await writer.close();
 
         // Log LLM usage (fire-and-forget)
+        const outputTokens = Math.round(outputLength / 4);
         const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
         const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
         fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
@@ -289,9 +295,18 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
             function_name: "generate-itinerary",
             model: "claude-sonnet-4-6",
             input_tokens: estimatedInputTokens,
-            output_tokens: Math.round(outputLength / 4),
+            output_tokens: outputTokens,
           }),
         }).catch(() => {});
+
+        deductCredits({
+          userId: user.id,
+          model: "claude-sonnet-4-6",
+          inputTokens: estimatedInputTokens,
+          outputTokens,
+          functionName: "generate-itinerary",
+          tripId: tripId || null,
+        });
       }
     })();
 

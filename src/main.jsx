@@ -7,6 +7,8 @@ import Home from "./Home.jsx";
 import App from "./App.jsx";
 import TripPublicView from "./TripPublicView.jsx";
 import AdminConsole from "./Admin.jsx";
+import CreditsOverlay from "./CreditsOverlay.jsx";
+import { refreshCredits } from "./credits";
 
 // ── PWA update check — reload on new version ──
 if ("serviceWorker" in navigator) {
@@ -77,6 +79,7 @@ function Root() {
       // Identify user in PostHog
       if (s?.user) {
         posthog.identify(s.user.id, { email: s.user.email });
+        refreshCredits(s.user.id);
       } else {
         posthog.reset();
       }
@@ -158,34 +161,45 @@ function Root() {
 
   // Admin console — auth check is inside the component
   if (route.page === "admin") {
-    return <AdminConsole session={session} onHome={() => { pushUrl("/"); window.location.reload(); }} />;
+    return (
+      <>
+        <AdminConsole session={session} onHome={() => { pushUrl("/"); window.location.reload(); }} />
+        <CreditsOverlay session={session} />
+      </>
+    );
   }
 
   if (screen === "home") {
     return (
-      <Home
-        session={session}
-        onOpenTrip={openTrip}
-        onCreateTrip={() => { setActiveTrip(null); setScreen("create"); setInitialStep(0); pushUrl("/new/0"); }}
-        onEditTrip={(trip) => {
-          setActiveTrip(trip);
-          setScreen("edit");
-          pushUrl(`/trip/${trip.id}/plans`);
-        }}
-      />
+      <>
+        <Home
+          session={session}
+          onOpenTrip={openTrip}
+          onCreateTrip={() => { setActiveTrip(null); setScreen("create"); setInitialStep(0); pushUrl("/new/0"); }}
+          onEditTrip={(trip) => {
+            setActiveTrip(trip);
+            setScreen("edit");
+            pushUrl(`/trip/${trip.id}/plans`);
+          }}
+        />
+        <CreditsOverlay session={session} />
+      </>
     );
   }
 
   return (
-    <App
-      session={session}
-      initialTrip={activeTrip}
-      initialScreen={screen === "create" || screen === "edit" ? "setup" : "itinerary"}
-      initialTab={initialTab}
-      initialSetupStep={initialStep}
-      onHome={goHome}
-      onUrlChange={pushUrl}
-    />
+    <>
+      <App
+        session={session}
+        initialTrip={activeTrip}
+        initialScreen={screen === "create" || screen === "edit" ? "setup" : "itinerary"}
+        initialTab={initialTab}
+        initialSetupStep={initialStep}
+        onHome={goHome}
+        onUrlChange={pushUrl}
+      />
+      <CreditsOverlay session={session} />
+    </>
   );
 }
 

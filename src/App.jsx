@@ -4,6 +4,7 @@ import { supabase } from "./supabase";
 import BoardView, { LogisticsTab } from "./components/BoardView.jsx";
 import SetupForm from "./components/SetupForm.jsx";
 import { T, RADIUS, SHADOW, MOTION, PLACES_PROXY, PLACES_HEADERS } from "./theme";
+import { refreshCredits, openPaywall } from "./credits";
 import { _photoCache, _usedPhotoUrls, _fetchPhoto, setActiveTripId, setTripDestination, extractPlace, geocodePlace, haversineMeters } from "./photos";
 import { MapView, RouteMapView } from "./components/MapView.jsx";
 import { DestinationHero, FoodSpotlightCard, CityCard, MagazineHighlightCard, HotelSuggestionCard } from "./components/Magazine.jsx";
@@ -671,7 +672,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
         : null;
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-brainstorm`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
         body: JSON.stringify({
           destinations, styles: igReq.styles, budget: igReq.budget, travelMonth, numDays,
           arrivalCity: igReq.arrivalCity || null, departureCity: igReq.departureCity || null,
@@ -682,6 +683,12 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
           tripId: trip?.id || null,
         }),
       });
+      if (res.status === 402) {
+        openPaywall("Generating routes needs credits.");
+        rgInFlight.current = false;
+        setGenerating(false);
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       // Stream text deltas and progressively parse complete JSON objects
@@ -796,6 +803,7 @@ function BrainstormView({ trip, session, pendingForm, onBuild, onBack, onEditFor
       console.error("Brainstorm generate error:", e);
       setGenError(e.message);
     }
+    if (session?.user?.id) refreshCredits(session.user.id);
     setGenerating(false);
     rgInFlight.current = false;
   }
@@ -2952,11 +2960,16 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
         {
           method: "POST",
           signal: controller.signal,
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
           body: JSON.stringify(igBody),
         }
       );
       clearTimeout(timeout);
+      if (res.status === 402) {
+        clearTimeout(timeout);
+        openPaywall("Building the itinerary needs credits.");
+        throw new Error("Out of credits");
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       // Read SSE stream
@@ -3117,6 +3130,12 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       // If user navigated away (abort), silently stop — don't redirect
       if (e.name === "AbortError") {
         console.log("IG generation aborted by user navigation");
+        _igInFlight = false;
+        return;
+      }
+      // Out of credits — paywall is already open; return to setup silently
+      if (e.message === "Out of credits") {
+        setScreen("setup");
         _igInFlight = false;
         return;
       }
@@ -3285,6 +3304,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     setChatAttention(true);
     setTimeout(() => setChatAttention(false), 3000);
     _igInFlight = false;
+    if (session?.user?.id) refreshCredits(session.user.id);
     // Log generation timing — update by trip_id as fallback since genLogId may not be set yet
     if (genLogId) {
       supabase.from("generation_log").update({ detailed_ready_at: generationCompletedAt, ig_count: tripPayload.ig_count }).eq("id", genLogId);
@@ -3592,7 +3612,7 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
       `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
         body: JSON.stringify({
           screen,
           trip: trip || editingTrip || null,
@@ -3604,8 +3624,14 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
         }),
       }
     );
+    if (res.status === 402) {
+      openPaywall("Chatting with Trippy needs credits.");
+      throw new Error("Out of credits");
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
+    const data = await res.json();
+    if (session?.user?.id) refreshCredits(session.user.id);
+    return data;
   };
 
   const sendChatMessage = async () => {
