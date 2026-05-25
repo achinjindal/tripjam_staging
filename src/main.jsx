@@ -8,7 +8,7 @@ import App from "./App.jsx";
 import TripPublicView from "./TripPublicView.jsx";
 import AdminConsole from "./Admin.jsx";
 import CreditsOverlay from "./CreditsOverlay.jsx";
-import { refreshCredits } from "./credits";
+import { refreshCredits, CREDITS_UI_ENABLED } from "./credits";
 
 // ── PWA update check — reload on new version ──
 if ("serviceWorker" in navigator) {
@@ -79,7 +79,7 @@ function Root() {
       // Identify user in PostHog
       if (s?.user) {
         posthog.identify(s.user.id, { email: s.user.email });
-        refreshCredits(s.user.id);
+        if (CREDITS_UI_ENABLED) refreshCredits(s.user.id);
       } else {
         posthog.reset();
       }
@@ -164,7 +164,7 @@ function Root() {
     return (
       <>
         <AdminConsole session={session} onHome={() => { pushUrl("/"); window.location.reload(); }} />
-        <CreditsOverlay session={session} />
+        {CREDITS_UI_ENABLED && <CreditsOverlay session={session} />}
       </>
     );
   }
@@ -182,7 +182,7 @@ function Root() {
             pushUrl(`/trip/${trip.id}/plans`);
           }}
         />
-        <CreditsOverlay session={session} />
+        {CREDITS_UI_ENABLED && <CreditsOverlay session={session} />}
       </>
     );
   }
@@ -198,7 +198,7 @@ function Root() {
         onHome={goHome}
         onUrlChange={pushUrl}
       />
-      <CreditsOverlay session={session} />
+      {CREDITS_UI_ENABLED && <CreditsOverlay session={session} />}
     </>
   );
 }
