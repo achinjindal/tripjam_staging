@@ -24,11 +24,15 @@ export default function Auth() {
     });
     if (signUpError) { setLoading(false); return setError(signUpError.message); }
     if (data?.user?.id) {
-      await supabase.from("profiles").upsert({
+      const { error: profileError } = await supabase.from("profiles").upsert({
         id: data.user.id,
         username: username.trim(),
-        face_icon: FACE_ICONS[faceIcon],
+        face_icon: faceIcon + 1,
       });
+      if (profileError) {
+        setLoading(false);
+        return setError(`Account created but profile failed: ${profileError.message}. Contact support.`);
+      }
     }
     setLoading(false);
   }
