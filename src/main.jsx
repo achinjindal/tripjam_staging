@@ -10,6 +10,8 @@ import TripPublicView from "./TripPublicView.jsx";
 import AdminConsole from "./Admin.jsx";
 import CreditsOverlay from "./CreditsOverlay.jsx";
 import AddRealEmailPrompt from "./AddRealEmailPrompt.jsx";
+import Avatar from "./Avatar.jsx";
+import LowCreditsBanner from "./LowCreditsBanner.jsx";
 import { refreshCredits, CREDITS_UI_ENABLED } from "./credits";
 
 // ── Sentry (no-op when VITE_SENTRY_DSN is not set) ──
@@ -216,6 +218,8 @@ function Root() {
           }}
         />
         <AddRealEmailPrompt session={session} />
+        {CREDITS_UI_ENABLED && <LowCreditsBanner session={session} />}
+        <Avatar session={session} />
         {CREDITS_UI_ENABLED && <CreditsOverlay session={session} />}
       </>
     );
@@ -240,6 +244,8 @@ function Root() {
           }}
         />
         <AddRealEmailPrompt session={session} />
+        {CREDITS_UI_ENABLED && <LowCreditsBanner session={session} />}
+        <Avatar session={session} />
         {CREDITS_UI_ENABLED && <CreditsOverlay session={session} />}
       </>
     );
@@ -259,6 +265,8 @@ function Root() {
         onUrlChange={pushUrl}
       />
       <AddRealEmailPrompt session={session} />
+      {CREDITS_UI_ENABLED && <LowCreditsBanner session={session} />}
+      <Avatar session={session} />
       {CREDITS_UI_ENABLED && <CreditsOverlay session={session} />}
     </>
   );

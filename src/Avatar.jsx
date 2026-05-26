@@ -1,0 +1,262 @@
+import { useEffect, useRef, useState } from "react";
+import { supabase } from "./supabase";
+import { T, RADIUS, SHADOW, MOTION } from "./theme";
+import {
+  useCredits,
+  refreshCredits,
+  displayCredits,
+  CREDITS_UI_ENABLED,
+  getCredits,
+} from "./credits";
+import { PackSelectorModal } from "./CreditsOverlay";
+
+const FACE_ICONS = ["👦", "👧", "🧑", "👨", "👩", "🧔", "👱", "🧓", "🥸", "😎"];
+
+// D20: top-right avatar is the single entry point for balance + top up + sign out.
+// Mounted globally in main.jsx for every authenticated view.
+export default function Avatar({ session }) {
+  const [profile, setProfile] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+  const credits = useCredits();
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    supabase
+      .from("profiles")
+      .select("username, face_icon, is_admin")
+      .eq("id", session.user.id)
+      .maybeSingle()
+      .then(({ data }) => setProfile(data));
+    if (CREDITS_UI_ENABLED && getCredits() === null) refreshCredits(session.user.id);
+  }, [session?.user?.id]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  if (!session?.user?.id) return null;
+
+  const face = FACE_ICONS[(profile?.face_icon || 1) - 1] || "👤";
+  const username = profile?.username || session.user.email?.split("@")[0] || "you";
+  const isAdmin = !!profile?.is_admin;
+  const balance = credits == null ? null : displayCredits(credits);
+  const balanceDecimal =
+    credits != null && Number.isFinite(Number(credits))
+      ? Number(credits).toFixed(2)
+      : null;
+
+  async function signOut() {
+    setOpen(false);
+    await supabase.auth.signOut();
+    // PostHog reset + Sentry.setUser(null) are handled in main.jsx auth listener
+  }
+
+  return (
+    <>
+      <div
+        ref={ref}
+        style={{
+          position: "fixed",
+          top: 12,
+          right: 12,
+          zIndex: 1000,
+          fontFamily: "Georgia, serif",
+        }}
+      >
+        <button
+          aria-label="Account menu"
+          onClick={() => setOpen((o) => !o)}
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 999,
+            border: `1px solid ${T.line || "rgba(0,0,0,0.08)"}`,
+            background: "rgba(255,255,255,0.92)",
+            backdropFilter: "blur(8px)",
+            cursor: "pointer",
+            fontSize: 20,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxShadow: SHADOW?.sm || "0 1px 3px rgba(0,0,0,0.08)",
+            transition: `transform ${MOTION?.normal || "180ms"}`,
+            transform: open ? "scale(0.96)" : "scale(1)",
+          }}
+        >
+          {face}
+        </button>
+
+        {open && (
+          <div
+            style={{
+              position: "absolute",
+              top: 44,
+              right: 0,
+              minWidth: 240,
+              background: "white",
+              borderRadius: RADIUS?.md || 12,
+              border: `1px solid ${T.line || "#E2DDD5"}`,
+              boxShadow: SHADOW?.lg || "0 12px 32px rgba(0,0,0,0.16)",
+              overflow: "hidden",
+              animation: `dropdown ${MOTION?.fast || "120ms"} ease-out`,
+            }}
+          >
+            <div
+              style={{
+                padding: "12px 14px",
+                borderBottom: `1px solid ${T.line || "#F0EBE3"}`,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 700,
+                  color: T.ink || "#0F1923",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <span style={{ fontSize: 20 }}>{face}</span>
+                <span>@{username}</span>
+                {isAdmin && (
+                  <span
+                    style={{
+                      fontSize: 9,
+                      letterSpacing: 0.8,
+                      padding: "2px 6px",
+                      borderRadius: 4,
+                      background: T.ocean || "#2563A8",
+                      color: "white",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Admin
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {CREDITS_UI_ENABLED && (
+              <div
+                style={{
+                  padding: "12px 14px",
+                  borderBottom: `1px solid ${T.line || "#F0EBE3"}`,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 10,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.8,
+                    color: T.muted || "#8BA5BB",
+                    marginBottom: 4,
+                  }}
+                >
+                  Credits
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontFamily: "'DM Serif Display', Georgia, serif",
+                      fontSize: 26,
+                      color:
+                        balance == null
+                          ? T.muted
+                          : balance <= 10
+                            ? T.error || "#DC2626"
+                            : T.ink || "#0F1923",
+                    }}
+                    title={isAdmin && balanceDecimal ? `Exact: ${balanceDecimal}` : undefined}
+                  >
+                    {balance == null ? "…" : balance}
+                  </div>
+                  {isAdmin && balanceDecimal && (
+                    <div style={{ fontSize: 10, color: T.muted || "#8BA5BB" }}>
+                      ({balanceDecimal})
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    setShowPicker(true);
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: RADIUS?.sm || 8,
+                    border: "none",
+                    background: T.ocean || "#2563A8",
+                    color: "white",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    fontFamily: "Georgia, serif",
+                    cursor: "pointer",
+                    minHeight: 36,
+                  }}
+                >
+                  Top up
+                </button>
+                {/* R12 mitigation: brief pricing hint so users know what consumes credits */}
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 10,
+                    color: T.muted || "#8BA5BB",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  AI uses 1-30 credits per call. Magazine ~1 credit per city. Route &amp; itinerary 5-30 credits each.
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={signOut}
+              style={{
+                display: "block",
+                width: "100%",
+                padding: "12px 14px",
+                background: "white",
+                border: "none",
+                textAlign: "left",
+                fontSize: 13,
+                color: T.muted || "#8BA5BB",
+                cursor: "pointer",
+                fontFamily: "Georgia, serif",
+                transition: `background ${MOTION?.fast || "120ms"}`,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = T.warm || "#FAF6F0")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
+            >
+              Sign out
+            </button>
+          </div>
+        )}
+
+        <style>{`@keyframes dropdown { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: translateY(0) } }`}</style>
+      </div>
+      <PackSelectorModal
+        open={showPicker}
+        onClose={() => setShowPicker(false)}
+        session={session}
+      />
+    </>
+  );
+}
