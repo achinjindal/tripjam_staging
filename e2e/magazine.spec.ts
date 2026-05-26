@@ -2,25 +2,36 @@ import { test, expect } from "@playwright/test";
 import { login, snap } from "./helpers";
 
 test.describe("Magazine & Photos", () => {
-
   test("Magazine tab renders destination hero with photo", async ({ page }) => {
     await login(page);
 
     // Find an existing trip with an itinerary
-    const tripCard = page.locator("[style*='cursor: pointer']").filter({ hasText: /Tokyo|Japan|Day|days/i }).first();
-    if (!await tripCard.isVisible({ timeout: 5000 }).catch(() => false)) { test.skip(); return; }
+    const tripCard = page
+      .locator("[style*='cursor: pointer']")
+      .filter({ hasText: /Tokyo|Japan|Day|days/i })
+      .first();
+    if (!(await tripCard.isVisible({ timeout: 5000 }).catch(() => false))) {
+      test.skip();
+      return;
+    }
     await tripCard.click();
     await page.waitForTimeout(2000);
 
     // Click Magazine tab
     const magTab = page.locator("button", { hasText: /Magazine/i }).first();
-    if (!await magTab.isVisible({ timeout: 3000 }).catch(() => false)) { test.skip(); return; }
+    if (!(await magTab.isVisible({ timeout: 3000 }).catch(() => false))) {
+      test.skip();
+      return;
+    }
     await magTab.click();
     await page.waitForTimeout(2000);
 
     // Should see destination hero or city name
-    const hasContent = await page.locator("text=/Tokyo|Japan|Highlights|Things to see/i").first()
-      .isVisible({ timeout: 10000 }).catch(() => false);
+    const hasContent = await page
+      .locator("text=/Tokyo|Japan|Highlights|Things to see/i")
+      .first()
+      .isVisible({ timeout: 10000 })
+      .catch(() => false);
     expect(hasContent).toBe(true);
 
     // Check for images loading (hero photo or highlight cards)
@@ -33,16 +44,27 @@ test.describe("Magazine & Photos", () => {
     console.log(`Magazine photos loaded: ${imgCount}`);
   });
 
-  test("Magazine highlight cards show photos or emoji fallback", async ({ page }) => {
+  test("Magazine highlight cards show photos or emoji fallback", async ({
+    page,
+  }) => {
     await login(page);
 
-    const tripCard = page.locator("[style*='cursor: pointer']").filter({ hasText: /Tokyo|Japan|Day/i }).first();
-    if (!await tripCard.isVisible({ timeout: 5000 }).catch(() => false)) { test.skip(); return; }
+    const tripCard = page
+      .locator("[style*='cursor: pointer']")
+      .filter({ hasText: /Tokyo|Japan|Day/i })
+      .first();
+    if (!(await tripCard.isVisible({ timeout: 5000 }).catch(() => false))) {
+      test.skip();
+      return;
+    }
     await tripCard.click();
     await page.waitForTimeout(2000);
 
     const magTab = page.locator("button", { hasText: /Magazine/i }).first();
-    if (!await magTab.isVisible({ timeout: 3000 }).catch(() => false)) { test.skip(); return; }
+    if (!(await magTab.isVisible({ timeout: 3000 }).catch(() => false))) {
+      test.skip();
+      return;
+    }
     await magTab.click();
     await page.waitForTimeout(5000); // let photos load
 
@@ -53,11 +75,15 @@ test.describe("Magazine & Photos", () => {
 
     // All highlight cards should have either a photo or an emoji fallback — no empty boxes
     const emptyBoxes = await page.evaluate(() => {
-      const cards = document.querySelectorAll("[style*='border-radius: 14px'][style*='overflow: hidden']");
+      const cards = document.querySelectorAll(
+        "[style*='border-radius: 14px'][style*='overflow: hidden']",
+      );
       let empty = 0;
-      cards.forEach(card => {
+      cards.forEach((card) => {
         const hasImg = card.querySelector("img");
-        const hasEmoji = card.querySelector("[style*='font-size: 28px'], [style*='fontSize: 28px']");
+        const hasEmoji = card.querySelector(
+          "[style*='font-size: 28px'], [style*='fontSize: 28px']",
+        );
         const hasText = card.querySelector("[style*='font-family']");
         if (!hasImg && !hasEmoji && hasText) empty++;
       });
@@ -72,13 +98,22 @@ test.describe("Magazine & Photos", () => {
   test("City hero photo loads with name badge", async ({ page }) => {
     await login(page);
 
-    const tripCard = page.locator("[style*='cursor: pointer']").filter({ hasText: /Tokyo|Japan|Day/i }).first();
-    if (!await tripCard.isVisible({ timeout: 5000 }).catch(() => false)) { test.skip(); return; }
+    const tripCard = page
+      .locator("[style*='cursor: pointer']")
+      .filter({ hasText: /Tokyo|Japan|Day/i })
+      .first();
+    if (!(await tripCard.isVisible({ timeout: 5000 }).catch(() => false))) {
+      test.skip();
+      return;
+    }
     await tripCard.click();
     await page.waitForTimeout(2000);
 
     const magTab = page.locator("button", { hasText: /Magazine/i }).first();
-    if (!await magTab.isVisible({ timeout: 3000 }).catch(() => false)) { test.skip(); return; }
+    if (!(await magTab.isVisible({ timeout: 3000 }).catch(() => false))) {
+      test.skip();
+      return;
+    }
     await magTab.click();
     await page.waitForTimeout(3000);
 
@@ -87,7 +122,10 @@ test.describe("Magazine & Photos", () => {
     const badgeCount = await cityBadge.count();
     console.log(`City name badges: ${badgeCount}`);
     // May be 0 if deep-dive data hasn't loaded yet on staging — skip rather than fail
-    if (badgeCount === 0) { test.skip(); return; }
+    if (badgeCount === 0) {
+      test.skip();
+      return;
+    }
     expect(badgeCount).toBeGreaterThan(0);
 
     await snap(page, "32-city-hero");
@@ -96,19 +134,30 @@ test.describe("Magazine & Photos", () => {
   test("Food spotlight cards render", async ({ page }) => {
     await login(page);
 
-    const tripCard = page.locator("[style*='cursor: pointer']").filter({ hasText: /Tokyo|Japan|Day/i }).first();
-    if (!await tripCard.isVisible({ timeout: 5000 }).catch(() => false)) { test.skip(); return; }
+    const tripCard = page
+      .locator("[style*='cursor: pointer']")
+      .filter({ hasText: /Tokyo|Japan|Day/i })
+      .first();
+    if (!(await tripCard.isVisible({ timeout: 5000 }).catch(() => false))) {
+      test.skip();
+      return;
+    }
     await tripCard.click();
     await page.waitForTimeout(2000);
 
     const magTab = page.locator("button", { hasText: /Magazine/i }).first();
-    if (!await magTab.isVisible({ timeout: 3000 }).catch(() => false)) { test.skip(); return; }
+    if (!(await magTab.isVisible({ timeout: 3000 }).catch(() => false))) {
+      test.skip();
+      return;
+    }
     await magTab.click();
     await page.waitForTimeout(4000);
 
     // Check for food section
     const foodSection = page.locator("text=/Must try/i").first();
-    const hasFoodSection = await foodSection.isVisible({ timeout: 5000 }).catch(() => false);
+    const hasFoodSection = await foodSection
+      .isVisible({ timeout: 5000 })
+      .catch(() => false);
     console.log(`Food section visible: ${hasFoodSection}`);
 
     if (hasFoodSection) {
@@ -125,13 +174,22 @@ test.describe("Magazine & Photos", () => {
   test("Pull quote renders for did-you-know", async ({ page }) => {
     await login(page);
 
-    const tripCard = page.locator("[style*='cursor: pointer']").filter({ hasText: /Tokyo|Japan|Day/i }).first();
-    if (!await tripCard.isVisible({ timeout: 5000 }).catch(() => false)) { test.skip(); return; }
+    const tripCard = page
+      .locator("[style*='cursor: pointer']")
+      .filter({ hasText: /Tokyo|Japan|Day/i })
+      .first();
+    if (!(await tripCard.isVisible({ timeout: 5000 }).catch(() => false))) {
+      test.skip();
+      return;
+    }
     await tripCard.click();
     await page.waitForTimeout(2000);
 
     const magTab = page.locator("button", { hasText: /Magazine/i }).first();
-    if (!await magTab.isVisible({ timeout: 3000 }).catch(() => false)) { test.skip(); return; }
+    if (!(await magTab.isVisible({ timeout: 3000 }).catch(() => false))) {
+      test.skip();
+      return;
+    }
     await magTab.click();
     await page.waitForTimeout(4000);
 

@@ -27,9 +27,10 @@ You are a QA engineer running E2E browser tests against this travel planning app
 5. **Run the tests** with: `npx playwright test <spec-file> --reporter=list`
 
 6. **Report results** for each criterion:
+
    ```
    ## [PASS/FAIL] Criterion: "<criterion text>"
-   
+
    **Test:** <what the test did>
    **Result:** <pass/fail with details>
    **Screenshot:** e2e/screenshots/<name>.png
@@ -45,6 +46,7 @@ You are a QA engineer running E2E browser tests against this travel planning app
      - Each extract-preferences call = ~$0.0006 (1 Haiku call)
      - Tests with no AI calls (smoke, url-routing, geocoding) = $0.00
    - Report in this format:
+
    ```
    ## API Cost Summary
    | Test file | AI calls | Est. cost |
@@ -64,6 +66,7 @@ You are a QA engineer running E2E browser tests against this travel planning app
 ## Test cost awareness
 
 Tests that create trips trigger AI calls (RG/IG) which cost real money (~$0.05-0.15 per trip). To minimize cost:
+
 - **Reuse existing trips** — use `openDraftTrip(page)` pattern from interactions.spec.ts instead of creating new trips
 - **Share fixtures** — use `test.describe.serial` with a setup test that creates one trip for the group
 - **Skip AI calls** when testing UI-only features (chat UI, board widgets, URL routing)
@@ -74,6 +77,7 @@ Tests that create trips trigger AI calls (RG/IG) which cost real money (~$0.05-0
 ### Recently added features needing coverage:
 
 #### Edit Details & Route Preservation
+
 - Nothing changed in edit form → returns to routes silently, no confirmation sheet
 - Destinations changed → confirmation sheet with diff, "Generate New Routes" + "Cancel"
 - Duration changed → confirmation sheet with diff, "Generate New Routes" + "Cancel"
@@ -87,24 +91,28 @@ Tests that create trips trigger AI calls (RG/IG) which cost real money (~$0.05-0
 - Routes regenerated + trip had itinerary → itinerary reset (days + activities deleted, ig_response cleared)
 
 #### Itinerary Replace Confirmation
+
 - Generate itinerary → go back to Plans → select different route → Build → confirmation sheet shows diff
 - Generate itinerary → go back to Plans → same route, same params → Build → "Refresh itinerary?" (no diff)
 - Confirmation "Replace Itinerary" → old itinerary deleted, new one generated
 - Confirmation "Keep Current Itinerary" → navigates to existing itinerary view
 
 #### RG Page Fixes
+
 - "Show me more options" NOT visible before first route loads
 - "Build Itinerary" button visible when route is selected, even after dismissing other routes
 - Map loads correctly on production (lazy mount, OSM fallback for Mapbox)
 - Duplicate routes prevented when "Show more plans" clicked (title-based dedup)
 
 #### Transit & Transport
+
 - Transit tip renders below day header when present (purple bar with 🚇)
 - Transit tip not shown for rural/beach days
 - has_car toggle removed from Travel & Hotels widget
 - Hotel menu: "Suggest different hotel" + "Change hotel to…" (no "Remove" option)
 
 #### Transit v4
+
 - TransitionRow always shows haversine walk/drive pill (no LLM time estimates)
 - Transit icon (🚇/🚌/⛴️/🚊) shown next to pill when LLM provides mode AND distance 500m-20km AND walk >12min or drive >8min
 - Transit icon links to Google Maps with travelmode=transit
@@ -115,6 +123,7 @@ Tests that create trips trigger AI calls (RG/IG) which cost real money (~$0.05-0
 - "Get directions" fallback when geocoding fails (text-based Google Maps link)
 
 #### Per-Day Collapse/Expand
+
 - Compact/Detailed toggle removed
 - Each day has ▲ collapse button in detailed view, ▼ expand in compact
 - Expanding one day collapses all others (from compact view)
@@ -122,6 +131,7 @@ Tests that create trips trigger AI calls (RG/IG) which cost real money (~$0.05-0
 - Pre-loading: Day 1 pre-loaded when streamingDays >= 1, expanding Day N pre-loads Day N+1
 
 #### Chat Refinements
+
 - Fun contextual placeholder text (varies by screen + state)
 - Last AI message preview in collapsed chat bar
 - Place link-outs: AI messages mentioning itinerary places get tappable 📍 Google Maps links
@@ -130,6 +140,7 @@ Tests that create trips trigger AI calls (RG/IG) which cost real money (~$0.05-0
 - IG stream aborted when user clicks "Explore Other Plans" (prevents broken state)
 
 #### Design System
+
 - theme.js expanded: semantic colors (error/success/warning), TYPE scale, RADIUS (4 values), SHADOW (3 levels), MOTION
 - Auth.jsx: Inter → Georgia/DM Serif Display (consistent with rest of app)
 - Home.jsx: cool grays → warm palette, card hover lift
@@ -137,12 +148,14 @@ Tests that create trips trigger AI calls (RG/IG) which cost real money (~$0.05-0
 - Buttons: consistent padding, radius, min-height 44px across app
 
 #### Admin Console
+
 - /admin route gated by is_admin flag on profiles table
 - Tabs: Users (drill into trips), Trips, Credits (by function/model), Daily Usage
 - LLM usage tracked in llm_usage table (all edge functions log tokens)
 - Cost calculation: Sonnet $3/$15, Haiku $0.80/$4 per M tokens
 
 #### Other Features
+
 - Travel & Hotels widget in Board tab
 - Hotel autocomplete (CityInput with lodging type)
 - Pre-IG sheet preference extraction + "Any additional detail?" text box
@@ -187,21 +200,35 @@ await login(page);
 
 // Open existing draft trip (avoids creating new one — saves API cost)
 const card = page.locator("text=/Planning/i").first();
-if (!await card.isVisible({ timeout: 5000 }).catch(() => false)) { test.skip(); return; }
+if (!(await card.isVisible({ timeout: 5000 }).catch(() => false))) {
+  test.skip();
+  return;
+}
 await card.click();
 await page.waitForTimeout(2000);
 
 // Wait for routes
 await page.waitForFunction(
-  () => [...document.querySelectorAll("button")].filter(b => b.textContent?.trim() === "Select").length >= 2,
-  { timeout: 180000 }
+  () =>
+    [...document.querySelectorAll("button")].filter(
+      (b) => b.textContent?.trim() === "Select",
+    ).length >= 2,
+  { timeout: 180000 },
 );
 
 // Click with force (bypass overlays)
-await page.locator("button").filter({ hasText: /continue/i }).first().click({ force: true });
+await page
+  .locator("button")
+  .filter({ hasText: /continue/i })
+  .first()
+  .click({ force: true });
 
 // Check element visible with timeout
-const visible = await page.locator("text=/expected/i").first().isVisible({ timeout: 3000 }).catch(() => false);
+const visible = await page
+  .locator("text=/expected/i")
+  .first()
+  .isVisible({ timeout: 3000 })
+  .catch(() => false);
 
 // Screenshot
 await snap(page, "descriptive-name");

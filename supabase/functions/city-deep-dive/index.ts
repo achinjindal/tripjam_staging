@@ -2,7 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 const SYSTEM_PROMPT = `You are a travel expert writing a deep-dive guide for a specific destination. The traveler is already planning a trip there — your job is to give them colour, context, and practical tips that don't fit in the main itinerary.
@@ -36,7 +37,16 @@ serve(async (req) => {
   }
 
   try {
-    const { city, country, travelMonth, styles, budget, notes, tripDays, tripId } = await req.json();
+    const {
+      city,
+      country,
+      travelMonth,
+      styles,
+      budget,
+      notes,
+      tripDays,
+      tripId,
+    } = await req.json();
     if (!city) throw new Error("city is required");
 
     const userMessage = `Deep dive on: ${city}${country ? `, ${country}` : ""}.
@@ -74,8 +84,8 @@ ${notes ? `Traveler notes: ${notes}` : ""}`;
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "apikey": supabaseKey,
-        "Authorization": `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
       },
       body: JSON.stringify({
         trip_id: tripId || null,

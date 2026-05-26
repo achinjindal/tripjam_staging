@@ -7,6 +7,14 @@
     "build": "vite build",
     "build:android": "vite build && npx cap sync android",
     "preview": "vite preview",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && deno check --config supabase/functions/deno.json supabase/functions/*/index.ts",
+    "typecheck:web": "tsc --noEmit -p tsconfig.json",
+    "typecheck:functions": "deno check --config supabase/functions/deno.json supabase/functions/*/index.ts",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run build",
+    "test:e2e": "playwright test",
     "deploy:functions:staging": "supabase functions deploy --project-ref wlrzvwjdrjpfqcwgmzch",
     "deploy:functions:prod": "supabase functions deploy --project-ref viyvdqwwnbbqjuwiuzbh",
     "db:push:staging": "supabase link --project-ref wlrzvwjdrjpfqcwgmzch && supabase db push",
@@ -26,8 +34,16 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.59.1",
     "@vitejs/plugin-react": "^6.0.1",
+    "eslint": "^10.3.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.2",
     "vite": "^8.0.10"
   }
 }

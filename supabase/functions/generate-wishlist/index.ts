@@ -2,7 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 const SYSTEM_PROMPT = `You are a local travel expert. For each day of a trip, suggest exactly 3 local gems the traveller might enjoy if they have a spare moment.
@@ -26,11 +27,16 @@ serve(async (req) => {
     const { days, tripId } = await req.json();
 
     // Build a compact summary of each day's area and existing activities
-    const daysSummary = days.map((d: any) =>
-      `${d.label} (${d.city}): ${d.activities.map((a: any) => a.title).join(", ")}`
-    ).join("\n");
+    const daysSummary = days
+      .map(
+        (d: any) =>
+          `${d.label} (${d.city}): ${d.activities.map((a: any) => a.title).join(", ")}`,
+      )
+      .join("\n");
 
-    const allActivities = days.flatMap((d: any) => d.activities.map((a: any) => a.title)).join(", ");
+    const allActivities = days
+      .flatMap((d: any) => d.activities.map((a: any) => a.title))
+      .join(", ");
 
     const userMessage = `Generate local gems for each day of this trip:
 
@@ -69,8 +75,8 @@ Already in the itinerary (exclude these): ${allActivities}`;
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "apikey": supabaseKey,
-        "Authorization": `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
       },
       body: JSON.stringify({
         trip_id: tripId || null,
@@ -81,7 +87,11 @@ Already in the itinerary (exclude these): ${allActivities}`;
       }),
     }).catch(() => {});
 
-    const jsonMatch = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim().match(/\{[\s\S]*\}/);
+    const jsonMatch = text
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim()
+      .match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("No JSON in response");
     const result = JSON.parse(jsonMatch[0]);
 

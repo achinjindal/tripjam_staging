@@ -28,28 +28,26 @@
 
 These must be resolved on Day 0 — they have downstream copy, code, and legal implications.
 
-
 | #   | Decision                       | Value                                                                                                                                | Confirmed? |
 | --- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------- |
-| D1  | Free credits granted on signup | **100 credits** (~2 typical trips)                                                                                                   | ✅          |
-| D2  | Paid pack price + size         | **$5 → 500 credits** (one SKU)                                                                                                       | ✅          |
+| D1  | Free credits granted on signup | **100 credits** (~2 typical trips)                                                                                                   | ✅         |
+| D2  | Paid pack price + size         | **$5 → 500 credits** (one SKU)                                                                                                       | ✅         |
 | D3  | Currency                       | **USD**                                                                                                                              | ☐          |
-| D4  | we will                        | **displayed `≤ 15` credits**                                                                                                         | ✅          |
-| D5  | Hard-stop threshold            | `**Math.floor(balance) === 0`**                                                                                                      | ✅          |
+| D4  | we will                        | **displayed `≤ 15` credits**                                                                                                         | ✅         |
+| D5  | Hard-stop threshold            | `**Math.floor(balance) === 0`\*\*                                                                                                    | ✅         |
 | D6  | Production domain              | **TBD** (e.g. `tripjam.app`)                                                                                                         | ☐          |
 | D7  | Support email                  | **TBD** (e.g. `support@<domain>`)                                                                                                    | ☐          |
 | D8  | Refund policy                  | **No refunds; non-refundable credits**                                                                                               | ☐          |
 | D9  | Auth recovery at launch        | **Optional email field, manual SQL reset by founder**                                                                                | ☐          |
 | D10 | Launch channels (Day 11)       | **TBD** — choose from: Product Hunt, HN Show, X/Twitter, r/travel, r/solotravel, personal network, existing waitlist                 | ☐          |
-| D11 | Credit storage type            | `**NUMERIC(10,2)`** on `profiles.credits` and `credit_transactions.amount`                                                           | ✅          |
-| D12 | Per-call charging formula      | `**Math.ceil(actual_cost_usd / 0.007 × 100) / 100**` (fair, rounded up to nearest 0.01 credit)                                       | ✅          |
-| D13 | User-facing credit display     | `**Math.floor(balance)**` everywhere user-facing; admin/debug shows 2 decimals                                                       | ✅          |
-| D14 | Overdraw protection            | **Abort RG / IG / chat if `credits < 1`**. Accept ~$0.12 worst-case bleed per overdraw event.                                        | ✅          |
-| D15 | `extract-preferences` charging | **Keep LLM call, mark free, add auth check** (system-internal background call; cost ~$0.0007 absorbed)                               | ✅          |
-| D16 | `city-deep-dive` charging      | **Add auth + charge per-call** (~0.76 credits each). Currently missing both.                                                         | ✅          |
-| D17 | Magazine pre-fetch strategy    | **Hybrid:** pre-fetch destination only on RG-complete (~0.76 credits); lazy-load city deep dives on Magazine tab open with skeletons | ✅          |
-| D18 | Credit unit rescale            | **One-time 5× rescale** combined with D11 NUMERIC migration (1 old credit → 5 new credits)                                           | ✅          |
-
+| D11 | Credit storage type            | `**NUMERIC(10,2)`\*\* on `profiles.credits` and `credit_transactions.amount`                                                         | ✅         |
+| D12 | Per-call charging formula      | `**Math.ceil(actual_cost_usd / 0.007 × 100) / 100**` (fair, rounded up to nearest 0.01 credit)                                       | ✅         |
+| D13 | User-facing credit display     | `**Math.floor(balance)**` everywhere user-facing; admin/debug shows 2 decimals                                                       | ✅         |
+| D14 | Overdraw protection            | **Abort RG / IG / chat if `credits < 1`**. Accept ~$0.12 worst-case bleed per overdraw event.                                        | ✅         |
+| D15 | `extract-preferences` charging | **Keep LLM call, mark free, add auth check** (system-internal background call; cost ~$0.0007 absorbed)                               | ✅         |
+| D16 | `city-deep-dive` charging      | **Add auth + charge per-call** (~0.76 credits each). Currently missing both.                                                         | ✅         |
+| D17 | Magazine pre-fetch strategy    | **Hybrid:** pre-fetch destination only on RG-complete (~0.76 credits); lazy-load city deep dives on Magazine tab open with skeletons | ✅         |
+| D18 | Credit unit rescale            | **One-time 5× rescale** combined with D11 NUMERIC migration (1 old credit → 5 new credits)                                           | ✅         |
 
 > **Action:** Update the "Confirmed?" column inline as decisions are made. This doc is the single source of truth for these numbers.
 
@@ -75,7 +73,6 @@ Rescale context (D18): the existing code uses `CREDIT_LLM_BUDGET_USD = 0.035` ($
 
 These are real, valid improvements. They are explicitly **out of scope** for the 2-week sprint. Move to §10 backlog.
 
-
 | Cut                                         | Why it's safe to defer                                                   |
 | ------------------------------------------- | ------------------------------------------------------------------------ |
 | Decompose `App.jsx` (5,097 lines)           | Works today. Refactoring → bugs → bad launch.                            |
@@ -85,7 +82,7 @@ These are real, valid improvements. They are explicitly **out of scope** for the
 | Refresh stale `schema.sql`                  | Migrations are the truth. Cosmetic.                                      |
 | iOS via Capacitor                           | Web-first launch. iOS is a 1-day project later.                          |
 | Play Store listing                          | Offer APK download from landing page if asked.                           |
-| Onboarding tour                             | The 3-step setup wizard *is* the onboarding.                             |
+| Onboarding tour                             | The 3-step setup wizard _is_ the onboarding.                             |
 | Help center / docs site                     | FAQ accordion on landing page covers 80%.                                |
 | GDPR data export/deletion UI                | Have a manual SQL process ready. Build UI after first complaint.         |
 | Email-based password reset                  | Optional email field + manual reset. Acceptable for ≤200 users.          |
@@ -93,11 +90,9 @@ These are real, valid improvements. They are explicitly **out of scope** for the
 | Refactor `TripPublicView` to use `theme.js` | Drift, not bug.                                                          |
 | Move untracked HTML mockups                 | `.gitignore` them, done.                                                 |
 
-
 ---
 
 ## 3. Architecture Decisions for This Sprint
-
 
 | Area                   | Decision                                                                                                                           | Notes                                         |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
@@ -106,16 +101,15 @@ These are real, valid improvements. They are explicitly **out of scope** for the
 | Error tracking         | **Sentry** (frontend SDK + edge function wrapper)                                                                                  | Free tier sufficient                          |
 | Payments               | **Stripe Checkout (hosted)** — no custom payment form                                                                              | Single $5 SKU                                 |
 | Webhook → credit grant | **New edge function** `stripe-webhook` → calls existing `grant_credits` RPC with idempotency key on `stripe_session_id`            | Grants in NUMERIC (D11)                       |
-| Credit storage         | `**NUMERIC(10,2)`** on `profiles.credits` and `credit_transactions.amount`                                                         | Exact decimal math, no float errors           |
+| Credit storage         | `**NUMERIC(10,2)`\*\* on `profiles.credits` and `credit_transactions.amount`                                                       | Exact decimal math, no float errors           |
 | Credit charging        | **Cost-based, fair**: `ceil(actual_cost_usd / 0.007 × 100) / 100`. No `Math.max(1, ...)` floor.                                    | Replaces current integer-ceiling model        |
-| Credit display         | `**Math.floor(balance)`** wrapper everywhere user-facing; admin/debug shows 2 decimals                                             | Users never see fractions                     |
+| Credit display         | `**Math.floor(balance)`\*\* wrapper everywhere user-facing; admin/debug shows 2 decimals                                           | Users never see fractions                     |
 | Credit rescale         | **One-time 5× rescale** combined with the NUMERIC type change in a single Day 2 migration                                          | `credits::numeric * 5` in the `USING` clause  |
 | Overdraw guard         | **Pre-flight check**: edge functions (RG / IG / chat) return 402 if `credits < 1.0` before calling Anthropic                       | Cheap, simple; accept ~$0.12 worst-case bleed |
 | Rate limiting          | **Postgres counter per user per minute**, checked in `_shared/credits.ts`                                                          | Cheap; leverages existing auth path           |
 | Email/transactional    | **None at launch** beyond Stripe receipts (Stripe handles them)                                                                    | Defer dedicated provider                      |
 | Auth recovery          | **Optional email field on profile**; manual reset via SQL runbook                                                                  | Documented in `RUNBOOKS.md` (created Day 5)   |
 | Cost guardrails        | **Anthropic hard spend cap** + **Supabase usage alerts**                                                                           | Set before Stripe goes live                   |
-
 
 ---
 
@@ -150,7 +144,7 @@ Each day has **one primary outcome**. If a day overruns, the next day's scope sh
 - `.gitignore` the 13 root-level `*.html` design mockups
 - Remove duplicate `DebugContext` definition (keep only `src/context.js`)
 - Fix `CLAUDE.md` reference to non-existent `JoinView.jsx`
-- **Fix `city-deep-dive` (D16)** — currently missing both auth and credits. Add `authenticateUser` + `deductCredits` to `supabase/functions/city-deep-dive/index.ts`. Charges ~0.76 credits/call. Note: the auth fix is on Day 1; the *charging* part requires the new fractional `costToCredits` from Day 2 — so leave the deduct call wired but commented until Day 2 migration is in. Alternative: ship both on Day 2 along with everything else credits-related (safer).
+- **Fix `city-deep-dive` (D16)** — currently missing both auth and credits. Add `authenticateUser` + `deductCredits` to `supabase/functions/city-deep-dive/index.ts`. Charges ~0.76 credits/call. Note: the auth fix is on Day 1; the _charging_ part requires the new fractional `costToCredits` from Day 2 — so leave the deduct call wired but commented until Day 2 migration is in. Alternative: ship both on Day 2 along with everything else credits-related (safer).
 - **Fix `extract-preferences` (D15)** — add `authenticateUser` only to `supabase/functions/extract-preferences/index.ts`. **Do not charge** — add a code comment marking it as a free system-internal call (cost absorbed, ~$0.0007 per trip).
 - Commit freemium numbers (D1–D18) into `LAUNCH_PLAN.md`
 
@@ -227,7 +221,7 @@ ALTER TABLE credit_transactions ADD COLUMN IF NOT EXISTS stripe_session_id TEXT 
 - Admin/debug shows full precision (`balance.toFixed(2)`); users see integer only
 - Success-return URL `/credits/success` → shows "Credits added!" + auto-refreshes balance
 - Cancel-return URL `/credits/cancel` → silent return to app
-- Inline hint near Magazine tab: *"~1 credit per city explored"* (R12 mitigation)
+- Inline hint near Magazine tab: _"~1 credit per city explored"_ (R12 mitigation)
 
 **Done when:** Logged-in user can run out of credits → click Top up → pay (test mode) → see new balance reflected within 5 seconds. Low-credit warning visible when 15 displayed credits remain. Admin sees `99.42` while user sees `99`.
 
@@ -365,7 +359,6 @@ All must be true:
 
 ## 6. Risk Register
 
-
 | #   | Risk                                                 | Likelihood   | Impact | Mitigation                                                                                                                                                                       |
 | --- | ---------------------------------------------------- | ------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | R1  | Anthropic bill spikes from abuse                     | Medium       | High   | Per-user rate limit (Day 7) + Anthropic hard spend cap + kill switch                                                                                                             |
@@ -381,7 +374,6 @@ All must be true:
 | R11 | Long-trip user hits credit wall mid-IG               | Medium       | High   | Pre-flight `credits < 1.0` check (Day 2 / D14). Daily admin query for `WHERE credits < 0` post-launch. If overdraw is common, switch to per-endpoint estimates (RG: 10, IG: 30). |
 | R12 | Magazine pre-fetch causes opaque credit drops        | High pre-fix | Medium | D17 hybrid: pre-fetch destination only (Day 6). One-line UI hint near Magazine tab: "~1 credit per city explored" (Day 3).                                                       |
 
-
 ---
 
 ## 7. Cost Model (Per-Call and Per-Trip)
@@ -389,7 +381,6 @@ All must be true:
 All numbers below assume the new scale: `1 credit = $0.01 user value = $0.007 LLM budget`. Per-call charge = `ceil(actual_cost_usd / 0.007 × 100) / 100`.
 
 ### Per-call credit charges (cost-based, fair)
-
 
 | Use case                                     | Model  | Real cost USD | Decimal credits | Visible drop |
 | -------------------------------------------- | ------ | ------------- | --------------- | ------------ |
@@ -403,9 +394,7 @@ All numbers below assume the new scale: `1 credit = $0.01 user value = $0.007 LL
 | `generate-itinerary` detailed (7d)           | Sonnet | ~$0.10        | 14.29           | 14-15        |
 | `chat` exchange                              | Sonnet | $0.005-0.02   | 0.72-2.86       | 1-3          |
 
-
 ### Per-trip consumption ranges
-
 
 | Trip profile                                  | Credits typically consumed | % of 100 free | Conversion trigger?                              |
 | --------------------------------------------- | -------------------------- | ------------- | ------------------------------------------------ |
@@ -413,7 +402,6 @@ All numbers below assume the new scale: `1 credit = $0.01 user value = $0.007 LL
 | Week (7 days, 2-3 cities, normal chat)        | ~45                        | 45%           | No — free tier covers with margin                |
 | Two-week (14 days, 4-5 cities, heavy use)     | ~66                        | 66%           | No — first trip free, second trip prompts top-up |
 | Three-week heavy (21+ days, deep exploration) | ~99                        | 99%           | **Yes** — hits the wall, ideal time to convert   |
-
 
 ### Margin per paid pack
 
@@ -483,10 +471,7 @@ In rough priority order. Do not start any of these until **public launch + 1 wee
 
 ## 11. Change Log
 
-
 | Date       | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Author         |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | 2026-05-21 | Initial draft created                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Claude + Achin |
 | 2026-05-21 | Credit model finalized: 5× rescale (100 free, $5→500 pack), `NUMERIC(10,2)` decimal storage with `Math.floor()` integer display, cost-based fair charging (`ceil(cost/0.007 × 100)/100`, no per-call floor), pre-flight `credits < 1` guard for Sonnet calls. Edge function fixes: `city-deep-dive` adds auth + per-call charge, `extract-preferences` adds auth only (free, system-internal). Magazine pre-fetch reduced to destination-only on RG-complete, cities lazy-load on tab open. New decisions D11-D18, new risks R11-R12. | Claude + Achin |
-
-

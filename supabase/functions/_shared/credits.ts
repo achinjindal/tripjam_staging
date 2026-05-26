@@ -7,13 +7,17 @@
 // Anthropic rates as of 2026-05 (USD per 1M tokens):
 const RATES: Record<string, { input: number; output: number }> = {
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
-  "claude-haiku-4-5":  { input: 0.8, output: 4.0 },
+  "claude-haiku-4-5": { input: 0.8, output: 4.0 },
   "claude-haiku-4-5-20251001": { input: 0.8, output: 4.0 },
 };
 
 const CREDIT_LLM_BUDGET_USD = 0.035; // dollars of LLM cost per credit
 
-export function computeLLMCost(model: string, inputTokens: number, outputTokens: number): number {
+export function computeLLMCost(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+): number {
   const r = RATES[model] || RATES["claude-sonnet-4-6"];
   return (inputTokens * r.input + outputTokens * r.output) / 1_000_000;
 }
@@ -36,8 +40,11 @@ export type AuthedUser = { id: string; credits: number };
 
 // Verify the bearer token, return the user + current credit balance.
 // Returns null if the token is missing/invalid.
-export async function authenticateUser(req: Request): Promise<AuthedUser | null> {
-  const auth = req.headers.get("authorization") || req.headers.get("Authorization");
+export async function authenticateUser(
+  req: Request,
+): Promise<AuthedUser | null> {
+  const auth =
+    req.headers.get("authorization") || req.headers.get("Authorization");
   if (!auth?.startsWith("Bearer ")) return null;
   const token = auth.slice(7);
 
@@ -67,10 +74,20 @@ export function unauthorized(corsHeaders: Record<string, string>) {
 }
 
 // Standard 402 (Payment Required) response when the user is out of credits.
-export function outOfCredits(corsHeaders: Record<string, string>, balance: number) {
+export function outOfCredits(
+  corsHeaders: Record<string, string>,
+  balance: number,
+) {
   return new Response(
-    JSON.stringify({ error: "Out of credits", code: "insufficient_credits", credits: balance }),
-    { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    JSON.stringify({
+      error: "Out of credits",
+      code: "insufficient_credits",
+      credits: balance,
+    }),
+    {
+      status: 402,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    },
   );
 }
 
@@ -95,7 +112,11 @@ export async function deductCredits(args: {
       p_function_name: args.functionName,
       p_trip_id: args.tripId ?? null,
       p_llm_cost_usd: usd,
-      p_metadata: { model: args.model, input_tokens: args.inputTokens, output_tokens: args.outputTokens },
+      p_metadata: {
+        model: args.model,
+        input_tokens: args.inputTokens,
+        output_tokens: args.outputTokens,
+      },
     });
   } catch (e) {
     console.error("deductCredits failed:", (e as Error).message);

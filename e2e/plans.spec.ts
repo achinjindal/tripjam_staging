@@ -7,16 +7,24 @@ test.describe("Plans (RG) flow", () => {
     await login(page);
 
     // Create new trip
-    const createBtn = page.locator("button", { hasText: /new trip|create/i }).first();
+    const createBtn = page
+      .locator("button", { hasText: /new trip|create/i })
+      .first();
     await createBtn.click();
-    await expect(page.locator("text=/Where to/i").first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=/Where to/i").first()).toBeVisible({
+      timeout: 5000,
+    });
 
     // Step 0: Add destination
     const destInput = page.locator("input[placeholder*='Bangkok']").first();
     await destInput.fill("Japan");
     await page.waitForTimeout(1500);
     // Pick from suggestions or press Enter
-    const suggestion = page.locator("[style*='cursor: pointer'][style*='font-weight']", { hasText: /Japan/i }).first();
+    const suggestion = page
+      .locator("[style*='cursor: pointer'][style*='font-weight']", {
+        hasText: /Japan/i,
+      })
+      .first();
     if (await suggestion.isVisible({ timeout: 2000 }).catch(() => false)) {
       await suggestion.click();
     } else {
@@ -36,14 +44,19 @@ test.describe("Plans (RG) flow", () => {
     }
 
     // Click Start Planning
-    const startBtn = page.locator("button", { hasText: /start planning/i }).first();
+    const startBtn = page
+      .locator("button", { hasText: /start planning/i })
+      .first();
     await expect(startBtn).toBeVisible({ timeout: 5000 });
     await startBtn.click();
 
     // Wait for all 4 plan cards to appear (Select buttons)
     await page.waitForFunction(
-      () => [...document.querySelectorAll("button")].filter(b => b.textContent?.trim() === "Select").length >= 4,
-      { timeout: 120000 }
+      () =>
+        [...document.querySelectorAll("button")].filter(
+          (b) => b.textContent?.trim() === "Select",
+        ).length >= 4,
+      { timeout: 120000 },
     );
     await page.waitForTimeout(1000); // settle
 
@@ -59,7 +72,7 @@ test.describe("Plans (RG) flow", () => {
 
     // Find a draft trip
     const tripCard = page.locator("text=/Planning/i").first();
-    if (!await tripCard.isVisible({ timeout: 3000 }).catch(() => false)) {
+    if (!(await tripCard.isVisible({ timeout: 3000 }).catch(() => false))) {
       test.skip();
       return;
     }
@@ -67,8 +80,13 @@ test.describe("Plans (RG) flow", () => {
     await page.waitForTimeout(2000);
 
     // Count initial Select buttons
-    const initialCount = await page.locator("button", { hasText: /^Select$/ }).count();
-    if (initialCount === 0) { test.skip(); return; }
+    const initialCount = await page
+      .locator("button", { hasText: /^Select$/ })
+      .count();
+    if (initialCount === 0) {
+      test.skip();
+      return;
+    }
 
     // Click Select on first plan
     const selectBtn = page.locator("button", { hasText: /^Select$/ }).first();
@@ -76,15 +94,21 @@ test.describe("Plans (RG) flow", () => {
     await page.waitForTimeout(300);
 
     // Should show "✓ Selected"
-    await expect(page.locator("button", { hasText: /Selected/ }).first()).toBeVisible();
+    await expect(
+      page.locator("button", { hasText: /Selected/ }).first(),
+    ).toBeVisible();
 
     // Dismiss first plan
-    const dismissBtn = page.locator("button", { hasText: /dismiss this plan/i }).first();
+    const dismissBtn = page
+      .locator("button", { hasText: /dismiss this plan/i })
+      .first();
     await dismissBtn.click();
     await page.waitForTimeout(500);
 
     // Count should decrease by 1
-    const newCount = await page.locator("button", { hasText: /^Select$|Selected/ }).count();
+    const newCount = await page
+      .locator("button", { hasText: /^Select$|Selected/ })
+      .count();
     expect(newCount).toBe(initialCount - 1);
 
     await snap(page, "05-select-dismiss");

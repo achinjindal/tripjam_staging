@@ -1,14 +1,17 @@
 # TripJam — Product Notes
-*Last updated: March 2026*
+
+_Last updated: March 2026_
 
 ---
 
 ## What is TripJam?
+
 A travel planning and collaboration app. Core problem it solves: prevent nasty surprises on group trips — transparency and alignment for all travelers before embarking. Use case: 2 couples planning a trip together, everyone stays informed on the plan.
 
 ---
 
 ## Tech Stack
+
 - React (JSX) + Vite
 - Supabase (Postgres + Auth + Realtime)
 - Key files: `src/App.jsx`, `src/main.jsx`, `src/Auth.jsx`, `src/Home.jsx`, `src/supabase.js`
@@ -16,6 +19,7 @@ A travel planning and collaboration app. Core problem it solves: prevent nasty s
 ---
 
 ## Auth
+
 - Initially: username + password only (no email required)
 - Under the hood: Supabase auth uses `username@tripjam.app` as fake email
 - On signup: choose username + password + face icon (1 of 10 emoji options): ["👦","👧","🧑","👨","👩","🧔","👱","🧓","🥸","😎"]
@@ -25,6 +29,7 @@ A travel planning and collaboration app. Core problem it solves: prevent nasty s
 ---
 
 ## Collaboration Roles (3 tiers)
+
 - **Read-only** — view the itinerary (e.g. someone curious about the plan)
 - **Comment-only** — view + add comments/reactions (e.g. share with someone not on the trip who might have ideas)
 - **Full edit** — co-travelers and close friends, can make changes
@@ -32,6 +37,7 @@ A travel planning and collaboration app. Core problem it solves: prevent nasty s
 ---
 
 ## Data Model
+
 - Multiple trips per user
 - One shared canonical itinerary per trip — no hidden versions, full transparency
 - Collaborators can carve out a **fork** for a specific time block — their alternative sits alongside the main plan, visible to everyone
@@ -40,15 +46,17 @@ A travel planning and collaboration app. Core problem it solves: prevent nasty s
 ---
 
 ## Pricing / Access Tiers
+
 - **Free:** 1 trip, solo only (no collaborators)
 - **Paid Basic:** Unlimited trips (hard cap: 20), unlimited collaborators per trip (hard cap: 12)
-  - If a collaborator is free/unpaid: max 2 shared trips together — *PARKED, not implementing yet*
+  - If a collaborator is free/unpaid: max 2 shared trips together — _PARKED, not implementing yet_
   - If a collaborator is also paid: unlimited shared trips
 - Hard limits enforced server-side (not just UI)
 
 ---
 
 ## Trip Creation Flow
+
 1. Enter destination + dates (start date + end date — actual calendar dates, not just number of days)
 2. Select number of travelers (max 12)
 3. Select trip style: Cultural & Heritage / Adventure & Outdoors / Food & Culinary / Relaxation & Wellness / City Break / Road Trip / Beach & Coast / **I'll wing it 🎲**
@@ -58,11 +66,13 @@ A travel planning and collaboration app. Core problem it solves: prevent nasty s
    - ✈️ Add flights → origin city, flight duration (hours), arrival time Day 1, departure time last day
    - 🏨 Add hotel → name, area, status (booked/tentative)
    - 👥 Invite friends → choose role (edit/comment/read), generate + copy invite link
+
 - Rest time after long flights factored into AI generation — no fixed rules, context-aware
 
 ---
 
 ## Trip Budgeting
+
 - Cost attached at activity level (optional field) — represents total cost for the whole group
 - Budget page per trip shows: total expected cost + cost per traveler (total ÷ number of travelers)
 - When a fork exists: cost is attributed separately — travelers on the fork see their own per-person cost, not the main plan's cost
@@ -71,6 +81,7 @@ A travel planning and collaboration app. Core problem it solves: prevent nasty s
 ---
 
 ## Features Planned
+
 - Home screen showing all trips (owned + shared with you) ✅ DONE
 - Real-time activity log / live feed (who did what)
 - Invite collaborators via shareable link (link generation ✅ DONE, join flow not yet built)
@@ -81,9 +92,11 @@ A travel planning and collaboration app. Core problem it solves: prevent nasty s
 ---
 
 ## Database Schema (Supabase)
+
 **Project URL:** https://viyvdqwwnbbqjuwiuzbh.supabase.co
 
 Tables:
+
 - `profiles` — id (= auth user id), username, face_icon (1-10), plan_type (free/paid_basic)
 - `trips` — id, name, destination, start_date, end_date, created_by, origin_city, flight_duration_mins, arrival_time, departure_time, hotel_name, hotel_area, hotel_status
 - `trip_members` — trip_id, user_id, role (read/comment/edit)
@@ -103,6 +116,7 @@ All tables have Row Level Security (RLS) enabled. Policies exist for SELECT and 
 ## What's Been Built (implementation progress)
 
 ### ✅ Done
+
 - Supabase client setup (`src/supabase.js`, `.env`, `.gitignore`)
 - Auth screen (`src/Auth.jsx`) — username + password + face icon signup/signin
 - Home screen (`src/Home.jsx`) — lists all trips from Supabase, empty state, sign out
@@ -114,6 +128,7 @@ All tables have Row Level Security (RLS) enabled. Policies exist for SELECT and 
 - Invite link generation saved to `invite_links` table
 
 ### 🔜 Next up (in rough priority order)
+
 1. **Join flow** — handle `/join/{token}` URL so invited users can actually join a trip
 2. **Real AI generation** — Supabase Edge Function calling Claude API for actual itinerary suggestions
 3. **Real-time collab** — Supabase realtime subscriptions so changes sync live
@@ -124,6 +139,7 @@ All tables have Row Level Security (RLS) enabled. Policies exist for SELECT and 
 ---
 
 ## Out of Scope (for now)
+
 - Reveal/surprise mode
 - Threaded comments
 - In-app messaging (comments serve this purpose)

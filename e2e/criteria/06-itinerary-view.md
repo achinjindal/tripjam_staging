@@ -21,6 +21,7 @@
 19. "Edit trip" button goes to Routes page with saved routes
 
 ## Transitions & Geocoding Integrity
+
 20. No transition should show "1 min walk" for all activities in a day — indicates duplicate geocodes
 21. Activities within a trip should have distinct geocode values — never the generic city/park/region name for all
 22. Stale stored transition values (1 min) are recalculated on page load, not trusted

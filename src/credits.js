@@ -43,7 +43,10 @@ export async function refreshCredits(userId) {
 
 export function useCredits() {
   return useSyncExternalStore(
-    (cb) => { _listeners.add(cb); return () => _listeners.delete(cb); },
+    (cb) => {
+      _listeners.add(cb);
+      return () => _listeners.delete(cb);
+    },
     () => _balance,
   );
 }
@@ -66,7 +69,10 @@ export function closePaywall() {
 
 export function usePaywall() {
   return useSyncExternalStore(
-    (cb) => { _listeners.add(cb); return () => _listeners.delete(cb); },
+    (cb) => {
+      _listeners.add(cb);
+      return () => _listeners.delete(cb);
+    },
     () => _paywallReason,
   );
 }
@@ -79,7 +85,9 @@ export async function handleGatedResponse(res, userId, reason) {
     setCredits(0);
     openPaywall(reason || "You're out of credits");
     // Drain body so the caller doesn't accidentally read it.
-    try { await res.text(); } catch {}
+    try {
+      await res.text();
+    } catch {}
     return true;
   }
   // Otherwise we still want to refresh credits after the call completes.

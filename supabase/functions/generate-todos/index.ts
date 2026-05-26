@@ -2,7 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 const SYSTEM_PROMPT = `You are a travel planning assistant. Generate a practical pre-trip to-do checklist tailored to the specific trip.
@@ -32,14 +33,20 @@ Example:
 ]`;
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS")
+    return new Response("ok", { headers: corsHeaders });
 
   try {
     const { trip } = await req.json();
 
-    const budgetLabel = { budget: "budget", mid: "mid-range", luxury: "luxury" }[trip.budget] || "mid-range";
+    const budgetLabel =
+      { budget: "budget", mid: "mid-range", luxury: "luxury" }[trip.budget] ||
+      "mid-range";
     const travelMonth = trip.start_date
-      ? new Date(trip.start_date).toLocaleString("en-US", { month: "long", year: "numeric" })
+      ? new Date(trip.start_date).toLocaleString("en-US", {
+          month: "long",
+          year: "numeric",
+        })
       : null;
 
     const userMessage = `Generate a to-do checklist for this trip:
@@ -75,8 +82,8 @@ serve(async (req) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "apikey": supabaseKey,
-        "Authorization": `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
       },
       body: JSON.stringify({
         trip_id: trip?.id || null,

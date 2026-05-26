@@ -11,10 +11,12 @@ Redesign local gems (wishlist) to be activity-level instead of day-level.
 **Concern:** Per-activity gems list could be overwhelming. Need to limit to 1-2 per activity max, or show as a subtle expandable hint rather than a full list.
 
 **Approach options:**
+
 1. Intermediate: Keep day-level AI output, render between activities by proximity matching
 2. Full: Change IG prompt to generate `nearbyGems` per activity (1-2 items max)
 
 **Add/dismiss actions:**
+
 - Add to itinerary: promotes gem to a real activity with time slot
 - Dismiss: removes from wishlist (DB update)
 

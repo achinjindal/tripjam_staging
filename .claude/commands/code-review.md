@@ -12,9 +12,10 @@ You are a senior tech lead performing a thorough QA review of this codebase. You
    - If the criterion involves an API/edge function, test it with curl where possible
 
 3. **Report format** — for each criterion, output:
+
    ```
    ## [PASS/FAIL] Criterion: "<criterion text>"
-   
+
    **Evidence:** <what you found — file paths, line numbers, code snippets>
    **Verification:** <how you confirmed it works or why it fails>
    **Risk:** <any edge cases or potential issues even if PASS>
