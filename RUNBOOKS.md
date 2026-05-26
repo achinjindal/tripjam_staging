@@ -95,6 +95,69 @@ WHERE email IN ('<real-email>', '<legacy-email>');
 
 ---
 
+## Prod credits launch (current state + steps to go live)
+
+**Current state on prod (as of last migration):**
+- ✅ Schema migrated: `profiles.credits` is `NUMERIC(10,2)`, `stripe_customer_id` added, `credit_transactions` has `provider_session_id` UNIQUE
+- ✅ RPCs updated: `deduct_credits` + `grant_credits` accept NUMERIC, idempotent on `provider_session_id`
+- ✅ User balances preserved (~999999 each — intentionally inflated, effectively unlimited)
+- ❌ Edge functions still on OLD code (using `Math.max(1, ...)` floor + old `_shared/credits.ts`)
+- ❌ Credits UI hidden on prod (`CREDITS_UI_ENABLED` auto-detects via VITE_SUPABASE_URL and returns `false`)
+- ❌ Lemon Squeezy secrets not set on prod Supabase
+- ❌ Webhook not registered for prod URL in Lemon Squeezy dashboard
+
+**To go live (full launch checklist):**
+
+1. **Choose launch starting balance** (replace `300` with chosen value):
+   ```sql
+   -- On prod DB
+   UPDATE profiles SET credits = 300 WHERE credits >= 999000;  -- reset only the inflated test balances
+   ALTER TABLE profiles ALTER COLUMN credits SET DEFAULT 300;
+   ```
+
+2. **Deploy Day 2/3 edge functions to prod:**
+   ```bash
+   npm run deploy:functions:prod
+   # then separately for the webhook with --no-verify-jwt:
+   supabase functions deploy payment-webhook --no-verify-jwt --project-ref viyvdqwwnbbqjuwiuzbh
+   ```
+
+3. **Set Lemon Squeezy secrets on prod Supabase:**
+   ```bash
+   supabase secrets set \
+     LEMONSQUEEZY_API_KEY='<same key>' \
+     LEMONSQUEEZY_STORE_ID='388127' \
+     LEMONSQUEEZY_VARIANT_SMALL='1707537' \
+     LEMONSQUEEZY_VARIANT_LARGE='1707540' \
+     LEMONSQUEEZY_WEBHOOK_SECRET='<NEW 40-char secret — different from staging>' \
+     APP_PUBLIC_URL='https://tripjam.vercel.app' \
+     --project-ref viyvdqwwnbbqjuwiuzbh
+   ```
+
+4. **Register the prod webhook in Lemon Squeezy dashboard:**
+   - Callback URL: `https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/payment-webhook`
+   - Secret: matches what you set above
+   - Events: only `order_created`
+
+5. **Flip frontend flag to enable UI on prod:**
+   Edit `src/credits.js` — replace the conditional:
+   ```js
+   export const CREDITS_UI_ENABLED = true;  // launched
+   ```
+   Also set `VITE_PAYMENTS_ENABLED=true` in Vercel env vars for production.
+
+6. **Switch Lemon Squeezy from TEST to LIVE mode** (real money):
+   - Complete LS payout setup (KYC + Wise/PayPal/bank)
+   - LS dashboard → toggle Test mode OFF
+   - Same product variants work in both modes
+
+7. **Smoke test on prod after deploy:**
+   - Sign in with a real account
+   - Verify avatar dropdown shows balance
+   - Trigger paywall, attempt purchase with real card → verify webhook fires + credits granted
+
+---
+
 ## Lemon Squeezy Setup (Day 2 → Day 3)
 
 Lemon Squeezy is our Merchant of Record (Stripe India is invite-only).
