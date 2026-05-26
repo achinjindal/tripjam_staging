@@ -1399,6 +1399,10 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
   useEffect(() => {
     if (storedLooksReasonable) return;
     let cancelled = false;
+    // Feature 8: prefer stored lat/lng on the activity record over on-the-fly geocoding.
+    // The selectHotel flow + future activity backfill populate these via smart escalation.
+    const storedA = (from?.lat != null && from?.lng != null) ? { lat: from.lat, lng: from.lng } : null;
+    const storedB = (to?.lat   != null && to?.lng   != null) ? { lat: to.lat,   lng: to.lng   } : null;
     async function load() {
       const placeA = from.geocode || extractPlace(from.title);
       const placeB = to.geocode   || extractPlace(to.title);
@@ -1413,8 +1417,8 @@ function TransitionRow({ from, to, city, label = null, delay = 0, forceDrive = f
         if (attempt > 0) await new Promise(r => setTimeout(r, 2500 * attempt));
         if (cancelled) return;
         const [coordA, coordB] = await Promise.all([
-          geocodePlace(from.title, city, fromGeocode),
-          geocodePlace(to.title,   city, to.geocode),
+          storedA ?? geocodePlace(from.title, city, fromGeocode),
+          storedB ?? geocodePlace(to.title,   city, to.geocode),
         ]);
         if (cancelled) return;
         if (!coordA && !coordB) lastReason = `no coords for "${placeA}" or "${placeB}" in ${city}`;
@@ -2144,7 +2148,15 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
                 delay={dayIndex * 400}
                 initialCommute={act.transition_mins ? { mins: act.transition_mins, mode: act.transition_mode } : null}
                 onResolved={(mins, mode) => {
-                  if (act.id) supabase.from("activities").update({ transition_mins: mins, transition_mode: mode }).eq("id", act.id);
+                  // Story 8.3 fix: properly await and check error; previously was fire-and-forget
+                  // and 0/2527 rows ever got transition_mins persisted in production.
+                  // Skip if act.id is a tmp-* (in-flight, no DB row yet).
+                  if (act.id && !String(act.id).startsWith("tmp-")) {
+                    supabase.from("activities").update({ transition_mins: mins, transition_mode: mode }).eq("id", act.id)
+                      .then(({ error }) => {
+                        if (error) console.warn("transition_mins write failed:", error.message, "activity:", act.id);
+                      });
+                  }
                 }}
               />
             )}
@@ -2158,7 +2170,15 @@ function DaySection({ day, dayIndex = 0, onEditActivity, onRemoveActivity, onRep
                 delay={dayIndex * 400}
                 initialCommute={act.transition_mins ? { mins: act.transition_mins, mode: act.transition_mode } : null}
                 onResolved={(mins, mode) => {
-                  if (act.id) supabase.from("activities").update({ transition_mins: mins, transition_mode: mode }).eq("id", act.id);
+                  // Story 8.3 fix: properly await and check error; previously was fire-and-forget
+                  // and 0/2527 rows ever got transition_mins persisted in production.
+                  // Skip if act.id is a tmp-* (in-flight, no DB row yet).
+                  if (act.id && !String(act.id).startsWith("tmp-")) {
+                    supabase.from("activities").update({ transition_mins: mins, transition_mode: mode }).eq("id", act.id)
+                      .then(({ error }) => {
+                        if (error) console.warn("transition_mins write failed:", error.message, "activity:", act.id);
+                      });
+                  }
                 }}
               />
             )}
@@ -2647,18 +2667,57 @@ export default function App({ session, initialTrip, initialScreen = "setup", ini
     }
     // Insert new hotel activity
     const position = day.activities.filter(a => a.time <= checkInTime).length;
-    const { data: newAct } = await supabase.from("activities").insert({
+
+    // Feature 8: resolve hotel coordinates via smart escalation (Photon-first, Google fallback)
+    // Pass-through Google cost (D24: 1.70 credits/call if escalated; 0 if Photon hits)
+    let resolved = null;
+    try {
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/places-proxy?action=resolve-coords`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          name: hotel.title,
+          city: day.city,
+          hint: hotel.geocode,
+          type: "lodging",
+          tripId: trip?.id,
+        }),
+      });
+      if (res.ok) {
+        resolved = await res.json();
+      } else if (res.status !== 402) {
+        // Don't block hotel selection on geocode failure (except 402 = out of credits)
+        console.warn("Hotel resolve-coords failed:", res.status);
+      }
+    } catch (e) {
+      console.warn("Hotel resolve-coords exception:", e.message);
+    }
+
+    const insertPayload = {
       day_id: dayId, time: checkInTime,
       title: `Check in at ${hotel.title}`, geocode: hotel.geocode || hotel.title,
       type: "hotel", duration: "0.5h", note: hotel.note, icon: "🏨",
       confirmed: false, position, added_by: session.user.id,
-    }).select().single();
+    };
+    if (resolved?.lat && resolved?.lng) {
+      insertPayload.lat = resolved.lat;
+      insertPayload.lng = resolved.lng;
+      insertPayload.geocode_source = resolved.source || null;
+      insertPayload.geocode_confidence = resolved.confidence || null;
+      if (resolved.place_id) insertPayload.place_id = resolved.place_id;
+      if (resolved.business_status) insertPayload.business_status = resolved.business_status;
+    }
+
+    const { data: newAct } = await supabase.from("activities").insert(insertPayload).select().single();
     // Clear hotel_options from day once a hotel is selected
     await supabase.from("days").update({ hotel_options: null, hotel_check_in_time: null }).eq("id", dayId);
     setDays(prev => prev.map(d => {
       if (d.id !== dayId) return d;
       const acts = d.activities.filter(a => a.type !== "hotel");
-      const inserted = newAct || { id: `tmp-${Date.now()}`, time: checkInTime, title: `Check in at ${hotel.title}`, geocode: hotel.geocode, type: "hotel", duration: "0.5h", note: hotel.note, icon: "🏨", confirmed: false, position };
+      const inserted = newAct || { id: `tmp-${Date.now()}`, ...insertPayload };
       acts.splice(position, 0, inserted);
       return { ...d, activities: acts, hotel_options: null, hotel_check_in_time: null };
     }));

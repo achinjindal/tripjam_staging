@@ -114,6 +114,152 @@ async function taPhoto(locationId: string): Promise<string | null> {
   return data?.data?.[0]?.images?.large?.url ?? data?.data?.[0]?.images?.original?.url ?? null;
 }
 
+// ── Smart escalation heuristics (Feature 8) ─────────────────────────────────
+//
+// Decide whether a place lookup needs Google Places (chain hotels, bad LLM hints)
+// or can be served by Photon + sanity check (most uniquely-named places).
+
+const HOTEL_CHAIN_RE = /\b(hilton|marriott|hyatt|sheraton|westin|holiday\s*inn|best\s*western|ibis|gracery|comfort|hampton|courtyard|renaissance|ritz[-\s]carlton|four\s*seasons|park\s*hyatt|grand\s*hyatt|hyatt\s*regency|doubletree|embassy\s*suites|mercure|novotel|pullman|sofitel|premier\s*inn|travelodge|holiday\s*inn|days\s*inn|super\s*8|granbell|hilton\s*garden|hampton\s*inn|aloft|moxy|element|edition|park\s*plaza|crown\s*plaza|intercontinental|jw\s*marriott|w\s*hotel|st\s*regis|sheraton)\b/i;
+
+function preEscalateToGoogle(name: string, geocodeHint: string | null, city: string | null): { escalate: boolean; reason: string } {
+  // 1. LLM gave us garbage (hint equals city name)
+  if (geocodeHint && city && geocodeHint.trim().toLowerCase() === city.trim().toLowerCase()) {
+    return { escalate: true, reason: "hint_equals_city" };
+  }
+  // 2. Known chain hotel — Photon disambiguation is unreliable
+  if (HOTEL_CHAIN_RE.test(name)) {
+    return { escalate: true, reason: "chain_match" };
+  }
+  return { escalate: false, reason: "" };
+}
+
+function postEscalateCheck(coords: { lat: number; lng: number }, biasLat?: number, biasLng?: number): { escalate: boolean; reason: string } {
+  if (biasLat == null || biasLng == null) return { escalate: false, reason: "" };
+  // If Photon returned the city centroid (within 200m), it failed to find the specific place
+  const distFromCentroid = haversineKm(biasLat, biasLng, coords.lat, coords.lng);
+  if (distFromCentroid < 0.2) {
+    return { escalate: true, reason: "matched_city_centroid" };
+  }
+  return { escalate: false, reason: "" };
+}
+
+// ── Google Places lookup (Feature 8 — chains + bad hints + escalation fallback) ─
+
+async function googleFindPlace(name: string, city: string | null, type?: string): Promise<{ lat: number; lng: number; place_id: string; business_status?: string } | null> {
+  if (!PLACES_KEY) return null;
+  const query = city ? `${name}, ${city}` : name;
+  const body: Record<string, unknown> = {
+    textQuery: query,
+    languageCode: "en",
+    maxResultCount: 1,
+  };
+  if (type) body.includedType = type; // e.g., "lodging" for hotels
+  const res = await fetch(`${PLACES_BASE}/places:searchText`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": PLACES_KEY,
+      "X-Goog-FieldMask": "places.id,places.location,places.businessStatus,places.displayName",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    console.warn("googleFindPlace error:", res.status, await res.text());
+    return null;
+  }
+  const data: any = await res.json();
+  const place = data?.places?.[0];
+  if (!place?.location?.latitude || !place?.location?.longitude) return null;
+  return {
+    lat: place.location.latitude,
+    lng: place.location.longitude,
+    place_id: place.id,
+    business_status: place.businessStatus,
+  };
+}
+
+// ── Credit deduction for Google calls (D24 pass-through, no founder margin) ──
+//
+// `costToCreditsPassthrough` uses user-value rate ($0.01/credit) not LLM-budget rate ($0.007/credit)
+// so the founder breaks even (no margin) on Google API calls.
+
+const GOOGLE_PLACES_CALL_USD = 0.017;
+const USER_VALUE_PER_CREDIT = 0.01;
+
+function costToCreditsPassthrough(usd: number): number {
+  return Math.ceil((usd / USER_VALUE_PER_CREDIT) * 100) / 100;
+}
+
+async function authenticateUserId(req: Request): Promise<string | null> {
+  const auth = req.headers.get("authorization") || req.headers.get("Authorization");
+  if (!auth?.startsWith("Bearer ")) return null;
+  const token = auth.slice(7);
+  // Reject anon-key calls — must be a real user token
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  if (anonKey && token === anonKey) return null;
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { "Authorization": `Bearer ${token}`, "apikey": SUPABASE_SERVICE_KEY },
+  });
+  if (!res.ok) return null;
+  const data: any = await res.json();
+  return data?.id ?? null;
+}
+
+async function getUserCredits(userId: string): Promise<number> {
+  const res = await fetch(`${REST}/profiles?id=eq.${userId}&select=credits`, { headers: pgHeaders });
+  if (!res.ok) return 0;
+  const rows = await res.json();
+  return Number(rows?.[0]?.credits ?? 0);
+}
+
+async function chargeGoogleCall(userId: string, costUsd: number, reason: string): Promise<boolean> {
+  const credits = costToCreditsPassthrough(costUsd);
+  try {
+    // Use the existing deduct_credits RPC; on staging it may not exist, in which case we log and continue
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/deduct_credits`, {
+      method: "POST",
+      headers: pgHeaders,
+      body: JSON.stringify({
+        p_user_id: userId,
+        p_amount: credits,
+        p_reason: reason,
+        p_function_name: "places-proxy",
+        p_trip_id: null,
+        p_llm_cost_usd: costUsd,
+        p_metadata: { source: "google_places_passthrough" },
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      // If the RPC doesn't exist (staging in current state), don't block — just log
+      if (res.status === 404 || text.includes("does not exist")) {
+        console.warn("deduct_credits RPC not found — skipping charge (staging?)");
+        return true;
+      }
+      console.warn("chargeGoogleCall failed:", res.status, text);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("chargeGoogleCall exception:", (e as Error).message);
+    return false;
+  }
+}
+
+// ── geocode_overrides lookup ─────────────────────────────────────────────────
+
+async function checkOverride(name: string, city: string | null): Promise<{ lat: number; lng: number } | null> {
+  const normalized = name.trim().toLowerCase();
+  const cityFilter = city ? `&city=eq.${encodeURIComponent(city.trim().toLowerCase())}` : "&city=is.null";
+  try {
+    const res = await fetch(`${REST}/geocode_overrides?place_normalized=eq.${encodeURIComponent(normalized)}${cityFilter}&select=lat,lng&limit=1`, { headers: pgHeaders });
+    if (!res.ok) return null;
+    const rows = await res.json();
+    if (!rows?.length) return null;
+    return { lat: Number(rows[0].lat), lng: Number(rows[0].lng) };
+  } catch { return null; }
+}
+
 // ── handlers ─────────────────────────────────────────────────────────────────
 
 async function handleAutocomplete(req: Request): Promise<Response> {
@@ -355,6 +501,127 @@ async function handleGeocode(req: Request): Promise<Response> {
   return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
 }
 
+// ── Feature 8: lookup-place (direct Google Places, when we know Photon will fail) ──
+//
+// Charged to user at pass-through rate (D24) — no founder margin.
+// Used by selectHotel when the hotel matches a chain or the geocode hint is bad,
+// and by the resolve-coords fallback when Photon's result fails sanity checks.
+
+async function handleLookupPlace(req: Request): Promise<Response> {
+  const { name, city, type, tripId } = await req.json();
+  if (!name) return Response.json({ error: "name required" }, { status: 400, headers: corsHeaders });
+
+  // 1. User override always wins
+  const override = await checkOverride(name, city);
+  if (override) {
+    return Response.json({ lat: override.lat, lng: override.lng, source: "user_corrected", confidence: "high" }, { headers: corsHeaders });
+  }
+
+  // 2. Cache hit?
+  const cacheKey = `lookup-place:${name.trim().toLowerCase()}|${(city || "").toLowerCase()}|${type || ""}`;
+  const cached = await cacheGet(cacheKey);
+  if (cached?.lat) {
+    incrementUsage("lookup-place", "cache-hit", today()).catch(() => {});
+    return Response.json({ ...cached, source: cached.source || "google_places", confidence: "high", cached: true }, { headers: corsHeaders });
+  }
+
+  // 3. Need to call Google — authenticate + charge user
+  const userId = await authenticateUserId(req);
+  if (!userId) return Response.json({ error: "Unauthorized" }, { status: 401, headers: corsHeaders });
+
+  const balance = await getUserCredits(userId);
+  const credits = costToCreditsPassthrough(GOOGLE_PLACES_CALL_USD);
+  if (balance < credits) {
+    return Response.json({ error: "Out of credits", code: "insufficient_credits", credits: balance }, { status: 402, headers: corsHeaders });
+  }
+
+  // 4. Call Google
+  const result = await googleFindPlace(name, city, type);
+  if (!result) {
+    incrementUsage("lookup-place", "google-miss", today()).catch(() => {});
+    return Response.json({ lat: null, lng: null, source: null, confidence: "low" }, { headers: corsHeaders });
+  }
+
+  // 5. Charge user (only on success — failed lookups are on the house)
+  await chargeGoogleCall(userId, GOOGLE_PLACES_CALL_USD, `lookup-place:${name}`);
+
+  // 6. Cache (90d TTL for Google results)
+  const payload = { lat: result.lat, lng: result.lng, place_id: result.place_id, business_status: result.business_status, source: "google_places" };
+  cacheSet(cacheKey, "lookup-place", payload, "google", 90).catch(() => {});
+  incrementUsage("lookup-place", "google", today()).catch(() => {});
+
+  return Response.json({ ...payload, confidence: "high" }, { headers: corsHeaders });
+}
+
+// ── Feature 8: resolve-coords (smart escalation — Photon-first + heuristic + Google fallback) ──
+//
+// Used by selectHotel and (in future) background activity-geocode pipeline.
+// Tries the cheapest path first; only calls Google when Photon clearly fails.
+
+async function handleResolveCoords(req: Request): Promise<Response> {
+  const { name, city, hint, type, tripId } = await req.json();
+  if (!name) return Response.json({ error: "name required" }, { status: 400, headers: corsHeaders });
+
+  // 1. Override always wins
+  const override = await checkOverride(name, city);
+  if (override) {
+    return Response.json({ lat: override.lat, lng: override.lng, source: "user_corrected", confidence: "high" }, { headers: corsHeaders });
+  }
+
+  // 2. Pre-escalation heuristic — skip Photon for known-bad cases
+  const pre = preEscalateToGoogle(name, hint || null, city || null);
+  if (pre.escalate) {
+    // Delegate to lookup-place (it handles auth + charging)
+    const proxyReq = new Request(req.url, {
+      method: "POST",
+      headers: req.headers,
+      body: JSON.stringify({ name, city, type, tripId }),
+    });
+    return await handleLookupPlace(proxyReq);
+  }
+
+  // 3. Try Photon first — free, fast
+  // Resolve city bias
+  let biasLat: number | undefined;
+  let biasLng: number | undefined;
+  if (city) {
+    const biasCacheKey = `geocode-bias:${city.toLowerCase()}`;
+    const biasCache = await cacheGet(biasCacheKey);
+    if (biasCache?.lat) {
+      biasLat = biasCache.lat;
+      biasLng = biasCache.lng;
+    } else {
+      const nomResult = await nominatimSearch(city);
+      if (nomResult) {
+        biasLat = nomResult.lat;
+        biasLng = nomResult.lng;
+        cacheSet(biasCacheKey, "geocode", nomResult, "nominatim").catch(() => {});
+      }
+    }
+  }
+
+  const photonQ = hint || name;
+  const photonResult = await photonSearch(`${photonQ} ${city || ""}`.trim(), biasLat, biasLng);
+  if (photonResult) {
+    // Post-escalation check — is the Photon result actually the city centroid?
+    const post = postEscalateCheck(photonResult, biasLat, biasLng);
+    if (!post.escalate) {
+      // Photon result is good
+      incrementUsage("resolve-coords", "photon", today()).catch(() => {});
+      return Response.json({ lat: photonResult.lat, lng: photonResult.lng, source: "photon", confidence: "medium" }, { headers: corsHeaders });
+    }
+    // Photon returned city centroid — escalate to Google
+  }
+
+  // 4. Escalate to Google
+  const proxyReq = new Request(req.url, {
+    method: "POST",
+    headers: req.headers,
+    body: JSON.stringify({ name, city, type, tripId }),
+  });
+  return await handleLookupPlace(proxyReq);
+}
+
 // ── router ───────────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -364,9 +631,11 @@ serve(async (req) => {
   const action = url.searchParams.get("action");
 
   try {
-    if (action === "autocomplete") return await handleAutocomplete(req);
-    if (action === "hotel-photo")  return await handleHotelPhoto(req);
-    if (action === "geocode")      return await handleGeocode(req);
+    if (action === "autocomplete")    return await handleAutocomplete(req);
+    if (action === "hotel-photo")     return await handleHotelPhoto(req);
+    if (action === "geocode")         return await handleGeocode(req);
+    if (action === "lookup-place")    return await handleLookupPlace(req);
+    if (action === "resolve-coords")  return await handleResolveCoords(req);
     return Response.json({ error: "Unknown action" }, { status: 400, headers: corsHeaders });
   } catch (err) {
     console.error("places-proxy error:", err.message);
