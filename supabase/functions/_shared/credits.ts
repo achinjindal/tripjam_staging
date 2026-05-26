@@ -181,14 +181,15 @@ export async function deductExternalApiCredits(args: {
   }
 }
 
-// Idempotent credit grant (used by Stripe webhook). Pass `stripeSessionId`
-// to leverage the UNIQUE constraint on credit_transactions for at-most-once
-// semantics on webhook replays.
+// Idempotent credit grant (used by payment-webhook). Pass `providerSessionId`
+// (Lemon Squeezy order_id, Stripe checkout session id, etc) to leverage the
+// UNIQUE constraint on credit_transactions for at-most-once semantics on
+// webhook replays.
 export async function grantCredits(args: {
   userId: string;
   amount: number;
   reason: string;
-  stripeSessionId?: string;
+  providerSessionId?: string;
   metadata?: Record<string, unknown>;
 }): Promise<number | null> {
   if (!Number.isFinite(args.amount) || args.amount <= 0) return null;
@@ -199,7 +200,7 @@ export async function grantCredits(args: {
       p_amount: args.amount,
       p_reason: args.reason,
       p_metadata: args.metadata ?? null,
-      p_stripe_session_id: args.stripeSessionId ?? null,
+      p_provider_session_id: args.providerSessionId ?? null,
     });
     if (error) throw error;
     return typeof data === "number" ? data : Number(data);

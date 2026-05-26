@@ -95,96 +95,121 @@ WHERE email IN ('<real-email>', '<legacy-email>');
 
 ---
 
-## Stripe Setup (Day 2 → Day 3)
+## Lemon Squeezy Setup (Day 2 → Day 3)
+
+Lemon Squeezy is our Merchant of Record (Stripe India is invite-only).
+They handle VAT/sales tax, refunds, and chargebacks; we just plug in.
 
 ### One-time account setup
 
-1. Create Stripe account at https://dashboard.stripe.com/register (use your business email).
-2. Stay in **Test mode** for staging. **Live mode** only for production launch.
+1. Sign up at https://app.lemonsqueezy.com/register (any email).
+2. Complete identity verification (KYC) — quick for individuals.
+3. Set up payout method: PayPal, Wise, or direct bank (India supported).
+4. **Create a store** with `USD` as the default currency. ⚠️ Store currency
+   is locked at creation — if you accidentally created it with INR, delete
+   and recreate. Pricing in USD ensures international buyers see consistent
+   amounts; Lemon Squeezy auto-converts at checkout.
 
-### Create the two credit packs (Test mode first)
+### Create the two credit packs
 
-Stripe Dashboard → Products → Create product (do this twice):
+Dashboard → Products → New product. Do this twice:
 
-| Pack  | Name              | Price | Credits | Description                |
-|-------|-------------------|-------|---------|----------------------------|
-| Small | TripJam 300 Credits | $5.00 USD | 300 | One-time, no subscription   |
-| Large | TripJam 1000 Credits | $10.00 USD | 1000 | One-time, no subscription   |
+| Pack  | Name                | Price       | Credits | Tax category                       |
+|-------|---------------------|-------------|---------|------------------------------------|
+| Small | TripJam 300 Credits | $5.00 USD   | 300     | Software as a service (SaaS) - personal use |
+| Large | TripJam 1000 Credits | $10.00 USD | 1000    | Software as a service (SaaS) - personal use |
 
-- **Pricing model:** "Standard pricing", one-time
-- **Tax behavior:** "Exclusive" (or per local regulation)
-- **Recurring:** No (one-time only)
+- **Pricing model:** Standard pricing (one-time)
+- **Recurring:** No
+- **Description:** "300 credits for TripJam — generate itineraries, explore destinations, get AI travel tips."
 
-After creating, copy each product's **Price ID** (starts with `price_`):
-- `STRIPE_PRICE_ID_SMALL` = price_xxx (300 credits)
-- `STRIPE_PRICE_ID_LARGE` = price_xxx (1000 credits)
+After publishing each product, grab the **Variant ID** (the URL contains
+`/products/<product_id>/variants/<variant_id>` or via API call to
+`GET /v1/variants?filter[product_id]=<product_id>`).
 
-Repeat for **Live mode** when going to production.
+### Grab IDs and keys
 
-### Edge Function secrets (run for each env)
+| Where | Value | Env name |
+|---|---|---|
+| Settings → API → New API token | API key starting `eyJ...` | `LEMONSQUEEZY_API_KEY` |
+| Settings → Stores → click your store | Numeric store ID (URL path) | `LEMONSQUEEZY_STORE_ID` |
+| Small product page → Variants | Numeric variant ID | `LEMONSQUEEZY_VARIANT_SMALL` |
+| Large product page → Variants | Numeric variant ID | `LEMONSQUEEZY_VARIANT_LARGE` |
+| Set when creating webhook (below) | Any string ≥6 chars (use 32+ random) | `LEMONSQUEEZY_WEBHOOK_SECRET` |
 
-```bash
-# Staging (test mode)
-supabase secrets set \
-  STRIPE_SECRET_KEY=sk_test_... \
-  STRIPE_WEBHOOK_SECRET=whsec_... \
-  STRIPE_PRICE_ID_SMALL=price_... \
-  STRIPE_PRICE_ID_LARGE=price_... \
-  APP_PUBLIC_URL=https://tripjam-staging.vercel.app \
-  --project-ref wlrzvwjdrjpfqcwgmzch
-
-# Production (live mode)
-supabase secrets set \
-  STRIPE_SECRET_KEY=sk_live_... \
-  STRIPE_WEBHOOK_SECRET=whsec_... \
-  STRIPE_PRICE_ID_SMALL=price_... \
-  STRIPE_PRICE_ID_LARGE=price_... \
-  APP_PUBLIC_URL=https://tripjam.vercel.app \
-  --project-ref viyvdqwwnbbqjuwiuzbh
-```
-
-### Webhook registration
-
-Stripe Dashboard → Developers → Webhooks → Add endpoint:
-
-- **Endpoint URL:** `https://<project-ref>.supabase.co/functions/v1/stripe-webhook`
-- **Events to send:** `checkout.session.completed`
-- Click "Add endpoint" → reveal the **Signing secret** (starts with `whsec_`) → use it for `STRIPE_WEBHOOK_SECRET` above.
-
-### Redeploy webhook with JWT verification disabled
-
-The webhook must be reachable by Stripe's servers (no Supabase auth). Stripe signature verification replaces JWT auth:
+### Edge Function secrets (run once per env)
 
 ```bash
 # Staging
-supabase functions deploy stripe-webhook --no-verify-jwt --project-ref wlrzvwjdrjpfqcwgmzch
+supabase secrets set \
+  LEMONSQUEEZY_API_KEY='eyJ...' \
+  LEMONSQUEEZY_STORE_ID='12345' \
+  LEMONSQUEEZY_VARIANT_SMALL='67890' \
+  LEMONSQUEEZY_VARIANT_LARGE='67891' \
+  LEMONSQUEEZY_WEBHOOK_SECRET='<32+ random chars>' \
+  APP_PUBLIC_URL='https://tripjam-staging.vercel.app' \
+  --project-ref wlrzvwjdrjpfqcwgmzch
+
+# Production (use the same Lemon Squeezy account; same IDs are fine)
+supabase secrets set \
+  LEMONSQUEEZY_API_KEY='eyJ...' \
+  LEMONSQUEEZY_STORE_ID='12345' \
+  LEMONSQUEEZY_VARIANT_SMALL='67890' \
+  LEMONSQUEEZY_VARIANT_LARGE='67891' \
+  LEMONSQUEEZY_WEBHOOK_SECRET='<32+ random chars>' \
+  APP_PUBLIC_URL='https://tripjam.vercel.app' \
+  --project-ref viyvdqwwnbbqjuwiuzbh
+```
+
+> Tip: Lemon Squeezy has a **Test mode** toggle. Keep test mode ON in your
+> store while validating staging. Switch OFF (live mode) before launching prod.
+
+### Webhook registration
+
+Lemon Squeezy Dashboard → Settings → Webhooks → Add new webhook:
+
+- **Callback URL:** `https://<project-ref>.supabase.co/functions/v1/payment-webhook`
+- **Signing secret:** the value you used for `LEMONSQUEEZY_WEBHOOK_SECRET` above (32+ random chars). Must match exactly.
+- **Events:** check **only** `order_created` for now. (Add `order_refunded` later if you want to claw back credits on refunds.)
+- Save.
+
+Repeat for the production project URL.
+
+### Redeploy webhook with JWT verification disabled
+
+The webhook must be reachable by Lemon Squeezy's servers without a Supabase
+auth header. Our HMAC signature verification replaces JWT auth:
+
+```bash
+# Staging
+supabase functions deploy payment-webhook --no-verify-jwt --project-ref wlrzvwjdrjpfqcwgmzch
 # Production
-supabase functions deploy stripe-webhook --no-verify-jwt --project-ref viyvdqwwnbbqjuwiuzbh
+supabase functions deploy payment-webhook --no-verify-jwt --project-ref viyvdqwwnbbqjuwiuzbh
 ```
 
 ### Vercel env var to enable the UI
 
 In Vercel Dashboard → Settings → Environment Variables, add for all environments:
 
-- `VITE_STRIPE_ENABLED=true`
+- `VITE_PAYMENTS_ENABLED=true`
 
 Trigger a redeploy. Until this flag is set, the "Top up" button shows
-"launching soon" instead of opening Stripe.
+"launching soon" instead of opening checkout.
 
-### End-to-end test
+### End-to-end test (staging, with Test mode ON in Lemon Squeezy)
 
 1. Sign in to staging with `qa-tester` or a real test account.
-2. Trigger the paywall (e.g. set credits to 0 in DB and try to generate-brainstorm).
-3. Click **Top up** → choose **Small** → completes Stripe test checkout (card 4242 4242 4242 4242, any future expiry, any CVC).
-4. Verify webhook fires (Stripe Dashboard → Webhooks → Recent deliveries → 200 OK).
+2. Trigger the paywall (e.g. `UPDATE profiles SET credits = 0 WHERE username = 'qa-tester';` then try a brainstorm).
+3. Click **Top up** → choose **Small** → completes Lemon Squeezy test checkout (use card `4242 4242 4242 4242`, any future expiry, any CVC).
+4. Verify webhook fires (Lemon Squeezy Dashboard → Settings → Webhooks → click your webhook → Recent deliveries → 200 OK).
 5. Verify credits granted:
    ```sql
    SELECT username, credits FROM profiles WHERE username = 'qa-tester';
-   SELECT amount, balance_after, reason, stripe_session_id, created_at
+   SELECT amount, balance_after, reason, provider_session_id, created_at
    FROM credit_transactions WHERE user_id = '<qa-tester-uuid>'
    ORDER BY created_at DESC LIMIT 5;
    ```
-6. **Idempotency test:** Stripe Dashboard → Webhooks → click the delivery → "Resend" → verify balance does NOT increase a second time (idempotent on `stripe_session_id`).
+6. **Idempotency test:** Lemon Squeezy Dashboard → Webhooks → click the delivery → "Send again" → verify balance does NOT increase a second time (idempotent on `provider_session_id`).
 
 ---
 

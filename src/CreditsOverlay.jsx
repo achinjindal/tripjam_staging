@@ -18,17 +18,17 @@ const PACKS = [
   { id: "large", credits: 1000, price: 10, label: "Large", subtitle: "1000 credits · $10", badge: "Best value · 3.3× more per dollar" },
 ];
 
-const STRIPE_ENABLED = import.meta.env.VITE_STRIPE_ENABLED === "true";
+const PAYMENTS_ENABLED = import.meta.env.VITE_PAYMENTS_ENABLED === "true";
 
 async function startCheckout(packId, session) {
   if (!session?.access_token) {
     return { error: "Please sign in to top up." };
   }
-  if (!STRIPE_ENABLED) {
+  if (!PAYMENTS_ENABLED) {
     return { error: "Top-up is launching soon. Hang tight!" };
   }
   try {
-    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-checkout-session?pack=${packId}`;
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-checkout?pack=${packId}`;
     const res = await fetch(url, {
       method: "POST",
       headers: {
