@@ -1,12 +1,24 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { supabase } from "./supabase";
 
-// Master switch for the entire credits UX. Set to `false` to hide all
-// credit-related UI and bypass the paywall flow. Backend credit deduction
-// continues to run (and `llm_usage` continues to log) regardless.
-// To re-enable for launch: flip to `true` and grant users a real starting
-// balance via `UPDATE profiles SET credits = <N>`.
-export const CREDITS_UI_ENABLED = false;
+// Master switch for the entire credits UX. Day 2 re-enables this on
+// STAGING with the decimal credit system (NUMERIC(10,2)). Backend credit
+// deduction always runs; this flag only controls UI + paywall behavior.
+//
+// Per-environment: staging gets `true` to test the new flow; production
+// stays `false` until Day 3 ships the avatar dropdown + Stripe Checkout.
+// Falls back to `true` only on staging (detected by Supabase URL ref).
+const __SB_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const __IS_PROD = __SB_URL.includes("viyvdqwwnbbqjuwiuzbh");
+export const CREDITS_UI_ENABLED = !__IS_PROD;
+
+// Display credits as whole integers to the user (D14). The backend stores
+// NUMERIC(10,2); we render the floor so users always see "300" not "299.61".
+// Admin / debug mode can show full precision via balance.toFixed(2).
+export function displayCredits(balance) {
+  if (balance == null || !Number.isFinite(Number(balance))) return 0;
+  return Math.floor(Number(balance));
+}
 
 // Module-level credit store so every component can read the same balance
 // without prop-drilling. Updated by refreshCredits() after each gated call.

@@ -95,6 +95,99 @@ WHERE email IN ('<real-email>', '<legacy-email>');
 
 ---
 
+## Stripe Setup (Day 2 → Day 3)
+
+### One-time account setup
+
+1. Create Stripe account at https://dashboard.stripe.com/register (use your business email).
+2. Stay in **Test mode** for staging. **Live mode** only for production launch.
+
+### Create the two credit packs (Test mode first)
+
+Stripe Dashboard → Products → Create product (do this twice):
+
+| Pack  | Name              | Price | Credits | Description                |
+|-------|-------------------|-------|---------|----------------------------|
+| Small | TripJam 300 Credits | $5.00 USD | 300 | One-time, no subscription   |
+| Large | TripJam 1000 Credits | $10.00 USD | 1000 | One-time, no subscription   |
+
+- **Pricing model:** "Standard pricing", one-time
+- **Tax behavior:** "Exclusive" (or per local regulation)
+- **Recurring:** No (one-time only)
+
+After creating, copy each product's **Price ID** (starts with `price_`):
+- `STRIPE_PRICE_ID_SMALL` = price_xxx (300 credits)
+- `STRIPE_PRICE_ID_LARGE` = price_xxx (1000 credits)
+
+Repeat for **Live mode** when going to production.
+
+### Edge Function secrets (run for each env)
+
+```bash
+# Staging (test mode)
+supabase secrets set \
+  STRIPE_SECRET_KEY=sk_test_... \
+  STRIPE_WEBHOOK_SECRET=whsec_... \
+  STRIPE_PRICE_ID_SMALL=price_... \
+  STRIPE_PRICE_ID_LARGE=price_... \
+  APP_PUBLIC_URL=https://tripjam-staging.vercel.app \
+  --project-ref wlrzvwjdrjpfqcwgmzch
+
+# Production (live mode)
+supabase secrets set \
+  STRIPE_SECRET_KEY=sk_live_... \
+  STRIPE_WEBHOOK_SECRET=whsec_... \
+  STRIPE_PRICE_ID_SMALL=price_... \
+  STRIPE_PRICE_ID_LARGE=price_... \
+  APP_PUBLIC_URL=https://tripjam.vercel.app \
+  --project-ref viyvdqwwnbbqjuwiuzbh
+```
+
+### Webhook registration
+
+Stripe Dashboard → Developers → Webhooks → Add endpoint:
+
+- **Endpoint URL:** `https://<project-ref>.supabase.co/functions/v1/stripe-webhook`
+- **Events to send:** `checkout.session.completed`
+- Click "Add endpoint" → reveal the **Signing secret** (starts with `whsec_`) → use it for `STRIPE_WEBHOOK_SECRET` above.
+
+### Redeploy webhook with JWT verification disabled
+
+The webhook must be reachable by Stripe's servers (no Supabase auth). Stripe signature verification replaces JWT auth:
+
+```bash
+# Staging
+supabase functions deploy stripe-webhook --no-verify-jwt --project-ref wlrzvwjdrjpfqcwgmzch
+# Production
+supabase functions deploy stripe-webhook --no-verify-jwt --project-ref viyvdqwwnbbqjuwiuzbh
+```
+
+### Vercel env var to enable the UI
+
+In Vercel Dashboard → Settings → Environment Variables, add for all environments:
+
+- `VITE_STRIPE_ENABLED=true`
+
+Trigger a redeploy. Until this flag is set, the "Top up" button shows
+"launching soon" instead of opening Stripe.
+
+### End-to-end test
+
+1. Sign in to staging with `qa-tester` or a real test account.
+2. Trigger the paywall (e.g. set credits to 0 in DB and try to generate-brainstorm).
+3. Click **Top up** → choose **Small** → completes Stripe test checkout (card 4242 4242 4242 4242, any future expiry, any CVC).
+4. Verify webhook fires (Stripe Dashboard → Webhooks → Recent deliveries → 200 OK).
+5. Verify credits granted:
+   ```sql
+   SELECT username, credits FROM profiles WHERE username = 'qa-tester';
+   SELECT amount, balance_after, reason, stripe_session_id, created_at
+   FROM credit_transactions WHERE user_id = '<qa-tester-uuid>'
+   ORDER BY created_at DESC LIMIT 5;
+   ```
+6. **Idempotency test:** Stripe Dashboard → Webhooks → click the delivery → "Resend" → verify balance does NOT increase a second time (idempotent on `stripe_session_id`).
+
+---
+
 ## Credits (currently disabled, kept for future)
 
 ### Grant credits
