@@ -18,8 +18,11 @@ function fakeEmail(u) {
   return `${u.toLowerCase().trim().replace(/[^a-z0-9._-]/g, "")}@tripjam.app`;
 }
 
-export default function Auth() {
-  const [mode, setMode] = useState("signin");
+export default function Auth({ initialMode }) {
+  // Allow caller (Root in main.jsx) to force /signup vs /signin via URL.
+  const [mode, setMode] = useState(
+    initialMode === "signup" ? "signup" : "signin",
+  );
   // Signin accepts either: a real email OR a legacy username
   const [identifier, setIdentifier] = useState("");
   // Signup-only fields

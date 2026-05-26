@@ -4,6 +4,7 @@ import posthog from "posthog-js";
 import * as Sentry from "@sentry/react";
 import { supabase } from "./supabase";
 import Auth from "./Auth.jsx";
+import Landing from "./Landing.jsx";
 import Home from "./Home.jsx";
 import App from "./App.jsx";
 import TripPublicView from "./TripPublicView.jsx";
@@ -71,6 +72,8 @@ function parseUrl(path = window.location.pathname) {
   // Public share view — separate namespace from trip
   const publicMatch = path.match(/^\/share\/([a-f0-9-]{36})$/);
   if (publicMatch) return { page: "public", token: publicMatch[1] };
+  if (path === "/signin" || path === "/login") return { page: "signin" };
+  if (path === "/signup") return { page: "signup" };
   // Legacy /trip/:token format — only if no suffix (backwards compat)
   const legacyPublic = path.match(/^\/trip\/([a-f0-9-]{36})$/);
   // Check suffixed routes first (these are always authenticated trip views)
@@ -105,6 +108,9 @@ function Root() {
   const [activeTrip, setActiveTrip] = useState(null);
   const [initialTab, setInitialTab] = useState(null);
   const [initialStep, setInitialStep] = useState(0);
+  // urlVersion bumps on popstate so unauthed routes (Landing↔Auth) re-render
+  // when the path changes via pushState + dispatched PopStateEvent.
+  const [, setUrlVersion] = useState(0);
 
   useEffect(() => {
     supabase.auth
@@ -161,6 +167,7 @@ function Root() {
   // Browser back/forward
   useEffect(() => {
     const onPopState = () => {
+      setUrlVersion((v) => v + 1);
       const route = parseUrl();
       if (route.page === "home") {
         setActiveTrip(null);
@@ -204,7 +211,14 @@ function Root() {
   if (route.page === "public") return <TripPublicView token={route.token} />;
 
   if (session === undefined) return null;
-  if (!session) return <Auth />;
+  if (!session) {
+    // Landing page for unauthenticated visitors at "/".
+    // Explicit signin/signup paths jump straight to Auth.
+    // Any other path (deep-link) falls back to Auth so user can sign in then continue.
+    if (route.page === "home") return <Landing />;
+    if (route.page === "signup") return <Auth initialMode="signup" />;
+    return <Auth initialMode="signin" />;
+  }
 
   // Admin console — auth check is inside the component
   if (route.page === "admin") {
