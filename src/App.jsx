@@ -5647,46 +5647,84 @@ function DaySection({
               <ActivityCard
                 activity={act}
                 city={day.city}
-                delay={dayIndex * 400}
-                initialCommute={act.transition_mins ? { mins: act.transition_mins, mode: act.transition_mode } : null}
-                onResolved={(mins, mode) => {
-                  // Story 8.3 fix: properly await and check error; previously was fire-and-forget
-                  // and 0/2527 rows ever got transition_mins persisted in production.
-                  // Skip if act.id is a tmp-* (in-flight, no DB row yet).
-                  if (act.id && !String(act.id).startsWith("tmp-")) {
-                    supabase.from("activities").update({ transition_mins: mins, transition_mode: mode }).eq("id", act.id)
-                      .then(({ error }) => {
-                        if (error) console.warn("transition_mins write failed:", error.message, "activity:", act.id);
-                      });
-                  }
-                }}
+                onEdit={(updated) => onEditActivity(day.id, updated)}
+                onRemove={() => onRemoveActivity?.(day.id, act.id)}
+                onReplace={() => onReplaceActivity?.(act)}
+                onSuggestAlternatives={() => onSuggestAlternatives?.(act)}
+                onChangeHotel={(mode) => onChangeHotel?.(day.id, act, mode)}
+                transitMapsUrl={transitMapsUrl}
+                onAskTrippy={onAskTrippy}
               />
-            )}
-            {/* Last activity → hotel */}
-            {lastAct && endHotelActivity && act.type !== "hotel" && !samePackageAsHotel && (
-              <TransitionRow
-                from={act.type === "transit" && act.geocode_end ? { ...act, geocode: act.geocode_end } : act}
-                to={endHotelActivity}
-                city={day.city}
-                label="to hotel"
-                delay={dayIndex * 400}
-                initialCommute={act.transition_mins ? { mins: act.transition_mins, mode: act.transition_mode } : null}
-                onResolved={(mins, mode) => {
-                  // Story 8.3 fix: properly await and check error; previously was fire-and-forget
-                  // and 0/2527 rows ever got transition_mins persisted in production.
-                  // Skip if act.id is a tmp-* (in-flight, no DB row yet).
-                  if (act.id && !String(act.id).startsWith("tmp-")) {
-                    supabase.from("activities").update({ transition_mins: mins, transition_mode: mode }).eq("id", act.id)
-                      .then(({ error }) => {
-                        if (error) console.warn("transition_mins write failed:", error.message, "activity:", act.id);
-                      });
+              {!lastAct && !samePackageAsNext && (
+                <TransitionRow
+                  from={
+                    act.type === "transit" && act.geocode_end
+                      ? { ...act, geocode: act.geocode_end }
+                      : act
                   }
-                }}
-              />
-            )}
-          </div>
-        );
-      });
+                  to={day.activities[i + 1]}
+                  city={day.city}
+                  delay={dayIndex * 400}
+                  initialCommute={
+                    act.transition_mins
+                      ? { mins: act.transition_mins, mode: act.transition_mode }
+                      : null
+                  }
+                  onResolved={(mins, mode) => {
+                    // Story 8.3 fix: skip tmp-* in-flight IDs, log errors instead of fire-and-forget.
+                    // Previously 0/2527 rows ever got transition_mins persisted in production.
+                    if (act.id && !String(act.id).startsWith("tmp-")) {
+                      supabase
+                        .from("activities")
+                        .update({ transition_mins: mins, transition_mode: mode })
+                        .eq("id", act.id)
+                        .then(({ error }) => {
+                          if (error) console.warn("transition_mins write failed:", error.message, "activity:", act.id);
+                        });
+                    }
+                  }}
+                />
+              )}
+              {/* Last activity → hotel */}
+              {lastAct &&
+                endHotelActivity &&
+                act.type !== "hotel" &&
+                !samePackageAsHotel && (
+                  <TransitionRow
+                    from={
+                      act.type === "transit" && act.geocode_end
+                        ? { ...act, geocode: act.geocode_end }
+                        : act
+                    }
+                    to={endHotelActivity}
+                    city={day.city}
+                    label="to hotel"
+                    delay={dayIndex * 400}
+                    initialCommute={
+                      act.transition_mins
+                        ? {
+                            mins: act.transition_mins,
+                            mode: act.transition_mode,
+                          }
+                        : null
+                    }
+                    onResolved={(mins, mode) => {
+                      // Story 8.3 fix: skip tmp-* in-flight IDs, log errors instead of fire-and-forget.
+                      if (act.id && !String(act.id).startsWith("tmp-")) {
+                        supabase
+                          .from("activities")
+                          .update({ transition_mins: mins, transition_mode: mode })
+                          .eq("id", act.id)
+                          .then(({ error }) => {
+                            if (error) console.warn("transition_mins write failed:", error.message, "activity:", act.id);
+                          });
+                      }
+                    }}
+                  />
+                )}
+            </div>
+          );
+        });
       })()}
 
       {/* Wishlist */}
