@@ -90,11 +90,12 @@ Deno.serve(async (req) => {
         attributes: {
           checkout_data: {
             email: userEmail || undefined,
-            // custom is returned in webhook as meta.custom_data
+            // custom is returned in webhook as meta.custom_data.
+            // LS requires all custom values to be strings.
             custom: {
-              user_id: user.id,
-              credits: pack.credits,
-              pack: packParam,
+              user_id: String(user.id),
+              credits: String(pack.credits),
+              pack: String(packParam),
             },
           },
           checkout_options: {
