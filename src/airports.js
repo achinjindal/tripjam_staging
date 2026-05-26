@@ -22,7 +22,10 @@ export async function findNearestAirport({ lat, lng }, { maxKm = 250 } = {}) {
   const maxMeters = maxKm * 1000;
   for (const ap of airports) {
     const d = haversineMeters(target, { lat: ap.lat, lng: ap.lng });
-    if (d < bestDist) { best = ap; bestDist = d; }
+    if (d < bestDist) {
+      best = ap;
+      bestDist = d;
+    }
   }
   if (!best || bestDist > maxMeters) return null;
   return { ...best, distanceKm: bestDist / 1000 };

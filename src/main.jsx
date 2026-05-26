@@ -12,13 +12,16 @@ import { refreshCredits, CREDITS_UI_ENABLED } from "./credits";
 
 // ── PWA update check — reload on new version ──
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.ready.then(registration => {
+  navigator.serviceWorker.ready.then((registration) => {
     // Check for updates every 5 minutes
     setInterval(() => registration.update(), 5 * 60 * 1000);
     // Auto-reload when new service worker activates
     let refreshing = false;
     navigator.serviceWorker.addEventListener("controllerchange", () => {
-      if (!refreshing) { refreshing = true; window.location.reload(); }
+      if (!refreshing) {
+        refreshing = true;
+        window.location.reload();
+      }
     });
   });
 }
@@ -53,7 +56,11 @@ function parseUrl(path = window.location.pathname) {
   if (tripMatch) return { page: "trip", tripId: tripMatch[1] };
   if (path === "/admin") return { page: "admin" };
   const newStepMatch = path.match(/^\/new(?:\/(\d))?$/);
-  if (newStepMatch) return { page: "create", step: newStepMatch[1] ? parseInt(newStepMatch[1]) : 0 };
+  if (newStepMatch)
+    return {
+      page: "create",
+      step: newStepMatch[1] ? parseInt(newStepMatch[1]) : 0,
+    };
   return { page: "home" };
 }
 
@@ -73,8 +80,12 @@ function Root() {
   const [initialStep, setInitialStep] = useState(0);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => {
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => setSession(session));
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_e, s) => {
       setSession(s);
       // Identify user in PostHog
       if (s?.user) {
@@ -88,7 +99,11 @@ function Root() {
   }, []);
 
   const loadTrip = useCallback(async (tripId) => {
-    const { data } = await supabase.from("trips").select("*").eq("id", tripId).single();
+    const { data } = await supabase
+      .from("trips")
+      .select("*")
+      .eq("id", tripId)
+      .single();
     return data;
   }, []);
 
@@ -97,7 +112,7 @@ function Root() {
     if (!session) return;
     const route = parseUrl();
     if (route.page === "trip" || route.page === "edit") {
-      loadTrip(route.tripId).then(trip => {
+      loadTrip(route.tripId).then((trip) => {
         if (trip) {
           setActiveTrip(trip);
           setScreen(route.page === "edit" ? "edit" : "trip");
@@ -117,7 +132,8 @@ function Root() {
     const onPopState = () => {
       const route = parseUrl();
       if (route.page === "home") {
-        setActiveTrip(null); setScreen("home");
+        setActiveTrip(null);
+        setScreen("home");
       } else if (route.page === "create") {
         setScreen("create");
         setInitialStep(route.step || 0);
@@ -126,7 +142,7 @@ function Root() {
           setScreen(route.page === "edit" ? "edit" : "trip");
           if (route.tab) setInitialTab(route.tab);
         } else {
-          loadTrip(route.tripId).then(trip => {
+          loadTrip(route.tripId).then((trip) => {
             if (trip) {
               setActiveTrip(trip);
               setScreen(route.page === "edit" ? "edit" : "trip");
@@ -163,7 +179,13 @@ function Root() {
   if (route.page === "admin") {
     return (
       <>
-        <AdminConsole session={session} onHome={() => { pushUrl("/"); window.location.reload(); }} />
+        <AdminConsole
+          session={session}
+          onHome={() => {
+            pushUrl("/");
+            window.location.reload();
+          }}
+        />
         {CREDITS_UI_ENABLED && <CreditsOverlay session={session} />}
       </>
     );
@@ -175,7 +197,12 @@ function Root() {
         <Home
           session={session}
           onOpenTrip={openTrip}
-          onCreateTrip={() => { setActiveTrip(null); setScreen("create"); setInitialStep(0); pushUrl("/new/0"); }}
+          onCreateTrip={() => {
+            setActiveTrip(null);
+            setScreen("create");
+            setInitialStep(0);
+            pushUrl("/new/0");
+          }}
           onEditTrip={(trip) => {
             setActiveTrip(trip);
             setScreen("edit");
@@ -192,7 +219,9 @@ function Root() {
       <App
         session={session}
         initialTrip={activeTrip}
-        initialScreen={screen === "create" || screen === "edit" ? "setup" : "itinerary"}
+        initialScreen={
+          screen === "create" || screen === "edit" ? "setup" : "itinerary"
+        }
         initialTab={initialTab}
         initialSetupStep={initialStep}
         onHome={goHome}
@@ -206,5 +235,5 @@ function Root() {
 createRoot(document.getElementById("root")).render(
   <StrictMode>
     <Root />
-  </StrictMode>
+  </StrictMode>,
 );

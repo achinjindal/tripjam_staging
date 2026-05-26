@@ -1,23 +1,38 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { authenticateUser, unauthorized, outOfCredits, deductCredits } from "../_shared/credits.ts";
+import {
+  authenticateUser,
+  unauthorized,
+  outOfCredits,
+  deductCredits,
+} from "../_shared/credits.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 // Static system prompt — cached across requests
 // Style rules — only included in the user message for selected styles, not in the cached system prompt
 const STYLE_RULES: Record<string, string> = {
-  "Nature & Wildlife": "Okay to start early for wildlife/nature activities. Note permits, guides, or season restrictions.",
-  "Food & Culinary": "Include more meals than usual at legendary local places. Add shorter stops (ice cream, snack spots). Include a cooking class or food tour if it fits.",
-  "Shopping & Markets": "Include local markets, night markets, flea markets. Note what each is known for.",
-  "Photography & Scenery": "Prioritise viewpoints, golden-hour spots, photogenic locations. Schedule hilltop/rooftop visits at sunrise/sunset. Avoid midday harsh light.",
-  "Family & Kids": "Avoid kid-inappropriate activities. Prefer interactive museums, animal encounters, beaches. Keep days ≤8h. No late nights. Include child-friendly dining. Relaxed pace.",
-  "Nightlife & Bars": "Include bar-hopping, live music, night markets, rooftop bars after dinner. Keep mornings lighter.",
-  "Relaxation & Wellness": "Include spas, hammams, onsen, yoga. Reduce activity count. Prefer scenic walks and beach time.",
-  "Adventure & Thrill": "Prioritise trekking, rafting, diving, bungee — what's special for this destination. Early starts OK. Note gear/guide logistics.",
-  "History & Culture": "Include historic sites, local eateries, authentic local experiences.",
+  "Nature & Wildlife":
+    "Okay to start early for wildlife/nature activities. Note permits, guides, or season restrictions.",
+  "Food & Culinary":
+    "Include more meals than usual at legendary local places. Add shorter stops (ice cream, snack spots). Include a cooking class or food tour if it fits.",
+  "Shopping & Markets":
+    "Include local markets, night markets, flea markets. Note what each is known for.",
+  "Photography & Scenery":
+    "Prioritise viewpoints, golden-hour spots, photogenic locations. Schedule hilltop/rooftop visits at sunrise/sunset. Avoid midday harsh light.",
+  "Family & Kids":
+    "Avoid kid-inappropriate activities. Prefer interactive museums, animal encounters, beaches. Keep days ≤8h. No late nights. Include child-friendly dining. Relaxed pace.",
+  "Nightlife & Bars":
+    "Include bar-hopping, live music, night markets, rooftop bars after dinner. Keep mornings lighter.",
+  "Relaxation & Wellness":
+    "Include spas, hammams, onsen, yoga. Reduce activity count. Prefer scenic walks and beach time.",
+  "Adventure & Thrill":
+    "Prioritise trekking, rafting, diving, bungee — what's special for this destination. Early starts OK. Note gear/guide logistics.",
+  "History & Culture":
+    "Include historic sites, local eateries, authentic local experiences.",
 };
 
 const SYSTEM_PROMPT = `You are a travel expert who generates travel itineraries as JSON.
@@ -73,9 +88,32 @@ serve(async (req) => {
 
     const body = await req.json();
     console.log("Request body:", JSON.stringify(body));
-    const { destinations, numDays, travelers, styles, budget, pace, morningStart, notes, startDate, arrivalCity, arrivalTime, arrivalMode, departureCity, departureTime, departureMode, hasCar, votedItems, tripId } = body;
+    const {
+      destinations,
+      numDays,
+      travelers,
+      styles,
+      budget,
+      pace,
+      morningStart,
+      notes,
+      startDate,
+      arrivalCity,
+      arrivalTime,
+      arrivalMode,
+      departureCity,
+      departureTime,
+      departureMode,
+      votedItems,
+      tripId,
+    } = body;
 
-    const budgetLabel = { budget: "budget (hostels, street food)", mid: "mid-range (3-star hotels, local restaurants)", luxury: "luxury (5-star hotels, fine dining)" }[budget] || "mid-range";
+    const budgetLabel =
+      {
+        budget: "budget (hostels, street food)",
+        mid: "mid-range (3-star hotels, local restaurants)",
+        luxury: "luxury (5-star hotels, fine dining)",
+      }[budget] || "mid-range";
     const stylesText = styles.join(", ");
     // Only include style rules for selected styles (saves ~600 tokens vs all 9 in system prompt)
     const styleNotes = (styles || [])
@@ -83,19 +121,40 @@ serve(async (req) => {
       .filter(Boolean)
       .map((rule: string) => `  • ${rule}`)
       .join("\n");
-    const paceNote = pace === "relaxed"
-      ? "PACE: This is a relaxed trip. Plan 4-5 activities per day, with gaps for rest, wandering, or sitting at a cafe. Do not pack the day."
-      : "PACE: This is an active trip. Aim for 5-7 activities per day — push toward the higher end unless an activity is genuinely long (3h+). Make good use of the time available and plan till dinner.";
-    const morningNote = morningStart === "late"
-      ? "MORNING ROUTINE: These travelers like a slow start. On days without an arrival constraint, the first activity should not begin before 10:30–11:00. Build in time for a leisurely breakfast. Only start earlier if there is a genuinely unmissable reason (e.g. sunrise at a landmark, avoiding extreme midday heat, timed entry)."
-      : "MORNING ROUTINE: These travelers are early birds. From Day 2 onwards, first activity can start at 08:00–09:00 to beat crowds and enjoy the cool morning. Plan till dinner with breaks as needed.";
+    const paceNote =
+      pace === "relaxed"
+        ? "PACE: This is a relaxed trip. Plan 4-5 activities per day, with gaps for rest, wandering, or sitting at a cafe. Do not pack the day."
+        : "PACE: This is an active trip. Aim for 5-7 activities per day — push toward the higher end unless an activity is genuinely long (3h+). Make good use of the time available and plan till dinner.";
+    const morningNote =
+      morningStart === "late"
+        ? "MORNING ROUTINE: These travelers like a slow start. On days without an arrival constraint, the first activity should not begin before 10:30–11:00. Build in time for a leisurely breakfast. Only start earlier if there is a genuinely unmissable reason (e.g. sunrise at a landmark, avoiding extreme midday heat, timed entry)."
+        : "MORNING ROUTINE: These travelers are early birds. From Day 2 onwards, first activity can start at 08:00–09:00 to beat crowds and enjoy the cool morning. Plan till dinner with breaks as needed.";
 
     // Buffers by travel mode
-    const arrivalBuffers:  Record<string,number> = { flight: 90, train: 45, bus: 20, road: 20 };
-    const departureBuffers: Record<string,number> = { flight: 150, train: 60, bus: 30, road: 30 };
-    const arrivalBuffer  = arrivalBuffers[arrivalMode  ?? "flight"] ?? 90;
-    const arrivalVerb    = { flight: "lands", train: "arrives by train", bus: "arrives by bus", road: "arrives by road" }[arrivalMode ?? "flight"] ?? "arrives";
-    const arrivalPort    = { flight: "airport", train: "station", bus: "bus station", road: "" }[arrivalMode ?? "flight"] ?? "";
+    const arrivalBuffers: Record<string, number> = {
+      flight: 90,
+      train: 45,
+      bus: 20,
+      road: 20,
+    };
+    const departureBuffers: Record<string, number> = {
+      flight: 150,
+      train: 60,
+      bus: 30,
+      road: 30,
+    };
+    const arrivalBuffer = arrivalBuffers[arrivalMode ?? "flight"] ?? 90;
+    const arrivalVerb =
+      {
+        flight: "lands",
+        train: "arrives by train",
+        bus: "arrives by bus",
+        road: "arrives by road",
+      }[arrivalMode ?? "flight"] ?? "arrives";
+    const arrivalPort =
+      { flight: "airport", train: "station", bus: "bus station", road: "" }[
+        arrivalMode ?? "flight"
+      ] ?? "";
 
     let day1Note = "";
     if (arrivalTime) {
@@ -110,9 +169,13 @@ serve(async (req) => {
     }
 
     const departureBuffer = departureBuffers[departureMode ?? "flight"] ?? 150;
-    const departureDesc = { flight: "return flight departs", train: "return train departs", bus: "return bus departs", road: "travelers depart by road" }[departureMode ?? "flight"] ?? "return departs";
-    const departurePortDesc = { flight: "travel to the airport and check in", train: "travel to the station", bus: "travel to the bus station", road: "pack up and begin the drive" }[departureMode ?? "flight"] ?? "depart";
-
+    const departureDesc =
+      {
+        flight: "return flight departs",
+        train: "return train departs",
+        bus: "return bus departs",
+        road: "travelers depart by road",
+      }[departureMode ?? "flight"] ?? "return departs";
     let lastDayNote = "";
     if (departureTime) {
       const [h, m] = departureTime.split(":").map(Number);
@@ -120,24 +183,45 @@ serve(async (req) => {
       const cutHH = String(Math.floor(cutoffMins / 60) % 24).padStart(2, "0");
       const cutMM = String(cutoffMins % 60).padStart(2, "0");
       const depCity = departureCity || destinations[destinations.length - 1];
-      const depPort = { flight: "airport", train: "train station", bus: "bus station", road: "" }[departureMode ?? "flight"] ?? "";
+      const depPort =
+        {
+          flight: "airport",
+          train: "train station",
+          bus: "bus station",
+          road: "",
+        }[departureMode ?? "flight"] ?? "";
       lastDayNote = `LAST DAY CONSTRAINT (ABSOLUTE HARD RULE): ${departureDesc.charAt(0).toUpperCase() + departureDesc.slice(1)} at ${departureTime} from ${depCity}. Every sightseeing/food activity on the last day MUST end by ${cutHH}:${cutMM}. The LAST activity of the last day MUST be a transit activity (type:"transit") to the ${depPort || "departure point"} — e.g. title "Transit to ${depCity}${depPort ? " " + depPort : ""}", time "${cutHH}:${cutMM}", duration "${departureBuffer}min". This departure transit is MANDATORY — the itinerary must end with it. No hotel check-in on the last day.`;
     }
 
-    const notesNote = notes ? `TRAVELER NOTES: ${notes}. Factor this into every day of the itinerary.` : "";
-    const travelMonth = startDate ? new Date(startDate).toLocaleString("en-US", { month: "long" }) : null;
+    const notesNote = notes
+      ? `TRAVELER NOTES: ${notes}. Factor this into every day of the itinerary.`
+      : "";
+    const travelMonth = startDate
+      ? new Date(startDate).toLocaleString("en-US", { month: "long" })
+      : null;
 
     // Build route-constraint block ABOVE the main prompt so it takes precedence
     let routeConstraint = "";
     let extraPrefs = "";
     if (votedItems && votedItems.length > 0) {
-      const upvotedRegions = votedItems.filter((it: any) => it.tier === 1 && it.vote === 1);
-      const upvotedExp = votedItems.filter((it: any) => (it.tier || 2) === 2 && it.vote === 1);
-      const downvotedExp = votedItems.filter((it: any) => (it.tier || 2) === 2 && it.vote === -1);
+      const upvotedRegions = votedItems.filter(
+        (it: any) => it.tier === 1 && it.vote === 1,
+      );
+      const upvotedExp = votedItems.filter(
+        (it: any) => (it.tier || 2) === 2 && it.vote === 1,
+      );
+      const downvotedExp = votedItems.filter(
+        (it: any) => (it.tier || 2) === 2 && it.vote === -1,
+      );
       if (upvotedRegions.length) {
         const r = upvotedRegions[0]; // usually exactly one
-        const routeCities = (r.city || "").split(",").map((c: string) => c.trim()).filter(Boolean);
-        const routeDays = (r.days || []).map((d: any) => typeof d === "string" ? d : (d?.description || d?.day || ""));
+        const routeCities = (r.city || "")
+          .split(",")
+          .map((c: string) => c.trim())
+          .filter(Boolean);
+        const routeDays = (r.days || []).map((d: any) =>
+          typeof d === "string" ? d : d?.description || d?.day || "",
+        );
         // Infer overnight bases from the day template: per day, find which city the traveler SLEEPS in.
         // Look for explicit "return to X", "overnight in X", "back to X for overnight" phrasing; else assume
         // the day's primary city is the overnight base.
@@ -146,10 +230,13 @@ serve(async (req) => {
           const dayText = routeDays[i].toLowerCase();
           let base = "";
           // Pattern 1: explicit return/overnight
-          const m = dayText.match(/(?:return to|overnight in|back to|based in|stay in|sleep in)\s+([a-z][a-z\s\-]+?)(?:$|[,.]|\s+for\s+overnight)/i);
+          const m = dayText.match(
+            /(?:return to|overnight in|back to|based in|stay in|sleep in)\s+([a-z][a-z\s\-]+?)(?:$|[,.]|\s+for\s+overnight)/i,
+          );
           if (m) base = m[1].trim();
           // Pattern 2: day trip pattern implies return to previous base
-          else if (dayText.includes("day trip") && bases[i - 1]) base = bases[i - 1];
+          else if (dayText.includes("day trip") && bases[i - 1])
+            base = bases[i - 1];
           // Pattern 3: transit pattern "X → Y" → base is Y (destination)
           else {
             const transit = routeDays[i].match(/→\s*([A-Z][a-z\-]+)/);
@@ -157,7 +244,9 @@ serve(async (req) => {
           }
           // Fallback: use first city mentioned in the line
           if (!base) {
-            const cityHit = routeCities.find((c: string) => dayText.includes(c.toLowerCase()));
+            const cityHit = routeCities.find((c: string) =>
+              dayText.includes(c.toLowerCase()),
+            );
             if (cityHit) base = cityHit;
           }
           // Final fallback: previous base (if any)
@@ -165,7 +254,10 @@ serve(async (req) => {
           bases.push(base || routeCities[0] || "");
         }
         // Compute night-by-night summary — nights = days - 1 (last day usually ends in departure, no overnight)
-        const nightsSummary = bases.slice(0, Math.max(0, bases.length - 1)).map((b, i) => `  Night ${i + 1} (after Day ${i + 1}): sleep in ${b}`).join("\n");
+        const nightsSummary = bases
+          .slice(0, Math.max(0, bases.length - 1))
+          .map((b, i) => `  Night ${i + 1} (after Day ${i + 1}): sleep in ${b}`)
+          .join("\n");
 
         routeConstraint = `SELECTED ROUTE (ABSOLUTE HARD CONSTRAINT — highest priority):
 The traveler explicitly chose the "${r.title}" route. The itinerary MUST follow this route exactly:
@@ -186,11 +278,26 @@ Interpretation rules (VERY IMPORTANT — read carefully):
 
 DAY-BY-DAY TEMPLATE (the traveler agreed to this flow — refine activities, keep the place/theme/base structure):
 ${routeDays.map((d: string, i: number) => `  Day ${i + 1}: ${d}`).join("\n")}
-${r.points?.length ? `\nKey characteristics of this route the traveler values:\n${(r.points || []).filter((p: any) => p.good !== false).map((p: any) => `  • ${p.text}`).join("\n")}` : ""}`;
+${
+  r.points?.length
+    ? `\nKey characteristics of this route the traveler values:\n${(
+        r.points || []
+      )
+        .filter((p: any) => p.good !== false)
+        .map((p: any) => `  • ${p.text}`)
+        .join("\n")}`
+    : ""
+}`;
       }
       const prefParts: string[] = [];
-      if (upvotedExp.length) prefParts.push(`Experiences the traveler wants included: ${upvotedExp.map((e: any) => e.title).join(", ")}`);
-      if (downvotedExp.length) prefParts.push(`Experiences to avoid: ${downvotedExp.map((e: any) => e.title).join(", ")}`);
+      if (upvotedExp.length)
+        prefParts.push(
+          `Experiences the traveler wants included: ${upvotedExp.map((e: any) => e.title).join(", ")}`,
+        );
+      if (downvotedExp.length)
+        prefParts.push(
+          `Experiences to avoid: ${downvotedExp.map((e: any) => e.title).join(", ")}`,
+        );
       if (prefParts.length) extraPrefs = `\n\n${prefParts.join("\n")}`;
     }
 
@@ -216,10 +323,14 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
         max_tokens: Math.min(16000, numDays * 1800 + 2000),
         temperature: 0.8,
         stream: true,
-        system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
-        messages: [
-          { role: "user", content: userMessage },
+        system: [
+          {
+            type: "text",
+            text: SYSTEM_PROMPT,
+            cache_control: { type: "ephemeral" },
+          },
         ],
+        messages: [{ role: "user", content: userMessage }],
       }),
     });
 
@@ -236,7 +347,13 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       max_tokens: Math.min(16000, numDays * 1800 + 2000),
       temperature: 0.8,
       stream: true,
-      system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+      system: [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
       messages: [{ role: "user", content: userMessage }],
     });
     const estimatedInputTokens = Math.round(requestBodyStr.length / 4);
@@ -264,15 +381,27 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
             if (raw === "[DONE]") continue;
             try {
               const event = JSON.parse(raw);
-              if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+              if (
+                event.type === "content_block_delta" &&
+                event.delta?.type === "text_delta"
+              ) {
                 outputLength += event.delta.text.length;
-                await writer.write(encoder.encode(`data: ${JSON.stringify(event.delta.text)}\n\n`));
+                await writer.write(
+                  encoder.encode(
+                    `data: ${JSON.stringify(event.delta.text)}\n\n`,
+                  ),
+                );
               } else if (event.type === "error") {
-                console.error("Anthropic stream error:", JSON.stringify(event.error));
+                console.error(
+                  "Anthropic stream error:",
+                  JSON.stringify(event.error),
+                );
               } else {
                 console.log("Event type:", event.type);
               }
-            } catch (e) { console.error("Parse error:", e.message, raw.slice(0, 100)); }
+            } catch (e) {
+              console.error("Parse error:", e.message, raw.slice(0, 100));
+            }
           }
         }
       } finally {
@@ -287,8 +416,8 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": supabaseKey,
-            "Authorization": `Bearer ${supabaseKey}`,
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
           },
           body: JSON.stringify({
             trip_id: tripId || null,
@@ -311,7 +440,11 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
     })();
 
     return new Response(readable, {
-      headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+      },
     });
   } catch (err) {
     console.error("Function error:", err.message, err.stack);

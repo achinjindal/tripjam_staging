@@ -1,9 +1,11 @@
 # TripJam — CLAUDE.md
 
 ## What is this?
+
 TripJam is an AI-powered travel planning and collaboration app. Solo founder project.
 
 ## Tech Stack
+
 - **Frontend:** React 18 (JSX) + Vite 8, single-page app, no router library (History API for URL routing)
 - **Backend:** Supabase (Postgres, Auth, Edge Functions, RLS, Realtime)
 - **AI:** Anthropic Claude API — Sonnet 4.6 for RG/IG/chat, Haiku 4.5 for todos/expenses/deep-dives/preferences
@@ -16,6 +18,7 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 - **Hosting:** Vercel (frontend auto-deploy), Supabase (backend/DB/functions)
 
 ## Project Structure
+
 ```
 src/
   App.jsx            — Main UI (~5000 lines, core state + views)
@@ -55,6 +58,7 @@ e2e/                 — Playwright E2E tests
 ```
 
 ## Commands
+
 ```bash
 # Dev server
 npm run dev                    # Vite on localhost:5173
@@ -62,6 +66,13 @@ npm run dev                    # Vite on localhost:5173
 # Build
 npm run build                  # Production build
 npm run build:android          # Build + Capacitor sync
+
+# Review gate
+npm run format                 # Format code with Prettier
+npm run format:check           # Verify formatting
+npm run lint                   # ESLint
+npm run typecheck              # Web TS + Supabase Edge Function Deno checks
+npm run check                  # format:check + lint + typecheck + build
 
 # E2E tests
 npx playwright test            # Run all tests (sequential, workers: 1)
@@ -75,6 +86,7 @@ npm run db:push:prod                # Apply migrations to production
 ```
 
 ## Internal Nomenclature
+
 - **RG** — Route Generation. Pre-IG step where 4 route options are generated.
 - **IG** — Itinerary Generation. Full day-by-day plan from selected route. Two phases: compact (fast) then detailed (streaming).
 - **Magazine** — Destination guide tab (highlights, deep dives, food, tips). Lazy-loaded: destination + top 2 cities on route load, rest on Magazine open.
@@ -83,6 +95,7 @@ npm run db:push:prod                # Apply migrations to production
 - **Transit tips** — Per-day actionable public transport advice (e.g. "Use Suica card · Day pass ¥600").
 
 ## Architecture Notes
+
 - App.jsx split into components: BoardView, SetupForm, Magazine, MapView + shared modules (theme, photos, context).
 - Design system in theme.js: T (colors + semantic states), TYPE (6-level typography), RADIUS (4 values), SHADOW (3 levels), MOTION (3 speeds).
 - Auth uses username + password only (no email). Fake email = `username@tripjam.app`.
@@ -101,27 +114,32 @@ npm run db:push:prod                # Apply migrations to production
 - LLM usage logged to llm_usage table (all edge functions, fire-and-forget).
 
 ## Admin Console
+
 - Route: `/admin` — gated by `is_admin` boolean on profiles table
 - Tabs: Users, Trips, Credits (by function/model), Daily Usage
 - Shows: trip counts, chat counts, IG timing, activity breakdown, token usage, cost estimates
 - Cost rates: Sonnet $3/$15 per M tokens, Haiku $0.80/$4 per M tokens
 
 ## Testing
+
 - Playwright config: `workers: 1` (sequential) — API-dependent tests can't run in parallel.
 - Test user: `qa-tester` / `qaTest123!`
 - Tests use real Supabase (not mocked). Board tests create trips via serial setup fixture.
 - QA skills: `/code-review` (static analysis), `/qa-e2e` (browser tests with cost tracking).
+- Before sending code for review, run `npm run check`. If formatting fails, run `npm run format`, then rerun `npm run check`.
 
 ## Environments
+
 Two Supabase projects — local dev and staging share one, production is isolated.
 
-| | Staging/Local | Production |
-|---|---|---|
-| **Supabase ref** | `wlrzvwjdrjpfqcwgmzch` | `viyvdqwwnbbqjuwiuzbh` |
-| **Used by** | `npm run dev`, E2E tests, Vercel preview | `npm run build`, Vercel production, APK |
-| **Env file** | `.env` | `.env.production` |
+|                  | Staging/Local                            | Production                              |
+| ---------------- | ---------------------------------------- | --------------------------------------- |
+| **Supabase ref** | `wlrzvwjdrjpfqcwgmzch`                   | `viyvdqwwnbbqjuwiuzbh`                  |
+| **Used by**      | `npm run dev`, E2E tests, Vercel preview | `npm run build`, Vercel production, APK |
+| **Env file**     | `.env`                                   | `.env.production`                       |
 
 ## Deployment
+
 - Vercel auto-deploys on push. Preview deploys use staging Supabase, production deploys use production Supabase.
 - **Do not push to any remote without explicit user approval.** Every remote auto-deploys.
 - **Do not make code changes without user approval.** Discuss first, implement after approval. Exception: clear bug fixes can be applied directly.
@@ -130,6 +148,7 @@ Two Supabase projects — local dev and staging share one, production is isolate
 - After any file extraction/split, verify no duplicate `const T =` definitions and no escaped unicode (`\\u` sequences).
 
 ## Supabase Edge Functions
+
 - Runtime: Deno (TypeScript)
 - All use Anthropic API via direct fetch or `npm:@anthropic-ai/sdk`
 - CORS headers required on every response

@@ -72,7 +72,6 @@ What's already done in production and staging, *before* the formal Day 0 of the 
 
 These must be resolved on Day 0 — they have downstream copy, code, and legal implications.
 
-
 | #   | Decision                       | Value                                                                                                                                | Confirmed? |
 | --- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------- |
 | D1  | Free credits granted on signup | **100 credits** (~2 typical trips)                                                                                                   | ✅          |
@@ -127,7 +126,6 @@ Rescale context (D18): the existing code uses `CREDIT_LLM_BUDGET_USD = 0.035` ($
 
 These are real, valid improvements. They are explicitly **out of scope** for the 2-week sprint. Move to §10 backlog.
 
-
 | Cut                                         | Why it's safe to defer                                                   |
 | ------------------------------------------- | ------------------------------------------------------------------------ |
 | Decompose `App.jsx` (5,097 lines)           | Works today. Refactoring → bugs → bad launch.                            |
@@ -137,7 +135,7 @@ These are real, valid improvements. They are explicitly **out of scope** for the
 | Refresh stale `schema.sql`                  | Migrations are the truth. Cosmetic.                                      |
 | iOS via Capacitor                           | Web-first launch. iOS is a 1-day project later.                          |
 | Play Store listing                          | Offer APK download from landing page if asked.                           |
-| Onboarding tour                             | The 3-step setup wizard *is* the onboarding.                             |
+| Onboarding tour                             | The 3-step setup wizard _is_ the onboarding.                             |
 | Help center / docs site                     | FAQ accordion on landing page covers 80%.                                |
 | GDPR data export/deletion UI                | Have a manual SQL process ready. Build UI after first complaint.         |
 | Email-based password reset                  | Optional email field + manual reset. Acceptable for ≤200 users.          |
@@ -145,11 +143,9 @@ These are real, valid improvements. They are explicitly **out of scope** for the
 | Refactor `TripPublicView` to use `theme.js` | Drift, not bug.                                                          |
 | Move untracked HTML mockups                 | `.gitignore` them, done.                                                 |
 
-
 ---
 
 ## 3. Architecture Decisions for This Sprint
-
 
 | Area                   | Decision                                                                                                                           | Notes                                         |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
@@ -158,9 +154,9 @@ These are real, valid improvements. They are explicitly **out of scope** for the
 | Error tracking         | **Sentry** (frontend SDK + edge function wrapper)                                                                                  | Free tier sufficient                          |
 | Payments               | **Stripe Checkout (hosted)** — no custom payment form                                                                              | Single $5 SKU                                 |
 | Webhook → credit grant | **New edge function** `stripe-webhook` → calls existing `grant_credits` RPC with idempotency key on `stripe_session_id`            | Grants in NUMERIC (D11)                       |
-| Credit storage         | `**NUMERIC(10,2)`** on `profiles.credits` and `credit_transactions.amount`                                                         | Exact decimal math, no float errors           |
+| Credit storage         | `**NUMERIC(10,2)`\*\* on `profiles.credits` and `credit_transactions.amount`                                                       | Exact decimal math, no float errors           |
 | Credit charging        | **Cost-based, fair**: `ceil(actual_cost_usd / 0.007 × 100) / 100`. No `Math.max(1, ...)` floor.                                    | Replaces current integer-ceiling model        |
-| Credit display         | `**Math.floor(balance)`** wrapper everywhere user-facing; admin/debug shows 2 decimals                                             | Users never see fractions                     |
+| Credit display         | `**Math.floor(balance)`\*\* wrapper everywhere user-facing; admin/debug shows 2 decimals                                           | Users never see fractions                     |
 | Credit rescale         | **One-time 5× rescale** combined with the NUMERIC type change in a single Day 2 migration                                          | `credits::numeric * 5` in the `USING` clause  |
 | Overdraw guard         | **Pre-flight check**: edge functions (RG / IG / chat) return 402 if `credits < 1.0` before calling Anthropic                       | Cheap, simple; accept ~$0.12 worst-case bleed |
 | Rate limiting          | **Postgres counter per user per minute**, checked in `_shared/credits.ts`                                                          | Cheap; leverages existing auth path           |
@@ -170,7 +166,6 @@ These are real, valid improvements. They are explicitly **out of scope** for the
 | Credits UX             | **No persistent indicator** (D19). Top-right avatar dropdown for balance + top-up (D20). Warning at displayed ≤10 (D4).             | Day 2-3 wires this                            |
 | Desktop                | **≥1024px breakpoint** (D21). Sidebar + center + persistent map/chat right panel (D22).                                             | Backlog — post-launch month 2+                |
 | Cost guardrails        | **Anthropic hard spend cap** + **Supabase usage alerts**                                                                           | Set before Stripe goes live                   |
-
 
 ---
 
@@ -538,7 +533,6 @@ All must be true:
 
 ## 6. Risk Register
 
-
 | #   | Risk                                                 | Likelihood   | Impact | Mitigation                                                                                                                                                                       |
 | --- | ---------------------------------------------------- | ------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | R1  | Anthropic bill spikes from abuse                     | Medium       | High   | Per-user rate limit (Day 7) + Anthropic hard spend cap + kill switch                                                                                                             |
@@ -554,7 +548,6 @@ All must be true:
 | R11 | Long-trip user hits credit wall mid-IG               | Medium       | High   | Pre-flight `credits < 1.0` check (Day 2 / D14). Daily admin query for `WHERE credits < 0` post-launch. If overdraw is common, switch to per-endpoint estimates (RG: 10, IG: 30). |
 | R12 | Magazine pre-fetch causes opaque credit drops        | High pre-fix | Medium | D17 hybrid: pre-fetch destination only (Day 6). One-line UI hint near Magazine tab: "~1 credit per city explored" (Day 3).                                                       |
 
-
 ---
 
 ## 7. Cost Model (Per-Call and Per-Trip)
@@ -562,7 +555,6 @@ All must be true:
 All numbers below assume the new scale: `1 credit = $0.01 user value = $0.007 LLM budget`. Per-call charge = `ceil(actual_cost_usd / 0.007 × 100) / 100`.
 
 ### Per-call credit charges (cost-based, fair)
-
 
 | Use case                                     | Model  | Real cost USD | Decimal credits | Visible drop |
 | -------------------------------------------- | ------ | ------------- | --------------- | ------------ |
@@ -576,9 +568,7 @@ All numbers below assume the new scale: `1 credit = $0.01 user value = $0.007 LL
 | `generate-itinerary` detailed (7d)           | Sonnet | ~$0.10        | 14.29           | 14-15        |
 | `chat` exchange                              | Sonnet | $0.005-0.02   | 0.72-2.86       | 1-3          |
 
-
 ### Per-trip consumption ranges
-
 
 | Trip profile                                  | Credits typically consumed | % of 100 free | Conversion trigger?                              |
 | --------------------------------------------- | -------------------------- | ------------- | ------------------------------------------------ |
@@ -586,7 +576,6 @@ All numbers below assume the new scale: `1 credit = $0.01 user value = $0.007 LL
 | Week (7 days, 2-3 cities, normal chat)        | ~45                        | 45%           | No — free tier covers with margin                |
 | Two-week (14 days, 4-5 cities, heavy use)     | ~66                        | 66%           | No — first trip free, second trip prompts top-up |
 | Three-week heavy (21+ days, deep exploration) | ~99                        | 99%           | **Yes** — hits the wall, ideal time to convert   |
-
 
 ### Margin per paid pack
 
@@ -711,7 +700,6 @@ Full story details in [USER_STORIES.md](USER_STORIES.md). Brief summary here for
 ---
 
 ## 11. Change Log
-
 
 | Date       | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Author         |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |

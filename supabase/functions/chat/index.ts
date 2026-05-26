@@ -1,9 +1,15 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { authenticateUser, unauthorized, outOfCredits, deductCredits } from "../_shared/credits.ts";
+import {
+  authenticateUser,
+  unauthorized,
+  outOfCredits,
+  deductCredits,
+} from "../_shared/credits.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 serve(async (req) => {
@@ -16,17 +22,23 @@ serve(async (req) => {
     if (!user) return unauthorized(corsHeaders);
     if (user.credits <= 0) return outOfCredits(corsHeaders, user.credits);
 
-    const { screen, trip, routes, days, form, message, history } = await req.json();
+    const { screen, trip, routes, days, form, message, history } =
+      await req.json();
 
     // ── Build context based on current screen ──
     const isBrainstorm = screen === "brainstorm";
     const isItinerary = screen === "itinerary";
 
     // Route summary (for brainstorm context)
-    const routeSummary = (routes || []).map((r: any, i: number) => {
-      const points = (r.points || []).map((p: any) => `  • ${p.good === false ? "✗" : "✓"} ${p.text}`).join("\n");
-      const dayLines = (r.days || []).map((d: string, di: number) => `    Day ${di + 1}: ${d}`).join("\n");
-      return `PLAN P${i + 1} (id="${r.id}") — ${r.title}
+    const routeSummary = (routes || [])
+      .map((r: any, i: number) => {
+        const points = (r.points || [])
+          .map((p: any) => `  • ${p.good === false ? "✗" : "✓"} ${p.text}`)
+          .join("\n");
+        const dayLines = (r.days || [])
+          .map((d: string, di: number) => `    Day ${di + 1}: ${d}`)
+          .join("\n");
+        return `PLAN P${i + 1} (id="${r.id}") — ${r.title}
   Cities: ${r.city || ""}
   Tagline: ${r.tagline || ""}
   Best for: ${r.bestFor || ""}
@@ -36,38 +48,54 @@ serve(async (req) => {
 ${dayLines}
   Points:
 ${points}`;
-    }).join("\n\n");
+      })
+      .join("\n\n");
 
     // Itinerary summary (for itinerary context)
-    const itinerarySummary = (days || []).map((d: any) => {
-      const acts = (d.activities || []).map((a: any) => `${a.time} ${a.title}`).join(", ");
-      const gems = d.wishlist?.length ? ` | Local gems: ${d.wishlist.map((w: any) => w.title).join(", ")}` : "";
-      return `${d.label} - ${d.city}: ${acts}${gems}`;
-    }).join("\n");
+    const itinerarySummary = (days || [])
+      .map((d: any) => {
+        const acts = (d.activities || [])
+          .map((a: any) => `${a.time} ${a.title}`)
+          .join(", ");
+        const gems = d.wishlist?.length
+          ? ` | Local gems: ${d.wishlist.map((w: any) => w.title).join(", ")}`
+          : "";
+        return `${d.label} - ${d.city}: ${acts}${gems}`;
+      })
+      .join("\n");
 
     // Logistics
-    const fmtTime = (iso: string) => iso ? iso.split("T")[1]?.substring(0, 5) : null;
+    const fmtTime = (iso: string) =>
+      iso ? iso.split("T")[1]?.substring(0, 5) : null;
     const logisticsParts: string[] = [];
     if (trip?.arrival_time) {
       const t = fmtTime(trip.arrival_time);
-      logisticsParts.push(`Arrival: ${t}${trip.arrival_city ? ` at ${trip.arrival_city}` : ""}${trip.arrival_mode ? ` (${trip.arrival_mode})` : ""} on Day 1`);
+      logisticsParts.push(
+        `Arrival: ${t}${trip.arrival_city ? ` at ${trip.arrival_city}` : ""}${trip.arrival_mode ? ` (${trip.arrival_mode})` : ""} on Day 1`,
+      );
     }
     if (trip?.departure_time) {
       const t = fmtTime(trip.departure_time);
       const lastDay = days?.[days.length - 1]?.label || "last day";
-      logisticsParts.push(`Departure: ${t}${trip.departure_city ? ` from ${trip.departure_city}` : ""}${trip.departure_mode ? ` (${trip.departure_mode})` : ""} on ${lastDay}`);
+      logisticsParts.push(
+        `Departure: ${t}${trip.departure_city ? ` from ${trip.departure_city}` : ""}${trip.departure_mode ? ` (${trip.departure_mode})` : ""} on ${lastDay}`,
+      );
     }
-    const logisticsNote = logisticsParts.length ? `\nLogistics: ${logisticsParts.join(" · ")}` : "";
+    const logisticsNote = logisticsParts.length
+      ? `\nLogistics: ${logisticsParts.join(" · ")}`
+      : "";
 
     // Form info
-    const formInfo = form ? `
+    const formInfo = form
+      ? `
 TRAVELLER PREFERENCES:
 - Destinations: ${(form.destinations || []).join(", ")}
 - Travel month: ${form.startDate ? new Date(form.startDate).toLocaleString("en-US", { month: "long" }) : "not set"}
 - Duration: ${form.startDate && form.endDate ? Math.max(1, Math.round((new Date(form.endDate).getTime() - new Date(form.startDate).getTime()) / 864e5) + 1) + " days" : "not set"}
 - Travelers: ${form.travelers || "not set"}
 - Budget: ${form.budget || "not set"}
-- Notes: ${form.notes || "none"}` : "";
+- Notes: ${form.notes || "none"}`
+      : "";
 
     const systemPrompt = `You are Trippy, a friendly travel planning assistant. Refer to yourself as Trippy if asked.
 
@@ -82,7 +110,9 @@ ACTIONS — You can perform these actions by including an "actions" array in you
 Each action is an object with a "type" field and action-specific data.
 
 AVAILABLE ACTIONS:
-${isBrainstorm ? `
+${
+  isBrainstorm
+    ? `
 1. update_route — Modify an existing plan's fields (title, days, cities, points, etc.)
    {"type":"update_route","route":{...full route object with id...}}
    RULES:
@@ -103,8 +133,12 @@ ${isBrainstorm ? `
 3. generate_more_plans — Trigger generation of additional plan options
    {"type":"generate_more_plans"}
    Use when user says "show me more options", "suggest more destinations", "I want more choices"
-` : ""}
-${isItinerary ? `
+`
+    : ""
+}
+${
+  isItinerary
+    ? `
 1. update_day — Modify a day's activities in the itinerary
    {"type":"update_day","day":{...day object with label, city, activities, wishlist...}}
    RULES:
@@ -122,7 +156,9 @@ ${isItinerary ? `
 2. suggest — Show alternatives without changing the itinerary
    {"type":"suggest","suggestions":[{title, geocode, note, icon, type},...]}
    For hotel suggestions add: area, price ("$"/"$$"/"$$$"/"$$$$"), bullets (3 phrases)
-` : ""}
+`
+    : ""
+}
 ACTIONS AVAILABLE ON ALL SCREENS:
 
 ${isBrainstorm || isItinerary ? "" : ""}A. add_todo — Add an item to the trip checklist
@@ -150,7 +186,7 @@ RESPONSE RULES:
 - HONESTY: If you cannot do something (e.g. book a flight, check real-time prices), say so. Never pretend an action was taken if it wasn't.
 - PLAN LABELS: Refer to plans as P1, P2, etc. (not "route 2" or the full title).
 - NO MARKDOWN in message: no ##, ---, or bullet-point lists.
-${isBrainstorm ? "- When modifying ALL plans, return the first 3 in actions and include {\"type\":\"pending_routes\",\"routeIds\":[...remaining ids...]} for the app to handle automatically." : ""}
+${isBrainstorm ? '- When modifying ALL plans, return the first 3 in actions and include {"type":"pending_routes","routeIds":[...remaining ids...]} for the app to handle automatically.' : ""}
 
 Example (brainstorm):
 {"message":"Made P2 more relaxed — swapped the packed Day 3 for a beach day in Mirissa.","actions":[{"type":"update_route","route":{...full P2 object...}}]}
@@ -167,16 +203,25 @@ Example (multi-action):
     // Clean history
     const cleanHistory = (history || [])
       .filter((m: any) => m.content && m.content.trim() && !m.streaming)
-      .map((m: any) => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content) }))
+      .map((m: any) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: String(m.content),
+      }))
       .reduce((acc: any[], m: any) => {
         if (acc.length > 0 && acc[acc.length - 1].role === m.role) {
-          acc[acc.length - 1] = { ...acc[acc.length - 1], content: acc[acc.length - 1].content + "\n" + m.content };
+          acc[acc.length - 1] = {
+            ...acc[acc.length - 1],
+            content: acc[acc.length - 1].content + "\n" + m.content,
+          };
         } else {
           acc.push(m);
         }
         return acc;
       }, []);
-    const trimmed = cleanHistory[0]?.role === "assistant" ? cleanHistory.slice(1) : cleanHistory;
+    const trimmed =
+      cleanHistory[0]?.role === "assistant"
+        ? cleanHistory.slice(1)
+        : cleanHistory;
     const recent = trimmed.slice(-6); // Keep last 6 messages to cap input token cost
     const messages = [...recent, { role: "user", content: message }];
 
@@ -218,10 +263,15 @@ Example (multi-action):
         if (raw === "[DONE]") continue;
         try {
           const event = JSON.parse(raw);
-          if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+          if (
+            event.type === "content_block_delta" &&
+            event.delta?.type === "text_delta"
+          ) {
             accumulated += event.delta.text;
           }
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
     }
 
@@ -241,8 +291,8 @@ Example (multi-action):
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "apikey": supabaseKey,
-        "Authorization": `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
       },
       body: JSON.stringify({
         trip_id: trip?.id || null,
@@ -274,15 +324,24 @@ Example (multi-action):
 
     // Backwards compat: convert old-style updatedRoutes/updatedDays to actions format
     if (data.updatedRoutes && !data.actions) {
-      data.actions = data.updatedRoutes.map((r: any) => ({ type: "update_route", route: r }));
+      data.actions = data.updatedRoutes.map((r: any) => ({
+        type: "update_route",
+        route: r,
+      }));
       if (data.pendingRoutes) {
-        data.actions.push({ type: "pending_routes", routeIds: data.pendingRoutes });
+        data.actions.push({
+          type: "pending_routes",
+          routeIds: data.pendingRoutes,
+        });
       }
       delete data.updatedRoutes;
       delete data.pendingRoutes;
     }
     if (data.updatedDays && !data.actions) {
-      data.actions = data.updatedDays.map((d: any) => ({ type: "update_day", day: d }));
+      data.actions = data.updatedDays.map((d: any) => ({
+        type: "update_day",
+        day: d,
+      }));
       if (data.suggestions) {
         data.actions.push({ type: "suggest", suggestions: data.suggestions });
       }
@@ -295,9 +354,15 @@ Example (multi-action):
     });
   } catch (err) {
     console.error("chat error:", err.message);
-    return new Response(JSON.stringify({ error: err.message, message: "Sorry, something went wrong." }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({
+        error: err.message,
+        message: "Sorry, something went wrong.",
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
   }
 });

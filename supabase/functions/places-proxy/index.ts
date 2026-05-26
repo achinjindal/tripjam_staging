@@ -2,7 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 const PLACES_KEY = Deno.env.get("GOOGLE_PLACES_KEY") ?? "";
@@ -14,68 +15,129 @@ const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 // ── PostgREST helpers (no SDK needed) ───────────────────────────────────────
 
-const pgHeaders = { "apikey": SUPABASE_SERVICE_KEY, "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`, "Content-Type": "application/json", "Prefer": "return=minimal" };
+const pgHeaders = {
+  apikey: SUPABASE_SERVICE_KEY,
+  Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+  "Content-Type": "application/json",
+  Prefer: "return=minimal",
+};
 const REST = `${SUPABASE_URL}/rest/v1`;
 
 async function cacheGet(key: string): Promise<any | null> {
   try {
-    const res = await fetch(`${REST}/place_cache?key=eq.${encodeURIComponent(key)}&select=result,expires_at`, { headers: pgHeaders });
+    const res = await fetch(
+      `${REST}/place_cache?key=eq.${encodeURIComponent(key)}&select=result,expires_at`,
+      { headers: pgHeaders },
+    );
     if (!res.ok) return null;
     const rows = await res.json();
     if (!rows?.length) return null;
     const row = rows[0];
     if (row.expires_at && new Date(row.expires_at) < new Date()) {
-      fetch(`${REST}/place_cache?key=eq.${encodeURIComponent(key)}`, { method: "DELETE", headers: pgHeaders }).catch(() => {});
+      fetch(`${REST}/place_cache?key=eq.${encodeURIComponent(key)}`, {
+        method: "DELETE",
+        headers: pgHeaders,
+      }).catch(() => {});
       return null;
     }
     return row.result;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
-async function cacheSet(key: string, action: string, result: any, source: string, ttlDays?: number): Promise<void> {
+async function cacheSet(
+  key: string,
+  action: string,
+  result: any,
+  source: string,
+  ttlDays?: number,
+): Promise<void> {
   try {
-    const expires_at = ttlDays ? new Date(Date.now() + ttlDays * 86400000).toISOString() : null;
+    const expires_at = ttlDays
+      ? new Date(Date.now() + ttlDays * 86400000).toISOString()
+      : null;
     await fetch(`${REST}/place_cache`, {
       method: "POST",
-      headers: { ...pgHeaders, "Prefer": "resolution=merge-duplicates" },
-      body: JSON.stringify({ key, action, result, source, expires_at, created_at: new Date().toISOString() }),
+      headers: { ...pgHeaders, Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify({
+        key,
+        action,
+        result,
+        source,
+        expires_at,
+        created_at: new Date().toISOString(),
+      }),
     });
-  } catch { /* fire-and-forget */ }
+  } catch {
+    /* fire-and-forget */
+  }
 }
 
 // ── rate limit helpers (atomic upsert via ON CONFLICT) ──────────────────────
 
-async function getUsage(api: string, scope: string, period: string): Promise<number> {
+async function getUsage(
+  api: string,
+  scope: string,
+  period: string,
+): Promise<number> {
   try {
-    const res = await fetch(`${REST}/api_usage?api=eq.${encodeURIComponent(api)}&scope=eq.${encodeURIComponent(scope)}&period=eq.${encodeURIComponent(period)}&select=count`, { headers: pgHeaders });
+    const res = await fetch(
+      `${REST}/api_usage?api=eq.${encodeURIComponent(api)}&scope=eq.${encodeURIComponent(scope)}&period=eq.${encodeURIComponent(period)}&select=count`,
+      { headers: pgHeaders },
+    );
     if (!res.ok) return 0;
     const rows = await res.json();
     return rows?.[0]?.count ?? 0;
-  } catch { return 0; }
+  } catch {
+    return 0;
+  }
 }
 
-async function incrementUsage(api: string, scope: string, period: string, amount = 1): Promise<void> {
+async function incrementUsage(
+  api: string,
+  scope: string,
+  period: string,
+  amount = 1,
+): Promise<void> {
   try {
     // Use RPC or upsert with ON CONFLICT to avoid race conditions
-    const res = await fetch(`${REST}/api_usage?api=eq.${encodeURIComponent(api)}&scope=eq.${encodeURIComponent(scope)}&period=eq.${encodeURIComponent(period)}&select=count`, { headers: pgHeaders });
+    const res = await fetch(
+      `${REST}/api_usage?api=eq.${encodeURIComponent(api)}&scope=eq.${encodeURIComponent(scope)}&period=eq.${encodeURIComponent(period)}&select=count`,
+      { headers: pgHeaders },
+    );
     if (!res.ok) return;
     const rows = await res.json();
     if (rows?.length) {
-      await fetch(`${REST}/api_usage?api=eq.${encodeURIComponent(api)}&scope=eq.${encodeURIComponent(scope)}&period=eq.${encodeURIComponent(period)}`, {
-        method: "PATCH", headers: pgHeaders,
-        body: JSON.stringify({ count: rows[0].count + amount, updated_at: new Date().toISOString() }),
-      });
+      await fetch(
+        `${REST}/api_usage?api=eq.${encodeURIComponent(api)}&scope=eq.${encodeURIComponent(scope)}&period=eq.${encodeURIComponent(period)}`,
+        {
+          method: "PATCH",
+          headers: pgHeaders,
+          body: JSON.stringify({
+            count: rows[0].count + amount,
+            updated_at: new Date().toISOString(),
+          }),
+        },
+      );
     } else {
       await fetch(`${REST}/api_usage`, {
-        method: "POST", headers: { ...pgHeaders, "Prefer": "resolution=merge-duplicates" },
+        method: "POST",
+        headers: { ...pgHeaders, Prefer: "resolution=merge-duplicates" },
         body: JSON.stringify({ api, scope, period, count: amount }),
       });
     }
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 }
 
-function today(): string { return new Date().toISOString().slice(0, 10); }
-function thisMonth(): string { return new Date().toISOString().slice(0, 7); }
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+function thisMonth(): string {
+  return new Date().toISOString().slice(0, 7);
+}
 
 // ── Google helpers ──────────────────────────────────────────────────────────
 
@@ -101,17 +163,25 @@ async function autocomplete(q: string, types?: string): Promise<unknown> {
 const TA_BASE = "https://api.content.tripadvisor.com/api/v1";
 
 async function taSearch(query: string): Promise<string | null> {
-  const res = await fetch(`${TA_BASE}/location/search?key=${TRIPADVISOR_KEY}&searchQuery=${encodeURIComponent(query)}&language=en&category=hotels`);
+  const res = await fetch(
+    `${TA_BASE}/location/search?key=${TRIPADVISOR_KEY}&searchQuery=${encodeURIComponent(query)}&language=en&category=hotels`,
+  );
   if (!res.ok) return null;
   const data: any = await res.json();
   return data?.data?.[0]?.location_id ?? null;
 }
 
 async function taPhoto(locationId: string): Promise<string | null> {
-  const res = await fetch(`${TA_BASE}/location/${locationId}/photos?key=${TRIPADVISOR_KEY}&language=en`);
+  const res = await fetch(
+    `${TA_BASE}/location/${locationId}/photos?key=${TRIPADVISOR_KEY}&language=en`,
+  );
   if (!res.ok) return null;
   const data: any = await res.json();
-  return data?.data?.[0]?.images?.large?.url ?? data?.data?.[0]?.images?.original?.url ?? null;
+  return (
+    data?.data?.[0]?.images?.large?.url ??
+    data?.data?.[0]?.images?.original?.url ??
+    null
+  );
 }
 
 // ── Smart escalation heuristics (Feature 8) ─────────────────────────────────
@@ -287,8 +357,9 @@ async function handleAutocomplete(req: Request): Promise<Response> {
 }
 
 async function handleHotelPhoto(req: Request): Promise<Response> {
-  const { q, city, tripId, context } = await req.json();
-  if (!q) return Response.json({ url: null, source: null }, { headers: corsHeaders });
+  const { q, city, tripId: _tripId, context: _context } = await req.json();
+  if (!q)
+    return Response.json({ url: null, source: null }, { headers: corsHeaders });
 
   const query = city ? `${q} ${city}` : q;
   const cacheKey = `hotel-photo:${query.toLowerCase()}`;
@@ -297,7 +368,10 @@ async function handleHotelPhoto(req: Request): Promise<Response> {
   const cached = await cacheGet(cacheKey);
   if (cached) {
     incrementUsage("hotel-photo", "cache-hit", today()).catch(() => {});
-    return Response.json({ url: cached.url, source: cached.source }, { headers: corsHeaders });
+    return Response.json(
+      { url: cached.url, source: cached.source },
+      { headers: corsHeaders },
+    );
   }
 
   // 2. Try TripAdvisor (within rate limits: 1000/day, 4900/month — each hotel = 2 API calls)
@@ -316,11 +390,22 @@ async function handleHotelPhoto(req: Request): Promise<Response> {
         await incrementUsage("tripadvisor", "daily", today());
         await incrementUsage("tripadvisor", "monthly", thisMonth());
         if (photoUrl) {
-          await cacheSet(cacheKey, "hotel-photo", { url: photoUrl, source: "tripadvisor" }, "tripadvisor", 30);
-          return Response.json({ url: photoUrl, source: "tripadvisor" }, { headers: corsHeaders });
+          await cacheSet(
+            cacheKey,
+            "hotel-photo",
+            { url: photoUrl, source: "tripadvisor" },
+            "tripadvisor",
+            30,
+          );
+          return Response.json(
+            { url: photoUrl, source: "tripadvisor" },
+            { headers: corsHeaders },
+          );
         }
       }
-    } catch (e) { console.error("TripAdvisor error:", e.message); }
+    } catch (e) {
+      console.error("TripAdvisor error:", e.message);
+    }
   }
 
   // 3. No photo found (Google fallback removed — zero Google photo charges)
@@ -328,50 +413,79 @@ async function handleHotelPhoto(req: Request): Promise<Response> {
 }
 
 // Haversine distance in km between two lat/lng points
-function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371, toR = Math.PI / 180;
-  const dLat = (lat2 - lat1) * toR, dLng = (lng2 - lng1) * toR;
-  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*toR)*Math.cos(lat2*toR)*Math.sin(dLng/2)**2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+function haversineKm(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+): number {
+  const R = 6371,
+    toR = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toR,
+    dLng = (lng2 - lng1) * toR;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * toR) * Math.cos(lat2 * toR) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 // Photon search with optional location bias
-async function photonSearch(q: string, biasLat?: number, biasLng?: number): Promise<{lat:number,lng:number}|null> {
-  const bias = (biasLat != null && biasLng != null) ? `&lat=${biasLat}&lon=${biasLng}` : "";
+async function photonSearch(
+  q: string,
+  biasLat?: number,
+  biasLng?: number,
+): Promise<{ lat: number; lng: number } | null> {
+  const bias =
+    biasLat != null && biasLng != null ? `&lat=${biasLat}&lon=${biasLng}` : "";
   try {
-    const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1${bias}`);
+    const res = await fetch(
+      `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1${bias}`,
+    );
     if (!res.ok) return null;
     const data: any = await res.json();
     const coords = data?.features?.[0]?.geometry?.coordinates;
     if (coords && coords.length >= 2) return { lat: coords[1], lng: coords[0] };
-  } catch { /* Photon unavailable */ }
+  } catch {
+    /* Photon unavailable */
+  }
   return null;
 }
 
 // Nominatim fallback — better at finding named places like temples, streets, landmarks
-async function nominatimSearch(q: string): Promise<{lat:number,lng:number}|null> {
+async function nominatimSearch(
+  q: string,
+): Promise<{ lat: number; lng: number } | null> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`, {
-      headers: { "User-Agent": "TripJam/1.0 (travel planning app)" },
-      signal: controller.signal,
-    });
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`,
+      {
+        headers: { "User-Agent": "TripJam/1.0 (travel planning app)" },
+        signal: controller.signal,
+      },
+    );
     clearTimeout(timeout);
-    if (!res.ok) { console.log(`[nominatim] HTTP ${res.status} for "${q}"`); return null; }
+    if (!res.ok) {
+      console.log(`[nominatim] HTTP ${res.status} for "${q}"`);
+      return null;
+    }
     const data: any = await res.json();
     if (data?.[0]?.lat && data?.[0]?.lon) {
       console.log(`[nominatim] Found "${q}": ${data[0].lat}, ${data[0].lon}`);
       return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
     }
     console.log(`[nominatim] No results for "${q}"`);
-  } catch (e: any) { console.log(`[nominatim] Error for "${q}": ${e.message}`); }
+  } catch (e: any) {
+    console.log(`[nominatim] Error for "${q}": ${e.message}`);
+  }
   return null;
 }
 
 async function handleGeocode(req: Request): Promise<Response> {
   const { q, city } = await req.json();
-  if (!q) return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
+  if (!q)
+    return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
 
   // Extract the MAIN CITY from the city field — always the last comma-separated segment
   // "Shibuya & Shinjuku, Tokyo" → "Tokyo"
@@ -382,7 +496,10 @@ async function handleGeocode(req: Request): Promise<Response> {
   const mainCity = (() => {
     const c = city || "";
     // Split by comma, take last segment
-    const commaParts = c.split(",").map(s => s.trim()).filter(Boolean);
+    const commaParts = c
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     if (commaParts.length > 1) return commaParts[commaParts.length - 1];
     // Split by dash/em-dash, take first segment
     const dashParts = c.split(/\s+[–—]\s+|\s+-\s+/);
@@ -417,7 +534,9 @@ async function handleGeocode(req: Request): Promise<Response> {
       if (nomResult) {
         biasLat = nomResult.lat;
         biasLng = nomResult.lng;
-        cacheSet(biasCacheKey, "geocode", nomResult, "nominatim").catch(() => {});
+        cacheSet(biasCacheKey, "geocode", nomResult, "nominatim").catch(
+          () => {},
+        );
       } else {
         // Photon fallback
         const coords = await photonSearch(mainCity);
@@ -432,24 +551,38 @@ async function handleGeocode(req: Request): Promise<Response> {
 
   // 3. Photon search — prioritized strategies, validated against bias
   // Use wider radius if mainCity looks like a country (no comma, long distance expected)
-  const isCountryBias = mainCity && !mainCity.includes(",") && mainCity.length > 3 && !/tokyo|kyoto|osaka|delhi|mumbai|budapest|bangkok|beijing|seoul|paris|london|istanbul|cairo|rome/i.test(mainCity);
+  const isCountryBias =
+    mainCity &&
+    !mainCity.includes(",") &&
+    mainCity.length > 3 &&
+    !/tokyo|kyoto|osaka|delhi|mumbai|budapest|bangkok|beijing|seoul|paris|london|istanbul|cairo|rome/i.test(
+      mainCity,
+    );
   const MAX_DISTANCE_KM = isCountryBias ? 1500 : 200;
   // Build query variations
   const dehyphenated = q.replace(/-/g, " "); // "Senso-ji" → "Senso ji"
   // Strip generic place suffixes AND activity-type suffixes iteratively, so multi-suffix
   // titles like "La Latina Neighbourhood Walk" shed both layers ("Walk" → "Neighbourhood") → "La Latina".
-  const SUFFIX_RE = /\s+(temple|shrine|mosque|church|cathedral|market|road|street|beach|fort|palace|museum|park|garden|square|bridge|tower|station|walk|tour|crawl|hike|trip|trail|experience|cruise|exploration|stroll|wander|visit|neighbourhood|neighborhood)$/i;
+  const SUFFIX_RE =
+    /\s+(temple|shrine|mosque|church|cathedral|market|road|street|beach|fort|palace|museum|park|garden|square|bridge|tower|station|walk|tour|crawl|hike|trip|trail|experience|cruise|exploration|stroll|wander|visit|neighbourhood|neighborhood)$/i;
   let noSuffix = q;
   let prev;
-  do { prev = noSuffix; noSuffix = noSuffix.replace(SUFFIX_RE, ""); } while (noSuffix !== prev);
+  do {
+    prev = noSuffix;
+    noSuffix = noSuffix.replace(SUFFIX_RE, "");
+  } while (noSuffix !== prev);
   const photonQueries = [
-    `${q} ${mainCity}`,                                               // place + main city (best)
-    q,                                                                 // just the place name
-    `${dehyphenated} ${mainCity}`,                                     // dehyphenated + city
-    dehyphenated,                                                      // dehyphenated alone
-    q.replace(/,/g, " ").replace(/[&/–—]/g, " ").replace(/\s+/g, " ").trim(),  // cleaned full query
-    q.split(/[,&/–—]/)[0].trim() + (mainCity ? ` ${mainCity}` : ""),  // first segment + main city
-    noSuffix !== q ? `${noSuffix} ${mainCity}` : "",                   // without generic suffix + city
+    `${q} ${mainCity}`, // place + main city (best)
+    q, // just the place name
+    `${dehyphenated} ${mainCity}`, // dehyphenated + city
+    dehyphenated, // dehyphenated alone
+    q
+      .replace(/,/g, " ")
+      .replace(/[&/–—]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(), // cleaned full query
+    q.split(/[,&/–—]/)[0].trim() + (mainCity ? ` ${mainCity}` : ""), // first segment + main city
+    noSuffix !== q ? `${noSuffix} ${mainCity}` : "", // without generic suffix + city
   ].filter(Boolean);
   const seen = new Set<string>();
   for (const pq of photonQueries) {
@@ -470,11 +603,7 @@ async function handleGeocode(req: Request): Promise<Response> {
   }
 
   // 4. Nominatim fallback — better at named POIs (temples, streets, landmarks)
-  const nominatimQueries = [
-    `${q}, ${mainCity || ""}`.trim(),
-    q,
-    dehyphenated,
-  ];
+  const nominatimQueries = [`${q}, ${mainCity || ""}`.trim(), q, dehyphenated];
   const seenNom = new Set<string>();
   for (const nq of nominatimQueries) {
     const clean = nq.replace(/\s+/g, " ").trim();
@@ -497,7 +626,13 @@ async function handleGeocode(req: Request): Promise<Response> {
   // a single transient failure for a hard-to-geocode place would keep returning null for 24h,
   // making the client's "Get directions" fallback persistent even after the underlying issue cleared.
   incrementUsage("geocode", "miss", today()).catch(() => {});
-  cacheSet(cacheKey, "geocode", { lat: null, lng: null }, "miss", 5 / 1440).catch(() => {});
+  cacheSet(
+    cacheKey,
+    "geocode",
+    { lat: null, lng: null },
+    "miss",
+    5 / 1440,
+  ).catch(() => {});
   return Response.json({ lat: null, lng: null }, { headers: corsHeaders });
 }
 
@@ -625,7 +760,8 @@ async function handleResolveCoords(req: Request): Promise<Response> {
 // ── router ───────────────────────────────────────────────────────────────────
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS")
+    return new Response("ok", { headers: corsHeaders });
 
   const url = new URL(req.url);
   const action = url.searchParams.get("action");
@@ -639,6 +775,9 @@ serve(async (req) => {
     return Response.json({ error: "Unknown action" }, { status: 400, headers: corsHeaders });
   } catch (err) {
     console.error("places-proxy error:", err.message);
-    return Response.json({ error: err.message }, { status: 500, headers: corsHeaders });
+    return Response.json(
+      { error: err.message },
+      { status: 500, headers: corsHeaders },
+    );
   }
 });

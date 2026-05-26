@@ -2,7 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 const SYSTEM_PROMPT = `You extract travel preferences from user notes and chat history.
@@ -33,7 +34,9 @@ serve(async (req) => {
     if (notes?.trim()) parts.push(`User notes: "${notes.trim()}"`);
     if (chatHistory?.length) {
       const chatText = chatHistory
-        .map((m: { role: string; content: string }) => `${m.role}: ${m.content}`)
+        .map(
+          (m: { role: string; content: string }) => `${m.role}: ${m.content}`,
+        )
         .slice(-10) // last 10 messages max
         .join("\n");
       parts.push(`Chat history:\n${chatText}`);
@@ -42,12 +45,14 @@ serve(async (req) => {
     if (!parts.length) {
       return new Response(
         JSON.stringify({ budget: null, morningStart: null, pace: null }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
     const Anthropic = (await import("npm:@anthropic-ai/sdk")).default;
-    const client = new Anthropic({ apiKey: Deno.env.get("ANTHROPIC_API_KEY")! });
+    const client = new Anthropic({
+      apiKey: Deno.env.get("ANTHROPIC_API_KEY")!,
+    });
 
     const msg = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -63,8 +68,8 @@ serve(async (req) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "apikey": supabaseKey,
-        "Authorization": `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
       },
       body: JSON.stringify({
         trip_id: tripId || null,
@@ -80,16 +85,22 @@ serve(async (req) => {
 
     return new Response(
       JSON.stringify({
-        budget: ["budget", "mid", "luxury"].includes(parsed.budget) ? parsed.budget : null,
-        morningStart: ["early", "mid", "late"].includes(parsed.morningStart) ? parsed.morningStart : null,
-        pace: ["active", "moderate", "relaxed"].includes(parsed.pace) ? parsed.pace : null,
+        budget: ["budget", "mid", "luxury"].includes(parsed.budget)
+          ? parsed.budget
+          : null,
+        morningStart: ["early", "mid", "late"].includes(parsed.morningStart)
+          ? parsed.morningStart
+          : null,
+        pace: ["active", "moderate", "relaxed"].includes(parsed.pace)
+          ? parsed.pace
+          : null,
       }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
-  } catch (e) {
+  } catch {
     return new Response(
       JSON.stringify({ budget: null, morningStart: null, pace: null }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 });

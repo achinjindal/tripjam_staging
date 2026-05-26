@@ -38,14 +38,21 @@ export async function login(page: Page, username = "qa-tester") {
   await inputs2.nth(1).fill(TEST_PASSWORD);
 
   // Submit button on sign up is "Create Account"
-  const createBtn = page.locator("button", { hasText: /Create Account|Sign Up/i }).last();
+  const createBtn = page
+    .locator("button", { hasText: /Create Account|Sign Up/i })
+    .last();
   await createBtn.click();
 
   // Wait for home screen
-  await page.waitForSelector("text=/Your Trips|No trips yet/i", { timeout: 15000 });
+  await page.waitForSelector("text=/Your Trips|No trips yet/i", {
+    timeout: 15000,
+  });
 }
 
 /** Take a labeled screenshot */
 export async function snap(page: Page, name: string) {
-  await page.screenshot({ path: `e2e/screenshots/${name}.png`, fullPage: false });
+  await page.screenshot({
+    path: `e2e/screenshots/${name}.png`,
+    fullPage: false,
+  });
 }

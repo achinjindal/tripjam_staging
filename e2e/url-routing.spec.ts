@@ -5,13 +5,17 @@ test.describe("URL Routing", () => {
   test("/ loads home page", async ({ page }) => {
     await login(page);
     expect(page.url()).toMatch(/\/$/);
-    await expect(page.locator("text=/Your Trips|No trips yet/i").first()).toBeVisible();
+    await expect(
+      page.locator("text=/Your Trips|No trips yet/i").first(),
+    ).toBeVisible();
   });
 
   test("/new loads setup wizard at step 0", async ({ page }) => {
     await login(page);
     await page.goto("/new/0");
-    await expect(page.locator("text=/Where to/i").first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("text=/Where to/i").first()).toBeVisible({
+      timeout: 5000,
+    });
   });
 
   test("setup step navigation updates URL", async ({ page }) => {
@@ -26,7 +30,9 @@ test.describe("URL Routing", () => {
     await destInput.press("Enter");
     await page.waitForTimeout(300);
 
-    const nextBtn = page.locator("button", { hasText: /next|continue/i }).first();
+    const nextBtn = page
+      .locator("button", { hasText: /next|continue/i })
+      .first();
     if (await nextBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
       await nextBtn.click();
       await page.waitForTimeout(500);
@@ -46,7 +52,9 @@ test.describe("URL Routing", () => {
     await destInput.press("Enter");
     await page.waitForTimeout(300);
 
-    const nextBtn = page.locator("button", { hasText: /next|continue/i }).first();
+    const nextBtn = page
+      .locator("button", { hasText: /next|continue/i })
+      .first();
     if (await nextBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
       await nextBtn.click();
       await page.waitForTimeout(500);
@@ -64,7 +72,11 @@ test.describe("URL Routing", () => {
     await page.goto("/share/00000000-0000-0000-0000-000000000000");
     await page.waitForTimeout(2000);
     // Should not show login screen — public view renders without auth
-    const loginVisible = await page.locator("text=/Sign In/i").first().isVisible({ timeout: 2000 }).catch(() => false);
+    const loginVisible = await page
+      .locator("text=/Sign In/i")
+      .first()
+      .isVisible({ timeout: 2000 })
+      .catch(() => false);
     // Public view should show either the trip or "not found"
     expect(true).toBe(true); // Just verify no crash
   });

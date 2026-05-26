@@ -2,7 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 const SYSTEM_PROMPT = `You are a travel budget estimator. Generate realistic cost estimates for a trip.
@@ -22,16 +23,27 @@ Return ONLY a raw JSON array. No markdown, no code fences.
 Each item: {"title": "...", "amount": number, "category": "Stay|Transport|Food|Activities|Shopping|Other"}`;
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS")
+    return new Response("ok", { headers: corsHeaders });
 
   try {
     const { trip } = await req.json();
 
     const igReq = trip.ig_request || {};
-    const budgetLabel = { budget: "budget", mid: "mid-range", luxury: "luxury" }[igReq.budget] || "mid-range";
-    const numDays = (trip.start_date && trip.end_date)
-      ? Math.max(1, Math.round((new Date(trip.end_date).getTime() - new Date(trip.start_date).getTime()) / 864e5) + 1)
-      : 5;
+    const budgetLabel =
+      { budget: "budget", mid: "mid-range", luxury: "luxury" }[igReq.budget] ||
+      "mid-range";
+    const numDays =
+      trip.start_date && trip.end_date
+        ? Math.max(
+            1,
+            Math.round(
+              (new Date(trip.end_date).getTime() -
+                new Date(trip.start_date).getTime()) /
+                864e5,
+            ) + 1,
+          )
+        : 5;
 
     const userMessage = `Estimate costs for:
 - Destination: ${trip.destination}
@@ -66,8 +78,8 @@ serve(async (req) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "apikey": supabaseKey,
-        "Authorization": `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
       },
       body: JSON.stringify({
         trip_id: trip?.id || null,

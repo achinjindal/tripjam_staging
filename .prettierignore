@@ -1,0 +1,10 @@
+node_modules/
+dist/
+build/
+android/
+test-results/
+playwright-report/
+e2e/screenshots/
+
+package-lock.json
+supabase/functions/deno.lock

@@ -12,17 +12,25 @@ export default function Auth() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const fakeEmail = (u) => `${u.toLowerCase().trim().replace(/[^a-z0-9._-]/g, "")}@tripjam.app`;
+  const fakeEmail = (u) =>
+    `${u
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9._-]/g, "")}@tripjam.app`;
 
   async function handleSignUp() {
     setError("");
-    if (!username.trim() || !password) return setError("Username and password are required.");
+    if (!username.trim() || !password)
+      return setError("Username and password are required.");
     setLoading(true);
     const { data, error: signUpError } = await supabase.auth.signUp({
       email: fakeEmail(username),
       password,
     });
-    if (signUpError) { setLoading(false); return setError(signUpError.message); }
+    if (signUpError) {
+      setLoading(false);
+      return setError(signUpError.message);
+    }
     if (data?.user?.id) {
       const { error: profileError } = await supabase.from("profiles").upsert({
         id: data.user.id,
@@ -31,7 +39,9 @@ export default function Auth() {
       });
       if (profileError) {
         setLoading(false);
-        return setError(`Account created but profile failed: ${profileError.message}. Contact support.`);
+        return setError(
+          `Account created but profile failed: ${profileError.message}. Contact support.`,
+        );
       }
     }
     setLoading(false);
@@ -39,7 +49,8 @@ export default function Auth() {
 
   async function handleSignIn() {
     setError("");
-    if (!username.trim() || !password) return setError("Username and password are required.");
+    if (!username.trim() || !password)
+      return setError("Username and password are required.");
     setLoading(true);
     const { error: signInError } = await supabase.auth.signInWithPassword({
       email: fakeEmail(username),
@@ -50,45 +61,76 @@ export default function Auth() {
   }
 
   return (
-    <div style={{
-      minHeight: "100vh",
-      background: T.ink,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      fontFamily: "Georgia, serif",
-    }}>
-      <div style={{
-        background: T.dusk,
-        borderRadius: RADIUS.lg,
-        padding: "40px 36px",
-        width: "100%",
-        maxWidth: 400,
-        boxShadow: SHADOW.lg,
-      }}>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: T.ink,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: "Georgia, serif",
+      }}
+    >
+      <div
+        style={{
+          background: T.dusk,
+          borderRadius: RADIUS.lg,
+          padding: "40px 36px",
+          width: "100%",
+          maxWidth: 400,
+          boxShadow: SHADOW.lg,
+        }}
+      >
         {/* Logo */}
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ fontSize: 32, marginBottom: 8 }}>✈️</div>
-          <h1 style={{ color: T.chalk, fontSize: 26, fontWeight: 400, margin: 0, fontFamily: "'DM Serif Display', serif" }}>TripJam</h1>
-          <p style={{ color: T.mist, fontSize: 12, margin: "4px 0 0" }}>Plan together, travel better</p>
+          <h1
+            style={{
+              color: T.chalk,
+              fontSize: 26,
+              fontWeight: 400,
+              margin: 0,
+              fontFamily: "'DM Serif Display', serif",
+            }}
+          >
+            TripJam
+          </h1>
+          <p style={{ color: T.mist, fontSize: 12, margin: "4px 0 0" }}>
+            Plan together, travel better
+          </p>
         </div>
 
         {/* Tabs */}
-        <div style={{ display: "flex", background: T.ink, borderRadius: RADIUS.md, padding: 4, marginBottom: 24 }}>
+        <div
+          style={{
+            display: "flex",
+            background: T.ink,
+            borderRadius: RADIUS.md,
+            padding: 4,
+            marginBottom: 24,
+          }}
+        >
           {["signin", "signup"].map((m) => (
-            <button key={m} onClick={() => { setMode(m); setError(""); }} style={{
-              flex: 1,
-              padding: "8px 0",
-              borderRadius: RADIUS.sm,
-              border: "none",
-              cursor: "pointer",
-              fontSize: 14,
-              fontWeight: 600,
-              fontFamily: "Georgia, serif",
-              background: mode === m ? T.ocean : "transparent",
-              color: mode === m ? T.chalk : T.mist,
-              transition: `all ${MOTION.normal}`,
-            }}>
+            <button
+              key={m}
+              onClick={() => {
+                setMode(m);
+                setError("");
+              }}
+              style={{
+                flex: 1,
+                padding: "8px 0",
+                borderRadius: RADIUS.sm,
+                border: "none",
+                cursor: "pointer",
+                fontSize: 14,
+                fontWeight: 600,
+                fontFamily: "Georgia, serif",
+                background: mode === m ? T.ocean : "transparent",
+                color: mode === m ? T.chalk : T.mist,
+                transition: `all ${MOTION.normal}`,
+              }}
+            >
               {m === "signin" ? "Sign In" : "Sign Up"}
             </button>
           ))}
@@ -107,29 +149,42 @@ export default function Auth() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && (mode === "signin" ? handleSignIn() : handleSignUp())}
+            onKeyDown={(e) =>
+              e.key === "Enter" &&
+              (mode === "signin" ? handleSignIn() : handleSignUp())
+            }
             style={inputStyle}
           />
 
           {/* Face icon picker — signup only */}
           {mode === "signup" && (
             <div>
-              <p style={{ color: T.mist, fontSize: 12, margin: "4px 0 8px" }}>Choose your icon</p>
+              <p style={{ color: T.mist, fontSize: 12, margin: "4px 0 8px" }}>
+                Choose your icon
+              </p>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {FACE_ICONS.map((icon, i) => (
-                  <button key={i} onClick={() => setFaceIcon(i)} style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: RADIUS.md,
-                    border: faceIcon === i ? `2px solid ${T.sky}` : `2px solid transparent`,
-                    background: faceIcon === i ? "rgba(74,144,217,0.15)" : T.ink,
-                    fontSize: 22,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    transition: `all ${MOTION.normal}`,
-                  }}>
+                  <button
+                    key={i}
+                    onClick={() => setFaceIcon(i)}
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: RADIUS.md,
+                      border:
+                        faceIcon === i
+                          ? `2px solid ${T.sky}`
+                          : `2px solid transparent`,
+                      background:
+                        faceIcon === i ? "rgba(74,144,217,0.15)" : T.ink,
+                      fontSize: 22,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      transition: `all ${MOTION.normal}`,
+                    }}
+                  >
                     {icon}
                   </button>
                 ))}

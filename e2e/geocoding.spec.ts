@@ -1,22 +1,43 @@
 import { test, expect } from "@playwright/test";
 
-const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpeXZkcXd3bmJicWp1d2l1emJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODgxNzcsImV4cCI6MjA4OTU2NDE3N30.yTPlrirndnDpIeN4PPr7qKqzc4IhDXrfj_1Uuxv_Zgs";
-const PROXY_URL = "https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode";
+const ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpeXZkcXd3bmJicWp1d2l1emJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODgxNzcsImV4cCI6MjA4OTU2NDE3N30.yTPlrirndnDpIeN4PPr7qKqzc4IhDXrfj_1Uuxv_Zgs";
+const PROXY_URL =
+  "https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode";
 
 async function geocode(q: string, city?: string) {
   const res = await fetch(PROXY_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${ANON_KEY}` },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${ANON_KEY}`,
+    },
     body: JSON.stringify({ q, city: city || null }),
   });
   return res.json();
 }
 
-function assertInRegion(result: any, name: string, expected: { latMin: number; latMax: number; lngMin: number; lngMax: number }) {
-  expect(result.lat, `${name}: lat should be between ${expected.latMin}-${expected.latMax}`).toBeGreaterThan(expected.latMin);
-  expect(result.lat, `${name}: lat should be between ${expected.latMin}-${expected.latMax}`).toBeLessThan(expected.latMax);
-  expect(result.lng, `${name}: lng should be between ${expected.lngMin}-${expected.lngMax}`).toBeGreaterThan(expected.lngMin);
-  expect(result.lng, `${name}: lng should be between ${expected.lngMin}-${expected.lngMax}`).toBeLessThan(expected.lngMax);
+function assertInRegion(
+  result: any,
+  name: string,
+  expected: { latMin: number; latMax: number; lngMin: number; lngMax: number },
+) {
+  expect(
+    result.lat,
+    `${name}: lat should be between ${expected.latMin}-${expected.latMax}`,
+  ).toBeGreaterThan(expected.latMin);
+  expect(
+    result.lat,
+    `${name}: lat should be between ${expected.latMin}-${expected.latMax}`,
+  ).toBeLessThan(expected.latMax);
+  expect(
+    result.lng,
+    `${name}: lng should be between ${expected.lngMin}-${expected.lngMax}`,
+  ).toBeGreaterThan(expected.lngMin);
+  expect(
+    result.lng,
+    `${name}: lng should be between ${expected.lngMin}-${expected.lngMax}`,
+  ).toBeLessThan(expected.lngMax);
 }
 
 // Region bounding boxes
@@ -29,7 +50,6 @@ const THAILAND = { latMin: 5, latMax: 21, lngMin: 97, lngMax: 106 };
 const BHUTAN = { latMin: 26, latMax: 29, lngMin: 88, lngMax: 93 };
 
 test.describe("Geocoding — Photon accuracy", () => {
-
   test("Indian cities resolve correctly", async () => {
     const tests = [
       { q: "Shimla", city: "Himachal Pradesh", name: "Shimla" },
@@ -76,7 +96,11 @@ test.describe("Geocoding — Photon accuracy", () => {
       const result = await geocode(t.q, t.city);
       console.log(`${t.name}: ${result.lat}, ${result.lng}`);
       // Must NOT be in Europe (lat 35-72, lng -25 to 45)
-      const inEurope = result.lat > 35 && result.lat < 72 && result.lng > -25 && result.lng < 45;
+      const inEurope =
+        result.lat > 35 &&
+        result.lat < 72 &&
+        result.lng > -25 &&
+        result.lng < 45;
       expect(inEurope, `${t.name} should NOT be in Europe`).toBe(false);
     }
   });
@@ -105,7 +129,11 @@ test.describe("Geocoding — Photon accuracy", () => {
     for (const t of tests) {
       const result = await geocode(t.q, t.city);
       console.log(`${t.name}: ${result.lat}, ${result.lng}`);
-      const inSEAsia = result.lat > 5 && result.lat < 24 && result.lng > 97 && result.lng < 110;
+      const inSEAsia =
+        result.lat > 5 &&
+        result.lat < 24 &&
+        result.lng > 97 &&
+        result.lng < 110;
       expect(inSEAsia, `${t.name} should be in SE Asia`).toBe(true);
     }
   });
@@ -119,7 +147,11 @@ test.describe("Geocoding — Photon accuracy", () => {
     for (const t of tests) {
       const result = await geocode(t.q, t.city);
       console.log(`${t.name}: ${result.lat}, ${result.lng}`);
-      const inEurope = result.lat > 34 && result.lat < 72 && result.lng > -25 && result.lng < 45;
+      const inEurope =
+        result.lat > 34 &&
+        result.lat < 72 &&
+        result.lng > -25 &&
+        result.lng < 45;
       expect(inEurope, `${t.name} should be in Europe`).toBe(true);
     }
   });

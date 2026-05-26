@@ -1,12 +1,14 @@
 # Chat (FAB & Bottom Sheet)
 
 ## FAB (Floating Action Button)
+
 1. Mascot FAB appears on itinerary and brainstorm screens
 2. FAB is draggable with edge-snap behavior (snaps to left or right edge)
 3. Tapping FAB opens chat bottom sheet
 4. FAB shows unread indicator after new AI responses (e.g. after IG generation)
 
 ## Chat - Route Context (Pre-IG)
+
 5. Chat in brainstorm mode has write access to modify routes
 6. Routes are labeled R1–R4 — chat references them by label
 7. Chat can modify route details (add cities, change days, swap activities)
@@ -16,6 +18,7 @@
 11. Chat welcome message appears on first open in brainstorm
 
 ## Chat - Trip Context (Post-IG)
+
 12. Chat in itinerary mode can answer questions and suggest changes
 13. Hotel suggestion cards show photo (TripAdvisor), price, area, bullets
 14. Hotel suggestion card photo area collapses when no photo found
@@ -26,6 +29,7 @@
 19. Chat welcome message appears after first IG generation
 
 ## Chat UI
+
 20. Chat input auto-resizes as user types
 21. Chat header shows mascot image and contextual subtitle
 22. Chat messages survive page refresh (loaded from DB)
