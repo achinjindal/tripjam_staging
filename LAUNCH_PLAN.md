@@ -4,7 +4,7 @@
 **Owner:** Achin (solo)
 **Created:** 2026-05-21 · **Last updated:** 2026-05-26 (sprint kickoff)
 **Target launch window:** ~2 weeks from today (Day 1 begins 2026-05-26 with Feature 8 navigation fix)
-**Monetization model at launch:** Freemium (100 free credits on signup + Stripe top-ups at $5 → 500 credits)
+**Monetization model at launch:** Freemium (100 free credits on signup + Stripe top-ups: **$5 → 300 credits** OR **$10 → 1000 credits** — volume discount)
 
 > **Note on history:** v2 contained an Android-first / Play Store / RevenueCat pivot; rolled back. v3 partially consolidated. v4 (this draft) incorporates the 8-feature USER_STORIES decisions: F6 + F7 + F8 stay in launch sprint; F1-F5 move to post-launch backlog. D6-D10 re-confirmed with prior session values. D4 lowered 15→10. Google OAuth (D9) re-introduced as Day 1 Part C.
 
@@ -75,7 +75,7 @@ These must be resolved on Day 0 — they have downstream copy, code, and legal i
 | #   | Decision                       | Value                                                                                                                                | Confirmed? |
 | --- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------- |
 | D1  | Free credits granted on signup | **100 credits** (~2 typical trips)                                                                                                   | ✅          |
-| D2  | Paid pack price + size         | **$5 → 500 credits** (one SKU)                                                                                                       | ✅          |
+| D2  | Paid pack price + size         | **Two SKUs (updated 2026-05-26):** Small `$5 → 300 credits` ($0.0167/credit) · Large `$10 → 1000 credits` ($0.01/credit, **3.3× better deal per credit**). Volume discount nudges users toward the larger pack. Small pack also has higher per-call founder margin (~58% vs ~30% on LLM calls); large pack matches the original $0.01/credit math. | ✅          |
 | D3  | Currency                       | **USD with Stripe Adaptive Pricing** (auto-localizes at checkout, settles USD)                                                       | ✅          |
 | D4  | Low-credit warning threshold   | **displayed `≤ 10` credits** (changed from 15 per 2026-05-26)                                                                        | ✅          |
 | D5  | Hard-stop threshold            | `**Math.floor(balance) === 0`**                                                                                                      | ✅          |
@@ -334,13 +334,16 @@ ALTER TABLE profiles ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
 - [ ] Add pre-flight check to `generate-brainstorm/index.ts`, `generate-itinerary/index.ts`, `chat/index.ts`:
   - Call `requireMinCredits(user, 1.0)` before invoking Anthropic; return 402 with code `insufficient_credits` if blocked
 
-**Part C — Stripe wiring**
+**Part C — Stripe wiring (TWO PACKS per D2 updated 2026-05-26)**
 
-- [ ] Create Stripe account (test mode); create one product: `$5 → 500 credits`. Enable Adaptive Pricing (D3).
-- [ ] New edge function `create-checkout-session` — auths the user, creates Stripe Checkout Session, returns the URL
-- [ ] New edge function `stripe-webhook` — verifies signature → calls `grant_credits(user_id, 500.00, 'stripe', session.id)`; idempotent on `credit_transactions.stripe_session_id UNIQUE` constraint
+- [ ] Create Stripe account (test mode); create **two products**:
+  - Small pack: `credits_300_pack` at $5.00 USD (=300 credits)
+  - Large pack: `credits_1000_pack` at $10.00 USD (=1000 credits)
+  - Enable Adaptive Pricing on both (D3)
+- [ ] New edge function `create-checkout-session` — auths the user, takes a `pack` query param (`"small" | "large"`), maps to the right Stripe product, creates Checkout Session, returns the URL
+- [ ] New edge function `stripe-webhook` — verifies signature → on `checkout.session.completed`, reads the line item's product → grants either 300 or 1000 credits via `grant_credits(user_id, amount, 'stripe', session.id)`; idempotent on `credit_transactions.stripe_session_id UNIQUE` constraint
 - [ ] Register webhook endpoint URL in Stripe dashboard (staging URL first)
-- [ ] End-to-end test: complete Stripe test checkout → verify webhook fires → verify exactly `500.00` credits granted → replay webhook → verify no double-grant
+- [ ] End-to-end test both packs: complete each Stripe test checkout → verify webhook fires → verify correct credit amount granted (300 or 1000) → replay webhook → verify no double-grant
 
 **Done when:**
 
@@ -363,8 +366,11 @@ ALTER TABLE profiles ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
 - [ ] **No persistent CreditPill** anywhere (D19) — confirm removed in Day 2 Part B
 - [ ] **Low-credits banner**: appears at top of screen when `displayCredits(balance) <= 10` (D4 updated); dismissible per-session ("10 credits left — top up?")
 - [ ] **Hard-stop modal**: when `displayCredits(balance) === 0` (D5) with single "Top up" CTA
-- [ ] **"Top up" button** (from avatar dropdown OR low-credit banner OR hard-stop modal) → calls `create-checkout-session` → opens Stripe Checkout in new tab
-- [ ] Success-return URL `/credits/success` → shows toast "500 credits added!" + auto-refreshes balance via `refreshCredits()`
+- [ ] **"Top up" button** (from avatar dropdown OR low-credit banner OR hard-stop modal) → opens **pack selector modal** with two options:
+  - "Small · 300 credits · $5"
+  - "Large · 1000 credits · $10 — best value · 3.3× more per dollar" (highlighted as default)
+  - User picks → calls `create-checkout-session?pack=small|large` → opens Stripe Checkout in new tab
+- [ ] Success-return URL `/credits/success` → shows toast "300 credits added!" or "1000 credits added!" (based on which pack) + auto-refreshes balance via `refreshCredits()`
 - [ ] Cancel-return URL `/credits/cancel` → silent return to app
 - [ ] On top-up success, leftover decimals roll forward — `0.42 + 500 = 500.42`, displayed as `500`. No special handling needed; document in code comment.
 - [ ] Admin/debug shows full precision (`balance.toFixed(2)`); users see integer only
@@ -444,12 +450,12 @@ In `src/App.jsx` around lines 2532-2569:
 - [ ] Each city card shows a skeleton loader on first paint, then renders content after Haiku returns (~1s)
 
 **Done when:**
-- [ ] Day 1 of generated trip is fully rendered (photos + navigation) within ~10s of click
+- [ ] **Day 1 photos + navigation render within 2-3 seconds of Day 1 itinerary text first appearing** (per Story 6.2 revised 2026-05-26)
 - [ ] Subsequent days appear progressively, each "complete" before being shown as interactive
 - [ ] Landing page LCP < 2.5s on a throttled mobile
 - [ ] Share link in iMessage shows trip thumbnail + title
 - [ ] After RG completes, only 1 deep dive (destination) has fired — verify in `llm_usage` table
-- [ ] Sentry shows TTC distribution we can use for post-launch optimization decisions
+- [ ] Sentry shows TTC + Day-1 photos+nav timing distribution we can use for post-launch optimization decisions
 
 #### Day 7 (Tue) — Abuse & Safety Nets
 
@@ -577,12 +583,23 @@ All numbers below assume the new scale: `1 credit = $0.01 user value = $0.007 LL
 | Two-week (14 days, 4-5 cities, heavy use)     | ~66                        | 66%           | No — first trip free, second trip prompts top-up |
 | Three-week heavy (21+ days, deep exploration) | ~99                        | 99%           | **Yes** — hits the wall, ideal time to convert   |
 
-### Margin per paid pack
+### Margin per paid pack (two-pack model per D2)
 
-- $5 → 500 credits = `$3.50 LLM budget` allocated
-- Realistic LLM spend on a 500-credit pack: ~$2.00-2.75 (rounding works in your favor on Haiku-heavy use)
-- Stripe fees: ~$0.45 ($0.30 + 2.9%)
-- **Net margin per pack: $1.80-2.25 (36-45%)** before infrastructure costs
+**Small pack: $5 → 300 credits** ($0.0167/credit, **better-for-founder pricing**)
+- $5 retail → ~$4.55 after Stripe (~$0.45 fee)
+- 300 credits × $0.007 LLM budget = $2.10 reserved for LLM spend
+- Realistic LLM spend: ~$1.20-1.60 (rounding works in founder's favor)
+- **Net margin: $2.95-3.35 (59-67%)** before infrastructure
+
+**Large pack: $10 → 1000 credits** ($0.01/credit, **better-for-user pricing**)
+- $10 retail → ~$9.41 after Stripe (~$0.59 fee)
+- 1000 credits × $0.007 LLM budget = $7.00 reserved
+- Realistic LLM spend: ~$4.00-5.50
+- **Net margin: $3.91-5.41 (39-54%)** before infrastructure
+
+**Blended assumption** (if 60% buy small, 40% buy large): ~52% blended margin. Small pack has higher % margin per dollar but lower absolute revenue. Large pack drives volume.
+
+**Why two packs:** the small pack is the impulse buy ($5 feels low) for users who just want a top-up. The large pack is the value option for engaged users planning multiple trips — 3.3× better per-credit deal incentivizes upgrading.
 
 ### Worst case for free tier
 
@@ -651,14 +668,19 @@ Full story details in [USER_STORIES.md](USER_STORIES.md). Brief summary here for
 - Cleaner shorter replies (system prompt tweak for brevity)
 - **NEW: "View Updated Itinerary" button gets snippet + thumbnail preview** of what changed (per Q2c)
 
-**F3 — Google Photo upgrade** — month 2
-- Wikipedia first (free) → Google Photo fallback at 0.70 credits (pass-through, no founder margin per D24)
-- Per-activity "📸 Better photo (1 credit)" opt-in button
+**F3 — Google Photo automatic fallback** — month 2
+- Wikipedia first (free) → Google Photo automatic fallback ONLY when Wikipedia returns nothing
+- No opt-in "Get better photo" button (Story 3.1 rejected 2026-05-26 — silent UX preferred)
+- Charged 0.70 credits/photo (pass-through, no founder margin per D24); silent deduction same as navigation geocoding
 - Server-side cache so subsequent users get free photos for the same place
 
 **F4 — Homepage redesign** — month 1 (high impact)
 - Visual trip cards with cached destination photo (no editorial commission)
-- Tab buttons on each card: Itinerary · Map · Board · Magazine — route directly to `/trip/:id/<tab>`
+- Tab buttons on each card depending on trip state:
+  - Pre-IG (only RG done): `Routes · Map · Board · Magazine`
+  - Post-IG: `Routes · Itinerary · Map · Board · Magazine` (BOTH visible)
+  - Route directly to `/trip/:id/plans` (Routes) or `/trip/:id` (Itinerary) etc.
+  - Default tap on card goes to Itinerary if generated, else Routes
 - Smart featured destinations carousel for new users (curated initially, data-driven post-launch month 2 based on time-of-year + aggregate trip popularity)
 - (Past-trips memories section CUT per Q4d)
 
@@ -705,6 +727,7 @@ Full story details in [USER_STORIES.md](USER_STORIES.md). Brief summary here for
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | 2026-05-21 | Initial draft created                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Claude + Achin |
 | 2026-05-21 | Credit model finalized: 5× rescale (100 free, $5→500 pack), `NUMERIC(10,2)` decimal storage with `Math.floor()` integer display, cost-based fair charging (`ceil(cost/0.007 × 100)/100`, no per-call floor), pre-flight `credits < 1` guard for Sonnet calls. Edge function fixes: `city-deep-dive` adds auth + per-call charge, `extract-preferences` adds auth only (free, system-internal). Magazine pre-fetch reduced to destination-only on RG-complete, cities lazy-load on tab open. New decisions D11-D18, new risks R11-R12. | Claude + Achin |
+| 2026-05-26 (PM) | **Late-day product tweaks (post Feature 8 deploy).** Story 3.1 REJECTED — no "Get better photo" opt-in button; F3 simplifies to silent Wikipedia → Google fallback only when Wikipedia returns nothing. Story 4.2 REVISED — homepage trip-card tab buttons depend on trip state: show **Routes always**, show **Itinerary only when IG generated** (both visible post-IG). Story 6.2 REVISED — stricter Day 1 perf target: photos + nav must load within **2-3s of Day 1 itinerary text first appearing** (down from 8s). D2 + Story 7.2 REVISED — **two-pack pricing** instead of single SKU: Small `$5 → 300 credits` ($0.0167/credit) and Large `$10 → 1000 credits` ($0.01/credit, 3.3× better deal per credit). Volume discount, two Stripe products, pack selector modal in Day 3 UX. §7 margin table rewritten for both packs (~59-67% small, ~39-54% large). | Claude + Achin |
 | 2026-05-26 | **Sprint kickoff.** USER_STORIES.md created + 8 features reviewed end-to-end. D6-D10 re-confirmed with rolled-back v3 values (tripjam.app, achinj.work@gmail.com, no-refund + 30d rider, Google OAuth + email mandatory + Identity Linking, sequenced launch channels). D4 lowered 15→10 per F7 directive. New D19-D26 added: no persistent credits UI (D19), avatar dropdown entry point (D20), ≥1024px desktop breakpoint (D21), sidebar+center+chat/map layout (D22), fully qualified geocode hint format (D23), Google API pass-through cost model with no founder margin (D24), smart escalation for hotels via heuristic chain/bad-hint detection (D25), sprint kickoff date 2026-05-26 (D26). Launch scope decisions: F6 IG speedup → Day 6, F7 credits rebuild → Day 2-3, F8 navigation fix → Day 1 (today). F1-F5 deferred to post-launch backlog with detailed stories. Day 1 expanded with Parts A (safety/cleanup), B (edge fn auth), C (auth migration Google OAuth), D (Feature 8 navigation fix). Day 2 reframed with new credits flow: no pill, avatar dropdown, warning at 10. Day 3 rebuilt around F7 stories (no persistent indicator, avatar entry point, top-up via Stripe). Day 6 expanded with F6 IG speedup (parallelize photo prefetch + geocode resolution, show days only when COMPLETE, Sentry timing breadcrumbs). Cost model corrections: Google calls 1.70 credits/call (pass-through), Google photos 0.70 credits/photo, Inspirations digest 7.72 credits (cold, button opt-in). Typical trip cost ~46 credits cold (free tier covers ~2 trips). | Claude + Achin |
 | 2026-05-25 | **Pre-sprint deploys (out-of-band):** Disabled credits UI globally for testing — added `CREDITS_UI_ENABLED = false` flag in `src/credits.js`, gated 3 `<CreditsOverlay>` mounts in `src/main.jsx`, all paywall + balance code tree-shaken from production bundle (commit `e8f6679`). Pre-set all 30 production profiles to `credits = 999999` (column default also set to 999999) via direct SQL. Same fix applied to staging (which also required adding the missing `credits` column due to migration version-number collision with the `inspiration` branch). Backfilled 3 prod + 2 staging users with missing `profiles` rows. Discovered + fixed `Auth.jsx` signup bug (`face_icon` integer column was rejecting emoji-string upserts, silently breaking every signup); fix landed via commit `f91528d`. Both commits deployed to production via push to `main`. | Claude + Achin |
 | 2026-05-26 | **Consolidation pass.** File was rolled back somewhere between 2026-05-22 and 2026-05-26 — the Android-first / Play Store / RevenueCat pivot and Google-OAuth Day 1 Part C work that previously lived in v2/v3 drafts are not currently present in this file. (The credit decimal model D11-D18 remains intact.) This consolidation adds: §0.5 Current State Snapshot summarizing pre-sprint deploys; annotations to Day 1 (already-done items + new items like staging Auth deploy, `face_icon` UI audit, backfilled-user `face_icon` restoration); Day 2 Part A reworked to handle the current 999999 credit balances (reset to launch value before NUMERIC rescale; handle missing `credit_transactions` on staging via conditional `DO $$ BEGIN ... END $$`); §10 backlog additions A-E (Inspirations decision, schema collision cleanup, staging Auth deploy, `face_icon` audit fallback, credits re-enable tracking); fix to broken D4 row text. | Claude + Achin |

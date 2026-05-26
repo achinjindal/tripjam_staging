@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { authenticateUser, unauthorized } from "../_shared/credits.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,6 +26,13 @@ serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
+
+  // D15: extract-preferences requires authentication to prevent abuse.
+  // This is a free system-internal call — no credit deduction. Cost (~$0.0007/call)
+  // is absorbed by the founder since it runs invisibly between user actions
+  // (Build button click → pre-IG sheet open) and would be a surprise charge.
+  const user = await authenticateUser(req);
+  if (!user) return unauthorized(corsHeaders);
 
   try {
     const { notes, chatHistory, tripId } = await req.json();

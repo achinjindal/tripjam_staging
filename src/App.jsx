@@ -3,11 +3,11 @@ import {
   useRef,
   useEffect,
   useCallback,
-  createContext,
   useContext,
   Fragment,
   Component,
 } from "react";
+import { DebugContext } from "./context.js";
 import posthog from "posthog-js";
 import { supabase } from "./supabase";
 import BoardView, { LogisticsTab } from "./components/BoardView.jsx";
@@ -102,7 +102,7 @@ class ErrorBoundary extends Component {
 }
 import html2canvas from "html2canvas";
 
-const DebugContext = createContext(false);
+// DebugContext is now imported from ./context.js (was duplicated here).
 
 // _rgInFlight removed — generate() is now called imperatively, not via useEffect
 let _igInFlight = false; // same for IG // prevent same photo showing on multiple activities
@@ -1624,13 +1624,16 @@ function BrainstormView({
         const tripDays = (days || []).filter(
           (d) => (d.city || "").toLowerCase() === city.toLowerCase(),
         ).length;
+        // D16: city-deep-dive now requires user authentication.
+        const { data: { session: ddSession } } = await supabase.auth.getSession();
+        if (!ddSession?.access_token) throw new Error("Not authenticated");
         const res = await fetch(
           `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/city-deep-dive`,
           {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+              Authorization: `Bearer ${ddSession.access_token}`,
             },
             body: JSON.stringify({
               city,
@@ -6373,13 +6376,14 @@ export default function App({
             )
           : null;
       const igReq = trip?.ig_request || pendingForm || {};
+      // D16: city-deep-dive now requires user authentication.
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/city-deep-dive`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
           body: JSON.stringify({
             city,
@@ -10758,13 +10762,14 @@ export default function App({
                         pace: "active",
                       };
                       try {
+                        // D15: extract-preferences now requires user authentication.
                         const res = await fetch(
                           `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/extract-preferences`,
                           {
                             method: "POST",
                             headers: {
                               "Content-Type": "application/json",
-                              Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+                              Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
                             },
                             body: JSON.stringify({
                               notes: pendingForm?.notes || "",

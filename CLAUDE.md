@@ -27,7 +27,7 @@ src/
   Home.jsx           — Trip list (card hover, warm palette)
   Admin.jsx          — Admin console (/admin, is_admin gated)
   TripPublicView.jsx — Read-only shared trip view
-  JoinView.jsx       — Join trip via invite link
+  (invite-link join flow handled inline in TripPublicView.jsx — no separate JoinView.jsx file)
   supabase.js        — Supabase client
   theme.js           — Design system: T colors, TYPE, SPACE, RADIUS, SHADOW, MOTION
   photos.js          — Photo fetch, caching, dedup, geocoding, haversine

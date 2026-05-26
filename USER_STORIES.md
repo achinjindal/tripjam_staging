@@ -25,21 +25,21 @@ All 8 features reviewed. Decisions folded into [LAUNCH_PLAN.md](LAUNCH_PLAN.md) 
 | F2 Chat | 2.3 Actionable replies | **KEEP** | Buttons: Add / Open in Maps / Tell me more. |
 | F2 Chat | 2.4 Cleaner shorter replies | **KEEP** | Prompt tweak for brevity. |
 | F2 Chat | NEW: Update Itinerary snippet preview | **KEEP** | Added per Q2c — "View Updated Itinerary" button gets snippet + thumbnail of changes. |
-| F3 Google Photos | 3.1 Premium photo button | **KEEP** | Charged 0.70 credits/photo (pass-through, was 1 in draft). |
+| F3 Google Photos | 3.1 Premium photo button | **REJECTED** (2026-05-26) | No opt-in "Get better photo" button. F3 simplifies to: Wikipedia first → Google Photo automatic fallback when Wikipedia returns nothing. Charged 0.70 credits/photo (pass-through, silent). |
 | F3 Google Photos | 3.2 Cached photos free | **KEEP** | Server-side cache; subsequent users free. |
 | F3 Google Photos | 3.3 Wikipedia fallback always free | **KEEP** | Hotels stay on TripAdvisor (existing). |
 | F4 Homepage | 4.1 Visual trip cards | **KEEP** | Cached destination photo, no editorial commission. |
-| F4 Homepage | 4.2 Jump to any section | **KEEP** | Tab buttons on each card per Q4b. |
+| F4 Homepage | 4.2 Jump to any section | **REVISE** (2026-05-26) | Tab buttons differ by trip state: **show Routes always** (the RG/Brainstorm view) + **show Itinerary only when IG has been generated**. Pre-IG card: `Routes · Map · Board · Magazine`. Post-IG card: `Routes · Itinerary · Map · Board · Magazine`. Default tap on the card still goes to the most recent active view (Itinerary if present, else Routes). |
 | F4 Homepage | 4.3 Inspirational empty state | **KEEP** | Smart featured destinations — curated initially, data-driven post-launch. |
 | F4 Homepage | 4.4 Past trips memories | **CUT** | Not required per Q4d. |
 | F5 Desktop | 5.1 Full screen on desktop | **KEEP** | Breakpoint ≥1024px (D21). |
 | F5 Desktop | 5.2 Side-by-side map and itinerary | **REVISE** | Per Q5b: also include persistent chat. Final layout = sidebar + center itinerary + right column (map top + chat bottom). |
 | F5 Desktop | 5.3 Persistent navigation sidebar | **KEEP** | 240px sidebar with trips list. |
 | F6 IG speedup | 6.1 Something within 3s | **REVISE** | Per Q6b: only show days when COMPLETE (photos + navigation loaded). "Half-baked stuff" rejected. |
-| F6 IG speedup | 6.2 Day-by-day progressive disclosure | **KEEP** with "complete days only" constraint. |
+| F6 IG speedup | 6.2 Day-by-day progressive disclosure | **REVISE** (2026-05-26) — keep "complete days only" constraint AND add target: **Day 1 photos + navigation must load within 2-3 seconds of Day 1 itinerary text first appearing**. Stronger than the 8s in the earlier draft. Requires aggressive parallelism (Wikipedia + Photon in parallel for all Day 1 activities). |
 | F6 IG speedup | 6.3 Warm-cache regeneration | **CUT** | Per Q6d: every trip unique, no caching. |
 | F7 Credits | 7.1 No persistent indicator | **KEEP** | Pill removed entirely (D19). |
-| F7 Credits | 7.2 On-demand credit check + top-up | **KEEP** | Avatar dropdown in top-right (D20). |
+| F7 Credits | 7.2 On-demand credit check + top-up | **REVISE** (2026-05-26) | Avatar dropdown in top-right (D20). **Two pack SKUs**: Small `$5 → 300 credits` ($0.0167/credit) and Large `$10 → 1000 credits` ($0.01/credit). Top-up flow shows pack selector ("Small · 300 credits · $5" vs "Large · 1000 credits · $10 — best value"). Stripe checkout supports both products. |
 | F7 Credits | 7.3 Polite low-credit warning | **KEEP** at **≤10 credits** (D4 changed from 15 → 10). |
 | F7 Credits | 7.4 100 credits on signup | **KEEP** | D1 stays at 100. |
 | F8 Navigation | 8.1 Background pipeline | **REVISE** | Per multi-iteration cost negotiation: hotels use smart escalation (Photon-first + heuristic check + Google fallback when needed). Activities use Photon-only + on-demand "Fix location" button. Pass-through Google cost (D24). |

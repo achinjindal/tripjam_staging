@@ -1,9 +1,21 @@
 import { test, expect } from "@playwright/test";
 
+// Geocoding tests hit the configured Supabase project (staging by default per .env;
+// pass PLAYWRIGHT_SUPABASE_URL + PLAYWRIGHT_SUPABASE_ANON_KEY to override).
+const SUPABASE_URL =
+  process.env.PLAYWRIGHT_SUPABASE_URL ||
+  process.env.VITE_SUPABASE_URL ||
+  "https://wlrzvwjdrjpfqcwgmzch.supabase.co";
 const ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpeXZkcXd3bmJicWp1d2l1emJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODgxNzcsImV4cCI6MjA4OTU2NDE3N30.yTPlrirndnDpIeN4PPr7qKqzc4IhDXrfj_1Uuxv_Zgs";
-const PROXY_URL =
-  "https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode";
+  process.env.PLAYWRIGHT_SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  "";
+if (!ANON_KEY) {
+  throw new Error(
+    "geocoding.spec.ts: missing anon key. Set PLAYWRIGHT_SUPABASE_ANON_KEY or VITE_SUPABASE_ANON_KEY.",
+  );
+}
+const PROXY_URL = `${SUPABASE_URL}/functions/v1/places-proxy?action=geocode`;
 
 async function geocode(q: string, city?: string) {
   const res = await fetch(PROXY_URL, {

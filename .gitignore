@@ -34,3 +34,18 @@ npm-debug.log*
 # Local Netlify folder
 .netlify
 .vercel
+
+# Root-level design HTML mockups — exploration artifacts, not production code
+/calendar-design.html
+/calendar-fullpage.html
+/credits-design.html
+/design-system-preview.html
+/destination-design.html
+/edit-details-design.html
+/inspirations-design.html
+/itinerary-save-design.html
+/transit-design.html
+/transit-design-v3.html
+/transit-design-v4.html
+/transit-validation.html
+/transit-validation-v2.html
