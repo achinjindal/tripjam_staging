@@ -83,8 +83,11 @@ export function PackSelectorModal({ open, onClose, session }) {
           padding: "24px 22px 28px",
           width: "100%",
           maxWidth: 480,
+          maxHeight: "92vh",
+          overflowY: "auto",
           boxShadow: SHADOW?.lg || "0 -8px 32px rgba(0,0,0,0.2)",
           animation: `slideUp ${MOTION?.medium || "240ms"} ease-out`,
+          WebkitOverflowScrolling: "touch",
         }}
       >
         <div
