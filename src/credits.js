@@ -1,16 +1,15 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { supabase } from "./supabase";
 
-// Master switch for the entire credits UX. Day 2 re-enables this on
-// STAGING with the decimal credit system (NUMERIC(10,2)). Backend credit
-// deduction always runs; this flag only controls UI + paywall behavior.
+// Master switch for the entire credits UX. Controls UI + paywall behavior;
+// backend credit deduction in edge functions always runs regardless.
 //
-// Per-environment: staging gets `true` to test the new flow; production
-// stays `false` until Day 3 ships the avatar dropdown + Stripe Checkout.
-// Falls back to `true` only on staging (detected by Supabase URL ref).
-const __SB_URL = import.meta.env.VITE_SUPABASE_URL || "";
-const __IS_PROD = __SB_URL.includes("viyvdqwwnbbqjuwiuzbh");
-export const CREDITS_UI_ENABLED = !__IS_PROD;
+// Launched on 2026-05-27 with 300 free credits per signup
+// (LAUNCH_PLAN D2 + handoff decision). At launch flip the prior env-aware
+// guard `!__IS_PROD` (staging-only) was removed once Lemon Squeezy prod
+// secrets + webhook + new-signup-default 300 + edge fn redeploys were
+// all in place — RUNBOOKS "Prod credits launch" steps 1-4 complete.
+export const CREDITS_UI_ENABLED = true;
 
 // Display credits as whole integers to the user (D14). The backend stores
 // NUMERIC(10,2); we render the floor so users always see "300" not "299.61".
