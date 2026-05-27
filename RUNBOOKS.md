@@ -259,6 +259,42 @@ In Vercel Dashboard → Settings → Environment Variables, add for all environm
 Trigger a redeploy. Until this flag is set, the "Top up" button shows
 "launching soon" instead of opening checkout.
 
+### Webhook replay / debugging
+
+If a customer pays but their credits don't update (webhook delivery failed,
+or our handler had a bug):
+
+1. **Find the order in Lemon Squeezy dashboard** → Orders → search by email or order ID.
+2. **Check Settings → Webhooks → click your webhook → Recent deliveries.**
+   - Find the failed delivery (red status). Click for details.
+   - "Send again" button replays the request with the same payload + signature.
+3. **Verify in DB:**
+   ```sql
+   SELECT amount, balance_after, reason, provider_session_id, created_at, metadata
+   FROM credit_transactions
+   WHERE provider_session_id = '<order_id>';
+   ```
+4. **If still missing**, manually grant credits using the SQL in the Credits
+   section below. Mark the operation in the transaction metadata so it's traceable.
+
+### Manual credit grant for a paid order (last resort)
+
+If webhook replay also fails (e.g. handler bug), grant credits manually
+**only after confirming payment** in Lemon Squeezy dashboard:
+
+```sql
+SELECT grant_credits(
+  '<user-id>'::uuid,
+  300::numeric,                      -- or 1000 for large pack
+  'lemonsqueezy-manual-recovery',
+  '{"order_id":"<ls-order-id>","reason":"webhook_failed"}'::jsonb,
+  '<ls-order-id>'                    -- still use order ID as idempotency key
+);
+```
+
+This uses the same UNIQUE constraint on `provider_session_id`, so if the
+webhook later succeeds it won't double-grant.
+
 ### End-to-end test (staging, with Test mode ON in Lemon Squeezy)
 
 1. Sign in to staging with `qa-tester` or a real test account.

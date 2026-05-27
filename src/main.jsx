@@ -5,6 +5,8 @@ import * as Sentry from "@sentry/react";
 import { supabase } from "./supabase";
 import Auth from "./Auth.jsx";
 import Landing from "./Landing.jsx";
+import Privacy from "./Privacy.jsx";
+import Terms from "./Terms.jsx";
 import Home from "./Home.jsx";
 import App from "./App.jsx";
 import TripPublicView from "./TripPublicView.jsx";
@@ -74,6 +76,8 @@ function parseUrl(path = window.location.pathname) {
   if (publicMatch) return { page: "public", token: publicMatch[1] };
   if (path === "/signin" || path === "/login") return { page: "signin" };
   if (path === "/signup") return { page: "signup" };
+  if (path === "/privacy") return { page: "privacy" };
+  if (path === "/terms") return { page: "terms" };
   // Legacy /trip/:token format — only if no suffix (backwards compat)
   const legacyPublic = path.match(/^\/trip\/([a-f0-9-]{36})$/);
   // Check suffixed routes first (these are always authenticated trip views)
@@ -209,6 +213,9 @@ function Root() {
   // Public view — no auth
   const route = parseUrl();
   if (route.page === "public") return <TripPublicView token={route.token} />;
+  // Legal pages — public, render regardless of session state
+  if (route.page === "privacy") return <Privacy />;
+  if (route.page === "terms") return <Terms />;
 
   if (session === undefined) return null;
   if (!session) {

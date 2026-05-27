@@ -30,6 +30,7 @@ export default function Auth({ initialMode }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [faceIcon, setFaceIcon] = useState(0);
+  const [agreeToTerms, setAgreeToTerms] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -56,6 +57,7 @@ export default function Auth({ initialMode }) {
     if (!username.trim()) return setError("Username is required.");
     if (!password) return setError("Password is required.");
     if (password.length < 6) return setError("Password must be at least 6 characters.");
+    if (!agreeToTerms) return setError("Please agree to the Terms and Privacy Policy.");
 
     setLoading(true);
     const cleanEmail = email.trim().toLowerCase();
@@ -315,6 +317,48 @@ export default function Auth({ initialMode }) {
                 ))}
               </div>
             </div>
+          )}
+
+          {mode === "signup" && (
+            <label
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "flex-start",
+                fontSize: 12,
+                color: T.mist,
+                lineHeight: 1.45,
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={agreeToTerms}
+                onChange={(e) => setAgreeToTerms(e.target.checked)}
+                style={{ marginTop: 3, accentColor: T.ocean, cursor: "pointer" }}
+              />
+              <span>
+                I agree to the{" "}
+                <a
+                  href="/terms"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: T.sky, textDecoration: "underline" }}
+                >
+                  Terms
+                </a>{" "}
+                and{" "}
+                <a
+                  href="/privacy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: T.sky, textDecoration: "underline" }}
+                >
+                  Privacy Policy
+                </a>
+                .
+              </span>
+            </label>
           )}
 
           {error && (
