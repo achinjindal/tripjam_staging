@@ -1,4 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import {
+  authenticateUser,
+  unauthorized,
+  outOfCredits,
+  rateLimit,
+  llmKillSwitch,
+  deductCredits,
+} from "../_shared/credits.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -27,6 +35,16 @@ serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
 
   try {
+    const killed = llmKillSwitch(corsHeaders);
+    if (killed) return killed;
+
+    const user = await authenticateUser(req);
+    if (!user) return unauthorized(corsHeaders);
+    if (user.credits < 1.0) return outOfCredits(corsHeaders, user.credits);
+
+    const rateLimited = await rateLimit(user.id, corsHeaders);
+    if (rateLimited) return rateLimited;
+
     const { trip } = await req.json();
 
     const igReq = trip.ig_request || {};
@@ -89,6 +107,15 @@ serve(async (req) => {
         output_tokens: data.usage?.output_tokens || 0,
       }),
     }).catch(() => {});
+
+    deductCredits({
+      userId: user.id,
+      model: "claude-haiku-4-5-20251001",
+      inputTokens: data.usage?.input_tokens || 0,
+      outputTokens: data.usage?.output_tokens || 0,
+      functionName: "estimate-expenses",
+      tripId: trip?.id || null,
+    });
 
     let items = [];
     try {

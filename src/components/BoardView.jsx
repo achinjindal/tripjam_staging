@@ -189,13 +189,19 @@ function TodoView({ trip, onBack }) {
     setGenerating(true);
     setSuggestions([]);
     try {
+      // D7: edge function now requires real user auth (not anon key)
+      const {
+        data: { session: sess },
+      } = await supabase.auth.getSession();
+      const token =
+        sess?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY;
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-todos`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({ trip }),
         },
@@ -1376,13 +1382,18 @@ Include: accommodation (total), flights/transport, daily food budget, key activi
     } catch {
       // Fallback: use generate-todos-style edge function
       try {
+        const {
+          data: { session: sess },
+        } = await supabase.auth.getSession();
+        const token =
+          sess?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY;
         const res = await fetch(
           `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/estimate-expenses`,
           {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+              Authorization: `Bearer ${token}`,
             },
             body: JSON.stringify({ trip }),
           },

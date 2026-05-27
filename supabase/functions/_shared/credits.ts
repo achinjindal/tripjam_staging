@@ -119,6 +119,74 @@ export function requireMinCredits(
   return null;
 }
 
+// Day 7: per-user per-minute rate limit. Returns 429 Response when over the
+// limit; null otherwise. Uses Postgres SECURITY DEFINER RPC for atomicity.
+// Limit defaults to 20 calls/min/user — comfortable for normal usage,
+// catches runaway loops and basic abuse.
+export async function rateLimit(
+  userId: string,
+  corsHeaders: Record<string, string>,
+  bucket = "llm",
+  limit = 20,
+): Promise<Response | null> {
+  if (!userId) return null;
+  const supa = adminClient();
+  try {
+    const { data, error } = await supa.rpc("incr_rate_limit", {
+      p_user_id: userId,
+      p_bucket: bucket,
+    });
+    if (error) {
+      // Fail-open: log + allow request through. Avoid blocking valid users
+      // because of a transient DB hiccup.
+      console.warn("rateLimit RPC failed:", error.message);
+      return null;
+    }
+    const count = typeof data === "number" ? data : Number(data);
+    if (count > limit) {
+      return new Response(
+        JSON.stringify({
+          error: "Rate limit exceeded",
+          code: "rate_limited",
+          limit,
+          retry_after_seconds: 60,
+        }),
+        {
+          status: 429,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json",
+            "Retry-After": "60",
+          },
+        },
+      );
+    }
+    return null;
+  } catch (e) {
+    console.warn("rateLimit exception:", (e as Error).message);
+    return null;
+  }
+}
+
+// Day 7: global kill switch. Set LLM_KILL_SWITCH=true on Supabase edge
+// function secrets to block all LLM-touching endpoints within ~1 minute
+// (next cold start picks up the env). Returns 503 when active.
+export function llmKillSwitch(corsHeaders: Record<string, string>): Response | null {
+  if (Deno.env.get("LLM_KILL_SWITCH") === "true") {
+    return new Response(
+      JSON.stringify({
+        error: "Service temporarily unavailable. Please retry in a few minutes.",
+        code: "kill_switch",
+      }),
+      {
+        status: 503,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
+  }
+  return null;
+}
+
 // Atomically deduct credits and log a transaction. Fire-and-forget — failure
 // to record a deduction should not break the user-facing response.
 export async function deductCredits(args: {

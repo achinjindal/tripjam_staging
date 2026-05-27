@@ -4,6 +4,8 @@ import {
   unauthorized,
   outOfCredits,
   deductCredits,
+  rateLimit,
+  llmKillSwitch,
 } from "../_shared/credits.ts";
 
 const corsHeaders = {
@@ -82,11 +84,17 @@ serve(async (req) => {
   }
 
   try {
+    const killed = llmKillSwitch(corsHeaders);
+    if (killed) return killed;
+
     const user = await authenticateUser(req);
     if (!user) return unauthorized(corsHeaders);
     // Pre-flight: require ≥1.0 credits so a partial decimal at the boundary
     // can't overdraw mid-call (IG can cost 20-50 credits worst case).
     if (user.credits < 1.0) return outOfCredits(corsHeaders, user.credits);
+
+    const rateLimited = await rateLimit(user.id, corsHeaders);
+    if (rateLimited) return rateLimited;
 
     const body = await req.json();
     console.log("Request body:", JSON.stringify(body));

@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { authenticateUser, unauthorized } from "../_shared/credits.ts";
+import { authenticateUser, unauthorized, rateLimit, llmKillSwitch } from "../_shared/credits.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -40,8 +40,14 @@ serve(async (req) => {
   // D16: Magazine deep-dive requires authentication.
   // Credit charging is still wired through the existing deductCredits flow
   // (will activate once Day 2 NUMERIC migration lands; until then it's a no-op).
+  const killed = llmKillSwitch(corsHeaders);
+  if (killed) return killed;
+
   const user = await authenticateUser(req);
   if (!user) return unauthorized(corsHeaders);
+
+  const rateLimited = await rateLimit(user.id, corsHeaders);
+  if (rateLimited) return rateLimited;
 
   try {
     const {
