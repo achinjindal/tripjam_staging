@@ -6255,10 +6255,16 @@ export default function App({
     }
   }, []);
 
-  // When streamingDays increases, pre-load the first ready day (Day 1)
+  // Day 6 Part A: parallelize per-day photo + geocode prefetch as days stream
+  // in from the detailed IG phase. Previously only Day 0 was warmed; now every
+  // newly-streamed day kicks off photo/geocode in parallel so they're ready
+  // by the time the user expands the card.
+  // `preloadDay` is internally idempotent via preloadedDaysRef.
   useEffect(() => {
-    if (streamingDays >= 1 && days.length >= 1) {
-      preloadDay(0);
+    if (streamingDays < 1) return;
+    const upTo = Math.min(streamingDays, days.length);
+    for (let i = 0; i < upTo; i++) {
+      preloadDay(i);
     }
   }, [streamingDays, days.length, preloadDay]);
 
@@ -6414,11 +6420,12 @@ export default function App({
       setDeepDiveCacheApp((prev) => ({ ...prev, [city]: "error" }));
     }
   };
-  // Background-load city-deep-dive for Magazine — destination + top 2 cities only
-  // Other cities are lazy-loaded when Magazine tab opens or user scrolls
+  // Background-load city-deep-dive for Magazine — destination only.
+  // D17 / R12 (Day 6 Part C): removed the auto top-2-cities pre-fetch that
+  // fired 2 extra deep dives users hadn't asked for. City deep dives now
+  // lazy-load on Magazine tab open (effect below) or on individual card click.
   useEffect(() => {
     if (pretripRoutes.length === 0) return;
-    // 1. Destination-level intro (e.g. "Japan", "Sri Lanka") — always first
     const rawDests = (pendingForm?.destinations || []).filter(
       (d) => !d.toLowerCase().includes("help me decide"),
     );
@@ -6428,24 +6435,6 @@ export default function App({
       (rawDests.length ? rawDests.join(", ") : null);
     if (destination && !deepDiveCacheApp[destination])
       loadCityDeepDiveApp(destination);
-
-    // 2. Find the 2 most common cities across all routes and pre-load those
-    const cityCount = {};
-    for (const route of pretripRoutes) {
-      for (const c of (route.city || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)) {
-        cityCount[c] = (cityCount[c] || 0) + 1;
-      }
-    }
-    const topCities = Object.entries(cityCount)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 2)
-      .map(([city]) => city);
-    for (const city of topCities) {
-      if (!deepDiveCacheApp[city]) loadCityDeepDiveApp(city);
-    }
   }, [pretripRoutes.length]);
 
   // Lazy-load remaining city deep dives when Magazine tab opens — staggered to avoid burst
@@ -7126,6 +7115,18 @@ export default function App({
     _igInFlight = true;
     const capturedTripId = editingTrip?.id || null;
     let genLogId = null; // track this generation's log row
+    // Day 6: IG timing instrumentation. Anchor timestamp for compact/detailed deltas.
+    const __igStartedAt = Date.now();
+    posthog.capture("ig_started", {
+      trip_id: capturedTripId,
+      days: Math.max(
+        1,
+        Math.round(
+          (new Date(form.endDate) - new Date(form.startDate)) /
+            (1000 * 60 * 60 * 24),
+        ),
+      ),
+    });
     setGenerateError("");
     setStreamingDays(0);
     preloadedDaysRef.current = new Set();
@@ -7246,6 +7247,11 @@ export default function App({
                     const compactData = JSON.parse(partial.slice(s));
                     if (compactData.compact?.length) {
                       compactShown = true;
+                      posthog.capture("ig_compact_complete", {
+                        trip_id: capturedTripId,
+                        ms_since_start: Date.now() - __igStartedAt,
+                        days: compactData.compact.length,
+                      });
                       const start = new Date(form.startDate);
                       const compactDays = compactData.compact.map((day, i) => {
                         const dayDate = new Date(start);
@@ -7744,6 +7750,11 @@ export default function App({
     setDays(savedDays);
     setActiveDay(0);
     if (!compactShown) playDoneChime(); // chime only if compact didn't already play it
+    posthog.capture("ig_detailed_complete", {
+      trip_id: capturedTripId,
+      ms_since_start: Date.now() - __igStartedAt,
+      days: savedDays?.length || 0,
+    });
     setChatUnread(true);
     setEditingTrip(null);
     setPendingForm(null);
