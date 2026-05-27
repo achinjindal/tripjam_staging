@@ -53,7 +53,15 @@ OK) · **🟢 Nice-to-have**.
 - 🟢 Bundle visualizer audit (current splits look reasonable)
 - 🟢 Inline magazine-tab credits hint (consolidated into Avatar dropdown)
 - 🟡 Manual password reset flow (currently emailed support — see RUNBOOKS)
-- 🟡 Desktop layout ≥1024px breakpoint (D21-D22, post-launch month 2+)
+- 🟢 Desktop layout ≥1024px breakpoint (D21-D22) — **Phase 1 shipped 2026-05-27.**
+  Trip-view (brainstorm + itinerary) renders D22 three-column shell on
+  desktop: 240px left sidebar (trips link / trip name / share / explore
+  plans) + center column (top-tab row + active tab content) + right column
+  (persistent Leaflet map on top, persistent Trippy chat inline on bottom).
+  Mobile (<1024px) is byte-identical. Phase 2 backlog: Setup wizard, Home
+  trips-list-as-sidebar, TripPublicView, Auth. Dev helper: `?desktop=1`
+  query param forces the desktop shell at any viewport width (useful for
+  in-IDE browser testing where the inner iframe is fixed at ~760px).
 - 🟢 9 Playwright RG/IG-dependent tests flaky (real Anthropic API; not a
   product bug — manual smoke A5 covers these flows)
 

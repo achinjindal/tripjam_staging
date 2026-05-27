@@ -32,6 +32,7 @@ import {
   haversineMeters,
 } from "./photos";
 import { MapView, RouteMapView } from "./components/MapView.jsx";
+import { useIsDesktop } from "./hooks/useViewport.js";
 import {
   DestinationHero,
   FoodSpotlightCard,
@@ -1625,7 +1626,9 @@ function BrainstormView({
           (d) => (d.city || "").toLowerCase() === city.toLowerCase(),
         ).length;
         // D16: city-deep-dive now requires user authentication.
-        const { data: { session: ddSession } } = await supabase.auth.getSession();
+        const {
+          data: { session: ddSession },
+        } = await supabase.auth.getSession();
         if (!ddSession?.access_token) throw new Error("Not authenticated");
         const res = await fetch(
           `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/city-deep-dive`,
@@ -3506,8 +3509,12 @@ function TransitionRow({
     let cancelled = false;
     // Feature 8: prefer stored lat/lng on the activity record over on-the-fly geocoding.
     // The selectHotel flow + future activity backfill populate these via smart escalation.
-    const storedA = (from?.lat != null && from?.lng != null) ? { lat: from.lat, lng: from.lng } : null;
-    const storedB = (to?.lat   != null && to?.lng   != null) ? { lat: to.lat,   lng: to.lng   } : null;
+    const storedA =
+      from?.lat != null && from?.lng != null
+        ? { lat: from.lat, lng: from.lng }
+        : null;
+    const storedB =
+      to?.lat != null && to?.lng != null ? { lat: to.lat, lng: to.lng } : null;
     async function load() {
       const placeA = from.geocode || extractPlace(from.title);
       const placeB = to.geocode || extractPlace(to.title);
@@ -3528,7 +3535,7 @@ function TransitionRow({
         if (cancelled) return;
         const [coordA, coordB] = await Promise.all([
           storedA ?? geocodePlace(from.title, city, fromGeocode),
-          storedB ?? geocodePlace(to.title,   city, to.geocode),
+          storedB ?? geocodePlace(to.title, city, to.geocode),
         ]);
         if (cancelled) return;
         if (!coordA && !coordB)
@@ -5679,10 +5686,19 @@ function DaySection({
                     if (act.id && !String(act.id).startsWith("tmp-")) {
                       supabase
                         .from("activities")
-                        .update({ transition_mins: mins, transition_mode: mode })
+                        .update({
+                          transition_mins: mins,
+                          transition_mode: mode,
+                        })
                         .eq("id", act.id)
                         .then(({ error }) => {
-                          if (error) console.warn("transition_mins write failed:", error.message, "activity:", act.id);
+                          if (error)
+                            console.warn(
+                              "transition_mins write failed:",
+                              error.message,
+                              "activity:",
+                              act.id,
+                            );
                         });
                     }
                   }}
@@ -5716,10 +5732,19 @@ function DaySection({
                       if (act.id && !String(act.id).startsWith("tmp-")) {
                         supabase
                           .from("activities")
-                          .update({ transition_mins: mins, transition_mode: mode })
+                          .update({
+                            transition_mins: mins,
+                            transition_mode: mode,
+                          })
                           .eq("id", act.id)
                           .then(({ error }) => {
-                            if (error) console.warn("transition_mins write failed:", error.message, "activity:", act.id);
+                            if (error)
+                              console.warn(
+                                "transition_mins write failed:",
+                                error.message,
+                                "activity:",
+                                act.id,
+                              );
                           });
                       }
                     }}
@@ -6086,6 +6111,12 @@ export default function App({
   onHome,
   onUrlChange,
 }) {
+  // D21 desktop breakpoint. The D22 three-column layout (left sidebar /
+  // center / persistent map + chat right) applies only to trip-view screens
+  // (brainstorm + itinerary). Setup, Home, Public, Auth keep the mobile
+  // shell at all widths in this phase.
+  const isDesktop = useIsDesktop();
+
   // Draft trip (RG done, no IG yet) → go straight to routes, not setup form
   const isDraft = initialTrip && !initialTrip.ig_response;
   const [screen, setScreen] = useState(isDraft ? "brainstorm" : initialScreen);
@@ -6573,26 +6604,29 @@ export default function App({
       await supabase.from("activities").delete().eq("id", existingHotel.id);
     }
     // Insert new hotel activity
-    const position = day.activities.filter(a => a.time <= checkInTime).length;
+    const position = day.activities.filter((a) => a.time <= checkInTime).length;
 
     // Feature 8: resolve hotel coordinates via smart escalation (Photon-first, Google fallback)
     // Pass-through Google cost (D24: 1.70 credits/call if escalated; 0 if Photon hits)
     let resolved = null;
     try {
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/places-proxy?action=resolve-coords`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`,
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/places-proxy?action=resolve-coords`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            name: hotel.title,
+            city: day.city,
+            hint: hotel.geocode,
+            type: "lodging",
+            tripId: trip?.id,
+          }),
         },
-        body: JSON.stringify({
-          name: hotel.title,
-          city: day.city,
-          hint: hotel.geocode,
-          type: "lodging",
-          tripId: trip?.id,
-        }),
-      });
+      );
       if (res.ok) {
         resolved = await res.json();
       } else if (res.status !== 402) {
@@ -6604,10 +6638,17 @@ export default function App({
     }
 
     const insertPayload = {
-      day_id: dayId, time: checkInTime,
-      title: `Check in at ${hotel.title}`, geocode: hotel.geocode || hotel.title,
-      type: "hotel", duration: "0.5h", note: hotel.note, icon: "🏨",
-      confirmed: false, position, added_by: session.user.id,
+      day_id: dayId,
+      time: checkInTime,
+      title: `Check in at ${hotel.title}`,
+      geocode: hotel.geocode || hotel.title,
+      type: "hotel",
+      duration: "0.5h",
+      note: hotel.note,
+      icon: "🏨",
+      confirmed: false,
+      position,
+      added_by: session.user.id,
     };
     if (resolved?.lat && resolved?.lng) {
       insertPayload.lat = resolved.lat;
@@ -6615,19 +6656,37 @@ export default function App({
       insertPayload.geocode_source = resolved.source || null;
       insertPayload.geocode_confidence = resolved.confidence || null;
       if (resolved.place_id) insertPayload.place_id = resolved.place_id;
-      if (resolved.business_status) insertPayload.business_status = resolved.business_status;
+      if (resolved.business_status)
+        insertPayload.business_status = resolved.business_status;
     }
 
-    const { data: newAct } = await supabase.from("activities").insert(insertPayload).select().single();
+    const { data: newAct } = await supabase
+      .from("activities")
+      .insert(insertPayload)
+      .select()
+      .single();
     // Clear hotel_options from day once a hotel is selected
-    await supabase.from("days").update({ hotel_options: null, hotel_check_in_time: null }).eq("id", dayId);
-    setDays(prev => prev.map(d => {
-      if (d.id !== dayId) return d;
-      const acts = d.activities.filter(a => a.type !== "hotel");
-      const inserted = newAct || { id: `tmp-${Date.now()}`, ...insertPayload };
-      acts.splice(position, 0, inserted);
-      return { ...d, activities: acts, hotel_options: null, hotel_check_in_time: null };
-    }));
+    await supabase
+      .from("days")
+      .update({ hotel_options: null, hotel_check_in_time: null })
+      .eq("id", dayId);
+    setDays((prev) =>
+      prev.map((d) => {
+        if (d.id !== dayId) return d;
+        const acts = d.activities.filter((a) => a.type !== "hotel");
+        const inserted = newAct || {
+          id: `tmp-${Date.now()}`,
+          ...insertPayload,
+        };
+        acts.splice(position, 0, inserted);
+        return {
+          ...d,
+          activities: acts,
+          hotel_options: null,
+          hotel_check_in_time: null,
+        };
+      }),
+    );
   };
 
   const removeActivity = async (dayId, activityId) => {
@@ -8436,21 +8495,48 @@ export default function App({
     setChatLoading(false);
   };
 
+  // D22 desktop shell — applies only on trip-view screens. Setup / Home /
+  // public / auth keep the mobile-stretched layout in this phase.
+  const isTripView = screen === "brainstorm" || screen === "itinerary";
+  const useDesktopShell = isDesktop && isTripView;
+
   return (
     <ErrorBoundary>
       <div
-        style={{
-          fontFamily: "Georgia,serif",
-          background: T.warm,
-          maxWidth: 430,
-          margin: "0 auto",
-          position: "relative",
-          display: "flex",
-          flexDirection: "column",
-          height: "100dvh",
-          overflow: "hidden",
-          paddingTop: "env(safe-area-inset-top, 0px)",
-        }}
+        style={
+          useDesktopShell
+            ? {
+                fontFamily: "Georgia,serif",
+                background: T.warm,
+                maxWidth: 1440,
+                margin: "0 auto",
+                position: "relative",
+                display: "grid",
+                gridTemplateColumns: "240px minmax(0, 1fr) minmax(0, 1fr)",
+                // Right column splits ~60/40 between persistent map (top) and
+                // persistent Trippy chat (bottom). The named-area syntax lets
+                // the existing screen content stay a normal child of the grid
+                // and just claim the "center" cell via gridArea below.
+                gridTemplateRows: "60% 40%",
+                gridTemplateAreas:
+                  '"left center right-top" "left center right-bottom"',
+                height: "100dvh",
+                overflow: "hidden",
+                paddingTop: "env(safe-area-inset-top, 0px)",
+              }
+            : {
+                fontFamily: "Georgia,serif",
+                background: T.warm,
+                maxWidth: 430,
+                margin: "0 auto",
+                position: "relative",
+                display: "flex",
+                flexDirection: "column",
+                height: "100dvh",
+                overflow: "hidden",
+                paddingTop: "env(safe-area-inset-top, 0px)",
+              }
+        }
       >
         <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap');
@@ -8759,637 +8845,420 @@ export default function App({
           </div>
         )}
 
-        {/* ── BRAINSTORM (pre-trip) — full layout with bottom nav ── */}
-        {screen === "brainstorm" && (
-          <>
-            {/* Content area per active tab */}
-            {/* BrainstormView always mounted to preserve items + selection, but hidden when not active */}
-            <div
+        {/* ── DESKTOP LEFT SIDEBAR (D22) ──
+            Lives in the "left" grid area on desktop, transparent on mobile.
+            Lightweight nav: trips link, trip name, edit/share, account avatar.
+            Phase 2 will expand this into the full trips-list sidebar. */}
+        {useDesktopShell && (
+          <div
+            style={{
+              gridArea: "left",
+              background: T.chalk,
+              borderRight: `1px solid ${T.sand}`,
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+              padding: "20px 16px",
+              gap: 16,
+            }}
+          >
+            <button
+              onClick={() => {
+                if (onHome) onHome();
+              }}
               style={{
-                flex: pretripTab === "brainstorm" ? 1 : 0,
-                display: pretripTab === "brainstorm" ? "flex" : "none",
-                flexDirection: "column",
-                overflow: "hidden",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                background: "none",
+                border: "none",
+                color: T.mist,
+                cursor: "pointer",
+                fontFamily: "Georgia,serif",
+                fontSize: 13,
+                padding: "6px 4px",
+                textAlign: "left",
               }}
             >
-              <BrainstormView
-                trip={null}
-                session={session}
-                pendingForm={pendingForm}
-                triggerGenerateRef={triggerRgRef}
-                onGeneratingChange={setRoutesGenerating}
-                editTripId={editingTrip?.id || null}
-                deepDiveCache={deepDiveCacheApp}
-                loadCityDeepDive={loadCityDeepDiveApp}
-                onBuild={handleBuildFromBrainstorm}
-                onBack={() => setScreen("setup")}
-                onEditForm={
-                  editingTrip
-                    ? () => {
-                        setSetupStep(0);
-                        setScreen("setup");
-                      }
-                    : null
-                }
-                onOpenChat={() => {
-                  setChatOpen(true);
-                  setChatUnread(false);
-                }}
-                undoDismissRef={undoDismissRef}
-                onModifyRoute={(label) => {
-                  setChatOpen(true);
-                  setChatUnread(false);
-                  setChatInput(`Modify ${label}: `);
-                  setTimeout(() => chatInputRef.current?.focus(), 100);
-                }}
-                onDismissRoute={(label, itemId) => {
-                  const item = (pretripRoutes || []).find(
-                    (r) => r.id === itemId,
-                  );
-                  const undoMsg = {
-                    role: "system-undo",
-                    content: `${label} "${item?.title || "route"}" was dismissed.`,
-                    undoData: { dismissedRouteId: itemId },
-                    id: `undo-route-${Date.now()}`,
-                  };
-                  setChatMessages((prev) => [...prev, undoMsg]);
-                  setChatUnread(true);
-                }}
-                onItemsChange={setPretripRoutes}
-                onSelectionChange={setPretripSelectedRouteId}
-                externalSelectedId={pretripSelectedRouteId}
-                externalRoutes={pretripRoutes}
-                onTellMore={(cities, routeId) => {
-                  // Switch to Magazine tab, filtered for this route's cities
-                  setMagazineFilterCities(cities);
-                  setMagazineFilterRouteId(routeId);
-                  setPretripTab("magazine");
-                }}
-                onShowMap={(routeId) => {
-                  setPretripSelectedRouteId(routeId);
-                  setPretripTab("map");
-                }}
-              />
+              ← All trips
+            </button>
+            <div
+              style={{
+                fontFamily: "'DM Serif Display',serif",
+                fontSize: 22,
+                color: T.ink,
+                lineHeight: 1.2,
+                padding: "4px 4px 8px",
+                borderBottom: `1px solid ${T.sand}`,
+              }}
+            >
+              {trip?.name || trip?.destination || "Your trip"}
             </div>
-
-            {/* RouteMapView — lazy mount so Leaflet initializes with proper container dimensions */}
-            {pretripTab === "map" && (
+            {trip?.start_date && trip?.end_date && (
               <div
                 style={{
-                  flex: 1,
+                  fontSize: 12,
+                  color: T.mist,
+                  fontFamily: "Georgia,serif",
+                  padding: "0 4px",
+                }}
+              >
+                📅 {trip.start_date} → {trip.end_date}
+              </div>
+            )}
+            {screen === "itinerary" && (
+              <button
+                onClick={() => {
+                  setScreen("brainstorm");
+                  if (onUrlChange) onUrlChange(`/trip/${trip.id}/plans`);
+                }}
+                style={{
                   display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  background: "none",
+                  border: `1px solid ${T.sand}`,
+                  borderRadius: RADIUS.md,
+                  color: T.ink,
+                  cursor: "pointer",
+                  fontFamily: "Georgia,serif",
+                  fontSize: 12,
+                  padding: "8px 12px",
+                  textAlign: "left",
+                }}
+              >
+                🛣 Explore other plans
+              </button>
+            )}
+            <button
+              onClick={async () => {
+                let token = trip?.share_token;
+                if (!token && trip?.id) {
+                  const { data } = await supabase
+                    .from("trips")
+                    .update({ share_token: crypto.randomUUID() })
+                    .eq("id", trip.id)
+                    .select("share_token")
+                    .single();
+                  token = data?.share_token;
+                  if (token) setTrip((t) => ({ ...t, share_token: token }));
+                }
+                if (!token) return;
+                const url = `${window.location.origin}/share/${token}`;
+                if (navigator.share) {
+                  await navigator.share({
+                    title: trip.name,
+                    text: `Check out our trip: ${trip.name}`,
+                    url,
+                  });
+                } else {
+                  await navigator.clipboard.writeText(url);
+                  alert("Link copied!");
+                }
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                background: "none",
+                border: `1px solid ${T.sand}`,
+                borderRadius: RADIUS.md,
+                color: T.ink,
+                cursor: "pointer",
+                fontFamily: "Georgia,serif",
+                fontSize: 12,
+                padding: "8px 12px",
+                textAlign: "left",
+              }}
+            >
+              📤 Share trip
+            </button>
+            <div style={{ flex: 1 }} />
+            <div
+              style={{
+                fontSize: 11,
+                color: T.mist,
+                fontFamily: "Georgia,serif",
+                textAlign: "center",
+                padding: "8px 0",
+                borderTop: `1px solid ${T.sand}`,
+              }}
+            >
+              TripJam
+            </div>
+          </div>
+        )}
+
+        {/* ── CENTER COLUMN (D22) ──
+            Wraps brainstorm + itinerary screens. On desktop this claims the
+            "center" grid area; on mobile it's transparent (display: contents)
+            so the original flex layout is preserved byte-for-byte. */}
+        <div
+          style={
+            useDesktopShell
+              ? {
+                  gridArea: "center",
+                  display: "flex",
+                  flexDirection: "column",
+                  overflow: "hidden",
+                  borderRight: `1px solid ${T.sand}`,
+                  position: "relative",
+                }
+              : { display: "contents" }
+          }
+        >
+          {/* ── DESKTOP TOP-TAB ROW (D22) ──
+            Replaces the mobile bottom-nav. The Map tab is omitted (map is
+            persistent in the right column) so brainstorm shows Route | Magazine
+            and itinerary shows Magazine | Itinerary | Board. */}
+          {useDesktopShell && (
+            <div
+              style={{
+                flexShrink: 0,
+                background: T.chalk,
+                borderBottom: `1px solid ${T.sand}`,
+                display: "flex",
+                padding: "0 8px",
+              }}
+            >
+              {(screen === "brainstorm"
+                ? [
+                    { key: "brainstorm", icon: "🛣️", label: "Route" },
+                    { key: "magazine", icon: "📖", label: "Magazine" },
+                  ]
+                : [
+                    { key: "brainstorm", icon: "📖", label: "Magazine" },
+                    { key: "itinerary", icon: "🗓", label: "Itinerary" },
+                    { key: "board", icon: "📋", label: "Board" },
+                  ]
+              ).map(({ key, icon, label }) => {
+                const active =
+                  screen === "brainstorm"
+                    ? pretripTab === key
+                    : activeBottomTab === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => {
+                      posthog.capture("tab_switch", { tab: key });
+                      if (screen === "brainstorm") {
+                        setPretripTab(key);
+                        if (key !== "magazine") {
+                          setMagazineFilterCities(null);
+                          setMagazineFilterRouteId(null);
+                        }
+                      } else {
+                        setActiveBottomTab(key);
+                      }
+                    }}
+                    style={{
+                      flexShrink: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "14px 18px",
+                      border: "none",
+                      background: "none",
+                      cursor: "pointer",
+                      color: active ? T.ocean : T.mist,
+                      transition: `color ${MOTION.normal}`,
+                      position: "relative",
+                      fontFamily: "'Inter','Segoe UI',sans-serif",
+                      fontSize: 13,
+                      fontWeight: active ? 600 : 400,
+                      letterSpacing: 0.2,
+                    }}
+                  >
+                    <span style={{ fontSize: 16 }}>{icon}</span>
+                    {label}
+                    {active && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          bottom: 0,
+                          left: 12,
+                          right: 12,
+                          height: 2.5,
+                          borderRadius: "2px 2px 0 0",
+                          background: T.ocean,
+                        }}
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── BRAINSTORM (pre-trip) — full layout with bottom nav ── */}
+          {screen === "brainstorm" && (
+            <>
+              {/* Content area per active tab */}
+              {/* BrainstormView always mounted to preserve items + selection, but hidden when not active */}
+              <div
+                style={{
+                  flex: pretripTab === "brainstorm" ? 1 : 0,
+                  display: pretripTab === "brainstorm" ? "flex" : "none",
                   flexDirection: "column",
                   overflow: "hidden",
                 }}
               >
-                <RouteMapView
-                  routes={pretripRoutes}
-                  selectedId={pretripSelectedRouteId}
-                  onSelectRoute={setPretripSelectedRouteId}
-                  destination={
-                    (pendingForm?.destinations || []).join(", ") ||
-                    editingTrip?.destination ||
-                    ""
+                <BrainstormView
+                  trip={null}
+                  session={session}
+                  pendingForm={pendingForm}
+                  triggerGenerateRef={triggerRgRef}
+                  onGeneratingChange={setRoutesGenerating}
+                  editTripId={editingTrip?.id || null}
+                  deepDiveCache={deepDiveCacheApp}
+                  loadCityDeepDive={loadCityDeepDiveApp}
+                  onBuild={handleBuildFromBrainstorm}
+                  onBack={() => setScreen("setup")}
+                  onEditForm={
+                    editingTrip
+                      ? () => {
+                          setSetupStep(0);
+                          setScreen("setup");
+                        }
+                      : null
                   }
+                  onOpenChat={() => {
+                    setChatOpen(true);
+                    setChatUnread(false);
+                  }}
+                  undoDismissRef={undoDismissRef}
+                  onModifyRoute={(label) => {
+                    setChatOpen(true);
+                    setChatUnread(false);
+                    setChatInput(`Modify ${label}: `);
+                    setTimeout(() => chatInputRef.current?.focus(), 100);
+                  }}
+                  onDismissRoute={(label, itemId) => {
+                    const item = (pretripRoutes || []).find(
+                      (r) => r.id === itemId,
+                    );
+                    const undoMsg = {
+                      role: "system-undo",
+                      content: `${label} "${item?.title || "route"}" was dismissed.`,
+                      undoData: { dismissedRouteId: itemId },
+                      id: `undo-route-${Date.now()}`,
+                    };
+                    setChatMessages((prev) => [...prev, undoMsg]);
+                    setChatUnread(true);
+                  }}
+                  onItemsChange={setPretripRoutes}
+                  onSelectionChange={setPretripSelectedRouteId}
+                  externalSelectedId={pretripSelectedRouteId}
+                  externalRoutes={pretripRoutes}
+                  onTellMore={(cities, routeId) => {
+                    // Switch to Magazine tab, filtered for this route's cities
+                    setMagazineFilterCities(cities);
+                    setMagazineFilterRouteId(routeId);
+                    setPretripTab("magazine");
+                  }}
+                  onShowMap={(routeId) => {
+                    setPretripSelectedRouteId(routeId);
+                    setPretripTab("map");
+                  }}
                 />
               </div>
-            )}
 
-            {/* Pre-IG Magazine tab */}
-            {pretripTab === "magazine" &&
-              pretripDeepDiveCity &&
-              (() => {
-                const ddCity = pretripDeepDiveCity;
-                const dd = deepDiveCacheApp[ddCity];
-                const data = dd && typeof dd === "object" ? dd : null;
-                const loading = dd === "loading";
-                const errored = dd === "error";
-                return (
-                  <div
-                    style={{
-                      flex: 1,
-                      overflowY: "auto",
-                      background: T.warm,
-                      padding: "16px 16px 24px",
-                    }}
-                  >
-                    <button
-                      onClick={() => setPretripDeepDiveCity(null)}
-                      style={{
-                        alignSelf: "flex-start",
-                        background: "none",
-                        border: "none",
-                        color: T.ocean,
-                        fontFamily: "Georgia,serif",
-                        fontSize: 13,
-                        cursor: "pointer",
-                        padding: "4px 0",
-                        marginBottom: 12,
-                      }}
-                    >
-                      ← Back to destinations
-                    </button>
-                    <div
-                      style={{
-                        fontFamily: "'DM Serif Display',serif",
-                        fontSize: 28,
-                        color: T.ink,
-                        lineHeight: 1.15,
-                        marginBottom: 12,
-                      }}
-                    >
-                      {ddCity}
-                    </div>
-                    {data?.writeup && (
-                      <div
-                        style={{
-                          fontSize: 14,
-                          color: T.ink,
-                          fontFamily: "Georgia,serif",
-                          lineHeight: 1.6,
-                          marginBottom: 16,
-                        }}
-                      >
-                        {data.writeup}
-                      </div>
-                    )}
-                    {data?.didYouKnow && (
-                      <div
-                        style={{
-                          marginBottom: 16,
-                          padding: "12px 16px",
-                          borderLeft: `3px solid ${T.ocean}`,
-                          background: `linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,
-                          borderRadius: "0 12px 12px 0",
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: 13,
-                            lineHeight: 1.55,
-                            color: T.ocean,
-                            fontFamily: "Georgia,serif",
-                            fontStyle: "italic",
-                          }}
-                        >
-                          💡 {data.didYouKnow}
-                        </div>
-                      </div>
-                    )}
-                    {data?.moreSights?.length > 0 && (
-                      <div style={{ marginBottom: 16 }}>
-                        <div
-                          style={{
-                            fontSize: 10,
-                            color: T.mist,
-                            fontFamily: "Georgia,serif",
-                            textTransform: "uppercase",
-                            letterSpacing: 1.2,
-                            marginBottom: 10,
-                          }}
-                        >
-                          🧭 More to discover
-                        </div>
-                        <div
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "1fr 1fr",
-                            gap: 10,
-                          }}
-                        >
-                          {data.moreSights.map((s, i) => (
-                            <MagazineHighlightCard
-                              key={i}
-                              item={s}
-                              city={ddCity}
-                              masonry={true}
-                              tall={i % 3 === 0}
-                              onAskTrippy={(title) => {
-                                setChatInput(`Tell me about "${title}"`);
-                                setChatOpen(true);
-                                setChatUnread(false);
-                                setTimeout(
-                                  () => chatInputRef.current?.focus(),
-                                  50,
-                                );
-                              }}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    {data?.foodSpecialties?.length > 0 && (
-                      <div
-                        style={{
-                          background: T.chalk,
-                          borderRadius: RADIUS.lg,
-                          padding: "14px 16px",
-                          border: `1px solid ${T.sand}`,
-                          marginBottom: 16,
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: 10,
-                            color: T.mist,
-                            fontFamily: "Georgia,serif",
-                            textTransform: "uppercase",
-                            letterSpacing: 1,
-                            marginBottom: 10,
-                          }}
-                        >
-                          🍜 Food you should try
-                        </div>
-                        {data.foodSpecialties.map((f, i) => (
-                          <div
-                            key={i}
-                            style={{
-                              display: "flex",
-                              gap: 10,
-                              alignItems: "flex-start",
-                              marginBottom: 8,
-                            }}
-                          >
-                            <span style={{ fontSize: 18, flexShrink: 0 }}>
-                              {f.icon || "🍽️"}
-                            </span>
-                            <div>
-                              <div
-                                style={{
-                                  fontFamily: "'DM Serif Display',serif",
-                                  fontSize: 13,
-                                  color: T.ink,
-                                }}
-                              >
-                                {f.name}
-                              </div>
-                              {f.note && (
-                                <div
-                                  style={{
-                                    fontSize: 11,
-                                    color: T.mist,
-                                    fontFamily: "Georgia,serif",
-                                  }}
-                                >
-                                  {f.note}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {data?.weather && (
-                      <div
-                        style={{
-                          background: T.chalk,
-                          borderRadius: RADIUS.lg,
-                          padding: "14px 16px",
-                          border: `1px solid ${T.sand}`,
-                          marginBottom: 16,
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: 10,
-                            color: T.mist,
-                            fontFamily: "Georgia,serif",
-                            textTransform: "uppercase",
-                            letterSpacing: 1,
-                            marginBottom: 8,
-                          }}
-                        >
-                          🌤 Weather & season
-                        </div>
-                        <div
-                          style={{
-                            fontSize: 13,
-                            color: T.ink,
-                            fontFamily: "Georgia,serif",
-                            lineHeight: 1.55,
-                          }}
-                        >
-                          {data.weather}
-                        </div>
-                      </div>
-                    )}
-                    {data?.gettingAround && (
-                      <div
-                        style={{
-                          background: T.chalk,
-                          borderRadius: RADIUS.lg,
-                          padding: "14px 16px",
-                          border: `1px solid ${T.sand}`,
-                          marginBottom: 16,
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: 10,
-                            color: T.mist,
-                            fontFamily: "Georgia,serif",
-                            textTransform: "uppercase",
-                            letterSpacing: 1,
-                            marginBottom: 8,
-                          }}
-                        >
-                          🚕 Getting around
-                        </div>
-                        <div
-                          style={{
-                            fontSize: 13,
-                            color: T.ink,
-                            fontFamily: "Georgia,serif",
-                            lineHeight: 1.55,
-                          }}
-                        >
-                          {data.gettingAround}
-                        </div>
-                      </div>
-                    )}
-                    {data?.etiquette?.length > 0 && (
-                      <div
-                        style={{
-                          background: T.chalk,
-                          borderRadius: RADIUS.lg,
-                          padding: "14px 16px",
-                          border: `1px solid ${T.sand}`,
-                          marginBottom: 16,
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: 10,
-                            color: T.mist,
-                            fontFamily: "Georgia,serif",
-                            textTransform: "uppercase",
-                            letterSpacing: 1,
-                            marginBottom: 10,
-                          }}
-                        >
-                          🤝 Local etiquette
-                        </div>
-                        {data.etiquette.map((tip, i) => (
-                          <div
-                            key={i}
-                            style={{
-                              display: "flex",
-                              gap: 8,
-                              alignItems: "flex-start",
-                              marginBottom: 4,
-                            }}
-                          >
-                            <span
-                              style={{
-                                fontSize: 11,
-                                color: T.ocean,
-                                flexShrink: 0,
-                                marginTop: 3,
-                              }}
-                            >
-                              ●
-                            </span>
-                            <div
-                              style={{
-                                fontSize: 13,
-                                color: T.ink,
-                                fontFamily: "Georgia,serif",
-                                lineHeight: 1.5,
-                              }}
-                            >
-                              {tip}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {loading && (
-                      <div
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 12,
-                        }}
-                      >
-                        {[0, 1, 2].map((i) => (
-                          <div
-                            key={i}
-                            style={{
-                              background: T.chalk,
-                              borderRadius: RADIUS.lg,
-                              padding: "14px 16px",
-                              border: `1px solid ${T.sand}`,
-                            }}
-                          >
-                            <div
-                              style={{
-                                width: 100,
-                                height: 10,
-                                borderRadius: 4,
-                                background: T.sand,
-                                animation: "shimmer 1.5s ease-in-out infinite",
-                                marginBottom: 10,
-                              }}
-                            />
-                            <div
-                              style={{
-                                width: "90%",
-                                height: 12,
-                                borderRadius: 4,
-                                background: T.sand,
-                                animation: "shimmer 1.5s ease-in-out infinite",
-                                marginBottom: 6,
-                              }}
-                            />
-                            <div
-                              style={{
-                                width: "70%",
-                                height: 12,
-                                borderRadius: 4,
-                                background: T.sand,
-                                animation: "shimmer 1.5s ease-in-out infinite",
-                              }}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {errored && (
-                      <div
-                        style={{
-                          padding: "14px 16px",
-                          textAlign: "center",
-                          color: T.error,
-                          fontFamily: "Georgia,serif",
-                          fontSize: 13,
-                          background: T.errorLight,
-                          borderRadius: RADIUS.md,
-                        }}
-                      >
-                        Couldn't load details.{" "}
-                        <button
-                          onClick={() => loadCityDeepDiveApp(ddCity)}
-                          style={{
-                            background: "none",
-                            border: "none",
-                            color: T.ocean,
-                            cursor: "pointer",
-                            textDecoration: "underline",
-                          }}
-                        >
-                          Retry
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-            {pretripTab === "magazine" && !pretripDeepDiveCity && (
-              <div style={{ flex: 1, overflowY: "auto", background: T.warm }}>
+              {/* RouteMapView — lazy mount so Leaflet initializes with proper container dimensions.
+                Skipped on desktop (D22): the route map is rendered persistently
+                in the right-top grid area instead, so the Map tab is hidden
+                from the desktop tab row. */}
+              {!useDesktopShell && pretripTab === "map" && (
                 <div
                   style={{
-                    padding: "20px 16px 12px",
-                    background: T.chalk,
-                    borderBottom: `1px solid ${T.sand}`,
+                    flex: 1,
                     display: "flex",
-                    alignItems: "center",
-                    gap: 10,
+                    flexDirection: "column",
+                    overflow: "hidden",
                   }}
                 >
-                  {magazineFilterCities && (
-                    <button
-                      onClick={() => {
-                        setMagazineFilterCities(null);
-                        setMagazineFilterRouteId(null);
-                        setPretripTab("brainstorm");
-                      }}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        fontSize: 20,
-                        cursor: "pointer",
-                        color: T.ocean,
-                        padding: "0 4px",
-                        lineHeight: 1,
-                      }}
-                    >
-                      ←
-                    </button>
-                  )}
-                  <div style={{ flex: 1 }}>
-                    <div
-                      style={{
-                        fontFamily: "'DM Serif Display',serif",
-                        fontSize: 20,
-                        color: T.ink,
-                      }}
-                    >
-                      {magazineFilterCities
-                        ? (() => {
-                            // Show country/region from route title (e.g. "Georgia – Caucasus Explorer" → "Georgia")
-                            const route = magazineFilterRouteId
-                              ? (pretripRoutes || []).find(
-                                  (r) => r.id === magazineFilterRouteId,
-                                )
-                              : null;
-                            if (route?.title)
-                              return route.title.split(/\s*[–—-]\s*/)[0].trim();
-                            return magazineFilterCities.join(", ");
-                          })()
-                        : editingTrip?.destination ||
-                          (pendingForm?.destinations || [])
-                            .filter(
-                              (d) =>
-                                !d.toLowerCase().includes("help me decide"),
-                            )
-                            .join(", ") ||
-                          "Magazine"}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: T.mist,
-                        fontFamily: "Georgia,serif",
-                        marginTop: 4,
-                      }}
-                    >
-                      {magazineFilterCities
-                        ? "Explore this route's destinations"
-                        : "Explore the destinations across your trip plans"}
-                    </div>
-                  </div>
-                  {magazineFilterCities && (
-                    <button
-                      onClick={() => {
-                        setMagazineFilterCities(null);
-                        setMagazineFilterRouteId(null);
-                      }}
-                      style={{
-                        background: T.sand,
-                        border: "none",
-                        borderRadius: RADIUS.full,
-                        padding: "5px 11px",
-                        color: T.ink,
-                        fontSize: 11,
-                        cursor: "pointer",
-                        fontFamily: "Georgia,serif",
-                      }}
-                    >
-                      Show all
-                    </button>
-                  )}
-                </div>
-                <div
-                  style={{ display: "flex", flexDirection: "column", gap: 0 }}
-                >
-                  {/* Destination-level intro — always shown with hero photo */}
-                  {(() => {
-                    // Derive destination: from trip, form, or route title (for "Help me decide" flows)
-                    const rawDest = (pendingForm?.destinations || []).filter(
-                      (d) => !d.toLowerCase().includes("help me decide"),
-                    );
-                    let dest =
+                  <RouteMapView
+                    routes={pretripRoutes}
+                    selectedId={pretripSelectedRouteId}
+                    onSelectRoute={setPretripSelectedRouteId}
+                    destination={
+                      (pendingForm?.destinations || []).join(", ") ||
                       editingTrip?.destination ||
-                      (rawDest.length ? rawDest.join(", ") : null);
-                    // If filtered by a route, use country from route title
-                    if (!dest && magazineFilterRouteId) {
-                      const route = (pretripRoutes || []).find(
-                        (r) => r.id === magazineFilterRouteId,
-                      );
-                      if (route?.title)
-                        dest = route.title.split(/\s*[–—-]\s*/)[0].trim();
+                      ""
                     }
-                    if (!dest) return null;
-                    // Load deep dive if not cached
-                    if (!deepDiveCacheApp[dest]) loadCityDeepDiveApp(dest);
-                    const dd = deepDiveCacheApp[dest] || null;
-                    const data = dd && typeof dd === "object" ? dd : null;
-                    const isLoading = dd === "loading";
-                    if (!dest) return null;
-                    return (
-                      <DestinationHero
-                        dest={dest}
-                        isLoading={isLoading}
-                        data={data}
+                  />
+                </div>
+              )}
+
+              {/* Pre-IG Magazine tab */}
+              {pretripTab === "magazine" &&
+                pretripDeepDiveCity &&
+                (() => {
+                  const ddCity = pretripDeepDiveCity;
+                  const dd = deepDiveCacheApp[ddCity];
+                  const data = dd && typeof dd === "object" ? dd : null;
+                  const loading = dd === "loading";
+                  const errored = dd === "error";
+                  return (
+                    <div
+                      style={{
+                        flex: 1,
+                        overflowY: "auto",
+                        background: T.warm,
+                        padding: "16px 16px 24px",
+                      }}
+                    >
+                      <button
+                        onClick={() => setPretripDeepDiveCity(null)}
+                        style={{
+                          alignSelf: "flex-start",
+                          background: "none",
+                          border: "none",
+                          color: T.ocean,
+                          fontFamily: "Georgia,serif",
+                          fontSize: 13,
+                          cursor: "pointer",
+                          padding: "4px 0",
+                          marginBottom: 12,
+                        }}
                       >
+                        ← Back to destinations
+                      </button>
+                      <div
+                        style={{
+                          fontFamily: "'DM Serif Display',serif",
+                          fontSize: 28,
+                          color: T.ink,
+                          lineHeight: 1.15,
+                          marginBottom: 12,
+                        }}
+                      >
+                        {ddCity}
+                      </div>
+                      {data?.writeup && (
                         <div
                           style={{
-                            fontSize: 13,
+                            fontSize: 14,
                             color: T.ink,
                             fontFamily: "Georgia,serif",
                             lineHeight: 1.6,
+                            marginBottom: 16,
                           }}
                         >
-                          {data?.writeup}
+                          {data.writeup}
                         </div>
-                        {data?.didYouKnow && (
+                      )}
+                      {data?.didYouKnow && (
+                        <div
+                          style={{
+                            marginBottom: 16,
+                            padding: "12px 16px",
+                            borderLeft: `3px solid ${T.ocean}`,
+                            background: `linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,
+                            borderRadius: "0 12px 12px 0",
+                          }}
+                        >
                           <div
                             style={{
-                              marginTop: 10,
-                              padding: "12px 16px",
-                              borderLeft: `3px solid ${T.ocean}`,
-                              background: `linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,
-                              borderRadius: "0 12px 12px 0",
                               fontSize: 13,
                               lineHeight: 1.55,
                               color: T.ocean,
@@ -9399,972 +9268,675 @@ export default function App({
                           >
                             💡 {data.didYouKnow}
                           </div>
-                        )}
-                        <a
-                          href={`https://www.google.com/search?q=${encodeURIComponent("site:tripadvisor.com Tourism " + dest)}&btnI`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 5,
-                            marginTop: 12,
-                            padding: "8px 14px",
-                            borderRadius: RADIUS.md,
-                            border: `1px solid ${T.moss}33`,
-                            color: T.moss,
-                            fontFamily: "Georgia,serif",
-                            fontSize: 12,
-                            fontWeight: 600,
-                            textDecoration: "none",
-                          }}
-                        >
-                          🗺 Explore {dest} on TripAdvisor
-                        </a>
-                      </DestinationHero>
-                    );
-                  })()}
-                  {(() => {
-                    // Collect all unique cities — optionally filtered by route
-                    const filterSet = magazineFilterCities
-                      ? new Set(
-                          magazineFilterCities.map((c) => c.toLowerCase()),
-                        )
-                      : null;
-                    // Exclude cities that match the destination (already shown as DestinationHero)
-                    const rawDests = (pendingForm?.destinations || []).filter(
-                      (d) => !d.toLowerCase().includes("help me decide"),
-                    );
-                    const destName =
-                      editingTrip?.destination ||
-                      (rawDests.length ? rawDests.join(", ") : "");
-                    const destWords = destName
-                      .toLowerCase()
-                      .split(/[\s,]+/)
-                      .filter(Boolean);
-                    const isDestMatch = (city) => {
-                      const cl = city.toLowerCase();
-                      return (
-                        cl === destName.toLowerCase() ||
-                        destWords.some((w) => w.length > 3 && cl.includes(w)) ||
-                        cl.includes(destName.toLowerCase())
-                      );
-                    };
-                    const allCities = [];
-                    const seen = new Set();
-                    for (const route of pretripRoutes) {
-                      if (route.dismissed) continue; // skip dismissed routes
-                      for (const c of (route.city || "")
-                        .split(",")
-                        .map((s) => s.trim())
-                        .filter(Boolean)) {
-                        if (filterSet && !filterSet.has(c.toLowerCase()))
-                          continue;
-                        if (isDestMatch(c)) continue; // already shown as destination hero
-                        if (!seen.has(c.toLowerCase())) {
-                          seen.add(c.toLowerCase());
-                          allCities.push({ city: c, fromRoute: route.title });
-                        }
-                      }
-                    }
-                    if (allCities.length === 0) {
-                      return (
-                        <div
-                          style={{
-                            textAlign: "center",
-                            padding: "40px 0",
-                            color: T.mist,
-                            fontFamily: "Georgia,serif",
-                            fontSize: 13,
-                          }}
-                        >
-                          Routes are still loading — cities will appear here
-                          shortly
                         </div>
-                      );
-                    }
-                    return allCities.map(({ city, fromRoute }, ci) => {
-                      const dd = deepDiveCacheApp[city];
-                      // Build highlights from moreSights
-                      const data = dd && typeof dd === "object" ? dd : null;
-                      const highlights = (data?.moreSights || []).map((s) => ({
-                        ...s,
-                        type: "sight",
-                      }));
-                      return (
-                        <Fragment key={city}>
-                          {ci > 0 && (
-                            <div
-                              style={{
-                                height: 8,
-                                background: "#F3EDE4",
-                                margin: "0 -16px",
-                              }}
-                            />
-                          )}
-                          <CityCard
-                            city={city}
-                            cityDays={[{ label: fromRoute }]}
-                            writeup={data?.writeup || ""}
-                            deepDive={dd}
-                            onDeepDive={() => {
-                              loadCityDeepDiveApp(city);
-                              setPretripDeepDiveCity(city);
+                      )}
+                      {data?.moreSights?.length > 0 && (
+                        <div style={{ marginBottom: 16 }}>
+                          <div
+                            style={{
+                              fontSize: 10,
+                              color: T.mist,
+                              fontFamily: "Georgia,serif",
+                              textTransform: "uppercase",
+                              letterSpacing: 1.2,
+                              marginBottom: 10,
                             }}
                           >
-                            {highlights.length > 0 && (
-                              <>
-                                <div
-                                  style={{
-                                    fontSize: 10,
-                                    color: T.mist,
-                                    fontFamily: "Georgia,serif",
-                                    textTransform: "uppercase",
-                                    letterSpacing: 1.2,
-                                    marginBottom: 10,
-                                  }}
-                                >
-                                  Things to see
-                                </div>
-                                <div
-                                  style={{
-                                    display: "grid",
-                                    gridTemplateColumns: "1fr 1fr",
-                                    gap: 10,
-                                    marginBottom: 10,
-                                  }}
-                                >
-                                  {highlights.map((act, i) => (
-                                    <MagazineHighlightCard
-                                      key={i}
-                                      item={act}
-                                      city={city}
-                                      masonry={true}
-                                      tall={i % 3 === 0}
-                                      onAskTrippy={(title) => {
-                                        setChatInput(
-                                          `Tell me about "${title}"`,
-                                        );
-                                        setChatOpen(true);
-                                        setChatUnread(false);
-                                        setTimeout(
-                                          () => chatInputRef.current?.focus(),
-                                          50,
-                                        );
-                                      }}
-                                    />
-                                  ))}
-                                </div>
-                              </>
-                            )}
-                          </CityCard>
-                        </Fragment>
-                      );
-                    });
-                  })()}
-                </div>
-              </div>
-            )}
-
-            {/* Bottom nav — pre-trip */}
-            <div
-              style={{
-                flexShrink: 0,
-                background: T.chalk,
-                borderTop: `1px solid ${T.sand}`,
-                display: "flex",
-                paddingBottom: "env(safe-area-inset-bottom, 0px)",
-              }}
-            >
-              {[
-                { key: "magazine", icon: "📖", label: "Magazine" },
-                { key: "brainstorm", icon: "🛣️", label: "Route" },
-                { key: "map", icon: "🗺", label: "Map" },
-              ].map(({ key, icon, label }) => {
-                const active = pretripTab === key;
-                return (
-                  <button
-                    key={key}
-                    onClick={() => {
-                      setPretripTab(key);
-                      if (key !== "magazine") {
-                        setMagazineFilterCities(null);
-                        setMagazineFilterRouteId(null);
-                      }
-                    }}
-                    style={{
-                      flex: 1,
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: 3,
-                      padding: "10px 0 8px",
-                      border: "none",
-                      background: "none",
-                      cursor: "pointer",
-                      color: active ? T.ocean : T.mist,
-                      transition: `color ${MOTION.normal}`,
-                      position: "relative",
-                    }}
-                  >
-                    {active && (
-                      <div
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          left: "50%",
-                          transform: "translateX(-50%)",
-                          width: 32,
-                          height: 2.5,
-                          borderRadius: "0 0 2px 2px",
-                          background: T.ocean,
-                        }}
-                      />
-                    )}
-                    <span style={{ fontSize: 20 }}>{icon}</span>
-                    <span
-                      style={{
-                        fontSize: 10,
-                        fontFamily: "'Inter','Segoe UI',sans-serif",
-                        fontWeight: active ? 600 : 400,
-                        letterSpacing: 0.3,
-                      }}
-                    >
-                      {label}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        )}
-
-        {/* ── ITINERARY ── */}
-        {screen === "itinerary" && loading && (
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#8BA5BB",
-              fontFamily: "Georgia,serif",
-              fontSize: 14,
-            }}
-          >
-            Loading itinerary…
-          </div>
-        )}
-        {screen === "itinerary" && !loading && (
-          <DebugContext.Provider value={debugMode}>
-            <>
-              {/* Scrollable body — only visible in itinerary tab */}
-              <div
-                ref={scrollRef}
-                onScroll={handleScroll}
-                style={{
-                  flex: 1,
-                  overflowY: "auto",
-                  paddingBottom: 150,
-                  display: activeBottomTab === "itinerary" ? "block" : "none",
-                }}
-              >
-                {/* Header — scrolls away */}
-                <div
-                  style={{
-                    background: `linear-gradient(160deg,${T.dusk},${T.ocean})`,
-                    padding: "28px 20px 20px",
-                    color: "white",
-                    position: "relative",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    style={{
-                      position: "absolute",
-                      top: -30,
-                      right: -30,
-                      width: 130,
-                      height: 130,
-                      borderRadius: "50%",
-                      background: "rgba(255,255,255,0.04)",
-                      pointerEvents: "none",
-                    }}
-                  />
-                  <div
-                    style={{
-                      position: "relative",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: 12,
-                    }}
-                  >
-                    <div style={{ display: "flex", gap: 8 }}>
-                      {onHome && (
-                        <button
-                          onClick={onHome}
-                          style={{
-                            background: "rgba(255,255,255,0.15)",
-                            border: "none",
-                            borderRadius: RADIUS.full,
-                            padding: "4px 13px",
-                            color: "white",
-                            fontSize: 12,
-                            cursor: "pointer",
-                            fontFamily: "Georgia,serif",
-                          }}
-                        >
-                          ← Trips
-                        </button>
+                            🧭 More to discover
+                          </div>
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "1fr 1fr",
+                              gap: 10,
+                            }}
+                          >
+                            {data.moreSights.map((s, i) => (
+                              <MagazineHighlightCard
+                                key={i}
+                                item={s}
+                                city={ddCity}
+                                masonry={true}
+                                tall={i % 3 === 0}
+                                onAskTrippy={(title) => {
+                                  setChatInput(`Tell me about "${title}"`);
+                                  setChatOpen(true);
+                                  setChatUnread(false);
+                                  setTimeout(
+                                    () => chatInputRef.current?.focus(),
+                                    50,
+                                  );
+                                }}
+                              />
+                            ))}
+                          </div>
+                        </div>
                       )}
-                      <button
-                        onClick={() => {
-                          // Abort any in-flight IG generation
-                          if (igAbortRef.current) {
-                            igAbortRef.current.abort();
-                            igAbortRef.current = null;
-                          }
-                          _igInFlight = false;
-                          setDetailedLoading(false);
-                          setEditingTrip(trip);
-                          // Prefill pendingForm from the trip so BrainstormView has context
-                          const igReq = trip.ig_request || {};
-                          setPendingForm({
-                            destinations: igReq.destinations?.length
-                              ? igReq.destinations
-                              : (trip.destination || "")
-                                  .split(" → ")
-                                  .map((s) => s.trim())
-                                  .filter(Boolean),
-                            startDate: trip.start_date || "",
-                            endDate: trip.end_date || "",
-                            travelers: String(igReq.travelers || "2"),
-                            styles: igReq.styles || [],
-                            budget: igReq.budget || "mid",
-                            pace: igReq.pace || "active",
-                            morningStart: igReq.morningStart || "early",
-                            notes: trip.notes || igReq.notes || "",
-                            arrivalCity: trip.arrival_city || "",
-                            departureCity: trip.departure_city || "",
-                            baseLocation:
-                              trip.base_location || igReq.baseLocation || "",
-                          });
-                          setFormEdited(false);
-                          setPretripTab("brainstorm");
-                          setScreen("brainstorm");
-                        }}
-                        style={{
-                          background: "rgba(255,255,255,0.15)",
-                          border: "none",
-                          borderRadius: RADIUS.full,
-                          padding: "4px 13px",
-                          color: "white",
-                          fontSize: 12,
-                          cursor: "pointer",
-                          fontFamily: "Georgia,serif",
-                        }}
-                      >
-                        Explore Other Plans
-                      </button>
-                    </div>
-                    <button
-                      onClick={() => setShowShare(true)}
-                      style={{
-                        background: "rgba(255,255,255,0.15)",
-                        border: "none",
-                        borderRadius: RADIUS.full,
-                        padding: "4px 13px",
-                        color: "white",
-                        fontSize: 12,
-                        cursor: "pointer",
-                        fontFamily: "Georgia,serif",
-                      }}
-                    >
-                      📤 Share
-                    </button>
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: "'DM Serif Display',serif",
-                      fontSize: 24,
-                      lineHeight: 1.2,
-                      marginBottom: 4,
-                    }}
-                  >
-                    {trip.name}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 13,
-                      opacity: 0.75,
-                      fontFamily: "Georgia,serif",
-                    }}
-                  >
-                    📅{" "}
-                    {trip.dates ||
-                      (trip.start_date && trip.end_date
-                        ? `${new Date(trip.start_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(trip.end_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
-                        : "")}
-                    {trip.travelers
-                      ? ` · 👤 ${trip.travelers} traveler${trip.travelers > 1 ? "s" : ""}`
-                      : ""}
-                  </div>
-                </div>
-
-                {/* Refining banner with progress — shown while detailed IG streams in background */}
-                {detailedLoading &&
-                  (() => {
-                    // 50% = compact done. 50-95% = detailed days streaming. Based on wishlist markers per day.
-                    const detailedPct =
-                      streamingTotal > 0
-                        ? Math.round((streamingDays / streamingTotal) * 45)
-                        : 0;
-                    const pct = Math.min(95, 50 + detailedPct);
-                    return (
-                      <div
-                        style={{
-                          padding: "6px 16px 8px",
-                          background: `${T.ocean}08`,
-                          borderBottom: `1px solid ${T.ocean}15`,
-                        }}
-                      >
+                      {data?.foodSpecialties?.length > 0 && (
                         <div
                           style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
+                            background: T.chalk,
+                            borderRadius: RADIUS.lg,
+                            padding: "14px 16px",
+                            border: `1px solid ${T.sand}`,
+                            marginBottom: 16,
                           }}
                         >
                           <div
                             style={{
-                              flex: 1,
-                              height: 3,
-                              borderRadius: 2,
-                              background: T.sand,
-                              overflow: "hidden",
-                            }}
-                          >
-                            <div
-                              style={{
-                                height: "100%",
-                                borderRadius: 2,
-                                background: `linear-gradient(90deg, ${T.ocean}, ${T.moss})`,
-                                width: `${pct}%`,
-                                transition: "width 0.6s ease-out",
-                              }}
-                            />
-                          </div>
-                          <span
-                            style={{
-                              fontSize: 11,
+                              fontSize: 10,
+                              color: T.mist,
                               fontFamily: "Georgia,serif",
-                              color: T.ocean,
-                              flexShrink: 0,
+                              textTransform: "uppercase",
+                              letterSpacing: 1,
+                              marginBottom: 10,
                             }}
                           >
-                            {pct}%
-                          </span>
+                            🍜 Food you should try
+                          </div>
+                          {data.foodSpecialties.map((f, i) => (
+                            <div
+                              key={i}
+                              style={{
+                                display: "flex",
+                                gap: 10,
+                                alignItems: "flex-start",
+                                marginBottom: 8,
+                              }}
+                            >
+                              <span style={{ fontSize: 18, flexShrink: 0 }}>
+                                {f.icon || "🍽️"}
+                              </span>
+                              <div>
+                                <div
+                                  style={{
+                                    fontFamily: "'DM Serif Display',serif",
+                                    fontSize: 13,
+                                    color: T.ink,
+                                  }}
+                                >
+                                  {f.name}
+                                </div>
+                                {f.note && (
+                                  <div
+                                    style={{
+                                      fontSize: 11,
+                                      color: T.mist,
+                                      fontFamily: "Georgia,serif",
+                                    }}
+                                  >
+                                    {f.note}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
                         </div>
+                      )}
+                      {data?.weather && (
                         <div
                           style={{
-                            fontSize: 11,
-                            color: T.mist,
-                            fontFamily: "Georgia,serif",
-                            textAlign: "center",
-                            marginTop: 4,
+                            background: T.chalk,
+                            borderRadius: RADIUS.lg,
+                            padding: "14px 16px",
+                            border: `1px solid ${T.sand}`,
+                            marginBottom: 16,
                           }}
                         >
-                          Detailed itinerary loading — tap items below to
-                          explore meanwhile
+                          <div
+                            style={{
+                              fontSize: 10,
+                              color: T.mist,
+                              fontFamily: "Georgia,serif",
+                              textTransform: "uppercase",
+                              letterSpacing: 1,
+                              marginBottom: 8,
+                            }}
+                          >
+                            🌤 Weather & season
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 13,
+                              color: T.ink,
+                              fontFamily: "Georgia,serif",
+                              lineHeight: 1.55,
+                            }}
+                          >
+                            {data.weather}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })()}
-
-                {/* City-pill strip — only in detailed view */}
-                {!compactView &&
-                  (() => {
-                    // Derive hotel city per day: use the day's city when it has a hotel activity,
-                    // carry forward the last known hotel city for day-trip / non-hotel days
-                    let lastHotelCity = days[0]?.city || "";
-                    const hotelCity = days.map((day) => {
-                      if (day.activities.some((a) => a.type === "hotel"))
-                        lastHotelCity = day.city;
-                      return lastHotelCity;
-                    });
-                    const allSameCity = hotelCity.every(
-                      (c) => c === hotelCity[0],
-                    );
-                    if (allSameCity) return null;
-                    const cityGroups = [];
-                    for (const [i, city] of hotelCity.entries()) {
-                      const last = cityGroups[cityGroups.length - 1];
-                      if (last && last.city === city) {
-                        last.lastIndex = i;
-                      } else
-                        cityGroups.push({ city, firstIndex: i, lastIndex: i });
-                    }
-                    return (
-                      <div
-                        style={{
-                          position: "sticky",
-                          top: 0,
-                          zIndex: 10,
-                          background: T.warm,
-                          borderBottom: `1px solid ${T.sand}`,
-                          padding: "8px 16px",
-                        }}
-                      >
+                      )}
+                      {data?.gettingAround && (
                         <div
-                          ref={pillStrip}
-                          className="no-scrollbar"
-                          style={{ display: "flex", gap: 6, overflowX: "auto" }}
+                          style={{
+                            background: T.chalk,
+                            borderRadius: RADIUS.lg,
+                            padding: "14px 16px",
+                            border: `1px solid ${T.sand}`,
+                            marginBottom: 16,
+                          }}
                         >
-                          {cityGroups.map((g, gi) => {
-                            const active =
-                              activeDay >= g.firstIndex &&
-                              activeDay <= g.lastIndex;
-                            const dayRange =
-                              g.firstIndex === g.lastIndex
-                                ? `Day ${g.firstIndex + 1}`
-                                : `Day ${g.firstIndex + 1}–${g.lastIndex + 1}`;
-                            return (
-                              <button
-                                key={gi}
-                                onClick={() => scrollToDay(g.firstIndex)}
+                          <div
+                            style={{
+                              fontSize: 10,
+                              color: T.mist,
+                              fontFamily: "Georgia,serif",
+                              textTransform: "uppercase",
+                              letterSpacing: 1,
+                              marginBottom: 8,
+                            }}
+                          >
+                            🚕 Getting around
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 13,
+                              color: T.ink,
+                              fontFamily: "Georgia,serif",
+                              lineHeight: 1.55,
+                            }}
+                          >
+                            {data.gettingAround}
+                          </div>
+                        </div>
+                      )}
+                      {data?.etiquette?.length > 0 && (
+                        <div
+                          style={{
+                            background: T.chalk,
+                            borderRadius: RADIUS.lg,
+                            padding: "14px 16px",
+                            border: `1px solid ${T.sand}`,
+                            marginBottom: 16,
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: 10,
+                              color: T.mist,
+                              fontFamily: "Georgia,serif",
+                              textTransform: "uppercase",
+                              letterSpacing: 1,
+                              marginBottom: 10,
+                            }}
+                          >
+                            🤝 Local etiquette
+                          </div>
+                          {data.etiquette.map((tip, i) => (
+                            <div
+                              key={i}
+                              style={{
+                                display: "flex",
+                                gap: 8,
+                                alignItems: "flex-start",
+                                marginBottom: 4,
+                              }}
+                            >
+                              <span
                                 style={{
+                                  fontSize: 11,
+                                  color: T.ocean,
                                   flexShrink: 0,
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 5,
-                                  padding: "5px 13px",
-                                  borderRadius: RADIUS.full,
-                                  border: `1.5px solid ${active ? T.ocean : T.sand}`,
-                                  background: active ? T.ocean : T.chalk,
-                                  color: active ? "white" : T.mist,
-                                  fontSize: 12,
-                                  fontFamily: "Georgia,serif",
-                                  cursor: "pointer",
-                                  transition: `all ${MOTION.normal}`,
-                                  fontWeight: active ? 700 : 400,
-                                  boxShadow: active
-                                    ? "0 2px 8px rgba(37,99,168,0.28)"
-                                    : "none",
-                                  whiteSpace: "nowrap",
+                                  marginTop: 3,
                                 }}
                               >
-                                <span
-                                  style={{ fontWeight: active ? 700 : 500 }}
-                                >
-                                  {g.city.split(/[,–—]/)[0].trim()}
-                                </span>
-                                <span style={{ opacity: 0.75, fontSize: 11 }}>
-                                  {dayRange}
-                                </span>
-                              </button>
-                            );
-                          })}
+                                ●
+                              </span>
+                              <div
+                                style={{
+                                  fontSize: 13,
+                                  color: T.ink,
+                                  fontFamily: "Georgia,serif",
+                                  lineHeight: 1.5,
+                                }}
+                              >
+                                {tip}
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      </div>
-                    );
-                  })()}
-
-                {(() => {
-                  // Build hotel-per-day array: carry forward last seen hotel across days
-                  const hotelByCity = {};
-                  days.forEach((d) =>
-                    d.activities.forEach((a) => {
-                      if (a.type === "hotel") hotelByCity[d.city] = a;
-                    }),
+                      )}
+                      {loading && (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 12,
+                          }}
+                        >
+                          {[0, 1, 2].map((i) => (
+                            <div
+                              key={i}
+                              style={{
+                                background: T.chalk,
+                                borderRadius: RADIUS.lg,
+                                padding: "14px 16px",
+                                border: `1px solid ${T.sand}`,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: 100,
+                                  height: 10,
+                                  borderRadius: 4,
+                                  background: T.sand,
+                                  animation:
+                                    "shimmer 1.5s ease-in-out infinite",
+                                  marginBottom: 10,
+                                }}
+                              />
+                              <div
+                                style={{
+                                  width: "90%",
+                                  height: 12,
+                                  borderRadius: 4,
+                                  background: T.sand,
+                                  animation:
+                                    "shimmer 1.5s ease-in-out infinite",
+                                  marginBottom: 6,
+                                }}
+                              />
+                              <div
+                                style={{
+                                  width: "70%",
+                                  height: 12,
+                                  borderRadius: 4,
+                                  background: T.sand,
+                                  animation:
+                                    "shimmer 1.5s ease-in-out infinite",
+                                }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {errored && (
+                        <div
+                          style={{
+                            padding: "14px 16px",
+                            textAlign: "center",
+                            color: T.error,
+                            fontFamily: "Georgia,serif",
+                            fontSize: 13,
+                            background: T.errorLight,
+                            borderRadius: RADIUS.md,
+                          }}
+                        >
+                          Couldn't load details.{" "}
+                          <button
+                            onClick={() => loadCityDeepDiveApp(ddCity)}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              color: T.ocean,
+                              cursor: "pointer",
+                              textDecoration: "underline",
+                            }}
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   );
-                  // For each day, track which hotel the traveler is currently staying at
-                  let currentHotel = null;
-                  let currentHotelCity = null;
-                  const hotelPerDay = days.map((d) => {
-                    const dayHotel = d.activities.find(
-                      (a) => a.type === "hotel",
-                    );
-                    if (dayHotel) {
-                      currentHotel = dayHotel;
-                      currentHotelCity = d.city;
-                    }
-                    return { hotel: currentHotel, city: currentHotelCity };
-                  });
-
-                  return days.map((day, i) => {
-                    const firstIsHotel = day.activities[0]?.type === "hotel";
-                    const lastAct = day.activities[day.activities.length - 1];
-                    const lastIsHotel = lastAct?.type === "hotel";
-                    const prevDay = i > 0 ? days[i - 1] : null;
-                    const cityChanged = prevDay && prevDay.city !== day.city;
-
-                    // Start-of-day hotel: on city-change days use previous day's hotel
-                    const prevHotel = i > 0 ? hotelPerDay[i - 1] : null;
-                    const startHotel = cityChanged
-                      ? prevHotel?.hotel || null
-                      : !firstIsHotel
-                        ? hotelPerDay[i]?.hotel || null
-                        : null;
-                    const startHotelCity = cityChanged
-                      ? prevHotel?.city
-                      : hotelPerDay[i]?.city;
-
-                    // End-of-day hotel: use current day's hotel (or carried-forward)
-                    // Skip on last day if user has a departure (they're leaving, no hotel needed)
-                    const isLastDay = i === days.length - 1;
-                    const hasDeparture =
-                      isLastDay && (trip.departure_time || trip.departure_city);
-                    const endHotel =
-                      !lastIsHotel && day.activities.length > 0 && !hasDeparture
-                        ? hotelPerDay[i]?.hotel || null
-                        : null;
-
-                    return (
-                      <div
-                        key={day.id}
-                        ref={(el) => {
-                          dayRefs.current[i] = el;
+                })()}
+              {pretripTab === "magazine" && !pretripDeepDiveCity && (
+                <div style={{ flex: 1, overflowY: "auto", background: T.warm }}>
+                  <div
+                    style={{
+                      padding: "20px 16px 12px",
+                      background: T.chalk,
+                      borderBottom: `1px solid ${T.sand}`,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                    }}
+                  >
+                    {magazineFilterCities && (
+                      <button
+                        onClick={() => {
+                          setMagazineFilterCities(null);
+                          setMagazineFilterRouteId(null);
+                          setPretripTab("brainstorm");
+                        }}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          fontSize: 20,
+                          cursor: "pointer",
+                          color: T.ocean,
+                          padding: "0 4px",
+                          lineHeight: 1,
                         }}
                       >
-                        {compactView || collapsedDays.has(day.id) ? (
-                          <DayCompact
-                            day={day}
-                            canExpand={detailedReady || i < streamingDays}
-                            displayCity={(() => {
-                              const hCity = hotelPerDay[i]?.city;
-                              if (!hCity) return day.city;
-                              return hCity === day.city
-                                ? day.city
-                                : `${day.city} (${hCity})`;
-                            })()}
-                            onExpand={() => {
-                              if (compactView) {
-                                setCompactView(false);
-                                const allOtherIds = new Set(
-                                  days
-                                    .filter((d) => d.id !== day.id)
-                                    .map((d) => d.id),
-                                );
-                                setCollapsedDays(allOtherIds);
-                              } else {
-                                setCollapsedDays((prev) => {
-                                  const next = new Set(prev);
-                                  next.delete(day.id);
-                                  return next;
-                                });
-                              }
-                              setActiveDay(i);
-                              // Pre-load current day (if not already) + next day
-                              preloadDay(i);
-                              if (i + 1 < days.length) preloadDay(i + 1);
-                              const tryScroll = (attempts = 0) => {
-                                requestAnimationFrame(() => {
-                                  const el = dayRefs.current[i];
-                                  if (el && scrollRef.current) {
-                                    const top = el.offsetTop;
-                                    if (top === 0 && i > 0 && attempts < 10) {
-                                      setTimeout(
-                                        () => tryScroll(attempts + 1),
-                                        100,
-                                      );
-                                      return;
-                                    }
-                                    scrollRef.current.scrollTo({
-                                      top: top - 50,
-                                      behavior: "smooth",
-                                    });
-                                  }
-                                });
-                              };
-                              setTimeout(() => tryScroll(), 150);
-                            }}
-                          />
-                        ) : (
-                          <DaySection
-                            day={day}
-                            dayIndex={i}
-                            onCollapse={() =>
-                              setCollapsedDays((prev) =>
-                                new Set(prev).add(day.id),
+                        ←
+                      </button>
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <div
+                        style={{
+                          fontFamily: "'DM Serif Display',serif",
+                          fontSize: 20,
+                          color: T.ink,
+                        }}
+                      >
+                        {magazineFilterCities
+                          ? (() => {
+                              // Show country/region from route title (e.g. "Georgia – Caucasus Explorer" → "Georgia")
+                              const route = magazineFilterRouteId
+                                ? (pretripRoutes || []).find(
+                                    (r) => r.id === magazineFilterRouteId,
+                                  )
+                                : null;
+                              if (route?.title)
+                                return route.title
+                                  .split(/\s*[–—-]\s*/)[0]
+                                  .trim();
+                              return magazineFilterCities.join(", ");
+                            })()
+                          : editingTrip?.destination ||
+                            (pendingForm?.destinations || [])
+                              .filter(
+                                (d) =>
+                                  !d.toLowerCase().includes("help me decide"),
                               )
-                            }
-                            onEditActivity={editActivity}
-                            onRemoveActivity={removeActivity}
-                            onReplaceActivity={(act) => {
-                              setChatInput(`Replace "${act.title}" with `);
-                              setChatOpen(true);
-                              setChatUnread(false);
-                              setTimeout(
-                                () => chatInputRef.current?.focus(),
-                                50,
-                              );
-                            }}
-                            onSuggestAlternatives={(act) => {
-                              setChatOpen(true);
-                              setChatUnread(false);
-                              sendChatDirect(
-                                `Suggest 2-3 alternatives to "${act.title}" for the same time slot, without making any changes yet`,
-                              );
-                            }}
-                            onAddGemToItinerary={(d, gem) => {
-                              setChatOpen(true);
-                              setChatUnread(false);
-                              sendChatDirect(
-                                `Please add ${gem.title} to the itinerary on ${d.label} at a suitable time.`,
-                              );
-                              dismissGemPersist(
-                                d,
-                                gem,
-                                `Added "${gem.title}" to itinerary.`,
-                              );
-                            }}
-                            onDismissGem={(d, gem) =>
-                              dismissGemPersist(
-                                d,
-                                gem,
-                                `"${gem.title}" dismissed.`,
-                              )
-                            }
-                            onChangeHotel={(dayId, act, mode) => {
-                              const dayLabel =
-                                days.find((d) => d.id === dayId)?.label ||
-                                "this day";
-                              if (mode === "own") {
-                                setChatInput(
-                                  `I've booked my own hotel for ${dayLabel} — please replace the "${act.title}" with`,
-                                );
-                                setChatOpen(true);
-                                setChatUnread(false);
-                                setTimeout(
-                                  () => chatInputRef.current?.focus(),
-                                  50,
-                                );
-                              } else {
-                                setChatOpen(true);
-                                setChatUnread(false);
-                                const dayCity =
-                                  days.find((d) => d.id === dayId)?.city || "";
-                                sendChatDirect(
-                                  `I want to consider other hotel options for ${dayLabel}. Currently at "${act.title}"${dayCity ? ` in ${dayCity}` : ""}.`,
-                                );
-                              }
-                            }}
-                            arrivalTime={
-                              i === 0
-                                ? trip.arrival_time ||
-                                  (trip.start_date
-                                    ? `${trip.start_date}T09:00:00`
-                                    : null)
-                                : null
-                            }
-                            arrivalMode={
-                              i === 0 ? trip.arrival_mode || "flight" : null
-                            }
-                            arrivalCity={i === 0 ? trip.arrival_city : null}
-                            arrivalAirportIata={
-                              i === 0 ? trip.arrival_airport_iata || null : null
-                            }
-                            originIata={i === 0 ? baseAirportIata : null}
-                            originDepartureHHMM={
-                              i === 0 ? originDepartureHHMM : null
-                            }
-                            onEditFlight={
-                              i === 0
-                                ? () => {
-                                    setBoardInitialSection("logistics");
-                                    setActiveBottomTab("board");
-                                  }
-                                : undefined
-                            }
-                            departureTime={
-                              i === days.length - 1
-                                ? trip.departure_time ||
-                                  (trip.end_date
-                                    ? `${trip.end_date}T22:00:00`
-                                    : null)
-                                : null
-                            }
-                            departureMode={
-                              i === days.length - 1
-                                ? trip.departure_mode || "flight"
-                                : null
-                            }
-                            departureCity={
-                              i === days.length - 1
-                                ? trip.departure_city || null
-                                : null
-                            }
-                            departureAirportIata={
-                              i === days.length - 1
-                                ? trip.departure_airport_iata || null
-                                : null
-                            }
-                            destIata={
-                              i === days.length - 1 ? baseAirportIata : null
-                            }
-                            destArrivalHHMM={
-                              i === days.length - 1 ? destArrivalHHMM : null
-                            }
-                            onEditDeparture={
-                              i === days.length - 1
-                                ? () => {
-                                    setBoardInitialSection("logistics");
-                                    setActiveBottomTab("board");
-                                  }
-                                : undefined
-                            }
-                            hotelActivity={startHotel}
-                            hotelCity={startHotelCity}
-                            endHotelActivity={endHotel}
-                            displayCity={(() => {
-                              const hCity = hotelPerDay[i]?.city;
-                              if (!hCity) return day.city;
-                              // Hotel city matches this day's city: use it (covers day trips from base)
-                              if (hCity === day.city) return hCity;
-                              // Hotel city is from a prior destination (e.g. cruise carried forward): use day's city
-                              const hotelCheckedInToday = day.activities.some(
-                                (a) => a.type === "hotel",
-                              );
-                              if (!hotelCheckedInToday) return day.city;
-                              return hCity;
-                            })()}
-                            onSelectHotel={(hotel) =>
-                              selectHotel(day.id, hotel)
-                            }
-                            onAskTrippy={(title) => {
-                              setChatInput(`Tell me about "${title}"`);
-                              setChatOpen(true);
-                              setChatUnread(false);
-                              setTimeout(
-                                () => chatInputRef.current?.focus(),
-                                50,
-                              );
-                            }}
-                          />
-                        )}
+                              .join(", ") ||
+                            "Magazine"}
                       </div>
-                    );
-                  });
-                })()}
-              </div>
-
-              {/* ── MAGAZINE TAB ── */}
-              {activeBottomTab === "brainstorm" && (
-                <BrainstormView
-                  trip={trip}
-                  session={session}
-                  days={days}
-                  onGeneratingChange={setRoutesGenerating}
-                  deepDiveCache={deepDiveCacheApp}
-                  loadCityDeepDive={loadCityDeepDiveApp}
-                  onAskTrippy={(title) => {
-                    setChatInput(`Tell me about "${title}"`);
-                    setChatOpen(true);
-                    setChatUnread(false);
-                    setTimeout(() => chatInputRef.current?.focus(), 50);
-                  }}
-                />
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: T.mist,
+                          fontFamily: "Georgia,serif",
+                          marginTop: 4,
+                        }}
+                      >
+                        {magazineFilterCities
+                          ? "Explore this route's destinations"
+                          : "Explore the destinations across your trip plans"}
+                      </div>
+                    </div>
+                    {magazineFilterCities && (
+                      <button
+                        onClick={() => {
+                          setMagazineFilterCities(null);
+                          setMagazineFilterRouteId(null);
+                        }}
+                        style={{
+                          background: T.sand,
+                          border: "none",
+                          borderRadius: RADIUS.full,
+                          padding: "5px 11px",
+                          color: T.ink,
+                          fontSize: 11,
+                          cursor: "pointer",
+                          fontFamily: "Georgia,serif",
+                        }}
+                      >
+                        Show all
+                      </button>
+                    )}
+                  </div>
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: 0 }}
+                  >
+                    {/* Destination-level intro — always shown with hero photo */}
+                    {(() => {
+                      // Derive destination: from trip, form, or route title (for "Help me decide" flows)
+                      const rawDest = (pendingForm?.destinations || []).filter(
+                        (d) => !d.toLowerCase().includes("help me decide"),
+                      );
+                      let dest =
+                        editingTrip?.destination ||
+                        (rawDest.length ? rawDest.join(", ") : null);
+                      // If filtered by a route, use country from route title
+                      if (!dest && magazineFilterRouteId) {
+                        const route = (pretripRoutes || []).find(
+                          (r) => r.id === magazineFilterRouteId,
+                        );
+                        if (route?.title)
+                          dest = route.title.split(/\s*[–—-]\s*/)[0].trim();
+                      }
+                      if (!dest) return null;
+                      // Load deep dive if not cached
+                      if (!deepDiveCacheApp[dest]) loadCityDeepDiveApp(dest);
+                      const dd = deepDiveCacheApp[dest] || null;
+                      const data = dd && typeof dd === "object" ? dd : null;
+                      const isLoading = dd === "loading";
+                      if (!dest) return null;
+                      return (
+                        <DestinationHero
+                          dest={dest}
+                          isLoading={isLoading}
+                          data={data}
+                        >
+                          <div
+                            style={{
+                              fontSize: 13,
+                              color: T.ink,
+                              fontFamily: "Georgia,serif",
+                              lineHeight: 1.6,
+                            }}
+                          >
+                            {data?.writeup}
+                          </div>
+                          {data?.didYouKnow && (
+                            <div
+                              style={{
+                                marginTop: 10,
+                                padding: "12px 16px",
+                                borderLeft: `3px solid ${T.ocean}`,
+                                background: `linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,
+                                borderRadius: "0 12px 12px 0",
+                                fontSize: 13,
+                                lineHeight: 1.55,
+                                color: T.ocean,
+                                fontFamily: "Georgia,serif",
+                                fontStyle: "italic",
+                              }}
+                            >
+                              💡 {data.didYouKnow}
+                            </div>
+                          )}
+                          <a
+                            href={`https://www.google.com/search?q=${encodeURIComponent("site:tripadvisor.com Tourism " + dest)}&btnI`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 5,
+                              marginTop: 12,
+                              padding: "8px 14px",
+                              borderRadius: RADIUS.md,
+                              border: `1px solid ${T.moss}33`,
+                              color: T.moss,
+                              fontFamily: "Georgia,serif",
+                              fontSize: 12,
+                              fontWeight: 600,
+                              textDecoration: "none",
+                            }}
+                          >
+                            🗺 Explore {dest} on TripAdvisor
+                          </a>
+                        </DestinationHero>
+                      );
+                    })()}
+                    {(() => {
+                      // Collect all unique cities — optionally filtered by route
+                      const filterSet = magazineFilterCities
+                        ? new Set(
+                            magazineFilterCities.map((c) => c.toLowerCase()),
+                          )
+                        : null;
+                      // Exclude cities that match the destination (already shown as DestinationHero)
+                      const rawDests = (pendingForm?.destinations || []).filter(
+                        (d) => !d.toLowerCase().includes("help me decide"),
+                      );
+                      const destName =
+                        editingTrip?.destination ||
+                        (rawDests.length ? rawDests.join(", ") : "");
+                      const destWords = destName
+                        .toLowerCase()
+                        .split(/[\s,]+/)
+                        .filter(Boolean);
+                      const isDestMatch = (city) => {
+                        const cl = city.toLowerCase();
+                        return (
+                          cl === destName.toLowerCase() ||
+                          destWords.some(
+                            (w) => w.length > 3 && cl.includes(w),
+                          ) ||
+                          cl.includes(destName.toLowerCase())
+                        );
+                      };
+                      const allCities = [];
+                      const seen = new Set();
+                      for (const route of pretripRoutes) {
+                        if (route.dismissed) continue; // skip dismissed routes
+                        for (const c of (route.city || "")
+                          .split(",")
+                          .map((s) => s.trim())
+                          .filter(Boolean)) {
+                          if (filterSet && !filterSet.has(c.toLowerCase()))
+                            continue;
+                          if (isDestMatch(c)) continue; // already shown as destination hero
+                          if (!seen.has(c.toLowerCase())) {
+                            seen.add(c.toLowerCase());
+                            allCities.push({ city: c, fromRoute: route.title });
+                          }
+                        }
+                      }
+                      if (allCities.length === 0) {
+                        return (
+                          <div
+                            style={{
+                              textAlign: "center",
+                              padding: "40px 0",
+                              color: T.mist,
+                              fontFamily: "Georgia,serif",
+                              fontSize: 13,
+                            }}
+                          >
+                            Routes are still loading — cities will appear here
+                            shortly
+                          </div>
+                        );
+                      }
+                      return allCities.map(({ city, fromRoute }, ci) => {
+                        const dd = deepDiveCacheApp[city];
+                        // Build highlights from moreSights
+                        const data = dd && typeof dd === "object" ? dd : null;
+                        const highlights = (data?.moreSights || []).map(
+                          (s) => ({
+                            ...s,
+                            type: "sight",
+                          }),
+                        );
+                        return (
+                          <Fragment key={city}>
+                            {ci > 0 && (
+                              <div
+                                style={{
+                                  height: 8,
+                                  background: "#F3EDE4",
+                                  margin: "0 -16px",
+                                }}
+                              />
+                            )}
+                            <CityCard
+                              city={city}
+                              cityDays={[{ label: fromRoute }]}
+                              writeup={data?.writeup || ""}
+                              deepDive={dd}
+                              onDeepDive={() => {
+                                loadCityDeepDiveApp(city);
+                                setPretripDeepDiveCity(city);
+                              }}
+                            >
+                              {highlights.length > 0 && (
+                                <>
+                                  <div
+                                    style={{
+                                      fontSize: 10,
+                                      color: T.mist,
+                                      fontFamily: "Georgia,serif",
+                                      textTransform: "uppercase",
+                                      letterSpacing: 1.2,
+                                      marginBottom: 10,
+                                    }}
+                                  >
+                                    Things to see
+                                  </div>
+                                  <div
+                                    style={{
+                                      display: "grid",
+                                      gridTemplateColumns: "1fr 1fr",
+                                      gap: 10,
+                                      marginBottom: 10,
+                                    }}
+                                  >
+                                    {highlights.map((act, i) => (
+                                      <MagazineHighlightCard
+                                        key={i}
+                                        item={act}
+                                        city={city}
+                                        masonry={true}
+                                        tall={i % 3 === 0}
+                                        onAskTrippy={(title) => {
+                                          setChatInput(
+                                            `Tell me about "${title}"`,
+                                          );
+                                          setChatOpen(true);
+                                          setChatUnread(false);
+                                          setTimeout(
+                                            () => chatInputRef.current?.focus(),
+                                            50,
+                                          );
+                                        }}
+                                      />
+                                    ))}
+                                  </div>
+                                </>
+                              )}
+                            </CityCard>
+                          </Fragment>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
               )}
 
-              {/* Chat sheet is rendered at App root */}
-              {/* ── MAP TAB ── */}
-              {activeBottomTab === "map" &&
-                (days.length > 0 ? (
-                  <MapView days={days} />
-                ) : (
-                  <div
-                    style={{
-                      flex: 1,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexDirection: "column",
-                      gap: 12,
-                      color: T.mist,
-                      fontFamily: "Georgia,serif",
-                      fontSize: 14,
-                    }}
-                  >
-                    <span style={{ fontSize: 32 }}>🗺️</span>Waiting for the
-                    itinerary to build…
-                  </div>
-                ))}
-
-              {/* ── BOARD TAB ── */}
-              {activeBottomTab === "board" &&
-                (days.length === 0 ? (
-                  <div
-                    style={{
-                      flex: 1,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexDirection: "column",
-                      gap: 12,
-                      color: T.mist,
-                      fontFamily: "Georgia,serif",
-                      fontSize: 14,
-                    }}
-                  >
-                    <span style={{ fontSize: 32 }}>📋</span>Waiting for the
-                    itinerary to build…
-                  </div>
-                ) : (
-                  <div
-                    style={{
-                      flex: 1,
-                      overflowY: "auto",
-                      paddingBottom: 150,
-                      display: "flex",
-                      flexDirection: "column",
-                    }}
-                  >
-                    <BoardView
-                      trip={trip}
-                      days={days}
-                      initialSection={boardInitialSection}
-                      onInitialSectionConsumed={() =>
-                        setBoardInitialSection(null)
-                      }
-                      onSaveFlights={saveLogisticsFlights}
-                      onSaveHotels={saveLogisticsHotels}
-                      onApplyHotels={applyHotelsToItinerary}
-                      onSaveNotes={async (text) => {
-                        setTrip((t) => ({ ...t, board_notes: text }));
-                        await supabase
-                          .from("trips")
-                          .update({ board_notes: text })
-                          .eq("id", trip.id);
-                      }}
-                    />
-                  </div>
-                ))}
-
-              {/* ── BOTTOM NAV ── */}
+              {/* Bottom nav — pre-trip. Hidden on desktop (the Map tab is
+                redundant since the route map is persistent on the right; the
+                remaining 2 tabs render as a top-tab row inside the center
+                column for D22). */}
               <div
                 style={{
                   flexShrink: 0,
                   background: T.chalk,
                   borderTop: `1px solid ${T.sand}`,
-                  display: "flex",
+                  display: useDesktopShell ? "none" : "flex",
                   paddingBottom: "env(safe-area-inset-bottom, 0px)",
                 }}
               >
                 {[
-                  { key: "brainstorm", icon: "📖", label: "Magazine" },
-                  { key: "itinerary", icon: "🗓", label: "Itinerary" },
+                  { key: "magazine", icon: "📖", label: "Magazine" },
+                  { key: "brainstorm", icon: "🛣️", label: "Route" },
                   { key: "map", icon: "🗺", label: "Map" },
-                  { key: "board", icon: "📋", label: "Board" },
                 ].map(({ key, icon, label }) => {
-                  const active = activeBottomTab === key;
+                  const active = pretripTab === key;
                   return (
                     <button
                       key={key}
                       onClick={() => {
-                        posthog.capture("tab_switch", { tab: key });
-                        setActiveBottomTab(key);
+                        setPretripTab(key);
+                        if (key !== "magazine") {
+                          setMagazineFilterCities(null);
+                          setMagazineFilterRouteId(null);
+                        }
                       }}
                       style={{
                         flex: 1,
@@ -10411,341 +9983,1154 @@ export default function App({
                   );
                 })}
               </div>
+            </>
+          )}
 
-              {/* ── SHARE CARD (hidden, used for image capture) ── */}
-              <div
-                style={{
-                  position: "fixed",
-                  left: "-9999px",
-                  top: 0,
-                  zIndex: -1,
-                }}
-              >
+          {/* ── ITINERARY ── */}
+          {screen === "itinerary" && loading && (
+            <div
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#8BA5BB",
+                fontFamily: "Georgia,serif",
+                fontSize: 14,
+              }}
+            >
+              Loading itinerary…
+            </div>
+          )}
+          {screen === "itinerary" && !loading && (
+            <DebugContext.Provider value={debugMode}>
+              <>
+                {/* Scrollable body — only visible in itinerary tab */}
                 <div
-                  ref={shareCardRef}
+                  ref={scrollRef}
+                  onScroll={handleScroll}
                   style={{
-                    width: 390,
-                    background: "linear-gradient(160deg,#1E2D3D,#2563A8)",
-                    padding: "36px 32px 28px",
-                    fontFamily: "Georgia,serif",
-                    color: "white",
+                    flex: 1,
+                    overflowY: "auto",
+                    paddingBottom: 150,
+                    display: activeBottomTab === "itinerary" ? "block" : "none",
                   }}
                 >
+                  {/* Header — scrolls away. Hidden on desktop because the left
+                    sidebar already provides trip name, dates, share, and
+                    "Explore other plans" — keeping the gradient header would
+                    double up on every control. */}
                   <div
                     style={{
-                      fontSize: 13,
-                      letterSpacing: 3,
-                      opacity: 0.6,
-                      textTransform: "uppercase",
-                      marginBottom: 12,
-                    }}
-                  >
-                    TripJam
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: "'DM Serif Display',serif",
-                      fontSize: 26,
-                      lineHeight: 1.2,
-                      marginBottom: 6,
-                    }}
-                  >
-                    {trip.name}
-                  </div>
-                  <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>
-                    📍 {trip.destination}
-                  </div>
-                  <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 24 }}>
-                    📅{" "}
-                    {trip.start_date && trip.end_date
-                      ? `${new Date(trip.start_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(trip.end_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
-                      : trip.dates || ""}
-                  </div>
-                  <div
-                    style={{
-                      borderTop: "1px solid rgba(255,255,255,0.2)",
-                      paddingTop: 20,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 14,
-                    }}
-                  >
-                    {days.map((day) => (
-                      <div key={day.id}>
-                        <div
-                          style={{
-                            fontSize: 11,
-                            letterSpacing: 2,
-                            opacity: 0.5,
-                            textTransform: "uppercase",
-                            marginBottom: 5,
-                          }}
-                        >
-                          {day.label} · {day.city}
-                        </div>
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 3,
-                          }}
-                        >
-                          {day.activities.map((a, i) => (
-                            <div
-                              key={i}
-                              style={{ fontSize: 13, opacity: 0.85 }}
-                            >
-                              {a.icon} {a.title}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div
-                    style={{
-                      marginTop: 24,
-                      borderTop: "1px solid rgba(255,255,255,0.15)",
-                      paddingTop: 16,
-                      fontSize: 11,
-                      opacity: 0.4,
-                      textAlign: "center",
-                      letterSpacing: 1,
-                    }}
-                  >
-                    MADE WITH TRIPJAM
-                  </div>
-                </div>
-              </div>
-
-              {/* ── SHARE SHEET ── */}
-              {showShare && (
-                <div
-                  onClick={() => setShowShare(false)}
-                  style={{
-                    position: "fixed",
-                    inset: 0,
-                    background: "rgba(0,0,0,0.45)",
-                    zIndex: 200,
-                    display: "flex",
-                    alignItems: "flex-end",
-                    justifyContent: "center",
-                  }}
-                >
-                  <div
-                    onClick={(e) => e.stopPropagation()}
-                    style={{
-                      background: T.chalk,
-                      borderRadius: "20px 20px 0 0",
-                      padding: "24px 20px 36px",
-                      width: "100%",
-                      maxWidth: 430,
+                      background: `linear-gradient(160deg,${T.dusk},${T.ocean})`,
+                      padding: "28px 20px 20px",
+                      color: "white",
+                      position: "relative",
+                      overflow: "hidden",
+                      display: useDesktopShell ? "none" : "block",
                     }}
                   >
                     <div
                       style={{
-                        fontFamily: "'DM Serif Display',serif",
-                        fontSize: 18,
-                        color: T.ink,
-                        marginBottom: 4,
+                        position: "absolute",
+                        top: -30,
+                        right: -30,
+                        width: 130,
+                        height: 130,
+                        borderRadius: "50%",
+                        background: "rgba(255,255,255,0.04)",
+                        pointerEvents: "none",
+                      }}
+                    />
+                    <div
+                      style={{
+                        position: "relative",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        marginBottom: 12,
                       }}
                     >
-                      Share trip
+                      <div style={{ display: "flex", gap: 8 }}>
+                        {onHome && (
+                          <button
+                            onClick={onHome}
+                            style={{
+                              background: "rgba(255,255,255,0.15)",
+                              border: "none",
+                              borderRadius: RADIUS.full,
+                              padding: "4px 13px",
+                              color: "white",
+                              fontSize: 12,
+                              cursor: "pointer",
+                              fontFamily: "Georgia,serif",
+                            }}
+                          >
+                            ← Trips
+                          </button>
+                        )}
+                        <button
+                          onClick={() => {
+                            // Abort any in-flight IG generation
+                            if (igAbortRef.current) {
+                              igAbortRef.current.abort();
+                              igAbortRef.current = null;
+                            }
+                            _igInFlight = false;
+                            setDetailedLoading(false);
+                            setEditingTrip(trip);
+                            // Prefill pendingForm from the trip so BrainstormView has context
+                            const igReq = trip.ig_request || {};
+                            setPendingForm({
+                              destinations: igReq.destinations?.length
+                                ? igReq.destinations
+                                : (trip.destination || "")
+                                    .split(" → ")
+                                    .map((s) => s.trim())
+                                    .filter(Boolean),
+                              startDate: trip.start_date || "",
+                              endDate: trip.end_date || "",
+                              travelers: String(igReq.travelers || "2"),
+                              styles: igReq.styles || [],
+                              budget: igReq.budget || "mid",
+                              pace: igReq.pace || "active",
+                              morningStart: igReq.morningStart || "early",
+                              notes: trip.notes || igReq.notes || "",
+                              arrivalCity: trip.arrival_city || "",
+                              departureCity: trip.departure_city || "",
+                              baseLocation:
+                                trip.base_location || igReq.baseLocation || "",
+                            });
+                            setFormEdited(false);
+                            setPretripTab("brainstorm");
+                            setScreen("brainstorm");
+                          }}
+                          style={{
+                            background: "rgba(255,255,255,0.15)",
+                            border: "none",
+                            borderRadius: RADIUS.full,
+                            padding: "4px 13px",
+                            color: "white",
+                            fontSize: 12,
+                            cursor: "pointer",
+                            fontFamily: "Georgia,serif",
+                          }}
+                        >
+                          Explore Other Plans
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => setShowShare(true)}
+                        style={{
+                          background: "rgba(255,255,255,0.15)",
+                          border: "none",
+                          borderRadius: RADIUS.full,
+                          padding: "4px 13px",
+                          color: "white",
+                          fontSize: 12,
+                          cursor: "pointer",
+                          fontFamily: "Georgia,serif",
+                        }}
+                      >
+                        📤 Share
+                      </button>
                     </div>
                     <div
                       style={{
-                        fontSize: 13,
-                        color: T.mist,
-                        fontFamily: "Georgia,serif",
-                        marginBottom: 20,
+                        fontFamily: "'DM Serif Display',serif",
+                        fontSize: 24,
+                        lineHeight: 1.2,
+                        marginBottom: 4,
                       }}
                     >
                       {trip.name}
                     </div>
                     <div
                       style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 10,
+                        fontSize: 13,
+                        opacity: 0.75,
+                        fontFamily: "Georgia,serif",
                       }}
                     >
-                      <button
-                        onClick={async () => {
-                          setShowShare(false);
-                          await new Promise((r) => setTimeout(r, 100));
-                          const canvas = await html2canvas(
-                            shareCardRef.current,
-                            { scale: 2, useCORS: true, backgroundColor: null },
-                          );
-                          canvas.toBlob(async (blob) => {
-                            const file = new File([blob], "tripjam.png", {
-                              type: "image/png",
-                            });
-                            if (
-                              navigator.share &&
-                              navigator.canShare?.({ files: [file] })
-                            ) {
-                              await navigator.share({
-                                files: [file],
-                                title: trip.name,
-                              });
-                            } else {
-                              const a = document.createElement("a");
-                              a.href = URL.createObjectURL(blob);
-                              a.download = `${trip.name}.png`;
-                              a.click();
-                            }
-                          }, "image/png");
-                        }}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 14,
-                          padding: "14px 16px",
-                          borderRadius: RADIUS.lg,
-                          border: `1.5px solid ${T.sand}`,
-                          background: "white",
-                          cursor: "pointer",
-                          fontFamily: "Georgia,serif",
-                          fontSize: 14,
-                          color: T.ink,
-                          fontWeight: 600,
-                        }}
-                      >
-                        <span style={{ fontSize: 24 }}>🖼</span>
-                        <div style={{ textAlign: "left" }}>
-                          <div>Share as image</div>
+                      📅{" "}
+                      {trip.dates ||
+                        (trip.start_date && trip.end_date
+                          ? `${new Date(trip.start_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(trip.end_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+                          : "")}
+                      {trip.travelers
+                        ? ` · 👤 ${trip.travelers} traveler${trip.travelers > 1 ? "s" : ""}`
+                        : ""}
+                    </div>
+                  </div>
+
+                  {/* Refining banner with progress — shown while detailed IG streams in background */}
+                  {detailedLoading &&
+                    (() => {
+                      // 50% = compact done. 50-95% = detailed days streaming. Based on wishlist markers per day.
+                      const detailedPct =
+                        streamingTotal > 0
+                          ? Math.round((streamingDays / streamingTotal) * 45)
+                          : 0;
+                      const pct = Math.min(95, 50 + detailedPct);
+                      return (
+                        <div
+                          style={{
+                            padding: "6px 16px 8px",
+                            background: `${T.ocean}08`,
+                            borderBottom: `1px solid ${T.ocean}15`,
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                            }}
+                          >
+                            <div
+                              style={{
+                                flex: 1,
+                                height: 3,
+                                borderRadius: 2,
+                                background: T.sand,
+                                overflow: "hidden",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  height: "100%",
+                                  borderRadius: 2,
+                                  background: `linear-gradient(90deg, ${T.ocean}, ${T.moss})`,
+                                  width: `${pct}%`,
+                                  transition: "width 0.6s ease-out",
+                                }}
+                              />
+                            </div>
+                            <span
+                              style={{
+                                fontSize: 11,
+                                fontFamily: "Georgia,serif",
+                                color: T.ocean,
+                                flexShrink: 0,
+                              }}
+                            >
+                              {pct}%
+                            </span>
+                          </div>
                           <div
                             style={{
                               fontSize: 11,
                               color: T.mist,
-                              fontWeight: 400,
+                              fontFamily: "Georgia,serif",
+                              textAlign: "center",
+                              marginTop: 4,
                             }}
                           >
-                            PNG card with your full itinerary
+                            Detailed itinerary loading — tap items below to
+                            explore meanwhile
                           </div>
                         </div>
-                      </button>
+                      );
+                    })()}
+
+                  {/* City-pill strip — only in detailed view */}
+                  {!compactView &&
+                    (() => {
+                      // Derive hotel city per day: use the day's city when it has a hotel activity,
+                      // carry forward the last known hotel city for day-trip / non-hotel days
+                      let lastHotelCity = days[0]?.city || "";
+                      const hotelCity = days.map((day) => {
+                        if (day.activities.some((a) => a.type === "hotel"))
+                          lastHotelCity = day.city;
+                        return lastHotelCity;
+                      });
+                      const allSameCity = hotelCity.every(
+                        (c) => c === hotelCity[0],
+                      );
+                      if (allSameCity) return null;
+                      const cityGroups = [];
+                      for (const [i, city] of hotelCity.entries()) {
+                        const last = cityGroups[cityGroups.length - 1];
+                        if (last && last.city === city) {
+                          last.lastIndex = i;
+                        } else
+                          cityGroups.push({
+                            city,
+                            firstIndex: i,
+                            lastIndex: i,
+                          });
+                      }
+                      return (
+                        <div
+                          style={{
+                            position: "sticky",
+                            top: 0,
+                            zIndex: 10,
+                            background: T.warm,
+                            borderBottom: `1px solid ${T.sand}`,
+                            padding: "8px 16px",
+                          }}
+                        >
+                          <div
+                            ref={pillStrip}
+                            className="no-scrollbar"
+                            style={{
+                              display: "flex",
+                              gap: 6,
+                              overflowX: "auto",
+                            }}
+                          >
+                            {cityGroups.map((g, gi) => {
+                              const active =
+                                activeDay >= g.firstIndex &&
+                                activeDay <= g.lastIndex;
+                              const dayRange =
+                                g.firstIndex === g.lastIndex
+                                  ? `Day ${g.firstIndex + 1}`
+                                  : `Day ${g.firstIndex + 1}–${g.lastIndex + 1}`;
+                              return (
+                                <button
+                                  key={gi}
+                                  onClick={() => scrollToDay(g.firstIndex)}
+                                  style={{
+                                    flexShrink: 0,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 5,
+                                    padding: "5px 13px",
+                                    borderRadius: RADIUS.full,
+                                    border: `1.5px solid ${active ? T.ocean : T.sand}`,
+                                    background: active ? T.ocean : T.chalk,
+                                    color: active ? "white" : T.mist,
+                                    fontSize: 12,
+                                    fontFamily: "Georgia,serif",
+                                    cursor: "pointer",
+                                    transition: `all ${MOTION.normal}`,
+                                    fontWeight: active ? 700 : 400,
+                                    boxShadow: active
+                                      ? "0 2px 8px rgba(37,99,168,0.28)"
+                                      : "none",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  <span
+                                    style={{ fontWeight: active ? 700 : 500 }}
+                                  >
+                                    {g.city.split(/[,–—]/)[0].trim()}
+                                  </span>
+                                  <span style={{ opacity: 0.75, fontSize: 11 }}>
+                                    {dayRange}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                  {(() => {
+                    // Build hotel-per-day array: carry forward last seen hotel across days
+                    const hotelByCity = {};
+                    days.forEach((d) =>
+                      d.activities.forEach((a) => {
+                        if (a.type === "hotel") hotelByCity[d.city] = a;
+                      }),
+                    );
+                    // For each day, track which hotel the traveler is currently staying at
+                    let currentHotel = null;
+                    let currentHotelCity = null;
+                    const hotelPerDay = days.map((d) => {
+                      const dayHotel = d.activities.find(
+                        (a) => a.type === "hotel",
+                      );
+                      if (dayHotel) {
+                        currentHotel = dayHotel;
+                        currentHotelCity = d.city;
+                      }
+                      return { hotel: currentHotel, city: currentHotelCity };
+                    });
+
+                    return days.map((day, i) => {
+                      const firstIsHotel = day.activities[0]?.type === "hotel";
+                      const lastAct = day.activities[day.activities.length - 1];
+                      const lastIsHotel = lastAct?.type === "hotel";
+                      const prevDay = i > 0 ? days[i - 1] : null;
+                      const cityChanged = prevDay && prevDay.city !== day.city;
+
+                      // Start-of-day hotel: on city-change days use previous day's hotel
+                      const prevHotel = i > 0 ? hotelPerDay[i - 1] : null;
+                      const startHotel = cityChanged
+                        ? prevHotel?.hotel || null
+                        : !firstIsHotel
+                          ? hotelPerDay[i]?.hotel || null
+                          : null;
+                      const startHotelCity = cityChanged
+                        ? prevHotel?.city
+                        : hotelPerDay[i]?.city;
+
+                      // End-of-day hotel: use current day's hotel (or carried-forward)
+                      // Skip on last day if user has a departure (they're leaving, no hotel needed)
+                      const isLastDay = i === days.length - 1;
+                      const hasDeparture =
+                        isLastDay &&
+                        (trip.departure_time || trip.departure_city);
+                      const endHotel =
+                        !lastIsHotel &&
+                        day.activities.length > 0 &&
+                        !hasDeparture
+                          ? hotelPerDay[i]?.hotel || null
+                          : null;
+
+                      return (
+                        <div
+                          key={day.id}
+                          ref={(el) => {
+                            dayRefs.current[i] = el;
+                          }}
+                        >
+                          {compactView || collapsedDays.has(day.id) ? (
+                            <DayCompact
+                              day={day}
+                              canExpand={detailedReady || i < streamingDays}
+                              displayCity={(() => {
+                                const hCity = hotelPerDay[i]?.city;
+                                if (!hCity) return day.city;
+                                return hCity === day.city
+                                  ? day.city
+                                  : `${day.city} (${hCity})`;
+                              })()}
+                              onExpand={() => {
+                                if (compactView) {
+                                  setCompactView(false);
+                                  const allOtherIds = new Set(
+                                    days
+                                      .filter((d) => d.id !== day.id)
+                                      .map((d) => d.id),
+                                  );
+                                  setCollapsedDays(allOtherIds);
+                                } else {
+                                  setCollapsedDays((prev) => {
+                                    const next = new Set(prev);
+                                    next.delete(day.id);
+                                    return next;
+                                  });
+                                }
+                                setActiveDay(i);
+                                // Pre-load current day (if not already) + next day
+                                preloadDay(i);
+                                if (i + 1 < days.length) preloadDay(i + 1);
+                                const tryScroll = (attempts = 0) => {
+                                  requestAnimationFrame(() => {
+                                    const el = dayRefs.current[i];
+                                    if (el && scrollRef.current) {
+                                      const top = el.offsetTop;
+                                      if (top === 0 && i > 0 && attempts < 10) {
+                                        setTimeout(
+                                          () => tryScroll(attempts + 1),
+                                          100,
+                                        );
+                                        return;
+                                      }
+                                      scrollRef.current.scrollTo({
+                                        top: top - 50,
+                                        behavior: "smooth",
+                                      });
+                                    }
+                                  });
+                                };
+                                setTimeout(() => tryScroll(), 150);
+                              }}
+                            />
+                          ) : (
+                            <DaySection
+                              day={day}
+                              dayIndex={i}
+                              onCollapse={() =>
+                                setCollapsedDays((prev) =>
+                                  new Set(prev).add(day.id),
+                                )
+                              }
+                              onEditActivity={editActivity}
+                              onRemoveActivity={removeActivity}
+                              onReplaceActivity={(act) => {
+                                setChatInput(`Replace "${act.title}" with `);
+                                setChatOpen(true);
+                                setChatUnread(false);
+                                setTimeout(
+                                  () => chatInputRef.current?.focus(),
+                                  50,
+                                );
+                              }}
+                              onSuggestAlternatives={(act) => {
+                                setChatOpen(true);
+                                setChatUnread(false);
+                                sendChatDirect(
+                                  `Suggest 2-3 alternatives to "${act.title}" for the same time slot, without making any changes yet`,
+                                );
+                              }}
+                              onAddGemToItinerary={(d, gem) => {
+                                setChatOpen(true);
+                                setChatUnread(false);
+                                sendChatDirect(
+                                  `Please add ${gem.title} to the itinerary on ${d.label} at a suitable time.`,
+                                );
+                                dismissGemPersist(
+                                  d,
+                                  gem,
+                                  `Added "${gem.title}" to itinerary.`,
+                                );
+                              }}
+                              onDismissGem={(d, gem) =>
+                                dismissGemPersist(
+                                  d,
+                                  gem,
+                                  `"${gem.title}" dismissed.`,
+                                )
+                              }
+                              onChangeHotel={(dayId, act, mode) => {
+                                const dayLabel =
+                                  days.find((d) => d.id === dayId)?.label ||
+                                  "this day";
+                                if (mode === "own") {
+                                  setChatInput(
+                                    `I've booked my own hotel for ${dayLabel} — please replace the "${act.title}" with`,
+                                  );
+                                  setChatOpen(true);
+                                  setChatUnread(false);
+                                  setTimeout(
+                                    () => chatInputRef.current?.focus(),
+                                    50,
+                                  );
+                                } else {
+                                  setChatOpen(true);
+                                  setChatUnread(false);
+                                  const dayCity =
+                                    days.find((d) => d.id === dayId)?.city ||
+                                    "";
+                                  sendChatDirect(
+                                    `I want to consider other hotel options for ${dayLabel}. Currently at "${act.title}"${dayCity ? ` in ${dayCity}` : ""}.`,
+                                  );
+                                }
+                              }}
+                              arrivalTime={
+                                i === 0
+                                  ? trip.arrival_time ||
+                                    (trip.start_date
+                                      ? `${trip.start_date}T09:00:00`
+                                      : null)
+                                  : null
+                              }
+                              arrivalMode={
+                                i === 0 ? trip.arrival_mode || "flight" : null
+                              }
+                              arrivalCity={i === 0 ? trip.arrival_city : null}
+                              arrivalAirportIata={
+                                i === 0
+                                  ? trip.arrival_airport_iata || null
+                                  : null
+                              }
+                              originIata={i === 0 ? baseAirportIata : null}
+                              originDepartureHHMM={
+                                i === 0 ? originDepartureHHMM : null
+                              }
+                              onEditFlight={
+                                i === 0
+                                  ? () => {
+                                      setBoardInitialSection("logistics");
+                                      setActiveBottomTab("board");
+                                    }
+                                  : undefined
+                              }
+                              departureTime={
+                                i === days.length - 1
+                                  ? trip.departure_time ||
+                                    (trip.end_date
+                                      ? `${trip.end_date}T22:00:00`
+                                      : null)
+                                  : null
+                              }
+                              departureMode={
+                                i === days.length - 1
+                                  ? trip.departure_mode || "flight"
+                                  : null
+                              }
+                              departureCity={
+                                i === days.length - 1
+                                  ? trip.departure_city || null
+                                  : null
+                              }
+                              departureAirportIata={
+                                i === days.length - 1
+                                  ? trip.departure_airport_iata || null
+                                  : null
+                              }
+                              destIata={
+                                i === days.length - 1 ? baseAirportIata : null
+                              }
+                              destArrivalHHMM={
+                                i === days.length - 1 ? destArrivalHHMM : null
+                              }
+                              onEditDeparture={
+                                i === days.length - 1
+                                  ? () => {
+                                      setBoardInitialSection("logistics");
+                                      setActiveBottomTab("board");
+                                    }
+                                  : undefined
+                              }
+                              hotelActivity={startHotel}
+                              hotelCity={startHotelCity}
+                              endHotelActivity={endHotel}
+                              displayCity={(() => {
+                                const hCity = hotelPerDay[i]?.city;
+                                if (!hCity) return day.city;
+                                // Hotel city matches this day's city: use it (covers day trips from base)
+                                if (hCity === day.city) return hCity;
+                                // Hotel city is from a prior destination (e.g. cruise carried forward): use day's city
+                                const hotelCheckedInToday = day.activities.some(
+                                  (a) => a.type === "hotel",
+                                );
+                                if (!hotelCheckedInToday) return day.city;
+                                return hCity;
+                              })()}
+                              onSelectHotel={(hotel) =>
+                                selectHotel(day.id, hotel)
+                              }
+                              onAskTrippy={(title) => {
+                                setChatInput(`Tell me about "${title}"`);
+                                setChatOpen(true);
+                                setChatUnread(false);
+                                setTimeout(
+                                  () => chatInputRef.current?.focus(),
+                                  50,
+                                );
+                              }}
+                            />
+                          )}
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+
+                {/* ── MAGAZINE TAB ── */}
+                {activeBottomTab === "brainstorm" && (
+                  <BrainstormView
+                    trip={trip}
+                    session={session}
+                    days={days}
+                    onGeneratingChange={setRoutesGenerating}
+                    deepDiveCache={deepDiveCacheApp}
+                    loadCityDeepDive={loadCityDeepDiveApp}
+                    onAskTrippy={(title) => {
+                      setChatInput(`Tell me about "${title}"`);
+                      setChatOpen(true);
+                      setChatUnread(false);
+                      setTimeout(() => chatInputRef.current?.focus(), 50);
+                    }}
+                  />
+                )}
+
+                {/* Chat sheet is rendered at App root */}
+                {/* ── MAP TAB ──
+                  Skipped on desktop (D22): the itinerary map is rendered
+                  persistently in the right-top grid area, so the Map tab is
+                  hidden from the desktop tab row. */}
+                {!useDesktopShell &&
+                  activeBottomTab === "map" &&
+                  (days.length > 0 ? (
+                    <MapView days={days} />
+                  ) : (
+                    <div
+                      style={{
+                        flex: 1,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexDirection: "column",
+                        gap: 12,
+                        color: T.mist,
+                        fontFamily: "Georgia,serif",
+                        fontSize: 14,
+                      }}
+                    >
+                      <span style={{ fontSize: 32 }}>🗺️</span>Waiting for the
+                      itinerary to build…
+                    </div>
+                  ))}
+
+                {/* ── BOARD TAB ── */}
+                {activeBottomTab === "board" &&
+                  (days.length === 0 ? (
+                    <div
+                      style={{
+                        flex: 1,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexDirection: "column",
+                        gap: 12,
+                        color: T.mist,
+                        fontFamily: "Georgia,serif",
+                        fontSize: 14,
+                      }}
+                    >
+                      <span style={{ fontSize: 32 }}>📋</span>Waiting for the
+                      itinerary to build…
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        flex: 1,
+                        overflowY: "auto",
+                        paddingBottom: 150,
+                        display: "flex",
+                        flexDirection: "column",
+                      }}
+                    >
+                      <BoardView
+                        trip={trip}
+                        days={days}
+                        initialSection={boardInitialSection}
+                        onInitialSectionConsumed={() =>
+                          setBoardInitialSection(null)
+                        }
+                        onSaveFlights={saveLogisticsFlights}
+                        onSaveHotels={saveLogisticsHotels}
+                        onApplyHotels={applyHotelsToItinerary}
+                        onSaveNotes={async (text) => {
+                          setTrip((t) => ({ ...t, board_notes: text }));
+                          await supabase
+                            .from("trips")
+                            .update({ board_notes: text })
+                            .eq("id", trip.id);
+                        }}
+                      />
+                    </div>
+                  ))}
+
+                {/* ── BOTTOM NAV ──
+                  Hidden on desktop (D22): Map tab is redundant because the map
+                  is persistent on the right, and the remaining 3 tabs render
+                  as a top-tab row inside the center column. */}
+                <div
+                  style={{
+                    flexShrink: 0,
+                    background: T.chalk,
+                    borderTop: `1px solid ${T.sand}`,
+                    display: useDesktopShell ? "none" : "flex",
+                    paddingBottom: "env(safe-area-inset-bottom, 0px)",
+                  }}
+                >
+                  {[
+                    { key: "brainstorm", icon: "📖", label: "Magazine" },
+                    { key: "itinerary", icon: "🗓", label: "Itinerary" },
+                    { key: "map", icon: "🗺", label: "Map" },
+                    { key: "board", icon: "📋", label: "Board" },
+                  ].map(({ key, icon, label }) => {
+                    const active = activeBottomTab === key;
+                    return (
                       <button
+                        key={key}
                         onClick={() => {
-                          const text = [
-                            `✈️ ${trip.name}`,
-                            `${trip.destination}`,
-                            trip.start_date && trip.end_date
-                              ? `${new Date(trip.start_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(trip.end_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
-                              : "",
-                            "",
-                            ...days.flatMap((day) => [
-                              `${day.label} · ${day.city}`,
-                              ...day.activities.map(
-                                (a) => `  ${a.icon} ${a.title}`,
-                              ),
-                              "",
-                            ]),
-                            "Planned with TripJam",
-                          ]
-                            .filter((l) => l !== undefined)
-                            .join("\n");
-                          navigator.clipboard.writeText(text);
-                          setShowShare(false);
+                          posthog.capture("tab_switch", { tab: key });
+                          setActiveBottomTab(key);
                         }}
                         style={{
+                          flex: 1,
                           display: "flex",
+                          flexDirection: "column",
                           alignItems: "center",
-                          gap: 14,
-                          padding: "14px 16px",
-                          borderRadius: RADIUS.lg,
-                          border: `1.5px solid ${T.sand}`,
-                          background: "white",
+                          justifyContent: "center",
+                          gap: 3,
+                          padding: "10px 0 8px",
+                          border: "none",
+                          background: "none",
                           cursor: "pointer",
-                          fontFamily: "Georgia,serif",
-                          fontSize: 14,
-                          color: T.ink,
-                          fontWeight: 600,
+                          color: active ? T.ocean : T.mist,
+                          transition: `color ${MOTION.normal}`,
+                          position: "relative",
                         }}
                       >
-                        <span style={{ fontSize: 24 }}>📋</span>
-                        <div style={{ textAlign: "left" }}>
-                          <div>Copy as text</div>
+                        {active && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: 0,
+                              left: "50%",
+                              transform: "translateX(-50%)",
+                              width: 32,
+                              height: 2.5,
+                              borderRadius: "0 0 2px 2px",
+                              background: T.ocean,
+                            }}
+                          />
+                        )}
+                        <span style={{ fontSize: 20 }}>{icon}</span>
+                        <span
+                          style={{
+                            fontSize: 10,
+                            fontFamily: "'Inter','Segoe UI',sans-serif",
+                            fontWeight: active ? 600 : 400,
+                            letterSpacing: 0.3,
+                          }}
+                        >
+                          {label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* ── SHARE CARD (hidden, used for image capture) ── */}
+                <div
+                  style={{
+                    position: "fixed",
+                    left: "-9999px",
+                    top: 0,
+                    zIndex: -1,
+                  }}
+                >
+                  <div
+                    ref={shareCardRef}
+                    style={{
+                      width: 390,
+                      background: "linear-gradient(160deg,#1E2D3D,#2563A8)",
+                      padding: "36px 32px 28px",
+                      fontFamily: "Georgia,serif",
+                      color: "white",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 13,
+                        letterSpacing: 3,
+                        opacity: 0.6,
+                        textTransform: "uppercase",
+                        marginBottom: 12,
+                      }}
+                    >
+                      TripJam
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: "'DM Serif Display',serif",
+                        fontSize: 26,
+                        lineHeight: 1.2,
+                        marginBottom: 6,
+                      }}
+                    >
+                      {trip.name}
+                    </div>
+                    <div
+                      style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}
+                    >
+                      📍 {trip.destination}
+                    </div>
+                    <div
+                      style={{ fontSize: 13, opacity: 0.7, marginBottom: 24 }}
+                    >
+                      📅{" "}
+                      {trip.start_date && trip.end_date
+                        ? `${new Date(trip.start_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(trip.end_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+                        : trip.dates || ""}
+                    </div>
+                    <div
+                      style={{
+                        borderTop: "1px solid rgba(255,255,255,0.2)",
+                        paddingTop: 20,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 14,
+                      }}
+                    >
+                      {days.map((day) => (
+                        <div key={day.id}>
                           <div
                             style={{
                               fontSize: 11,
-                              color: T.mist,
-                              fontWeight: 400,
+                              letterSpacing: 2,
+                              opacity: 0.5,
+                              textTransform: "uppercase",
+                              marginBottom: 5,
                             }}
                           >
-                            Paste into WhatsApp, Notes, anywhere
+                            {day.label} · {day.city}
                           </div>
-                        </div>
-                      </button>
-                      <button
-                        onClick={async () => {
-                          let token = trip.share_token;
-                          if (!token) {
-                            // Generate a new share token
-                            const { data } = await supabase
-                              .from("trips")
-                              .update({ share_token: crypto.randomUUID() })
-                              .eq("id", trip.id)
-                              .select("share_token")
-                              .single();
-                            token = data?.share_token;
-                            if (token)
-                              setTrip((t) => ({ ...t, share_token: token }));
-                          }
-                          if (!token) return;
-                          const url = `${window.location.origin}/share/${token}`;
-                          if (navigator.share) {
-                            await navigator.share({
-                              title: trip.name,
-                              text: `Check out our trip: ${trip.name}`,
-                              url,
-                            });
-                          } else {
-                            await navigator.clipboard.writeText(url);
-                            alert("Link copied!");
-                          }
-                          setShowShare(false);
-                        }}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 14,
-                          padding: "14px 16px",
-                          borderRadius: RADIUS.lg,
-                          border: `1.5px solid ${T.sand}`,
-                          background: "white",
-                          cursor: "pointer",
-                          fontFamily: "Georgia,serif",
-                          fontSize: 14,
-                          color: T.ink,
-                          fontWeight: 600,
-                        }}
-                      >
-                        <span style={{ fontSize: 24 }}>🔗</span>
-                        <div style={{ textAlign: "left" }}>
-                          <div>Share link</div>
                           <div
                             style={{
-                              fontSize: 11,
-                              color: T.mist,
-                              fontWeight: 400,
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 3,
                             }}
                           >
-                            Anyone with the link can view this trip
+                            {day.activities.map((a, i) => (
+                              <div
+                                key={i}
+                                style={{ fontSize: 13, opacity: 0.85 }}
+                              >
+                                {a.icon} {a.title}
+                              </div>
+                            ))}
                           </div>
                         </div>
-                      </button>
+                      ))}
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 24,
+                        borderTop: "1px solid rgba(255,255,255,0.15)",
+                        paddingTop: 16,
+                        fontSize: 11,
+                        opacity: 0.4,
+                        textAlign: "center",
+                        letterSpacing: 1,
+                      }}
+                    >
+                      MADE WITH TRIPJAM
                     </div>
                   </div>
                 </div>
-              )}
-            </>
-          </DebugContext.Provider>
-        )}
 
-        {/* ── PERSISTENT CHAT BAR (collapsed state — between content and bottom nav) ── */}
-        {!chatOpen &&
+                {/* ── SHARE SHEET ── */}
+                {showShare && (
+                  <div
+                    onClick={() => setShowShare(false)}
+                    style={{
+                      position: "fixed",
+                      inset: 0,
+                      background: "rgba(0,0,0,0.45)",
+                      zIndex: 200,
+                      display: "flex",
+                      alignItems: "flex-end",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        background: T.chalk,
+                        borderRadius: "20px 20px 0 0",
+                        padding: "24px 20px 36px",
+                        width: "100%",
+                        maxWidth: 430,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontFamily: "'DM Serif Display',serif",
+                          fontSize: 18,
+                          color: T.ink,
+                          marginBottom: 4,
+                        }}
+                      >
+                        Share trip
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          color: T.mist,
+                          fontFamily: "Georgia,serif",
+                          marginBottom: 20,
+                        }}
+                      >
+                        {trip.name}
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 10,
+                        }}
+                      >
+                        <button
+                          onClick={async () => {
+                            setShowShare(false);
+                            await new Promise((r) => setTimeout(r, 100));
+                            const canvas = await html2canvas(
+                              shareCardRef.current,
+                              {
+                                scale: 2,
+                                useCORS: true,
+                                backgroundColor: null,
+                              },
+                            );
+                            canvas.toBlob(async (blob) => {
+                              const file = new File([blob], "tripjam.png", {
+                                type: "image/png",
+                              });
+                              if (
+                                navigator.share &&
+                                navigator.canShare?.({ files: [file] })
+                              ) {
+                                await navigator.share({
+                                  files: [file],
+                                  title: trip.name,
+                                });
+                              } else {
+                                const a = document.createElement("a");
+                                a.href = URL.createObjectURL(blob);
+                                a.download = `${trip.name}.png`;
+                                a.click();
+                              }
+                            }, "image/png");
+                          }}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 14,
+                            padding: "14px 16px",
+                            borderRadius: RADIUS.lg,
+                            border: `1.5px solid ${T.sand}`,
+                            background: "white",
+                            cursor: "pointer",
+                            fontFamily: "Georgia,serif",
+                            fontSize: 14,
+                            color: T.ink,
+                            fontWeight: 600,
+                          }}
+                        >
+                          <span style={{ fontSize: 24 }}>🖼</span>
+                          <div style={{ textAlign: "left" }}>
+                            <div>Share as image</div>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: T.mist,
+                                fontWeight: 400,
+                              }}
+                            >
+                              PNG card with your full itinerary
+                            </div>
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => {
+                            const text = [
+                              `✈️ ${trip.name}`,
+                              `${trip.destination}`,
+                              trip.start_date && trip.end_date
+                                ? `${new Date(trip.start_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(trip.end_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+                                : "",
+                              "",
+                              ...days.flatMap((day) => [
+                                `${day.label} · ${day.city}`,
+                                ...day.activities.map(
+                                  (a) => `  ${a.icon} ${a.title}`,
+                                ),
+                                "",
+                              ]),
+                              "Planned with TripJam",
+                            ]
+                              .filter((l) => l !== undefined)
+                              .join("\n");
+                            navigator.clipboard.writeText(text);
+                            setShowShare(false);
+                          }}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 14,
+                            padding: "14px 16px",
+                            borderRadius: RADIUS.lg,
+                            border: `1.5px solid ${T.sand}`,
+                            background: "white",
+                            cursor: "pointer",
+                            fontFamily: "Georgia,serif",
+                            fontSize: 14,
+                            color: T.ink,
+                            fontWeight: 600,
+                          }}
+                        >
+                          <span style={{ fontSize: 24 }}>📋</span>
+                          <div style={{ textAlign: "left" }}>
+                            <div>Copy as text</div>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: T.mist,
+                                fontWeight: 400,
+                              }}
+                            >
+                              Paste into WhatsApp, Notes, anywhere
+                            </div>
+                          </div>
+                        </button>
+                        <button
+                          onClick={async () => {
+                            let token = trip.share_token;
+                            if (!token) {
+                              // Generate a new share token
+                              const { data } = await supabase
+                                .from("trips")
+                                .update({ share_token: crypto.randomUUID() })
+                                .eq("id", trip.id)
+                                .select("share_token")
+                                .single();
+                              token = data?.share_token;
+                              if (token)
+                                setTrip((t) => ({ ...t, share_token: token }));
+                            }
+                            if (!token) return;
+                            const url = `${window.location.origin}/share/${token}`;
+                            if (navigator.share) {
+                              await navigator.share({
+                                title: trip.name,
+                                text: `Check out our trip: ${trip.name}`,
+                                url,
+                              });
+                            } else {
+                              await navigator.clipboard.writeText(url);
+                              alert("Link copied!");
+                            }
+                            setShowShare(false);
+                          }}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 14,
+                            padding: "14px 16px",
+                            borderRadius: RADIUS.lg,
+                            border: `1.5px solid ${T.sand}`,
+                            background: "white",
+                            cursor: "pointer",
+                            fontFamily: "Georgia,serif",
+                            fontSize: 14,
+                            color: T.ink,
+                            fontWeight: 600,
+                          }}
+                        >
+                          <span style={{ fontSize: 24 }}>🔗</span>
+                          <div style={{ textAlign: "left" }}>
+                            <div>Share link</div>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: T.mist,
+                                fontWeight: 400,
+                              }}
+                            >
+                              Anyone with the link can view this trip
+                            </div>
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            </DebugContext.Provider>
+          )}
+
+          {/* ── CENTER COLUMN CLOSER (D22) ── */}
+        </div>
+
+        {/* ── PERSISTENT CHAT BAR (collapsed state — between content and bottom nav) ──
+            Mobile only. On desktop the chat is always rendered inline in the
+            right-bottom grid area, so this collapsed-state CTA bar is hidden. */}
+        {!useDesktopShell &&
+          !chatOpen &&
           (screen === "itinerary" || screen === "brainstorm") &&
           activeBottomTab !== "board" && (
             <div
@@ -11779,27 +12164,88 @@ export default function App({
             );
           })()}
 
-        {/* ── CHAT SHEET (floating bottom sheet, rendered globally) ── */}
-        {chatOpen &&
+        {/* ── PERSISTENT MAP (D22 — desktop only) ──
+            Lives in the right-top grid cell. Routes map during brainstorm,
+            itinerary map (with day pills) once the itinerary exists. Hidden
+            entirely on mobile — the existing in-tab Map render takes over. */}
+        {useDesktopShell && (
+          <div
+            style={{
+              gridArea: "right-top",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+              background: T.warm,
+            }}
+          >
+            {screen === "brainstorm" ? (
+              <RouteMapView
+                routes={pretripRoutes}
+                selectedId={pretripSelectedRouteId}
+                onSelectRoute={setPretripSelectedRouteId}
+                destination={
+                  pendingForm?.destinations?.[0] ||
+                  trip?.destination?.split("→")[0]?.trim() ||
+                  null
+                }
+              />
+            ) : days.length > 0 ? (
+              <MapView days={days} />
+            ) : (
+              <div
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexDirection: "column",
+                  gap: 12,
+                  color: T.mist,
+                  fontFamily: "Georgia,serif",
+                  fontSize: 14,
+                }}
+              >
+                <span style={{ fontSize: 32 }}>🗺️</span>
+                Waiting for the itinerary to build…
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── CHAT SHEET (mobile = bottom sheet | desktop = persistent inline right-bottom) ──
+            On desktop the chat is always rendered in the right-bottom grid
+            cell (no scrim, no slide-up animation, no maxWidth, fills its cell).
+            On mobile the original bottom-sheet behaviour is preserved. */}
+        {(chatOpen || useDesktopShell) &&
           (screen === "itinerary" || screen === "brainstorm") &&
           activeBottomTab !== "board" &&
           (() => {
             const isBrainstorm = screen === "brainstorm";
             return (
               <div
-                style={{
-                  position: "fixed",
-                  inset: 0,
-                  zIndex: 1500,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "flex-end",
-                  pointerEvents: "none",
-                }}
+                style={
+                  useDesktopShell
+                    ? {
+                        gridArea: "right-bottom",
+                        display: "flex",
+                        flexDirection: "column",
+                        overflow: "hidden",
+                        borderTop: `1px solid ${T.sand}`,
+                      }
+                    : {
+                        position: "fixed",
+                        inset: 0,
+                        zIndex: 1500,
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        justifyContent: "flex-end",
+                        pointerEvents: "none",
+                      }
+                }
               >
-                {/* Scrim — only on itinerary (full sheet), skip on brainstorm (half sheet) */}
-                {!isBrainstorm && (
+                {/* Scrim — only on mobile itinerary (full sheet); skipped on desktop and brainstorm */}
+                {!useDesktopShell && !isBrainstorm && (
                   <div
                     onClick={() => setChatOpen(false)}
                     style={{
@@ -11811,23 +12257,37 @@ export default function App({
                     }}
                   />
                 )}
-                {/* On brainstorm: no scrim, touches pass through to routes behind */}
-                {/* Sheet — half height on brainstorm, full on itinerary */}
+                {/* On mobile brainstorm: no scrim, touches pass through to routes behind */}
+                {/* Sheet — half height on brainstorm, full on itinerary; fills its grid cell on desktop */}
                 <div
-                  style={{
-                    position: "relative",
-                    width: "100%",
-                    maxWidth: 430,
-                    height: isBrainstorm ? "50dvh" : "85dvh",
-                    background: T.warm,
-                    borderRadius: "18px 18px 0 0",
-                    boxShadow: SHADOW.lg,
-                    display: "flex",
-                    flexDirection: "column",
-                    overflow: "hidden",
-                    animation: "slideUp 0.25s ease",
-                    pointerEvents: "all",
-                  }}
+                  style={
+                    useDesktopShell
+                      ? {
+                          position: "relative",
+                          width: "100%",
+                          height: "100%",
+                          background: T.warm,
+                          borderRadius: 0,
+                          display: "flex",
+                          flexDirection: "column",
+                          overflow: "hidden",
+                          pointerEvents: "all",
+                        }
+                      : {
+                          position: "relative",
+                          width: "100%",
+                          maxWidth: 430,
+                          height: isBrainstorm ? "50dvh" : "85dvh",
+                          background: T.warm,
+                          borderRadius: "18px 18px 0 0",
+                          boxShadow: SHADOW.lg,
+                          display: "flex",
+                          flexDirection: "column",
+                          overflow: "hidden",
+                          animation: "slideUp 0.25s ease",
+                          pointerEvents: "all",
+                        }
+                  }
                 >
                   {/* Drag handle */}
                   <div
@@ -11897,24 +12357,26 @@ export default function App({
                         Travel with Trippy
                       </div>
                     </div>
-                    <button
-                      onClick={() => setChatOpen(false)}
-                      style={{
-                        background: "rgba(255,255,255,0.15)",
-                        border: "none",
-                        color: "white",
-                        width: 28,
-                        height: 28,
-                        borderRadius: "50%",
-                        fontSize: 14,
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      ✕
-                    </button>
+                    {!useDesktopShell && (
+                      <button
+                        onClick={() => setChatOpen(false)}
+                        style={{
+                          background: "rgba(255,255,255,0.15)",
+                          border: "none",
+                          color: "white",
+                          width: 28,
+                          height: 28,
+                          borderRadius: "50%",
+                          fontSize: 14,
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
                   {/* Filter pills removed — no group features in phase 1 */}
                   {/* Messages */}

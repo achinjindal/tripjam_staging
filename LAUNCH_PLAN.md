@@ -164,7 +164,7 @@ These are real, valid improvements. They are explicitly **out of scope** for the
 | Auth                   | **Google OAuth + email-mandatory signup + Supabase Identity Linking** (D9). Implementation = Day 1 Part C.                          | Replaces username-only fake-email model       |
 | Geocoding              | **Photon-first with smart escalation to Google Places** (D25). Pass-through cost (D24). Stored lat/lng on activity rows.            | See Day 1 Part D                              |
 | Credits UX             | **No persistent indicator** (D19). Top-right avatar dropdown for balance + top-up (D20). Warning at displayed ≤10 (D4).             | Day 2-3 wires this                            |
-| Desktop                | **≥1024px breakpoint** (D21). Sidebar + center + persistent map/chat right panel (D22).                                             | Backlog — post-launch month 2+                |
+| Desktop                | **≥1024px breakpoint** (D21). Sidebar + center + persistent map/chat right panel (D22).                                             | **Phase 1 shipped 2026-05-27.** Trip-view screens (brainstorm + itinerary) only. Setup / Home / Public / Auth still mobile-stretched — Phase 2 backlog. |
 | Cost guardrails        | **Anthropic hard spend cap** + **Supabase usage alerts**                                                                           | Set before Stripe goes live                   |
 
 ---
