@@ -414,6 +414,13 @@ function SetupForm({
     setDestInput("");
     setSuggestions([]);
     setShowSugg(false);
+    setDestLoading(false);
+    // Cancel any in-flight autocomplete request + pending debounce timer.
+    // Otherwise a pending 200ms fetch can resolve after this call and
+    // reopen the dropdown over the Continue button (test flakiness +
+    // real UX: the dropdown stays open after pressing Enter).
+    clearTimeout(destTimer.current);
+    destAbortRef.current?.abort();
     return name;
   };
 
