@@ -5,6 +5,40 @@ Pair this with `RUNBOOKS.md` (operational SQL + recovery procedures).
 
 ---
 
+## ⚠️ Known issues / pre-launch bug backlog
+
+Tracked here so they don't get lost between sprint commits. Categorize by
+launch impact: **🔴 Blocker** (fix before launch) · **🟡 Polish** (post-launch
+OK) · **🟢 Nice-to-have**.
+
+### Reported 2026-05-27
+
+- **🔴 Map shows grey screen** — Map tab broken, no tiles render. Could be
+  Leaflet not initializing, tile-server CORS/CSP issue, or a regression
+  from Day 6 photo-prefetch parallelization. Needs reproduction +
+  devtools console check first. Status: not yet investigated.
+- **🔴 Magazine images ~90% skeleton-only** — Wikipedia/Wikimedia photo
+  lookup failing for most cards. Could be rate-limit from increased
+  parallel prefetch (Day 6 parallel-day change), Wikipedia API change,
+  or stale cache. Status: not yet investigated.
+
+### Pre-existing (carried from sprint)
+
+- 🟡 1200×630 dedicated OG image (using mascot.png 1536×1024 as fallback)
+- 🟡 Per-trip dynamic OG for `/share/:token` (needs Vercel middleware or
+  @vercel/og — currently all share links show the generic site OG)
+- 🟡 Per-day "skeleton until photos+coords ready" progressive IG gate
+- 🟢 Bundle visualizer audit (current splits look reasonable)
+- 🟢 Inline magazine-tab credits hint (consolidated into Avatar dropdown)
+- 🟡 Manual password reset flow (currently emailed support — see RUNBOOKS)
+- 🟡 Desktop layout ≥1024px breakpoint (D21-D22, post-launch month 2+)
+- 🟢 9 Playwright RG/IG-dependent tests flaky (real Anthropic API; not a
+  product bug — manual smoke A5 covers these flows)
+
+---
+
+---
+
 ## A. Manual smoke test (incognito, real browser, 15 min)
 
 Run on **staging** before each prod push. Re-run on **production** post-deploy.
