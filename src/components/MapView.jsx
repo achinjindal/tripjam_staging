@@ -59,11 +59,13 @@ function FitBounds({ pins, fallback }) {
 
 export function MapView({ days }) {
   const [pins, setPins] = useState(null);
+  const [resolving, setResolving] = useState(true);
   const [selectedDays, setSelectedDays] = useState(new Set()); // empty = show all
   const [multiSelect, setMultiSelect] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setResolving(true);
     (async () => {
       // Geocode all days in parallel; update pins as each day resolves
       const allPins = days.map(() => []);
@@ -81,21 +83,31 @@ export function MapView({ days }) {
                 return true;
               })
               .map(async (act) => {
-                // Always resolve via geocodePlace (server has permanent DB cache — fast for known places)
+                // Use persisted coords if present — avoids re-geocoding 60+ activities on every Map open.
+                if (act.lat != null && act.lng != null) {
+                  return {
+                    ...act,
+                    dayIndex: di,
+                    dayLabel: day.label,
+                  };
+                }
+                // Otherwise resolve via geocodePlace (server has permanent DB cache for known places).
                 const coords = await geocodePlace(
                   act.title,
                   day.city,
                   act.geocode,
                 );
-                if (
-                  coords &&
-                  act.id &&
-                  (coords.lat !== act.lat || coords.lng !== act.lng)
-                ) {
+                if (coords && act.id) {
+                  // Persist so subsequent loads are instant. supabase-js v2 builders are lazy,
+                  // so a trailing .then() is required to actually flush — without it the PATCH never fires.
                   supabase
                     .from("activities")
                     .update({ lat: coords.lat, lng: coords.lng })
-                    .eq("id", act.id);
+                    .eq("id", act.id)
+                    .then(
+                      () => {},
+                      () => {},
+                    );
                 }
                 return coords
                   ? {
@@ -112,6 +124,7 @@ export function MapView({ days }) {
           if (!cancelled) setPins(allPins.flat());
         }),
       );
+      if (!cancelled) setResolving(false);
     })();
     return () => {
       cancelled = true;
@@ -145,11 +158,15 @@ export function MapView({ days }) {
   const visiblePins = (pins || []).filter(
     (p) => selectedDays.size === 0 || selectedDays.has(p.dayIndex),
   );
+  // Only fall back to a "world" centre when we actually have pins (we always do if we render
+  // the map below). The empty/loading states render a placeholder instead, so Leaflet never
+  // boots at [20,0] (open ocean → grey-blue tiles → the "map is broken" perception).
   const center = visiblePins.length
     ? [visiblePins[0].lat, visiblePins[0].lng]
     : pins?.length
       ? [pins[0].lat, pins[0].lng]
-      : [20, 0];
+      : [0, 0];
+  const hasPins = (pins?.length ?? 0) > 0;
 
   return (
     <div
@@ -262,27 +279,73 @@ export function MapView({ days }) {
         </label>
       </div>
 
-      {(!pins || pins.length === 0) && (
+      {/* Skeleton / empty state — kept *outside* the MapContainer so Leaflet only mounts
+          once we actually have coordinates to centre on. This avoids the "grey ocean"
+          window where Leaflet would otherwise boot at [20,0] before any day resolves. */}
+      {!hasPins && (
         <div
           style={{
-            position: "absolute",
-            inset: 0,
-            top: 50,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: T.mist,
-            fontFamily: "Georgia,serif",
-            fontSize: 14,
-            zIndex: 500,
-            pointerEvents: "none",
+            flex: 1,
+            position: "relative",
+            background: "#E8EEF3",
+            overflow: "hidden",
           }}
         >
-          {!pins ? "Resolving locations…" : "No locations found"}
+          {resolving && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background:
+                  "linear-gradient(110deg, rgba(255,255,255,0) 20%, rgba(255,255,255,0.6) 50%, rgba(255,255,255,0) 80%)",
+                animation: "shimmer 1.5s ease-in-out infinite",
+              }}
+            />
+          )}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              pointerEvents: "none",
+            }}
+          >
+            {resolving && (
+              <div style={{ display: "flex", gap: 10 }}>
+                {[0, 1, 2, 3].map((i) => (
+                  <div
+                    key={i}
+                    style={{
+                      width: 14,
+                      height: 14,
+                      borderRadius: "50%",
+                      background: DAY_COLORS[i % DAY_COLORS.length],
+                      opacity: 0.7,
+                      animation: `pulse 1.2s ease-in-out ${i * 0.15}s infinite`,
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+            <div
+              style={{
+                fontSize: 13,
+                color: T.mist,
+                fontFamily: "Georgia,serif",
+                fontStyle: "italic",
+              }}
+            >
+              {resolving ? "Plotting your trip…" : "No locations to map yet"}
+            </div>
+          </div>
         </div>
       )}
 
-      {pins !== null && (
+      {hasPins && (
         <MapContainer center={center} zoom={13} style={{ flex: 1 }}>
           <TileLayer
             url={

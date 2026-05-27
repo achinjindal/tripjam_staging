@@ -244,37 +244,60 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
     );
   };
 
-  // Tier 1: Wikipedia exact title lookup. Trust the article's hero image when the
-  // page title is relevant — exact-title matches with redirects are authoritative,
-  // and the filename check would reject valid hero images whose filenames don't
-  // happen to contain the geocode tokens (e.g. Wat Phra Yai → Big_Buddha_Koh_Samui.jpg).
-  const data1 = await wikiQueuedFetch(
-    `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(geocode)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`,
-  );
-  const page1 = Object.values(data1?.query?.pages || {})[0];
-  const src = page1?.thumbnail?.source;
-  if (good(src) && pageRelevant(page1?.title)) {
-    _usedPhotoUrls.add(src);
-    _photoCache[cacheKey] = src;
-    return src;
-  }
-
-  // Tier 2: Wikipedia exact lookup with city stripped (geocode often has city appended)
+  // Strip generic POI suffixes — Wikipedia articles are usually titled "Senso-ji" not
+  // "Senso-ji Temple", "Tsurugaoka Hachimangu" not "...Shrine", etc. The exact-title lookup
+  // misses ~90% of highlight cards without this, leaving them perma-skeleton. Same regex
+  // (and iterative strip) as the geocoder uses in places-proxy/index.ts.
+  const POI_SUFFIX_RE =
+    /\s+(temple|shrine|mosque|church|cathedral|market|road|street|beach|fort|palace|museum|gardens?|park|square|bridge|tower|station|castle|monument|memorial)$/i;
+  const stripPoiSuffix = (s) => {
+    let out = s;
+    let prev;
+    do {
+      prev = out;
+      out = out.replace(POI_SUFFIX_RE, "").trim();
+    } while (out && out !== prev);
+    return out;
+  };
+  const titleCandidates = [geocode];
   if (city) {
-    const stripped = geocode
+    const noCity = geocode
       .replace(new RegExp(`\\s+${city}\\s*$`, "i"), "")
       .trim();
-    if (stripped && stripped !== geocode) {
-      const data2 = await wikiQueuedFetch(
-        `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(stripped)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`,
-      );
-      const page2 = Object.values(data2?.query?.pages || {})[0];
-      const src2 = page2?.thumbnail?.source;
-      if (good(src2) && pageRelevant(page2?.title)) {
-        _usedPhotoUrls.add(src2);
-        _photoCache[cacheKey] = src2;
-        return src2;
-      }
+    if (noCity && noCity !== geocode) titleCandidates.push(noCity);
+  }
+  const withoutSuffix = stripPoiSuffix(geocode);
+  if (withoutSuffix && withoutSuffix !== geocode)
+    titleCandidates.push(withoutSuffix);
+  if (city) {
+    const noCityNoSuffix = stripPoiSuffix(
+      geocode.replace(new RegExp(`\\s+${city}\\s*$`, "i"), "").trim(),
+    );
+    if (
+      noCityNoSuffix &&
+      !titleCandidates.some(
+        (c) => c.toLowerCase() === noCityNoSuffix.toLowerCase(),
+      )
+    ) {
+      titleCandidates.push(noCityNoSuffix);
+    }
+  }
+
+  // Tier 1 + 2: Wikipedia exact title lookup across the candidate variants in order.
+  // Trust the article's hero image when the page title is relevant — exact-title matches
+  // with redirects are authoritative, and the filename check would reject valid hero
+  // images whose filenames don't happen to contain the geocode tokens (e.g.
+  // Wat Phra Yai → Big_Buddha_Koh_Samui.jpg, Senso-ji → Sensoji_2023.jpg).
+  for (const candidate of titleCandidates) {
+    const data = await wikiQueuedFetch(
+      `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(candidate)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`,
+    );
+    const page = Object.values(data?.query?.pages || {})[0];
+    const src = page?.thumbnail?.source;
+    if (good(src) && pageRelevant(page?.title)) {
+      _usedPhotoUrls.add(src);
+      _photoCache[cacheKey] = src;
+      return src;
     }
   }
 
@@ -283,7 +306,11 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
   const data3 = await wikiQueuedFetch(
     `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages|description&pithumbsize=700&format=json&origin=*`,
   );
-  const results3 = Object.values(data3?.query?.pages || {});
+  // Sort search results by their "index" field so we evaluate in the actual search-rank
+  // order (Object.values on the response is unordered — top results were being skipped).
+  const results3 = Object.values(data3?.query?.pages || {}).sort(
+    (a, b) => (a.index ?? 999) - (b.index ?? 999),
+  );
   const PERSON_DESC =
     /\b(born|politician|actor|actress|singer|player|wrestler|athlete|writer|emperor|empress|manga|anime|artist|novelist|musician|composer|director|comedian|model|journalist|general|admiral|prince|princess|voice actor)\b/i;
   for (let ri = 0; ri < results3.length; ri++) {
@@ -292,11 +319,15 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
     if (page.description && PERSON_DESC.test(page.description)) {
       continue;
     }
+    // If the page title is itself relevant to the geocode, trust it without the
+    // filename check (mirrors the Tier 1/2 logic). Many valid hero images have
+    // filenames that don't contain the place name (e.g. "Day2-2_(40909714314).jpg").
+    const titleHit = pageRelevant(page.title);
     // Accept top 2 results without strict title relevance, but still check filename
     const relaxed = ri < 2;
-    if (!relaxed && !pageRelevant(page.title)) continue;
+    if (!relaxed && !titleHit) continue;
     const src3 = page?.thumbnail?.source;
-    if (good(src3) && photoFilenameRelevant(src3)) {
+    if (good(src3) && (titleHit || photoFilenameRelevant(src3))) {
       _usedPhotoUrls.add(src3);
       _photoCache[cacheKey] = src3;
       return src3;

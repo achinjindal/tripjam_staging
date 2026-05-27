@@ -11,16 +11,38 @@ Tracked here so they don't get lost between sprint commits. Categorize by
 launch impact: **🔴 Blocker** (fix before launch) · **🟡 Polish** (post-launch
 OK) · **🟢 Nice-to-have**.
 
-### Reported 2026-05-27
+### Reported 2026-05-27 — investigated + fixed + deployed (commit `<this>`)
 
-- **🔴 Map shows grey screen** — Map tab broken, no tiles render. Could be
-  Leaflet not initializing, tile-server CORS/CSP issue, or a regression
-  from Day 6 photo-prefetch parallelization. Needs reproduction +
-  devtools console check first. Status: not yet investigated.
-- **🔴 Magazine images ~90% skeleton-only** — Wikipedia/Wikimedia photo
-  lookup failing for most cards. Could be rate-limit from increased
-  parallel prefetch (Day 6 parallel-day change), Wikipedia API change,
-  or stale cache. Status: not yet investigated.
+- **🟢 Map "grey screen"** — root cause: `MapView` was firing
+  `supabase.from("activities").update(...).eq("id", act.id)` without `.then()` /
+  `await`, so supabase-js v2 (lazy builder) never sent the PATCH. Result: lat/lng
+  was never persisted, every Map open re-geocoded 60–100 activities, and the
+  `pins` array transiently settled to `[]` → `MapContainer` mounted at the
+  fallback `center=[20,0]` (open Atlantic Ocean at zoom 13 → grey-blue tiles).
+  Fix: append `.then()`, short-circuit when `act.lat/lng` already persisted, and
+  render a shimmer/placeholder when `pins` is empty so Leaflet never boots at
+  `[20,0]` even if all geocoding hard-fails. Verified: 21/66 activities on test
+  trip now persist coords on first open; second open is instant.
+- **🟢 Magazine highlight cards skeleton-only** — root cause: `_fetchPhoto`
+  Tier 1/2 did an exact-title Wikipedia lookup. Activities are stored as
+  `Senso-ji Temple`, `Tosho-gu Shrine`, `Hamarikyu Gardens` etc. but Wikipedia
+  pages are titled without the trailing POI noun (`Sensō-ji`, `Nikkō Tōshō-gū`,
+  `Hama-rikyū Gardens` is one of the rare exceptions). Tier 3 search returned
+  reasonable candidates but the filename-relevance filter then rejected them.
+  Fix in `photos.js`: add a small suffix-stripped retry mirroring the geocoder's
+  `SUFFIX_RE`, sort Tier 3 results by `index`, and accept the top result whose
+  page title matches the geocode without the filename check. Day 6 parallel
+  prefetch was a contributing aggravator (more queued requests) but not the
+  cause. Verified: Nikko card now shows Tosho-gu Shrine + Yomeimon Gate +
+  Shinkyo Bridge photos that were previously perma-skeleton.
+- **🟢 `/trip/:id/magazine` deep-link/reload showed an entirely blank screen**
+  (discovered while investigating) — `parseUrl` returned `tab: "magazine"` and
+  `App` stored that verbatim in `activeBottomTab`, but the Magazine view only
+  renders when `activeBottomTab === "brainstorm"` (legacy internal key) and the
+  inverse-translation only ran on URL writes, never on URL parses. Direct nav
+  (page reload, share-back, PWA cold start) rendered nothing. Fix in
+  `main.jsx`: translate URL `magazine` → internal `brainstorm` at the parse
+  boundary. Verified: `/trip/:id/magazine` now renders the full Magazine view.
 
 ### Pre-existing (carried from sprint)
 

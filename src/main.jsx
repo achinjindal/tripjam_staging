@@ -84,7 +84,14 @@ function parseUrl(path = window.location.pathname) {
   const routesMatch = path.match(/^\/trip\/([^/]+)\/plans$/);
   if (routesMatch) return { page: "edit", tripId: routesMatch[1] };
   const tabMatch = path.match(/^\/trip\/([^/]+)\/(magazine|map|board)$/);
-  if (tabMatch) return { page: "trip", tripId: tabMatch[1], tab: tabMatch[2] };
+  if (tabMatch) {
+    // URL uses the friendly slug "magazine"; the App state still uses the legacy key
+    // "brainstorm" for that tab. Translate at the parse boundary so deep-links + reloads
+    // on /trip/:id/magazine actually render the Magazine view (otherwise the tab key
+    // doesn't match any render branch and the view is blank).
+    const tab = tabMatch[2] === "magazine" ? "brainstorm" : tabMatch[2];
+    return { page: "trip", tripId: tabMatch[1], tab };
+  }
   // /trip/:id — authenticated trip view (UUID is a trip ID, not a share token)
   const tripMatch = path.match(/^\/trip\/([^/]+)$/);
   if (tripMatch) return { page: "trip", tripId: tripMatch[1] };
