@@ -52,7 +52,7 @@ All 8 features reviewed. Decisions folded into [LAUNCH_PLAN.md](LAUNCH_PLAN.md) 
 
 | Feature | Disposition |
 |---------|-------------|
-| F1 Inspirations | **Backlog** — month 1 (needs branch merge + schema collision fix) |
+| F1 Inspirations | **Phase 1 shipped 2026-05-27** — merged from `inspiration` branch, Haiku 4.5 + 4 web searches, opt-in button in Magazine, ~7 credits per cold call (cached 30d). Surfaces in post-IG Magazine only for now; pre-trip Magazine integration is Phase 2. |
 | F2 Chat enhancements | **Backlog** — month 1 |
 | F3 Google Photo upgrade | **Backlog** — month 2 |
 | F4 Homepage redesign | **Backlog** — month 1 (high impact) |

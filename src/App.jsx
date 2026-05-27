@@ -39,6 +39,7 @@ import {
   CityCard,
   MagazineHighlightCard,
   HotelSuggestionCard,
+  InspirationsSection,
 } from "./components/Magazine.jsx";
 
 // ── Error Boundary ──
@@ -6451,6 +6452,79 @@ export default function App({
       setDeepDiveCacheApp((prev) => ({ ...prev, [city]: "error" }));
     }
   };
+  // F1 Inspirations (merged 2026-05-27 from `inspiration` branch).
+  // State shape: { digest, loading: bool, errored: bool, hasLoaded: bool }.
+  // Triggered by the user clicking "Get destination inspirations" inside the
+  // Magazine view — opt-in because it costs ~8 credits per cold call (cached
+  // result is free for 30 days, served from `destination_research` table).
+  const [destResearch, setDestResearch] = useState({
+    digest: null,
+    loading: false,
+    errored: false,
+    hasLoaded: false,
+  });
+  const loadDestinationResearch = async () => {
+    if (destResearch.loading) return;
+    const rawDests = (pendingForm?.destinations || []).filter(
+      (d) => !d.toLowerCase().includes("help me decide"),
+    );
+    const destinations = rawDests.length
+      ? rawDests
+      : trip?.destination
+        ? trip.destination
+            .split(/\s*→\s*|\s*,\s*/)
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+    if (destinations.length === 0) return;
+    setDestResearch((s) => ({ ...s, loading: true, errored: false }));
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-destination-research`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            destinations,
+            notes:
+              trip?.notes ||
+              pendingForm?.notes ||
+              trip?.ig_request?.notes ||
+              "",
+            startDate: trip?.start_date || pendingForm?.startDate || null,
+            tripId: trip?.id || null,
+          }),
+        },
+      );
+      if (!res.ok) {
+        if (res.status === 402) {
+          // Out of credits — surface the standard paywall (CreditsOverlay).
+          const { openPaywall } = await import("./credits");
+          openPaywall("Inspirations needs ~8 credits");
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setDestResearch({
+        digest: data?.digest || null,
+        loading: false,
+        errored: false,
+        hasLoaded: true,
+      });
+    } catch (e) {
+      console.warn("destination-research failed:", e.message);
+      setDestResearch((s) => ({
+        ...s,
+        loading: false,
+        errored: true,
+        hasLoaded: true,
+      }));
+    }
+  };
+
   // Background-load city-deep-dive for Magazine — destination only.
   // D17 / R12 (Day 6 Part C): removed the auto top-2-cities pre-fetch that
   // fired 2 extra deep dives users hadn't asked for. City deep dives now
@@ -9763,6 +9837,17 @@ export default function App({
                         </DestinationHero>
                       );
                     })()}
+                    {/* F1 Inspirations — web-search-backed reading list.
+                        Opt-in: shows the "Get destination inspirations · ~8 credits"
+                        button until the user clicks it. Result is cached for 30 days
+                        in destination_research table, so subsequent loads are free. */}
+                    <InspirationsSection
+                      digest={destResearch.digest}
+                      loading={destResearch.loading}
+                      errored={destResearch.errored}
+                      hasLoaded={destResearch.hasLoaded}
+                      onLoad={loadDestinationResearch}
+                    />
                     {(() => {
                       // Collect all unique cities — optionally filtered by route
                       const filterSet = magazineFilterCities

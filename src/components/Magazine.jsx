@@ -1140,3 +1140,304 @@ export function HotelSuggestionCard({ suggestion, onSelect, onKnowMore }) {
     </div>
   );
 }
+
+/* ─── INSPIRATIONS (F1 — Magazine reading list) ─────────────────────── */
+// Web-search-backed digest from the `inspiration` branch, merged 2026-05-27.
+// Powered by supabase/functions/generate-destination-research.
+
+function authorTagStyle(type) {
+  switch (type) {
+    case "youtuber":
+      return { bg: "#FFF4E8", fg: "#C4622D", label: "YouTube" };
+    case "substack":
+      return { bg: "#F5F0FA", fg: "#7B5EA7", label: "Substack" };
+    case "instagram":
+      return { bg: "#FDECEF", fg: "#B0356C", label: "Instagram" };
+    case "journalist":
+      return { bg: "#EEF5EE", fg: "#3A6B3A", label: "Journalist" };
+    default:
+      return { bg: "#EBF3FD", fg: "#2563A8", label: "Personal blog" };
+  }
+}
+
+function InspirationCard({ item }) {
+  const tag = authorTagStyle(
+    item.author_type || (item.type === "video" ? "youtuber" : "personal_blog"),
+  );
+  const isVideo = item.type === "video";
+  const dateLabel = (() => {
+    if (!item.date) return null;
+    const m = String(item.date).match(/^(\d{4})-(\d{2})/);
+    if (!m) return item.date;
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+    return `${months[parseInt(m[2], 10) - 1]} ${m[1]}`;
+  })();
+  return (
+    <div
+      style={{ padding: "16px 0 18px", borderBottom: `1px solid ${T.sand}` }}
+    >
+      <div
+        style={{
+          fontFamily: "'DM Serif Display',serif",
+          fontSize: 16,
+          color: T.ink,
+          lineHeight: 1.3,
+          marginBottom: 2,
+        }}
+      >
+        {isVideo ? "▶ " : "by "}
+        {item.author || "Unknown"}
+        <span
+          style={{
+            fontSize: 11,
+            verticalAlign: "middle",
+            background: tag.bg,
+            color: tag.fg,
+            padding: "2px 7px",
+            borderRadius: 8,
+            marginLeft: 6,
+            fontFamily: "Georgia,serif",
+            fontWeight: 600,
+            letterSpacing: 0.3,
+          }}
+        >
+          {tag.label}
+        </span>
+      </div>
+      <div
+        style={{
+          fontFamily: "Georgia,serif",
+          fontSize: 12,
+          color: T.mist,
+          marginBottom: 8,
+        }}
+      >
+        {[item.outlet, dateLabel].filter(Boolean).join(" · ")}
+      </div>
+      {item.title && (
+        <div
+          style={{
+            fontFamily: "'DM Serif Display',serif",
+            fontSize: 18,
+            color: T.ink,
+            lineHeight: 1.25,
+            marginBottom: 6,
+          }}
+        >
+          {item.title}
+        </div>
+      )}
+      {item.blurb && (
+        <div
+          style={{
+            fontFamily: "Georgia,serif",
+            fontSize: 13,
+            color: T.mist,
+            lineHeight: 1.55,
+            marginBottom: 10,
+          }}
+        >
+          {item.blurb}
+        </div>
+      )}
+      {item.url && (
+        <a
+          href={item.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            fontFamily: "Georgia,serif",
+            fontSize: 13,
+            color: T.ocean,
+            textDecoration: "none",
+            fontWeight: 600,
+          }}
+        >
+          {isVideo ? "Watch" : "Read"} <span style={{ fontSize: 14 }}>↗</span>
+        </a>
+      )}
+    </div>
+  );
+}
+
+export function InspirationsSection({
+  digest,
+  loading,
+  errored,
+  onLoad,
+  hasLoaded,
+}) {
+  const items = (digest?.inspirations || []).filter((i) => i?.url);
+  const sub = loading
+    ? "Looking up recent articles and vlogs…"
+    : errored || items.length === 0
+      ? "We couldn't find recent first-person travel content for this combo. Check back as more travellers post."
+      : "Real travellers, real recent trips — to help you imagine yours.";
+
+  return (
+    <div
+      style={{
+        background: "#FFFBF5",
+        borderRadius: RADIUS.lg,
+        padding: "20px 18px",
+        margin: "0 16px 16px",
+        border: `1px solid ${T.sand}`,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "Georgia,serif",
+          fontSize: 11,
+          color: T.mist,
+          letterSpacing: 1.5,
+          textTransform: "uppercase",
+          marginBottom: 4,
+        }}
+      >
+        ✨ &nbsp;Inspirations
+      </div>
+      <div
+        style={{
+          fontFamily: "'DM Serif Display',serif",
+          fontSize: 24,
+          color: T.ink,
+          lineHeight: 1.15,
+          marginBottom: 4,
+        }}
+      >
+        {loading || items.length > 0 ? (
+          <>
+            From people who've
+            <br />
+            been there recently
+          </>
+        ) : (
+          <>
+            No recent stories
+            <br />
+            just yet
+          </>
+        )}
+      </div>
+      <div
+        style={{
+          fontFamily: "Georgia,serif",
+          fontSize: 13,
+          color: T.mist,
+          fontStyle: "italic",
+          marginBottom: items.length > 0 ? 18 : 14,
+          lineHeight: 1.5,
+        }}
+      >
+        {sub}
+      </div>
+      {/* Opt-in CTA — only shown when never loaded + not currently loading.
+          Once the user pays the ~8-credit cost, subsequent opens use the
+          30-day cache (free). */}
+      {!loading && !hasLoaded && !digest && onLoad && (
+        <button
+          onClick={onLoad}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "10px 16px",
+            borderRadius: RADIUS.md,
+            border: `1px solid ${T.ocean}`,
+            background: T.ocean,
+            color: "white",
+            fontFamily: "Georgia,serif",
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          ✨ Get destination inspirations &nbsp;
+          <span style={{ opacity: 0.75, fontWeight: 400 }}>~8 credits</span>
+        </button>
+      )}
+      {loading && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+            marginTop: 12,
+          }}
+        >
+          {[0, 1, 2].map((i) => (
+            <div key={i}>
+              <div
+                style={{
+                  height: 18,
+                  background: T.sand,
+                  borderRadius: 6,
+                  animation: "shimmer 1.5s ease-in-out infinite",
+                  marginBottom: 8,
+                  animationDelay: `${i * 0.12}s`,
+                }}
+              />
+              <div
+                style={{
+                  height: 14,
+                  width: "75%",
+                  background: T.sand,
+                  borderRadius: 6,
+                  animation: "shimmer 1.5s ease-in-out infinite",
+                  marginBottom: 6,
+                  animationDelay: `${i * 0.12 + 0.08}s`,
+                }}
+              />
+              <div
+                style={{
+                  height: 14,
+                  width: "90%",
+                  background: T.sand,
+                  borderRadius: 6,
+                  animation: "shimmer 1.5s ease-in-out infinite",
+                  animationDelay: `${i * 0.12 + 0.16}s`,
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+      {!loading &&
+        items.map((it, i) => (
+          <div key={it.url || i}>
+            <InspirationCard item={it} />
+          </div>
+        ))}
+      {!loading && items.length > 0 && (
+        <div
+          style={{
+            fontFamily: "Georgia,serif",
+            fontSize: 11,
+            color: T.mist,
+            fontStyle: "italic",
+            marginTop: 14,
+            lineHeight: 1.5,
+          }}
+        >
+          Surfaced from the open web. Links open in a new tab.
+        </div>
+      )}
+    </div>
+  );
+}
