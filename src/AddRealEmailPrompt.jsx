@@ -9,9 +9,17 @@ import { T, RADIUS, SHADOW, MOTION } from "./theme";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const LEGACY_EMAIL_RE = /@tripjam\.app$/i;
 
+const DISMISS_KEY = "tripjam.addRealEmailDismissedAt";
+
 export default function AddRealEmailPrompt({ session }) {
   const [needsPrompt, setNeedsPrompt] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return !!sessionStorage.getItem(DISMISS_KEY);
+    } catch {
+      return false;
+    }
+  });
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -120,7 +128,12 @@ export default function AddRealEmailPrompt({ session }) {
           {submitting ? "..." : "Save"}
         </button>
         <button
-          onClick={() => setDismissed(true)}
+          onClick={() => {
+            try {
+              sessionStorage.setItem(DISMISS_KEY, String(Date.now()));
+            } catch {}
+            setDismissed(true);
+          }}
           aria-label="Dismiss"
           style={{
             padding: "8px 10px",

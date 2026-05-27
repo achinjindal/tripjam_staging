@@ -69,6 +69,9 @@ export default function Avatar({ session }) {
           right: 12,
           zIndex: 1000,
           fontFamily: "Georgia, serif",
+          // Wrapper is pointer-events:none so it doesn't intercept clicks
+          // on the page beneath; the avatar button below restores auto.
+          pointerEvents: "none",
         }}
       >
         <button
@@ -89,6 +92,7 @@ export default function Avatar({ session }) {
             boxShadow: SHADOW?.sm || "0 1px 3px rgba(0,0,0,0.08)",
             transition: `transform ${MOTION?.normal || "180ms"}`,
             transform: open ? "scale(0.96)" : "scale(1)",
+            pointerEvents: "auto",
           }}
         >
           {face}
@@ -107,6 +111,7 @@ export default function Avatar({ session }) {
               boxShadow: SHADOW?.lg || "0 12px 32px rgba(0,0,0,0.16)",
               overflow: "hidden",
               animation: `dropdown ${MOTION?.fast || "120ms"} ease-out`,
+              pointerEvents: "auto",
             }}
           >
             <div
