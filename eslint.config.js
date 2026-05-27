@@ -108,4 +108,16 @@ export default [
       },
     },
   },
+
+  // Node scripts (one-off ops/backfill utilities). Allow standard Node globals.
+  {
+    files: ["scripts/**/*.{js,cjs,mjs,ts}"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "commonjs",
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
 ];
