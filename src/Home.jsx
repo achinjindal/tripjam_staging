@@ -2,8 +2,6 @@ import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
 import { T, RADIUS, SHADOW, MOTION } from "./theme";
 
-const FACE_ICONS = ["👦", "👧", "🧑", "👨", "👩", "🧔", "👱", "🧓", "🥸", "😎"];
-
 function tripStatus(startDate, endDate, igResponse) {
   // Draft = RG done but no IG yet (ig_response is null)
   if (!igResponse) return { label: "Planning", color: T.gold };
@@ -48,10 +46,8 @@ export default function Home({
   onCreateTrip,
   onEditTrip,
 }) {
-  const [profile, setProfile] = useState(null);
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showMenu, setShowMenu] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [infoOpenId, setInfoOpenId] = useState(null);
 
@@ -81,19 +77,13 @@ export default function Home({
 
   async function fetchData() {
     try {
-      // 1. Fetch current user's profile + their trip memberships in parallel
-      const [{ data: prof }, { data: myMemberships }] = await Promise.all([
-        supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single(),
-        supabase
-          .from("trip_members")
-          .select("trip_id, role")
-          .eq("user_id", session.user.id),
-      ]);
-      setProfile(prof);
+      // Fetch the current user's trip memberships. Profile + face icon are
+      // now owned by the global Avatar component (mounted in main.jsx), so
+      // we don't need to load the profile here anymore.
+      const { data: myMemberships } = await supabase
+        .from("trip_members")
+        .select("trip_id, role")
+        .eq("user_id", session.user.id);
 
       if (!myMemberships?.length) {
         setLoading(false);
@@ -126,12 +116,6 @@ export default function Home({
     }
   }
 
-  async function signOut() {
-    await supabase.auth.signOut();
-  }
-
-  const faceIcon = profile ? FACE_ICONS[(profile.face_icon || 1) - 1] : "👤";
-
   return (
     <div
       style={{
@@ -140,7 +124,11 @@ export default function Home({
         fontFamily: "Georgia, serif",
       }}
     >
-      {/* Header */}
+      {/* Header — TripJam wordmark on the left. The right-side avatar/menu
+          was removed: the global D20 Avatar component (mounted in main.jsx)
+          already lives at top:12 / right:12 and handles face icon, username,
+          credits balance, top-up, and sign-out. Two avatars at the same
+          position were stacking on top of each other. */}
       <div
         style={{
           background: T.chalk,
@@ -149,7 +137,9 @@ export default function Home({
           height: 60,
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
+          // Left-align the wordmark; leave the right-side reserved for the
+          // global Avatar overlay so it doesn't collide with header content.
+          paddingRight: 64,
           position: "sticky",
           top: 0,
           zIndex: 10,
@@ -167,62 +157,6 @@ export default function Home({
           >
             TripJam
           </span>
-        </div>
-
-        {/* Avatar + menu */}
-        <div style={{ position: "relative" }}>
-          <button
-            onClick={() => setShowMenu(!showMenu)}
-            style={{
-              background: T.bgPage,
-              border: "none",
-              borderRadius: RADIUS.full,
-              padding: "6px 12px 6px 8px",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: 500,
-              color: T.ink,
-            }}
-          >
-            <span style={{ fontSize: 20 }}>{faceIcon}</span>
-            <span>{profile?.username || "..."}</span>
-          </button>
-
-          {showMenu && (
-            <div
-              style={{
-                position: "absolute",
-                right: 0,
-                top: 42,
-                background: T.chalk,
-                borderRadius: RADIUS.md,
-                boxShadow: SHADOW.md,
-                padding: "6px 0",
-                minWidth: 140,
-                zIndex: 100,
-              }}
-            >
-              <button
-                onClick={signOut}
-                style={{
-                  width: "100%",
-                  padding: "10px 16px",
-                  border: "none",
-                  background: "none",
-                  textAlign: "left",
-                  cursor: "pointer",
-                  fontSize: 13,
-                  color: T.error,
-                  fontWeight: 500,
-                }}
-              >
-                Sign out
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
