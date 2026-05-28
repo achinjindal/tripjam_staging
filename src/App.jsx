@@ -2155,7 +2155,10 @@ function BrainstormView({
           flexShrink: 0,
         }}
       >
-        <div style={{ padding: "20px 16px 12px" }}>
+        {/* Right padding leaves room for the fixed Avatar (36px + 12px =
+            48px effective right-side reserve). Without this the Edit Details
+            pill overlaps the avatar circle on mobile. */}
+        <div style={{ padding: "20px 60px 12px 16px" }}>
           <div
             style={{
               display: "flex",
