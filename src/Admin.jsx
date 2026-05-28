@@ -429,9 +429,7 @@ export default function AdminConsole({ session, onHome }) {
               >
                 ← All Users
               </button>
-              <div style={headerStyle}>
-                {selectedUser.face_icon || "👤"} {selectedUser.username}
-              </div>
+              <div style={headerStyle}>{selectedUser.username}</div>
               <div style={{ fontSize: 12, color: T.mist, marginBottom: 16 }}>
                 {selectedUser.tripCount} trips · {selectedUser.chatCount} chats
                 · Last active: {fmtDate(selectedUser.lastTrip)}
@@ -666,9 +664,7 @@ export default function AdminConsole({ session, onHome }) {
                       bal <= 0 ? T.error || T.gold : bal < 10 ? T.gold : T.moss;
                     return (
                       <tr key={u.id}>
-                        <td style={tdStyle}>
-                          {u.face_icon || "👤"} {u.username}
-                        </td>
+                        <td style={tdStyle}>{u.username}</td>
                         <td style={tdStyle}>{u.tripCount}</td>
                         <td style={tdStyle}>{u.chatCount}</td>
                         <td
@@ -931,9 +927,7 @@ export default function AdminConsole({ session, onHome }) {
                     const last = txns[0]?.created_at || null;
                     return (
                       <tr key={u.id}>
-                        <td style={tdStyle}>
-                          {u.face_icon || "👤"} {u.username}
-                        </td>
+                        <td style={tdStyle}>{u.username}</td>
                         <td style={{ ...tdStyle, fontWeight: 600 }}>
                           {u.credits ?? 0}
                         </td>

@@ -10,7 +10,32 @@ import {
 } from "./credits";
 import { PackSelectorModal } from "./CreditsOverlay";
 
-const FACE_ICONS = ["👦", "👧", "🧑", "👨", "👩", "🧔", "👱", "🧓", "🥸", "😎"];
+// Modest fixed palette for username-hashed avatar circles. Each username
+// deterministically maps to one of these so the avatar is stable across
+// sessions but visually distinct across users (lightweight personalization
+// without the legacy face_icon emoji picker).
+const AVATAR_PALETTE = [T.ocean, T.terra, T.moss, T.gold, T.sky];
+
+function hashStringToInt(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+function avatarColorFor(name) {
+  if (!name) return T.ocean;
+  return AVATAR_PALETTE[hashStringToInt(name) % AVATAR_PALETTE.length];
+}
+
+function avatarInitial(name) {
+  if (!name) return "?";
+  // First alphanumeric character, uppercased. Falls back to '?' so we never
+  // render an empty circle.
+  const m = name.match(/[A-Za-z0-9]/);
+  return (m ? m[0] : "?").toUpperCase();
+}
 
 // D20: top-right avatar is the single entry point for balance + top up + sign out.
 // Mounted globally in main.jsx for every authenticated view.
@@ -25,11 +50,12 @@ export default function Avatar({ session }) {
     if (!session?.user?.id) return;
     supabase
       .from("profiles")
-      .select("username, face_icon, is_admin")
+      .select("username, is_admin")
       .eq("id", session.user.id)
       .maybeSingle()
       .then(({ data }) => setProfile(data));
-    if (CREDITS_UI_ENABLED && getCredits() === null) refreshCredits(session.user.id);
+    if (CREDITS_UI_ENABLED && getCredits() === null)
+      refreshCredits(session.user.id);
   }, [session?.user?.id]);
 
   // Close dropdown when clicking outside
@@ -44,8 +70,10 @@ export default function Avatar({ session }) {
 
   if (!session?.user?.id) return null;
 
-  const face = FACE_ICONS[(profile?.face_icon || 1) - 1] || "👤";
-  const username = profile?.username || session.user.email?.split("@")[0] || "you";
+  const username =
+    profile?.username || session.user.email?.split("@")[0] || "you";
+  const initial = avatarInitial(username);
+  const avatarBg = avatarColorFor(username);
   const isAdmin = !!profile?.is_admin;
   const balance = credits == null ? null : displayCredits(credits);
   const balanceDecimal =
@@ -81,11 +109,14 @@ export default function Avatar({ session }) {
             width: 36,
             height: 36,
             borderRadius: 999,
-            border: `1px solid ${T.line || "rgba(0,0,0,0.08)"}`,
-            background: "rgba(255,255,255,0.92)",
-            backdropFilter: "blur(8px)",
+            border: "none",
+            background: avatarBg,
+            color: T.chalk,
             cursor: "pointer",
-            fontSize: 20,
+            fontSize: 15,
+            fontWeight: 700,
+            fontFamily: "Georgia, serif",
+            letterSpacing: 0.2,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -95,7 +126,7 @@ export default function Avatar({ session }) {
             pointerEvents: "auto",
           }}
         >
-          {face}
+          {initial}
         </button>
 
         {open && (
@@ -130,7 +161,22 @@ export default function Avatar({ session }) {
                   gap: 8,
                 }}
               >
-                <span style={{ fontSize: 20 }}>{face}</span>
+                <span
+                  style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: 999,
+                    background: avatarBg,
+                    color: T.chalk,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 11,
+                    fontWeight: 700,
+                  }}
+                >
+                  {initial}
+                </span>
                 <span>@{username}</span>
                 {isAdmin && (
                   <span
@@ -187,7 +233,11 @@ export default function Avatar({ session }) {
                             ? T.error || "#DC2626"
                             : T.ink || "#0F1923",
                     }}
-                    title={isAdmin && balanceDecimal ? `Exact: ${balanceDecimal}` : undefined}
+                    title={
+                      isAdmin && balanceDecimal
+                        ? `Exact: ${balanceDecimal}`
+                        : undefined
+                    }
                   >
                     {balance == null ? "…" : balance}
                   </div>
@@ -227,7 +277,8 @@ export default function Avatar({ session }) {
                     lineHeight: 1.5,
                   }}
                 >
-                  AI uses 1-30 credits per call. Magazine ~1 credit per city. Route &amp; itinerary 5-30 credits each.
+                  AI uses 1-30 credits per call. Magazine ~1 credit per city.
+                  Route &amp; itinerary 5-30 credits each.
                 </div>
               </div>
             )}
@@ -247,7 +298,9 @@ export default function Avatar({ session }) {
                 fontFamily: "Georgia, serif",
                 transition: `background ${MOTION?.fast || "120ms"}`,
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = T.warm || "#FAF6F0")}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.background = T.warm || "#FAF6F0")
+              }
               onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
             >
               Sign out
