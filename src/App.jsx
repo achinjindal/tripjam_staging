@@ -6769,6 +6769,51 @@ export default function App({
     pace: "active",
     igNotes: "",
   });
+
+  // Opens the pre-IG refinement bottom sheet ("Build My Itinerary" CTA flow).
+  // Extracted so the same handler can drive both the mobile sticky CTA bar
+  // and the desktop CTA bar without duplicating ~50 lines of auth + LLM
+  // pref-extraction logic.
+  const openPreIgSheet = async () => {
+    const defaults = {
+      budget: "mid",
+      morningStart: "early",
+      pace: "active",
+    };
+    try {
+      // D15: extract-preferences requires user authentication.
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/extract-preferences`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            notes: pendingForm?.notes || "",
+            chatHistory: chatMessages.filter((m) => m.role !== "system-undo"),
+            tripId: trip?.id || null,
+          }),
+        },
+      );
+      if (res.ok) {
+        const prefs = await res.json();
+        setPreIgForm({
+          budget: prefs.budget || defaults.budget,
+          morningStart: prefs.morningStart || defaults.morningStart,
+          pace: prefs.pace || defaults.pace,
+          igNotes: "",
+        });
+      } else {
+        setPreIgForm({ ...defaults, igNotes: "" });
+      }
+    } catch {
+      setPreIgForm({ ...defaults, igNotes: "" });
+    }
+    setShowPreIgSheet(true);
+  };
+
   const [magazineFilterRouteId, setMagazineFilterRouteId] = useState(null);
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
   const [routesGenerating, setRoutesGenerating] = useState(false); // true while RG (brainstorm) is in flight — used to hide chat suggestions
@@ -11964,6 +12009,43 @@ export default function App({
             </DebugContext.Provider>
           )}
 
+          {/* ── DESKTOP BUILD CTA (D22) ──
+              On mobile the Build button lives inside the collapsed chat bar
+              (rendered below, gated on !useDesktopShell). On desktop that bar
+              is hidden — so we render a dedicated Build CTA pinned to the
+              bottom of the center column when a route is selected. */}
+          {useDesktopShell &&
+            screen === "brainstorm" &&
+            pretripTab === "brainstorm" &&
+            pretripSelectedRouteId && (
+              <div
+                style={{
+                  flexShrink: 0,
+                  background: T.chalk,
+                  borderTop: `1px solid ${T.sand}`,
+                  padding: "10px 16px",
+                }}
+              >
+                <button
+                  onClick={openPreIgSheet}
+                  style={{
+                    width: "100%",
+                    padding: "13px 0",
+                    borderRadius: RADIUS.lg,
+                    border: "none",
+                    background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
+                    color: "white",
+                    fontFamily: "'DM Serif Display',serif",
+                    fontSize: 16,
+                    cursor: "pointer",
+                    boxShadow: SHADOW.md,
+                  }}
+                >
+                  Build My Itinerary →
+                </button>
+              </div>
+            )}
+
           {/* ── CENTER COLUMN CLOSER (D22) ── */}
         </div>
 
@@ -11991,49 +12073,7 @@ export default function App({
                 pretripTab === "brainstorm" &&
                 pretripSelectedRouteId && (
                   <button
-                    onClick={async () => {
-                      // Extract preferences from notes + chat history via LLM
-                      const defaults = {
-                        budget: "mid",
-                        morningStart: "early",
-                        pace: "active",
-                      };
-                      try {
-                        // D15: extract-preferences now requires user authentication.
-                        const res = await fetch(
-                          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/extract-preferences`,
-                          {
-                            method: "POST",
-                            headers: {
-                              "Content-Type": "application/json",
-                              Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-                            },
-                            body: JSON.stringify({
-                              notes: pendingForm?.notes || "",
-                              chatHistory: chatMessages.filter(
-                                (m) => m.role !== "system-undo",
-                              ),
-                              tripId: trip?.id || null,
-                            }),
-                          },
-                        );
-                        if (res.ok) {
-                          const prefs = await res.json();
-                          setPreIgForm({
-                            budget: prefs.budget || defaults.budget,
-                            morningStart:
-                              prefs.morningStart || defaults.morningStart,
-                            pace: prefs.pace || defaults.pace,
-                            igNotes: "",
-                          });
-                        } else {
-                          setPreIgForm({ ...defaults, igNotes: "" });
-                        }
-                      } catch {
-                        setPreIgForm({ ...defaults, igNotes: "" });
-                      }
-                      setShowPreIgSheet(true);
-                    }}
+                    onClick={openPreIgSheet}
                     style={{
                       width: "100%",
                       padding: "13px 0",
