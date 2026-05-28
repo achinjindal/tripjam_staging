@@ -4,6 +4,8 @@ import posthog from "posthog-js";
 import * as Sentry from "@sentry/react";
 import { supabase } from "./supabase";
 import Auth from "./Auth.jsx";
+import ForgotPassword from "./ForgotPassword.jsx";
+import ResetPassword from "./ResetPassword.jsx";
 import Landing from "./Landing.jsx";
 import Privacy from "./Privacy.jsx";
 import Terms from "./Terms.jsx";
@@ -76,6 +78,8 @@ function parseUrl(path = window.location.pathname) {
   if (publicMatch) return { page: "public", token: publicMatch[1] };
   if (path === "/signin" || path === "/login") return { page: "signin" };
   if (path === "/signup") return { page: "signup" };
+  if (path === "/forgot-password") return { page: "forgot-password" };
+  if (path === "/reset-password") return { page: "reset-password" };
   if (path === "/privacy") return { page: "privacy" };
   if (path === "/terms") return { page: "terms" };
   // Legacy /trip/:token format — only if no suffix (backwards compat)
@@ -223,6 +227,13 @@ function Root() {
   // Legal pages — public, render regardless of session state
   if (route.page === "privacy") return <Privacy />;
   if (route.page === "terms") return <Terms />;
+  // Password reset flow — render regardless of session state.
+  //   /forgot-password: user enters email to request reset link (no session needed).
+  //   /reset-password:  Supabase auto-signs the user in via PASSWORD_RECOVERY
+  //     when they land here from the email link, so they may already have a
+  //     session by the time this renders. Either way the component handles it.
+  if (route.page === "forgot-password") return <ForgotPassword />;
+  if (route.page === "reset-password") return <ResetPassword />;
 
   if (session === undefined) return null;
   if (!session) {

@@ -2,74 +2,142 @@ import { useState } from "react";
 import { supabase } from "./supabase";
 import { T, RADIUS, SHADOW, MOTION } from "./theme";
 
-const FACE_ICONS = ["👦", "👧", "🧑", "👨", "👩", "🧔", "👱", "🧓", "🥸", "😎"];
-
-// D9: Email is mandatory at signup. Signin accepts either email OR username
-// (legacy users created before this migration used username-only auth).
+// D9: Email is mandatory at signup. Signin still accepts either email OR a
+// legacy username (pre-D9 accounts were created username-only).
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Gate the "Continue with Google" button on an env flag. Hidden until the
-// Google Cloud OAuth client is configured AND the provider is enabled in
-// Supabase Auth. Set VITE_GOOGLE_AUTH_ENABLED=true to show it.
+// Google OAuth button is gated by env so we don't ship a broken button when
+// Google Cloud OAuth + Supabase Auth provider config aren't yet in place.
+// Set VITE_GOOGLE_AUTH_ENABLED=true once both are configured.
 const GOOGLE_AUTH_ENABLED = import.meta.env.VITE_GOOGLE_AUTH_ENABLED === "true";
 
-// Legacy username → fake email shim so old accounts can still sign in.
+// Legacy username → fake email shim so pre-D9 accounts can still sign in.
 function fakeEmail(u) {
-  return `${u.toLowerCase().trim().replace(/[^a-z0-9._-]/g, "")}@tripjam.app`;
+  return `${u
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9._-]/g, "")}@tripjam.app`;
+}
+
+// Derive a username from the email local part: "Jane.Doe+travel@gmail.com" →
+// "jane.doe". Strips characters the profile constraint won't accept.
+function baseUsernameFromEmail(email) {
+  const local = (email.split("@")[0] || "").toLowerCase();
+  const sanitized = local
+    .replace(/\+.*$/, "") // drop +tags
+    .replace(/[^a-z0-9._-]/g, "")
+    .slice(0, 30);
+  return sanitized || `user${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Try the base username; if profiles.username UNIQUE collides, suffix -2,
+// -3, … up to 10 attempts before falling back to a random id.
+async function pickAvailableUsername(base) {
+  for (let i = 0; i < 10; i++) {
+    const candidate = i === 0 ? base : `${base}-${i + 1}`;
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("username", candidate)
+      .maybeSingle();
+    if (error && error.code !== "PGRST116") {
+      // Unexpected error — give up gracefully with the base + random suffix
+      return `${base}-${Math.random().toString(36).slice(2, 5)}`;
+    }
+    if (!data) return candidate;
+  }
+  return `${base}-${Math.random().toString(36).slice(2, 5)}`;
+}
+
+// Eye / eye-slash icon for the password show-hide toggle.
+function EyeIcon({ open }) {
+  return open ? (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+    >
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  ) : (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+    >
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 19c-7 0-10-7-10-7a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 7 10 7a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+      <line x1="1" y1="1" x2="23" y2="23" />
+    </svg>
+  );
 }
 
 export default function Auth({ initialMode }) {
-  // Allow caller (Root in main.jsx) to force /signup vs /signin via URL.
+  // initialMode comes from URL routing in main.jsx (/signin vs /signup).
+  // We also let users flip between the two via the bottom link without a
+  // full page reload — pushState updates the URL, setMode swaps the form.
   const [mode, setMode] = useState(
     initialMode === "signup" ? "signup" : "signin",
   );
-  // Signin accepts either: a real email OR a legacy username
+  // Signin accepts either: a real email OR a legacy username.
   const [identifier, setIdentifier] = useState("");
-  // Signup-only fields
+  // Signup uses email-only; username is auto-derived.
   const [email, setEmail] = useState("");
-  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [faceIcon, setFaceIcon] = useState(0);
-  const [agreeToTerms, setAgreeToTerms] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  function switchMode(next) {
+    setMode(next);
+    setError("");
+    const path = next === "signup" ? "/signup" : "/signin";
+    if (window.location.pathname !== path) {
+      window.history.pushState(null, "", path);
+    }
+  }
 
   async function handleSignInWithGoogle() {
     setError("");
     setLoading(true);
     const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/`,
-      },
+      options: { redirectTo: `${window.location.origin}/` },
     });
     if (oauthError) {
       setLoading(false);
       setError(`Google sign-in failed: ${oauthError.message}`);
     }
-    // On success, the browser redirects to Google; loading stays true until then.
+    // On success, browser redirects to Google; loading stays true until then.
   }
 
   async function handleSignUp() {
     setError("");
     if (!email.trim()) return setError("Email is required.");
-    if (!EMAIL_RE.test(email.trim())) return setError("Please enter a valid email address.");
-    if (!username.trim()) return setError("Username is required.");
+    if (!EMAIL_RE.test(email.trim()))
+      return setError("Please enter a valid email address.");
     if (!password) return setError("Password is required.");
-    if (password.length < 6) return setError("Password must be at least 6 characters.");
-    if (!agreeToTerms) return setError("Please agree to the Terms and Privacy Policy.");
+    if (password.length < 6)
+      return setError("Password must be at least 6 characters.");
 
     setLoading(true);
     const cleanEmail = email.trim().toLowerCase();
-    const cleanUsername = username.trim();
+    const base = baseUsernameFromEmail(cleanEmail);
+    const chosenUsername = await pickAvailableUsername(base);
 
     const { data, error: signUpError } = await supabase.auth.signUp({
       email: cleanEmail,
       password,
       options: {
         data: {
-          username: cleanUsername,
-          full_name: cleanUsername,
+          username: chosenUsername,
+          full_name: chosenUsername,
         },
       },
     });
@@ -80,15 +148,14 @@ export default function Auth({ initialMode }) {
     }
 
     if (data?.user?.id) {
-      // The DB trigger `create_profile_on_auth_signup` already inserted a row;
-      // upsert here ensures username + face_icon land correctly (the trigger
-      // derives username from email if no metadata, but we have the real one).
+      // The DB trigger `create_profile_on_auth_signup` already inserted a row
+      // using the username we passed in raw_user_meta_data. Upsert here is a
+      // belt-and-braces sync (face_icon stays NULL → renders as 👤 default).
       const { error: profileError } = await supabase.from("profiles").upsert({
         id: data.user.id,
-        username: cleanUsername,
+        username: chosenUsername,
         email: cleanEmail,
-        display_name: cleanUsername,
-        face_icon: faceIcon + 1,
+        display_name: chosenUsername,
       });
       if (profileError) {
         setLoading(false);
@@ -98,17 +165,15 @@ export default function Auth({ initialMode }) {
       }
     }
     setLoading(false);
-    // If email confirmation is required (Supabase setting), user gets a confirm-email
-    // prompt; otherwise they're now signed in. Either way, no further UI action here.
   }
 
   async function handleSignIn() {
     setError("");
     const id = identifier.trim();
-    if (!id || !password) return setError("Email/username and password are required.");
+    if (!id || !password)
+      return setError("Email/username and password are required.");
 
     setLoading(true);
-    // Detect whether identifier looks like an email or a legacy username
     const loginEmail = EMAIL_RE.test(id) ? id.toLowerCase() : fakeEmail(id);
     const { error: signInError } = await supabase.auth.signInWithPassword({
       email: loginEmail,
@@ -116,88 +181,62 @@ export default function Auth({ initialMode }) {
     });
     setLoading(false);
     if (signInError) {
-      // Don't reveal whether the identifier exists — generic message
       setError("Invalid email/username or password.");
     }
   }
+
+  const submit = mode === "signin" ? handleSignIn : handleSignUp;
 
   return (
     <div
       style={{
         minHeight: "100vh",
-        background: T.ink,
+        background: T.bgPage,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         fontFamily: "Georgia, serif",
+        padding: 20,
       }}
     >
       <div
         style={{
-          background: T.dusk,
+          background: T.chalk,
           borderRadius: RADIUS.lg,
-          padding: "40px 36px",
+          padding: "36px 32px",
           width: "100%",
-          maxWidth: 400,
-          boxShadow: SHADOW.lg,
+          maxWidth: 380,
+          boxShadow: SHADOW.md,
+          border: `1px solid ${T.border}`,
         }}
       >
-        {/* Logo */}
+        {/* Logo + title */}
         <div style={{ textAlign: "center", marginBottom: 28 }}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>✈️</div>
+          <div style={{ fontSize: 28, marginBottom: 6 }}>✈️</div>
           <h1
             style={{
-              color: T.chalk,
-              fontSize: 26,
+              color: T.ink,
+              fontSize: 24,
               fontWeight: 400,
               margin: 0,
               fontFamily: "'DM Serif Display', serif",
             }}
           >
-            TripJam
+            {mode === "signin" ? "Welcome back" : "Create your account"}
           </h1>
-          <p style={{ color: T.mist, fontSize: 12, margin: "4px 0 0" }}>
+          <p
+            style={{
+              color: T.mist,
+              fontSize: 13,
+              margin: "6px 0 0",
+              fontStyle: "italic",
+            }}
+          >
             Plan together, travel better
           </p>
         </div>
 
-        {/* Tabs */}
-        <div
-          style={{
-            display: "flex",
-            background: T.ink,
-            borderRadius: RADIUS.md,
-            padding: 4,
-            marginBottom: 20,
-          }}
-        >
-          {["signin", "signup"].map((m) => (
-            <button
-              key={m}
-              onClick={() => {
-                setMode(m);
-                setError("");
-              }}
-              style={{
-                flex: 1,
-                padding: "8px 0",
-                borderRadius: RADIUS.sm,
-                border: "none",
-                cursor: "pointer",
-                fontSize: 14,
-                fontWeight: 600,
-                fontFamily: "Georgia, serif",
-                background: mode === m ? T.ocean : "transparent",
-                color: mode === m ? T.chalk : T.mist,
-                transition: `all ${MOTION.normal}`,
-              }}
-            >
-              {m === "signin" ? "Sign In" : "Sign Up"}
-            </button>
-          ))}
-        </div>
-
-        {/* Google OAuth — D9 Part C (gated on VITE_GOOGLE_AUTH_ENABLED) */}
+        {/* Google OAuth — gated by env until prod OAuth client is wired. */}
         {GOOGLE_AUTH_ENABLED && (
           <>
             <button
@@ -206,10 +245,10 @@ export default function Auth({ initialMode }) {
               style={{
                 width: "100%",
                 padding: "11px 16px",
-                borderRadius: RADIUS.md,
-                border: "1.5px solid rgba(255,255,255,0.18)",
-                background: "#FFFFFF",
-                color: "#1F2937",
+                borderRadius: RADIUS.full,
+                border: `1.5px solid ${T.border}`,
+                background: T.chalk,
+                color: T.ink,
                 fontSize: 14,
                 fontWeight: 600,
                 fontFamily: "Georgia, serif",
@@ -219,195 +258,257 @@ export default function Auth({ initialMode }) {
                 alignItems: "center",
                 justifyContent: "center",
                 gap: 10,
-                marginBottom: 18,
+                marginBottom: 14,
                 opacity: loading ? 0.7 : 1,
                 transition: `all ${MOTION.normal}`,
               }}
             >
-              <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
-                <path d="M17.64 9.205c0-.639-.057-1.252-.164-1.841H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
-                <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.836.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
-                <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/>
-                <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 18 18"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M17.64 9.205c0-.639-.057-1.252-.164-1.841H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"
+                  fill="#4285F4"
+                />
+                <path
+                  d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.836.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"
+                  fill="#34A853"
+                />
+                <path
+                  d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"
+                  fill="#FBBC05"
+                />
+                <path
+                  d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"
+                  fill="#EA4335"
+                />
               </svg>
-              Continue with Google
+              {mode === "signin"
+                ? "Continue with Google"
+                : "Sign up with Google"}
             </button>
 
-            {/* Divider */}
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-              <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
-              <span style={{ fontSize: 11, color: T.mist, letterSpacing: 1 }}>OR</span>
-              <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.12)" }} />
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                marginBottom: 14,
+              }}
+            >
+              <div style={{ flex: 1, height: 1, background: T.border }} />
+              <span
+                style={{
+                  fontSize: 11,
+                  color: T.mist,
+                  letterSpacing: 1,
+                  textTransform: "uppercase",
+                }}
+              >
+                or
+              </span>
+              <div style={{ flex: 1, height: 1, background: T.border }} />
             </div>
           </>
         )}
 
-        {/* Fields */}
+        {/* Form fields */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {mode === "signup" ? (
-            <>
-              <input
-                placeholder="Email"
-                type="email"
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                style={inputStyle}
-              />
-              <input
-                placeholder="Username (display name)"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                style={inputStyle}
-              />
-            </>
+            <input
+              placeholder="Email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              style={inputStyle}
+            />
           ) : (
             <input
               placeholder="Email or username"
               autoComplete="username"
               value={identifier}
               onChange={(e) => setIdentifier(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
               style={inputStyle}
             />
           )}
-          <input
-            placeholder="Password"
-            type="password"
-            autoComplete={mode === "signup" ? "new-password" : "current-password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) =>
-              e.key === "Enter" &&
-              (mode === "signin" ? handleSignIn() : handleSignUp())
-            }
-            style={inputStyle}
-          />
 
-          {/* Face icon picker — signup only */}
-          {mode === "signup" && (
-            <div>
-              <p style={{ color: T.mist, fontSize: 12, margin: "4px 0 8px" }}>
-                Choose your icon
-              </p>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {FACE_ICONS.map((icon, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setFaceIcon(i)}
-                    style={{
-                      width: 44,
-                      height: 44,
-                      borderRadius: RADIUS.md,
-                      border:
-                        faceIcon === i
-                          ? `2px solid ${T.sky}`
-                          : `2px solid transparent`,
-                      background:
-                        faceIcon === i ? "rgba(74,144,217,0.15)" : T.ink,
-                      fontSize: 22,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      transition: `all ${MOTION.normal}`,
-                    }}
-                  >
-                    {icon}
-                  </button>
-                ))}
-              </div>
+          <div style={{ position: "relative" }}>
+            <input
+              placeholder="Password"
+              type={showPassword ? "text" : "password"}
+              autoComplete={
+                mode === "signup" ? "new-password" : "current-password"
+              }
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              style={{ ...inputStyle, paddingRight: 42 }}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((p) => !p)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              style={{
+                position: "absolute",
+                right: 10,
+                top: "50%",
+                transform: "translateY(-50%)",
+                background: "none",
+                border: "none",
+                color: T.mist,
+                cursor: "pointer",
+                padding: 4,
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              <EyeIcon open={showPassword} />
+            </button>
+          </div>
+
+          {/* Forgot password link — only on sign-in screen */}
+          {mode === "signin" && (
+            <div style={{ textAlign: "right", marginTop: -4 }}>
+              <a
+                href="/forgot-password"
+                onClick={(e) => {
+                  e.preventDefault();
+                  window.history.pushState(null, "", "/forgot-password");
+                  window.dispatchEvent(new PopStateEvent("popstate"));
+                }}
+                style={{
+                  fontSize: 12,
+                  color: T.ocean,
+                  textDecoration: "none",
+                  fontFamily: "Georgia, serif",
+                }}
+              >
+                Forgot password?
+              </a>
             </div>
           )}
 
-          {mode === "signup" && (
-            <label
+          {error && (
+            <p
               style={{
-                display: "flex",
-                gap: 8,
-                alignItems: "flex-start",
+                color: T.error,
                 fontSize: 12,
-                color: T.mist,
-                lineHeight: 1.45,
-                cursor: "pointer",
+                margin: 0,
+                background: T.errorLight,
+                border: `1px solid ${T.errorBorder}`,
+                padding: "8px 10px",
+                borderRadius: RADIUS.sm,
               }}
             >
-              <input
-                type="checkbox"
-                checked={agreeToTerms}
-                onChange={(e) => setAgreeToTerms(e.target.checked)}
-                style={{ marginTop: 3, accentColor: T.ocean, cursor: "pointer" }}
-              />
-              <span>
-                I agree to the{" "}
-                <a
-                  href="/terms"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: T.sky, textDecoration: "underline" }}
-                >
-                  Terms
-                </a>{" "}
-                and{" "}
-                <a
-                  href="/privacy"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: T.sky, textDecoration: "underline" }}
-                >
-                  Privacy Policy
-                </a>
-                .
-              </span>
-            </label>
-          )}
-
-          {error && (
-            <p style={{ color: T.error, fontSize: 12, margin: 0 }}>{error}</p>
+              {error}
+            </p>
           )}
 
           <button
-            onClick={mode === "signin" ? handleSignIn : handleSignUp}
+            onClick={submit}
             disabled={loading}
             style={{
               marginTop: 4,
-              padding: "10px 20px",
+              padding: "12px 20px",
               borderRadius: RADIUS.md,
               border: "none",
-              background: loading ? T.mist : T.ocean,
+              background: loading ? T.disabled : T.ocean,
               color: T.chalk,
               fontSize: 14,
               fontWeight: 600,
               fontFamily: "Georgia, serif",
               cursor: loading ? "not-allowed" : "pointer",
-              minHeight: 44,
+              minHeight: 46,
               transition: `all ${MOTION.normal}`,
               opacity: loading ? 0.7 : 1,
             }}
           >
-            {loading ? "..." : mode === "signin" ? "Sign In" : "Create Account"}
+            {loading ? "..." : mode === "signin" ? "Log in" : "Create account"}
           </button>
 
-          {mode === "signin" && (
-            <p style={{ color: T.mist, fontSize: 11, margin: "8px 0 0", textAlign: "center" }}>
-              Forgot password? Email{" "}
-              <a href="mailto:achinj.work@gmail.com" style={{ color: T.sky }}>
-                support
+          {/* Terms acceptance baked into the button text on signup */}
+          {mode === "signup" && (
+            <p
+              style={{
+                fontSize: 11,
+                color: T.mist,
+                lineHeight: 1.5,
+                margin: "4px 0 0",
+                textAlign: "center",
+              }}
+            >
+              By creating an account, you agree to our{" "}
+              <a
+                href="/terms"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: T.ocean, textDecoration: "underline" }}
+              >
+                Terms
               </a>{" "}
-              for a reset link.
+              and{" "}
+              <a
+                href="/privacy"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: T.ocean, textDecoration: "underline" }}
+              >
+                Privacy Policy
+              </a>
+              .
             </p>
           )}
         </div>
+
+        {/* Mode-switch link at the bottom */}
+        <p
+          style={{
+            margin: "24px 0 0",
+            textAlign: "center",
+            fontSize: 13,
+            color: T.mist,
+            fontFamily: "Georgia, serif",
+          }}
+        >
+          {mode === "signin" ? (
+            <>
+              Don&rsquo;t have an account?{" "}
+              <button
+                onClick={() => switchMode("signup")}
+                style={modeSwitchBtn}
+              >
+                Sign up
+              </button>
+            </>
+          ) : (
+            <>
+              Already have an account?{" "}
+              <button
+                onClick={() => switchMode("signin")}
+                style={modeSwitchBtn}
+              >
+                Log in
+              </button>
+            </>
+          )}
+        </p>
       </div>
     </div>
   );
 }
 
 const inputStyle = {
-  padding: "10px 14px",
+  padding: "12px 14px",
   borderRadius: RADIUS.md,
-  border: "1.5px solid rgba(255,255,255,0.12)",
-  background: "rgba(0,0,0,0.2)",
-  color: "#fff",
+  border: `1.5px solid ${T.border}`,
+  background: T.chalk,
+  color: T.ink,
   fontSize: 14,
   fontFamily: "Georgia, serif",
   outline: "none",
@@ -415,4 +516,16 @@ const inputStyle = {
   boxSizing: "border-box",
   minHeight: 44,
   transition: `border-color ${MOTION.normal}, box-shadow ${MOTION.normal}`,
+};
+
+const modeSwitchBtn = {
+  background: "none",
+  border: "none",
+  padding: 0,
+  color: T.ocean,
+  fontWeight: 600,
+  fontSize: 13,
+  fontFamily: "Georgia, serif",
+  cursor: "pointer",
+  textDecoration: "underline",
 };
