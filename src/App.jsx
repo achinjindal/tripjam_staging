@@ -30,6 +30,8 @@ import {
   extractPlace,
   geocodePlace,
   haversineMeters,
+  verifyActivity,
+  needsVerification,
 } from "./photos";
 import { MapView, RouteMapView } from "./components/MapView.jsx";
 import { useIsDesktop } from "./hooks/useViewport.js";
@@ -3620,14 +3622,25 @@ function TransitionRow({
       </div>
     );
 
+  // Prefer stored lat/lng when available — keeps Google Maps directions
+  // routing to the EXACT point we used to compute the pill. Without this,
+  // the pill says "8 min" using one coord and Maps says "90 min" using a
+  // text-resolved different coord (the Westin Sapporo / Rusutsu bug).
+  // Transit-as-origin still uses text because we don't have lat_end/lng_end.
+  const originParamSrc = (() => {
+    if (from.type === "transit" && from.geocodeEnd) return from.geocodeEnd;
+    if (from.lat != null && from.lng != null) return `${from.lat},${from.lng}`;
+    return from.geocode || `${extractPlace(from.title)} ${city}`;
+  })();
+  const destParamSrc =
+    to.lat != null && to.lng != null
+      ? `${to.lat},${to.lng}`
+      : to.geocode || `${extractPlace(to.title)} ${city}`;
+
   if (!commute) {
     // No coords — show a "Get directions" link using activity names
-    const fallbackOrigin = encodeURIComponent(
-      from.geocode || `${extractPlace(from.title)} ${city}`,
-    );
-    const fallbackDest = encodeURIComponent(
-      to.geocode || `${extractPlace(to.title)} ${city}`,
-    );
+    const fallbackOrigin = encodeURIComponent(originParamSrc);
+    const fallbackDest = encodeURIComponent(destParamSrc);
     const transit = from.transition || from.transition_data;
     const transitMode = transit?.mode;
     const fallbackUrl = `https://www.google.com/maps/dir/?api=1&origin=${fallbackOrigin}&destination=${fallbackDest}&travelmode=${transitMode ? "transit" : "driving"}`;
@@ -3680,14 +3693,10 @@ function TransitionRow({
     );
   }
 
-  const originGeocode =
-    from.type === "transit" && from.geocodeEnd ? from.geocodeEnd : from.geocode;
-  const origin = encodeURIComponent(
-    originGeocode || `${extractPlace(from.title)} ${city}`,
-  );
-  const dest = encodeURIComponent(
-    to.geocode || `${extractPlace(to.title)} ${city}`,
-  );
+  // Reuse the same coord-preferring origin/dest source we built above so the
+  // success-path URL routes to the SAME points our pill was computed against.
+  const origin = encodeURIComponent(originParamSrc);
+  const dest = encodeURIComponent(destParamSrc);
   const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=${commute.mode === "walk" ? "walking" : "driving"}`;
   const transitMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=transit`;
 
@@ -3795,6 +3804,9 @@ function ActivityCard({
   onChangeHotel,
   transitMapsUrl,
   onAskTrippy,
+  verifyAlternatives = null,
+  onPickVerifyAlternative,
+  onDismissVerifyAlternatives,
 }) {
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -4374,6 +4386,13 @@ function ActivityCard({
             >
               {activity.title}
             </div>
+            {activity.geocode_corrected_from && (
+              <CorrectedFromHint
+                original={activity.geocode_corrected_from}
+                currentTitle={activity.title}
+                city={city}
+              />
+            )}
             {activity.note && (
               <div
                 style={{
@@ -4621,7 +4640,207 @@ function ActivityCard({
         {activity.type !== "transit" && (
           <PhotoStrip activity={activity} city={city} />
         )}
+        {verifyAlternatives?.alternatives?.length > 0 && (
+          <VerifyAlternativesCard
+            originalName={activity.title}
+            alternatives={verifyAlternatives.alternatives}
+            reason={verifyAlternatives.reason}
+            onPick={onPickVerifyAlternative}
+            onDismiss={onDismissVerifyAlternatives}
+          />
+        )}
       </div>
+    </div>
+  );
+}
+
+/* ─── CORRECTED-FROM HINT ────────────────────────────────────────────── */
+// Renders "updated from 'Original Name'" with a [why?] toggle that lazy-loads
+// Haiku's repair reason from the verify-place cache row. Cache lookup is
+// fire-and-forget; if it misses, we just hide the [why?] affordance.
+function CorrectedFromHint({ original, currentTitle, city }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const fetchReason = async () => {
+    if (reason || loading) return;
+    setLoading(true);
+    // Verify-place cache key matches normName|city|type — we don't know
+    // type from here, so query with a startswith filter and pick the first.
+    const norm = (original || "").trim().toLowerCase();
+    const c = (city || "").toLowerCase();
+    const prefix = `verify-place:${norm}|${c}|`;
+    try {
+      const { data } = await supabase
+        .from("place_cache")
+        .select("result")
+        .like("key", `${prefix}%`)
+        .limit(1);
+      const row = data?.[0]?.result;
+      if (row?.repair_reason) setReason(row.repair_reason);
+      else setReason(""); // mark as fetched-but-empty
+    } catch {
+      setReason("");
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <div
+      style={{
+        fontSize: 11,
+        color: T.mist,
+        marginTop: 3,
+        fontFamily: "Georgia,serif",
+        fontStyle: "italic",
+      }}
+    >
+      updated from &ldquo;{original}&rdquo;{" "}
+      <button
+        onClick={() => {
+          setOpen((p) => !p);
+          if (!open) fetchReason();
+        }}
+        style={{
+          background: "none",
+          border: "none",
+          padding: 0,
+          color: T.ocean,
+          fontFamily: "Georgia,serif",
+          fontSize: 11,
+          cursor: "pointer",
+          textDecoration: "underline",
+        }}
+      >
+        {open ? "hide" : "why?"}
+      </button>
+      {open && (
+        <div
+          style={{
+            marginTop: 4,
+            padding: "6px 8px",
+            background: "#F7F4EC",
+            borderRadius: 4,
+            fontSize: 11,
+            color: T.dusk,
+            fontStyle: "normal",
+          }}
+        >
+          {loading
+            ? "Loading…"
+            : reason
+              ? reason
+              : `We couldn't verify "${original}" — replaced with "${currentTitle}".`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── VERIFY ALTERNATIVES PICKER ─────────────────────────────────────── */
+// Rendered inline on an activity card when verify-place falls through to
+// Tier 5 (Haiku alternatives). User picks one of 2-3 suggested real places
+// or dismisses to fall back to "Get directions".
+function VerifyAlternativesCard({
+  originalName,
+  alternatives,
+  reason,
+  onPick,
+  onDismiss,
+}) {
+  return (
+    <div
+      style={{
+        margin: "8px 16px 12px 16px",
+        padding: "12px 14px",
+        background: "#FFF8EC",
+        border: `1px solid ${T.amber || "#E6C77A"}`,
+        borderRadius: RADIUS.md || 8,
+        fontFamily: "Georgia,serif",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 12,
+          color: T.dusk,
+          fontWeight: 600,
+          marginBottom: 4,
+        }}
+      >
+        Couldn't verify &ldquo;{originalName}&rdquo;
+      </div>
+      {reason && (
+        <div
+          style={{
+            fontSize: 11,
+            color: T.mist,
+            fontStyle: "italic",
+            marginBottom: 8,
+          }}
+        >
+          {reason}
+        </div>
+      )}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
+        {alternatives.map((alt, i) => (
+          <button
+            key={i}
+            onClick={() => onPick?.(alt)}
+            style={{
+              textAlign: "left",
+              padding: "8px 10px",
+              border: `1px solid ${T.sand}`,
+              borderRadius: RADIUS.sm || 6,
+              background: "#FFFFFF",
+              cursor: "pointer",
+              fontFamily: "Georgia,serif",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 13,
+                color: T.dusk,
+                fontWeight: 600,
+              }}
+            >
+              {alt.name}
+            </div>
+            {alt.reason && (
+              <div
+                style={{
+                  fontSize: 11,
+                  color: T.mist,
+                  marginTop: 2,
+                }}
+              >
+                {alt.reason}
+              </div>
+            )}
+          </button>
+        ))}
+      </div>
+      <button
+        onClick={() => onDismiss?.()}
+        style={{
+          marginTop: 10,
+          fontSize: 11,
+          color: T.ocean,
+          background: "none",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+          fontFamily: "Georgia,serif",
+          textDecoration: "underline",
+        }}
+      >
+        Use &ldquo;Get directions&rdquo; instead
+      </button>
     </div>
   );
 }
@@ -5409,6 +5628,9 @@ function DaySection({
   destArrivalHHMM = null,
   onAddGemToItinerary,
   onDismissGem,
+  verifyAlternativesById = null,
+  onPickVerifyAlternative,
+  onDismissVerifyAlternatives,
 }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
@@ -5638,19 +5860,30 @@ function DaySection({
             (act.type === "hotel" && nextAct?.package);
           const samePackageAsHotel =
             act.package && act.package === endHotelActivity?.package;
-          // For transit activities, build a hotel-to-hotel Maps URL
+          // For transit activities, build a hotel-to-hotel Maps URL.
+          // Prefer the origin/destination hotels' stored lat/lng over text so
+          // Maps routes to the same point our pin shows.
           const transitMapsUrl = (() => {
             if (act.type !== "transit" || !act.geocode_end) return null;
-            const originGeocode = hotelActivity?.geocode || null;
             const destHotel = day.activities
               .slice(i + 1)
               .find((a) => a.type === "hotel");
-            const destGeocode = destHotel?.geocode || null;
-            if (!originGeocode && !destGeocode) return null;
-            const o = encodeURIComponent(
-              originGeocode || act.geocode || day.city,
-            );
-            const d = encodeURIComponent(destGeocode || act.geocode_end);
+            const originParam =
+              hotelActivity?.lat != null && hotelActivity?.lng != null
+                ? `${hotelActivity.lat},${hotelActivity.lng}`
+                : hotelActivity?.geocode || act.geocode || day.city;
+            const destParam =
+              destHotel?.lat != null && destHotel?.lng != null
+                ? `${destHotel.lat},${destHotel.lng}`
+                : destHotel?.geocode || act.geocode_end;
+            if (
+              !hotelActivity?.geocode &&
+              !destHotel?.geocode &&
+              !act.geocode_end
+            )
+              return null;
+            const o = encodeURIComponent(originParam);
+            const d = encodeURIComponent(destParam);
             return `https://www.google.com/maps/dir/${o}/${d}`;
           })();
           return (
@@ -5665,6 +5898,13 @@ function DaySection({
                 onChangeHotel={(mode) => onChangeHotel?.(day.id, act, mode)}
                 transitMapsUrl={transitMapsUrl}
                 onAskTrippy={onAskTrippy}
+                verifyAlternatives={verifyAlternativesById?.get(act.id) || null}
+                onPickVerifyAlternative={(alt) =>
+                  onPickVerifyAlternative?.(day.id, act, alt)
+                }
+                onDismissVerifyAlternatives={() =>
+                  onDismissVerifyAlternatives?.(act.id)
+                }
               />
               {!lastAct && !samePackageAsNext && (
                 <TransitionRow
@@ -6265,27 +6505,94 @@ export default function App({
   ); // true if opening existing trip
   const preloadedDaysRef = useRef(new Set()); // track which day indices have been pre-loaded
 
-  // Pre-load a day's geocoding + photos (warms caches for TransitionRow + PhotoStrip)
-  const preloadDay = useCallback((dayIndex) => {
-    if (preloadedDaysRef.current.has(dayIndex)) return;
-    const day = daysRef.current[dayIndex];
-    if (!day?.activities?.length) return;
-    preloadedDaysRef.current.add(dayIndex);
-    const acts = day.activities;
-    // Pre-geocode all activities
-    for (const act of acts) {
-      if (act.geocode && act.type !== "transit") {
-        geocodePlace(act.title, day.city, act.geocode);
-      }
-    }
-    // Pre-fetch photos
-    for (const act of acts) {
-      if (act.type !== "transit" && act.type !== "hotel" && !act.photo_url) {
-        const key = act.geocode || act.title;
-        if (key) _fetchPhoto(key, day.city, act.type || "sight");
-      }
-    }
+  // Verify-place picker state — maps activity id to Haiku-suggested alternatives
+  // when verify-place falls through to Tier 5. Lives at App scope so it survives
+  // re-renders of individual day sections. The picker UI inline-renders inside
+  // ActivityCard when this map has an entry for the activity.
+  const [verifyAlternativesById, setVerifyAlternativesById] = useState(
+    () => new Map(),
+  );
+  const setVerifyAlternativesFor = useCallback((actId, payload) => {
+    setVerifyAlternativesById((prev) => {
+      const next = new Map(prev);
+      if (payload) next.set(actId, payload);
+      else next.delete(actId);
+      return next;
+    });
   }, []);
+
+  // Pre-load a day's geocoding + photos (warms caches for TransitionRow + PhotoStrip)
+  // Also kicks off lazy verify-place for activities that have not yet been
+  // verified, persisting coords + metadata back to the DB and re-rendering
+  // when the verify resolves.
+  const preloadDay = useCallback(
+    (dayIndex) => {
+      if (preloadedDaysRef.current.has(dayIndex)) return;
+      const day = daysRef.current[dayIndex];
+      if (!day?.activities?.length) return;
+      preloadedDaysRef.current.add(dayIndex);
+      const acts = day.activities;
+      // Pre-geocode all activities
+      for (const act of acts) {
+        if (act.geocode && act.type !== "transit") {
+          geocodePlace(act.title, day.city, act.geocode);
+        }
+      }
+      // Pre-fetch photos
+      for (const act of acts) {
+        if (act.type !== "transit" && act.type !== "hotel" && !act.photo_url) {
+          const key = act.geocode || act.title;
+          if (key) _fetchPhoto(key, day.city, act.type || "sight");
+        }
+      }
+      // Lazy verify — only for activities that have never been verified and
+      // don't already have stored coords. verifyActivity dedups concurrent
+      // calls per-id, so the eager Day-1 path + this lazy path can't double-bill.
+      const toVerify = acts.filter(
+        (a) => a.type !== "transit" && needsVerification(a),
+      );
+      if (toVerify.length && session?.access_token) {
+        (async () => {
+          try {
+            const results = await Promise.all(
+              toVerify.map((a) =>
+                verifyActivity(a, day.city, session, trip?.id),
+              ),
+            );
+            const verifiedById = new Map(
+              results
+                .map((r, idx) => [toVerify[idx].id, r])
+                .filter(([, r]) => r?.status === "verified" && r.updateFields),
+            );
+            if (verifiedById.size) {
+              setDays((prev) =>
+                prev.map((d) => ({
+                  ...d,
+                  activities: d.activities.map((a) =>
+                    verifiedById.has(a.id)
+                      ? { ...a, ...verifiedById.get(a.id).updateFields }
+                      : a,
+                  ),
+                })),
+              );
+            }
+            // Surface picker UI for any activity that fell through to alternatives
+            results.forEach((r, idx) => {
+              if (r?.status === "alternatives" && r.alternatives?.length) {
+                setVerifyAlternativesFor(toVerify[idx].id, {
+                  alternatives: r.alternatives,
+                  reason: r.reason || null,
+                });
+              }
+            });
+          } catch (e) {
+            console.warn("lazy verifyActivity batch failed:", e?.message);
+          }
+        })();
+      }
+    },
+    [session, trip?.id, setVerifyAlternativesFor],
+  );
 
   // Day 6 Part A: parallelize per-day photo + geocode prefetch as days stream
   // in from the detailed IG phase. Previously only Day 0 was warmed; now every
@@ -6680,12 +6987,13 @@ export default function App({
     // Insert new hotel activity
     const position = day.activities.filter((a) => a.time <= checkInTime).length;
 
-    // Feature 8: resolve hotel coordinates via smart escalation (Photon-first, Google fallback)
-    // Pass-through Google cost (D24: 1.70 credits/call if escalated; 0 if Photon hits)
+    // Hardened verify-place ladder: Photon → Nominatim → Haiku repair →
+    // Google → user picker. Repaired names get persisted as corrected_from
+    // so the UI surfaces "updated from 'X'" hint.
     let resolved = null;
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/places-proxy?action=resolve-coords`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/places-proxy?action=verify-place`,
         {
           method: "POST",
           headers: {
@@ -6704,18 +7012,28 @@ export default function App({
       if (res.ok) {
         resolved = await res.json();
       } else if (res.status !== 402) {
-        // Don't block hotel selection on geocode failure (except 402 = out of credits)
-        console.warn("Hotel resolve-coords failed:", res.status);
+        // Don't block hotel selection on verify failure (except 402 = out of credits)
+        console.warn("Hotel verify-place failed:", res.status);
       }
     } catch (e) {
-      console.warn("Hotel resolve-coords exception:", e.message);
+      console.warn("Hotel verify-place exception:", e.message);
     }
 
+    // If verify returned a corrected name (Haiku repair), use that title instead
+    // of the original LLM-hallucinated one. Surfaces transparency via geocode_corrected_from.
+    const useTitle =
+      resolved?.repaired && resolved?.corrected_to
+        ? resolved.corrected_to
+        : hotel.title;
+    const useGeocode =
+      resolved?.repaired && resolved?.corrected_to
+        ? resolved.corrected_to
+        : hotel.geocode || hotel.title;
     const insertPayload = {
       day_id: dayId,
       time: checkInTime,
-      title: `Check in at ${hotel.title}`,
-      geocode: hotel.geocode || hotel.title,
+      title: `Check in at ${useTitle}`,
+      geocode: useGeocode,
       type: "hotel",
       duration: "0.5h",
       note: hotel.note,
@@ -6729,9 +7047,12 @@ export default function App({
       insertPayload.lng = resolved.lng;
       insertPayload.geocode_source = resolved.source || null;
       insertPayload.geocode_confidence = resolved.confidence || null;
+      insertPayload.geocode_verified_at = new Date().toISOString();
       if (resolved.place_id) insertPayload.place_id = resolved.place_id;
       if (resolved.business_status)
         insertPayload.business_status = resolved.business_status;
+      if (resolved.repaired && resolved.corrected_from)
+        insertPayload.geocode_corrected_from = resolved.corrected_from;
     }
 
     const { data: newAct } = await supabase
@@ -6761,6 +7082,87 @@ export default function App({
         };
       }),
     );
+  };
+
+  // Verify-place alternatives picker: when verify-place falls through to Tier 5
+  // (Haiku alternatives), the user picks one of the suggestions. We update the
+  // row's title + geocode, then re-trigger verifyActivity to get coords from
+  // Photon/Nominatim (now that the name is real, it usually hits Tier 1 or 2).
+  const pickVerifyAlternative = async (dayId, activity, alt) => {
+    if (!alt?.name) return;
+    const originalTitle = activity.title;
+    const isHotel = activity.type === "hotel";
+    const newTitle = isHotel ? `Check in at ${alt.name}` : alt.name;
+    const updateRow = {
+      title: newTitle,
+      geocode: alt.hint || alt.name,
+      geocode_corrected_from: activity.geocode_corrected_from || originalTitle,
+      lat: null,
+      lng: null,
+      geocode_source: "user_picked_alternative",
+      geocode_confidence: null,
+      geocode_verified_at: null,
+      place_id: null,
+      business_status: null,
+    };
+    // Persist immediately so the UI shows the picked name
+    supabase
+      .from("activities")
+      .update(updateRow)
+      .eq("id", activity.id)
+      .then(
+        () => {},
+        () => {},
+      );
+    setDays((prev) =>
+      prev.map((d) =>
+        d.id === dayId
+          ? {
+              ...d,
+              activities: d.activities.map((a) =>
+                a.id === activity.id ? { ...a, ...updateRow } : a,
+              ),
+            }
+          : d,
+      ),
+    );
+    setVerifyAlternativesFor(activity.id, null);
+    // Re-verify against the picked real name (should hit Tier 1/2 cheaply)
+    try {
+      const day = days.find((d) => d.id === dayId);
+      const r = await verifyActivity(
+        { ...activity, ...updateRow },
+        day?.city,
+        session,
+        trip?.id,
+      );
+      if (r?.status === "verified" && r.updateFields) {
+        setDays((prev) =>
+          prev.map((d) =>
+            d.id === dayId
+              ? {
+                  ...d,
+                  activities: d.activities.map((a) =>
+                    a.id === activity.id ? { ...a, ...r.updateFields } : a,
+                  ),
+                }
+              : d,
+          ),
+        );
+      } else if (r?.status === "alternatives" && r.alternatives?.length) {
+        // Should be rare — but re-surface if the picked alt is also unverifiable
+        setVerifyAlternativesFor(activity.id, {
+          alternatives: r.alternatives,
+          reason: r.reason || null,
+        });
+      }
+    } catch (e) {
+      console.warn("re-verify after pick failed:", e?.message);
+    }
+  };
+
+  const dismissVerifyAlternatives = (activityId) => {
+    setVerifyAlternativesFor(activityId, null);
   };
 
   const removeActivity = async (dayId, activityId) => {
@@ -7952,6 +8354,60 @@ export default function App({
             .eq("id", act.id);
         }
         await new Promise((r) => setTimeout(r, 500)); // Wikimedia rate limit buffer
+      }
+    })();
+
+    // Eager hybrid verification: Day 1 activities + all hotels (across all days)
+    // verified in parallel right after IG completion. Non-blocking — IG perceived
+    // latency is unchanged; the cards will re-render with corrected coords/title
+    // as each verify resolves. Other days verify lazily on first view.
+    (async () => {
+      try {
+        const day1 = savedDays[0]?.activities || [];
+        const hotelsAllDays = savedDays.flatMap((d) =>
+          (d.activities || []).filter(
+            (a) => a.type === "hotel" && !day1.includes(a),
+          ),
+        );
+        const toVerify = [...day1, ...hotelsAllDays].filter(needsVerification);
+        if (!toVerify.length) return;
+        const cityById = new Map(
+          savedDays.flatMap((d) =>
+            (d.activities || []).map((a) => [a.id, d.city]),
+          ),
+        );
+        const results = await Promise.all(
+          toVerify.map((a) =>
+            verifyActivity(a, cityById.get(a.id), session, tripData.id),
+          ),
+        );
+        // Apply updates locally so the UI shows corrected coords/titles immediately
+        const byId = new Map(
+          results
+            .map((r, idx) => [toVerify[idx].id, r])
+            .filter(([, r]) => r?.status === "verified" && r.updateFields),
+        );
+        if (byId.size) {
+          setDays((prev) =>
+            prev.map((d) => ({
+              ...d,
+              activities: d.activities.map((a) =>
+                byId.has(a.id) ? { ...a, ...byId.get(a.id).updateFields } : a,
+              ),
+            })),
+          );
+        }
+        // Surface picker UI for any activity that fell through to alternatives
+        results.forEach((r, idx) => {
+          if (r?.status === "alternatives" && r.alternatives?.length) {
+            setVerifyAlternativesFor(toVerify[idx].id, {
+              alternatives: r.alternatives,
+              reason: r.reason || null,
+            });
+          }
+        });
+      } catch (e) {
+        console.warn("eager verifyActivity batch failed:", e?.message);
       }
     })();
   };
@@ -10691,6 +11147,11 @@ export default function App({
                                   50,
                                 );
                               }}
+                              verifyAlternativesById={verifyAlternativesById}
+                              onPickVerifyAlternative={pickVerifyAlternative}
+                              onDismissVerifyAlternatives={
+                                dismissVerifyAlternatives
+                              }
                             />
                           )}
                         </div>

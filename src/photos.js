@@ -2,6 +2,7 @@
 // Shared mutable photo state and fetch logic, used by App.jsx and Magazine components.
 
 import { PLACES_PROXY, PLACES_HEADERS } from "./theme";
+import { supabase } from "./supabase";
 export { PLACES_PROXY, PLACES_HEADERS };
 
 export const _photoCache = {};
@@ -480,4 +481,162 @@ export function haversineMeters(a, b) {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(a.lat * toR) * Math.cos(b.lat * toR) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+/* ─── VERIFY-PLACE CLIENT (Hardened geocoding ladder) ─────────────────── */
+//
+// Calls places-proxy?action=verify-place and persists the result (coords +
+// metadata) directly onto the activities row. Deduplicates concurrent calls
+// for the same activity id so the eager-Day-1 burst and lazy-render path
+// don't double-bill the user.
+
+const _verifyInFlight = new Map(); // activityId -> Promise
+
+// Strip "Check in at " prefix etc. so the verifier sees a real place name.
+function _verifyPlaceName(activity) {
+  if (!activity?.title) return "";
+  return activity.title.replace(/^check[ -]?in (?:at )?/i, "").trim();
+}
+
+// Returns one of:
+//   { status: "verified", coords: { lat, lng }, source, correctedFrom?, correctedTo?, repairReason? }
+//   { status: "alternatives", alternatives: [{ name, hint, reason }], reason? }
+//   { status: "unresolved", reason? }
+//   { status: "skipped", reason }  — no auth / hotel without name / etc.
+export async function verifyActivity(activity, city, session, tripId) {
+  if (!activity?.id) return { status: "skipped", reason: "no activity id" };
+  if (!session?.access_token)
+    return { status: "skipped", reason: "no session" };
+
+  // Dedup in-flight calls for the same activity.
+  if (_verifyInFlight.has(activity.id)) {
+    return _verifyInFlight.get(activity.id);
+  }
+
+  const promise = (async () => {
+    const name = _verifyPlaceName(activity);
+    if (!name) return { status: "skipped", reason: "no name" };
+
+    let resolved;
+    try {
+      const res = await fetch(`${PLACES_PROXY}?action=verify-place`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          name,
+          city: city || null,
+          hint: activity.geocode || null,
+          type: activity.type === "hotel" ? "lodging" : null,
+          tripId: tripId || null,
+        }),
+      });
+      if (!res.ok) {
+        // 401/402/etc — don't persist anything, just skip
+        return { status: "skipped", reason: `http ${res.status}` };
+      }
+      resolved = await res.json();
+    } catch (e) {
+      return { status: "skipped", reason: `network: ${e.message}` };
+    }
+
+    // Verified case — persist coords + metadata
+    if (resolved?.lat != null && resolved?.lng != null) {
+      const update = {
+        lat: resolved.lat,
+        lng: resolved.lng,
+        geocode_source: resolved.source || null,
+        geocode_confidence: resolved.confidence || null,
+        geocode_verified_at: new Date().toISOString(),
+      };
+      if (resolved.place_id) update.place_id = resolved.place_id;
+      if (resolved.business_status)
+        update.business_status = resolved.business_status;
+      if (
+        resolved.repaired &&
+        resolved.corrected_from &&
+        resolved.corrected_to
+      ) {
+        update.geocode_corrected_from = resolved.corrected_from;
+        // Also update the title to the corrected canonical name (transparency
+        // hint surfaced separately via geocode_corrected_from).
+        // For hotels, prepend "Check in at " to keep title format.
+        const newTitle =
+          activity.type === "hotel"
+            ? `Check in at ${resolved.corrected_to}`
+            : resolved.corrected_to;
+        update.title = newTitle;
+        update.geocode = resolved.corrected_to;
+      }
+      supabase
+        .from("activities")
+        .update(update)
+        .eq("id", activity.id)
+        .then(
+          () => {},
+          () => {},
+        );
+      return {
+        status: "verified",
+        coords: { lat: resolved.lat, lng: resolved.lng },
+        source: resolved.source,
+        correctedFrom: resolved.corrected_from || null,
+        correctedTo: resolved.corrected_to || null,
+        repairReason: resolved.repair_reason || null,
+        updateFields: update,
+      };
+    }
+
+    // Alternatives case — picker UX
+    if (
+      resolved?.status === "needs_user_choice" &&
+      Array.isArray(resolved.alternatives)
+    ) {
+      // Mark verified_at so we don't re-run on every render. lat stays null
+      // — the UI uses (verified_at IS NOT NULL && lat IS NULL) as the
+      // "tried and failed automatic verification" signal.
+      const update = { geocode_verified_at: new Date().toISOString() };
+      supabase
+        .from("activities")
+        .update(update)
+        .eq("id", activity.id)
+        .then(
+          () => {},
+          () => {},
+        );
+      return {
+        status: "alternatives",
+        alternatives: resolved.alternatives,
+        reason: resolved.reason || null,
+      };
+    }
+
+    // Unresolved — also mark verified_at to avoid re-spamming
+    const update = { geocode_verified_at: new Date().toISOString() };
+    supabase
+      .from("activities")
+      .update(update)
+      .eq("id", activity.id)
+      .then(
+        () => {},
+        () => {},
+      );
+    return { status: "unresolved", reason: resolved?.reason || null };
+  })();
+
+  _verifyInFlight.set(activity.id, promise);
+  promise.finally(() => _verifyInFlight.delete(activity.id));
+  return promise;
+}
+
+// Helper: does an activity need verification?
+// Skip if (a) no id, (b) already has stored coords, (c) verified_at is set
+// (we've already tried — even if it failed, don't retry on every render).
+export function needsVerification(activity) {
+  if (!activity?.id) return false;
+  if (activity.lat != null && activity.lng != null) return false;
+  if (activity.geocode_verified_at) return false;
+  return true;
 }

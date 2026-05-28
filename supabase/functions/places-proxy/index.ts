@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { deductCredits } from "../_shared/credits.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -189,11 +190,25 @@ async function taPhoto(locationId: string): Promise<string | null> {
 // Decide whether a place lookup needs Google Places (chain hotels, bad LLM hints)
 // or can be served by Photon + sanity check (most uniquely-named places).
 
-const HOTEL_CHAIN_RE = /\b(hilton|marriott|hyatt|sheraton|westin|holiday\s*inn|best\s*western|ibis|gracery|comfort|hampton|courtyard|renaissance|ritz[-\s]carlton|four\s*seasons|park\s*hyatt|grand\s*hyatt|hyatt\s*regency|doubletree|embassy\s*suites|mercure|novotel|pullman|sofitel|premier\s*inn|travelodge|holiday\s*inn|days\s*inn|super\s*8|granbell|hilton\s*garden|hampton\s*inn|aloft|moxy|element|edition|park\s*plaza|crown\s*plaza|intercontinental|jw\s*marriott|w\s*hotel|st\s*regis|sheraton)\b/i;
+import {
+  HOTEL_CHAIN_RE,
+  RISKY_NAME_RE,
+  nameSimilarity,
+  normalizeName,
+  validateGoogleResult,
+} from "./_helpers.ts";
 
-function preEscalateToGoogle(name: string, geocodeHint: string | null, city: string | null): { escalate: boolean; reason: string } {
+function preEscalateToGoogle(
+  name: string,
+  geocodeHint: string | null,
+  city: string | null,
+): { escalate: boolean; reason: string } {
   // 1. LLM gave us garbage (hint equals city name)
-  if (geocodeHint && city && geocodeHint.trim().toLowerCase() === city.trim().toLowerCase()) {
+  if (
+    geocodeHint &&
+    city &&
+    geocodeHint.trim().toLowerCase() === city.trim().toLowerCase()
+  ) {
     return { escalate: true, reason: "hint_equals_city" };
   }
   // 2. Known chain hotel — Photon disambiguation is unreliable
@@ -203,10 +218,20 @@ function preEscalateToGoogle(name: string, geocodeHint: string | null, city: str
   return { escalate: false, reason: "" };
 }
 
-function postEscalateCheck(coords: { lat: number; lng: number }, biasLat?: number, biasLng?: number): { escalate: boolean; reason: string } {
-  if (biasLat == null || biasLng == null) return { escalate: false, reason: "" };
+function postEscalateCheck(
+  coords: { lat: number; lng: number },
+  biasLat?: number,
+  biasLng?: number,
+): { escalate: boolean; reason: string } {
+  if (biasLat == null || biasLng == null)
+    return { escalate: false, reason: "" };
   // If Photon returned the city centroid (within 200m), it failed to find the specific place
-  const distFromCentroid = haversineKm(biasLat, biasLng, coords.lat, coords.lng);
+  const distFromCentroid = haversineKm(
+    biasLat,
+    biasLng,
+    coords.lat,
+    coords.lng,
+  );
   if (distFromCentroid < 0.2) {
     return { escalate: true, reason: "matched_city_centroid" };
   }
@@ -215,7 +240,17 @@ function postEscalateCheck(coords: { lat: number; lng: number }, biasLat?: numbe
 
 // ── Google Places lookup (Feature 8 — chains + bad hints + escalation fallback) ─
 
-async function googleFindPlace(name: string, city: string | null, type?: string): Promise<{ lat: number; lng: number; place_id: string; business_status?: string } | null> {
+async function googleFindPlace(
+  name: string,
+  city: string | null,
+  type?: string,
+): Promise<{
+  lat: number;
+  lng: number;
+  place_id: string;
+  business_status?: string;
+  display_name?: string;
+} | null> {
   if (!PLACES_KEY) return null;
   const query = city ? `${name}, ${city}` : name;
   const body: Record<string, unknown> = {
@@ -229,7 +264,8 @@ async function googleFindPlace(name: string, city: string | null, type?: string)
     headers: {
       "Content-Type": "application/json",
       "X-Goog-Api-Key": PLACES_KEY,
-      "X-Goog-FieldMask": "places.id,places.location,places.businessStatus,places.displayName",
+      "X-Goog-FieldMask":
+        "places.id,places.location,places.businessStatus,places.displayName",
     },
     body: JSON.stringify(body),
   });
@@ -245,6 +281,7 @@ async function googleFindPlace(name: string, city: string | null, type?: string)
     lng: place.location.longitude,
     place_id: place.id,
     business_status: place.businessStatus,
+    display_name: place.displayName?.text ?? null,
   };
 }
 
@@ -261,14 +298,15 @@ function costToCreditsPassthrough(usd: number): number {
 }
 
 async function authenticateUserId(req: Request): Promise<string | null> {
-  const auth = req.headers.get("authorization") || req.headers.get("Authorization");
+  const auth =
+    req.headers.get("authorization") || req.headers.get("Authorization");
   if (!auth?.startsWith("Bearer ")) return null;
   const token = auth.slice(7);
   // Reject anon-key calls — must be a real user token
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
   if (anonKey && token === anonKey) return null;
   const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-    headers: { "Authorization": `Bearer ${token}`, "apikey": SUPABASE_SERVICE_KEY },
+    headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_SERVICE_KEY },
   });
   if (!res.ok) return null;
   const data: any = await res.json();
@@ -276,13 +314,20 @@ async function authenticateUserId(req: Request): Promise<string | null> {
 }
 
 async function getUserCredits(userId: string): Promise<number> {
-  const res = await fetch(`${REST}/profiles?id=eq.${userId}&select=credits`, { headers: pgHeaders });
+  const res = await fetch(`${REST}/profiles?id=eq.${userId}&select=credits`, {
+    headers: pgHeaders,
+  });
   if (!res.ok) return 0;
   const rows = await res.json();
   return Number(rows?.[0]?.credits ?? 0);
 }
 
-async function chargeGoogleCall(userId: string, costUsd: number, reason: string): Promise<boolean> {
+async function chargeGoogleCall(
+  userId: string,
+  costUsd: number,
+  reason: string,
+  tripId?: string | null,
+): Promise<boolean> {
   const credits = costToCreditsPassthrough(costUsd);
   try {
     // Use the existing deduct_credits RPC; on staging it may not exist, in which case we log and continue
@@ -294,7 +339,7 @@ async function chargeGoogleCall(userId: string, costUsd: number, reason: string)
         p_amount: credits,
         p_reason: reason,
         p_function_name: "places-proxy",
-        p_trip_id: null,
+        p_trip_id: tripId ?? null,
         p_llm_cost_usd: costUsd,
         p_metadata: { source: "google_places_passthrough" },
       }),
@@ -303,7 +348,9 @@ async function chargeGoogleCall(userId: string, costUsd: number, reason: string)
       const text = await res.text();
       // If the RPC doesn't exist (staging in current state), don't block — just log
       if (res.status === 404 || text.includes("does not exist")) {
-        console.warn("deduct_credits RPC not found — skipping charge (staging?)");
+        console.warn(
+          "deduct_credits RPC not found — skipping charge (staging?)",
+        );
         return true;
       }
       console.warn("chargeGoogleCall failed:", res.status, text);
@@ -318,16 +365,26 @@ async function chargeGoogleCall(userId: string, costUsd: number, reason: string)
 
 // ── geocode_overrides lookup ─────────────────────────────────────────────────
 
-async function checkOverride(name: string, city: string | null): Promise<{ lat: number; lng: number } | null> {
+async function checkOverride(
+  name: string,
+  city: string | null,
+): Promise<{ lat: number; lng: number } | null> {
   const normalized = name.trim().toLowerCase();
-  const cityFilter = city ? `&city=eq.${encodeURIComponent(city.trim().toLowerCase())}` : "&city=is.null";
+  const cityFilter = city
+    ? `&city=eq.${encodeURIComponent(city.trim().toLowerCase())}`
+    : "&city=is.null";
   try {
-    const res = await fetch(`${REST}/geocode_overrides?place_normalized=eq.${encodeURIComponent(normalized)}${cityFilter}&select=lat,lng&limit=1`, { headers: pgHeaders });
+    const res = await fetch(
+      `${REST}/geocode_overrides?place_normalized=eq.${encodeURIComponent(normalized)}${cityFilter}&select=lat,lng&limit=1`,
+      { headers: pgHeaders },
+    );
     if (!res.ok) return null;
     const rows = await res.json();
     if (!rows?.length) return null;
     return { lat: Number(rows[0].lat), lng: Number(rows[0].lng) };
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 // ── handlers ─────────────────────────────────────────────────────────────────
@@ -644,12 +701,24 @@ async function handleGeocode(req: Request): Promise<Response> {
 
 async function handleLookupPlace(req: Request): Promise<Response> {
   const { name, city, type, tripId } = await req.json();
-  if (!name) return Response.json({ error: "name required" }, { status: 400, headers: corsHeaders });
+  if (!name)
+    return Response.json(
+      { error: "name required" },
+      { status: 400, headers: corsHeaders },
+    );
 
   // 1. User override always wins
   const override = await checkOverride(name, city);
   if (override) {
-    return Response.json({ lat: override.lat, lng: override.lng, source: "user_corrected", confidence: "high" }, { headers: corsHeaders });
+    return Response.json(
+      {
+        lat: override.lat,
+        lng: override.lng,
+        source: "user_corrected",
+        confidence: "high",
+      },
+      { headers: corsHeaders },
+    );
   }
 
   // 2. Cache hit?
@@ -657,35 +726,71 @@ async function handleLookupPlace(req: Request): Promise<Response> {
   const cached = await cacheGet(cacheKey);
   if (cached?.lat) {
     incrementUsage("lookup-place", "cache-hit", today()).catch(() => {});
-    return Response.json({ ...cached, source: cached.source || "google_places", confidence: "high", cached: true }, { headers: corsHeaders });
+    return Response.json(
+      {
+        ...cached,
+        source: cached.source || "google_places",
+        confidence: "high",
+        cached: true,
+      },
+      { headers: corsHeaders },
+    );
   }
 
   // 3. Need to call Google — authenticate + charge user
   const userId = await authenticateUserId(req);
-  if (!userId) return Response.json({ error: "Unauthorized" }, { status: 401, headers: corsHeaders });
+  if (!userId)
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders },
+    );
 
   const balance = await getUserCredits(userId);
   const credits = costToCreditsPassthrough(GOOGLE_PLACES_CALL_USD);
   if (balance < credits) {
-    return Response.json({ error: "Out of credits", code: "insufficient_credits", credits: balance }, { status: 402, headers: corsHeaders });
+    return Response.json(
+      {
+        error: "Out of credits",
+        code: "insufficient_credits",
+        credits: balance,
+      },
+      { status: 402, headers: corsHeaders },
+    );
   }
 
   // 4. Call Google
   const result = await googleFindPlace(name, city, type);
   if (!result) {
     incrementUsage("lookup-place", "google-miss", today()).catch(() => {});
-    return Response.json({ lat: null, lng: null, source: null, confidence: "low" }, { headers: corsHeaders });
+    return Response.json(
+      { lat: null, lng: null, source: null, confidence: "low" },
+      { headers: corsHeaders },
+    );
   }
 
   // 5. Charge user (only on success — failed lookups are on the house)
-  await chargeGoogleCall(userId, GOOGLE_PLACES_CALL_USD, `lookup-place:${name}`);
+  await chargeGoogleCall(
+    userId,
+    GOOGLE_PLACES_CALL_USD,
+    `lookup-place:${name}`,
+    tripId || null,
+  );
 
   // 6. Cache (90d TTL for Google results)
-  const payload = { lat: result.lat, lng: result.lng, place_id: result.place_id, business_status: result.business_status, source: "google_places" };
+  const payload = {
+    lat: result.lat,
+    lng: result.lng,
+    place_id: result.place_id,
+    business_status: result.business_status,
+    source: "google_places",
+  };
   cacheSet(cacheKey, "lookup-place", payload, "google", 90).catch(() => {});
   incrementUsage("lookup-place", "google", today()).catch(() => {});
 
-  return Response.json({ ...payload, confidence: "high" }, { headers: corsHeaders });
+  return Response.json(
+    { ...payload, confidence: "high" },
+    { headers: corsHeaders },
+  );
 }
 
 // ── Feature 8: resolve-coords (smart escalation — Photon-first + heuristic + Google fallback) ──
@@ -695,12 +800,24 @@ async function handleLookupPlace(req: Request): Promise<Response> {
 
 async function handleResolveCoords(req: Request): Promise<Response> {
   const { name, city, hint, type, tripId } = await req.json();
-  if (!name) return Response.json({ error: "name required" }, { status: 400, headers: corsHeaders });
+  if (!name)
+    return Response.json(
+      { error: "name required" },
+      { status: 400, headers: corsHeaders },
+    );
 
   // 1. Override always wins
   const override = await checkOverride(name, city);
   if (override) {
-    return Response.json({ lat: override.lat, lng: override.lng, source: "user_corrected", confidence: "high" }, { headers: corsHeaders });
+    return Response.json(
+      {
+        lat: override.lat,
+        lng: override.lng,
+        source: "user_corrected",
+        confidence: "high",
+      },
+      { headers: corsHeaders },
+    );
   }
 
   // 2. Pre-escalation heuristic — skip Photon for known-bad cases
@@ -730,20 +847,34 @@ async function handleResolveCoords(req: Request): Promise<Response> {
       if (nomResult) {
         biasLat = nomResult.lat;
         biasLng = nomResult.lng;
-        cacheSet(biasCacheKey, "geocode", nomResult, "nominatim").catch(() => {});
+        cacheSet(biasCacheKey, "geocode", nomResult, "nominatim").catch(
+          () => {},
+        );
       }
     }
   }
 
   const photonQ = hint || name;
-  const photonResult = await photonSearch(`${photonQ} ${city || ""}`.trim(), biasLat, biasLng);
+  const photonResult = await photonSearch(
+    `${photonQ} ${city || ""}`.trim(),
+    biasLat,
+    biasLng,
+  );
   if (photonResult) {
     // Post-escalation check — is the Photon result actually the city centroid?
     const post = postEscalateCheck(photonResult, biasLat, biasLng);
     if (!post.escalate) {
       // Photon result is good
       incrementUsage("resolve-coords", "photon", today()).catch(() => {});
-      return Response.json({ lat: photonResult.lat, lng: photonResult.lng, source: "photon", confidence: "medium" }, { headers: corsHeaders });
+      return Response.json(
+        {
+          lat: photonResult.lat,
+          lng: photonResult.lng,
+          source: "photon",
+          confidence: "medium",
+        },
+        { headers: corsHeaders },
+      );
     }
     // Photon returned city centroid — escalate to Google
   }
@@ -757,6 +888,607 @@ async function handleResolveCoords(req: Request): Promise<Response> {
   return await handleLookupPlace(proxyReq);
 }
 
+// ── Verify-place ladder (Phase 1 — hardened geocoding) ─────────────────────
+//
+// 5-tier verification cascade that catches LLM hallucinations (the "Westin
+// Sapporo doesn't exist" class of bug) and confidently-wrong silent matches
+// (Photon returning a US consulate for a Westin search). Cached aggressively
+// against the ORIGINAL name so repeat hallucinations cost 0 credits.
+
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+const NAME_SIM_THRESHOLD = 0.5; // Tier 1/2 acceptance threshold
+
+// Cache TTLs (days)
+const VERIFY_TTL_DAYS = 90;
+const HAIKU_REPAIR_TTL_DAYS = 30;
+const HAIKU_ALTS_TTL_DAYS = 7;
+
+const REPAIR_SYSTEM_PROMPT = `You are a place-name verification assistant. Given a place name claimed to be in a specific city, decide if it refers to a real place.
+
+Return strict JSON ONLY (no markdown, no code fences):
+{"canonical": string | null, "reason": string}
+
+Rules:
+- If the place is real and the name is correct, return {"canonical": "<the same name>", "reason": "real place"}.
+- If the place is real but has a different canonical name (translation, official name, recent rename), return the canonical name.
+- If the place name is hallucinated (does not exist), return the CLOSEST real equivalent in the SAME CATEGORY (hotel→hotel, sight→sight, restaurant→restaurant) in the same region or country. Include "[hallucinated; suggesting X]" in the reason.
+- If no plausible real equivalent exists, return {"canonical": null, "reason": "no real equivalent"}.
+- The canonical name must be specific enough to geocode (e.g. "The Westin Rusutsu Resort" not "a Westin in Japan").
+- Keep reason under 120 characters.`;
+
+const ALTS_SYSTEM_PROMPT = `You are a place-name alternative-suggestion assistant. Given a place name in a city that we could not verify, suggest 2-3 real, specific alternatives in the same category (hotel/sight/restaurant) in the same city or nearby.
+
+Return strict JSON ONLY (no markdown, no code fences):
+{"alternatives": [{"name": "...", "hint": "...", "reason": "..."}, ...]}
+
+Rules:
+- Each "name" must be specific enough to geocode (e.g. "JR Tower Hotel Nikko Sapporo" not "a tower hotel in Sapporo").
+- "hint" is a fully-qualified place description for geocoding: "<name>, <neighborhood>, <city>, <country>".
+- "reason" is a 1-line "why this is a good fit" (under 80 chars). Mention category match and locality.
+- 2-3 alternatives only. Quality over quantity.`;
+
+// Anthropic Haiku call wrapper. Logs llm_usage + deducts credits.
+// Returns parsed JSON or null on failure.
+async function callHaiku(args: {
+  userId: string | null;
+  tripId: string | null;
+  functionTag: string; // e.g. "verify-place:repair"
+  systemPrompt: string;
+  userMessage: string;
+  maxTokens: number;
+}): Promise<{ json: any; inputTokens: number; outputTokens: number } | null> {
+  const apiKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+  if (!apiKey) {
+    console.warn(
+      `[${args.functionTag}] ANTHROPIC_API_KEY missing — skipping Haiku call`,
+    );
+    return null;
+  }
+  try {
+    const res = await fetch(ANTHROPIC_URL, {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: HAIKU_MODEL,
+        max_tokens: args.maxTokens,
+        system: args.systemPrompt,
+        messages: [{ role: "user", content: args.userMessage }],
+      }),
+    });
+    if (!res.ok) {
+      console.warn(
+        `[${args.functionTag}] Anthropic ${res.status}: ${await res.text()}`,
+      );
+      return null;
+    }
+    const data: any = await res.json();
+    const text = data?.content?.[0]?.text?.trim() ?? "";
+    const inputTokens = data?.usage?.input_tokens || 0;
+    const outputTokens = data?.usage?.output_tokens || 0;
+
+    // Log llm_usage (fire-and-forget)
+    fetch(`${REST}/llm_usage`, {
+      method: "POST",
+      headers: pgHeaders,
+      body: JSON.stringify({
+        trip_id: args.tripId,
+        function_name: `places-proxy:${args.functionTag}`,
+        model: HAIKU_MODEL,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+      }),
+    }).catch(() => {});
+
+    // Charge credits (fire-and-forget). Only if we have a user.
+    if (args.userId) {
+      deductCredits({
+        userId: args.userId,
+        model: HAIKU_MODEL,
+        inputTokens,
+        outputTokens,
+        functionName: `places-proxy:${args.functionTag}`,
+        tripId: args.tripId,
+      }).catch(() => {});
+    }
+
+    // Parse JSON object from response — strip fences if any
+    const stripped = text
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+    const match = stripped.match(/\{[\s\S]*\}/);
+    if (!match) return { json: null, inputTokens, outputTokens };
+    try {
+      return { json: JSON.parse(match[0]), inputTokens, outputTokens };
+    } catch {
+      return { json: null, inputTokens, outputTokens };
+    }
+  } catch (e) {
+    console.warn(`[${args.functionTag}] exception: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+// Tier 3: ask Haiku to repair or suggest a canonical name.
+async function haikuRepair(args: {
+  name: string;
+  city: string | null;
+  userId: string | null;
+  tripId: string | null;
+}): Promise<{ canonical: string | null; reason: string }> {
+  // Cache by original name + city — repairs are stable
+  const cacheKey = `haiku-repair:${args.name.trim().toLowerCase()}|${(args.city || "").toLowerCase()}`;
+  const cached = await cacheGet(cacheKey);
+  if (cached && typeof cached === "object" && "canonical" in cached) {
+    return cached as { canonical: string | null; reason: string };
+  }
+
+  const userMessage = `Place: "${args.name}"
+${args.city ? `City: "${args.city}"` : ""}`;
+
+  const result = await callHaiku({
+    userId: args.userId,
+    tripId: args.tripId,
+    functionTag: "verify-place:repair",
+    systemPrompt: REPAIR_SYSTEM_PROMPT,
+    userMessage,
+    maxTokens: 200,
+  });
+
+  if (!result?.json) {
+    return { canonical: null, reason: "haiku call failed" };
+  }
+  const canonical =
+    typeof result.json.canonical === "string" && result.json.canonical.trim()
+      ? result.json.canonical.trim()
+      : null;
+  const reason =
+    typeof result.json.reason === "string"
+      ? result.json.reason.slice(0, 200)
+      : "";
+
+  const payload = { canonical, reason };
+  cacheSet(
+    cacheKey,
+    "haiku-repair",
+    payload,
+    "anthropic-haiku",
+    HAIKU_REPAIR_TTL_DAYS,
+  ).catch(() => {});
+  return payload;
+}
+
+// Tier 5: ask Haiku for 2-3 alternatives we can render in a picker.
+async function haikuAlternatives(args: {
+  name: string;
+  city: string | null;
+  userId: string | null;
+  tripId: string | null;
+}): Promise<Array<{ name: string; hint: string; reason: string }>> {
+  const cacheKey = `haiku-alternatives:${args.name.trim().toLowerCase()}|${(args.city || "").toLowerCase()}`;
+  const cached = await cacheGet(cacheKey);
+  if (cached && Array.isArray(cached.alternatives)) {
+    return cached.alternatives;
+  }
+
+  const userMessage = `Place we could not verify: "${args.name}"
+${args.city ? `City: "${args.city}"` : ""}`;
+
+  const result = await callHaiku({
+    userId: args.userId,
+    tripId: args.tripId,
+    functionTag: "verify-place:alts",
+    systemPrompt: ALTS_SYSTEM_PROMPT,
+    userMessage,
+    maxTokens: 400,
+  });
+
+  if (!result?.json || !Array.isArray(result.json.alternatives)) return [];
+  const alts: Array<{ name: string; hint: string; reason: string }> = [];
+  for (const a of result.json.alternatives.slice(0, 3)) {
+    if (typeof a?.name !== "string" || !a.name.trim()) continue;
+    alts.push({
+      name: a.name.trim(),
+      hint: typeof a.hint === "string" ? a.hint.trim() : a.name.trim(),
+      reason: typeof a.reason === "string" ? a.reason.slice(0, 120) : "",
+    });
+  }
+  cacheSet(
+    cacheKey,
+    "haiku-alternatives",
+    { alternatives: alts },
+    "anthropic-haiku",
+    HAIKU_ALTS_TTL_DAYS,
+  ).catch(() => {});
+  return alts;
+}
+
+// Resolve city bias via Nominatim/cache. Returns null on failure.
+async function resolveCityBias(
+  city: string | null,
+): Promise<{ lat: number; lng: number } | null> {
+  if (!city) return null;
+  const key = `geocode-bias:${city.toLowerCase()}`;
+  const cached = await cacheGet(key);
+  if (cached?.lat) return { lat: cached.lat, lng: cached.lng };
+  const nom = await nominatimSearch(city);
+  if (nom) {
+    cacheSet(key, "geocode", nom, "nominatim").catch(() => {});
+    return nom;
+  }
+  const photon = await photonSearch(city);
+  if (photon) {
+    cacheSet(key, "geocode", photon, "photon").catch(() => {});
+    return photon;
+  }
+  return null;
+}
+
+// Photon search that ALSO returns the matched name so we can run similarity
+// against the query. Standalone version so we don't break existing photonSearch.
+async function photonSearchNamed(
+  q: string,
+  biasLat?: number,
+  biasLng?: number,
+): Promise<{ lat: number; lng: number; name: string } | null> {
+  const bias =
+    biasLat != null && biasLng != null ? `&lat=${biasLat}&lon=${biasLng}` : "";
+  try {
+    const res = await fetch(
+      `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1${bias}`,
+    );
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    const feat = data?.features?.[0];
+    const coords = feat?.geometry?.coordinates;
+    if (coords && coords.length >= 2) {
+      const name = feat?.properties?.name ?? "";
+      return { lat: coords[1], lng: coords[0], name };
+    }
+  } catch {
+    /* photon down */
+  }
+  return null;
+}
+
+// Nominatim search that ALSO returns matched name.
+async function nominatimSearchNamed(
+  q: string,
+): Promise<{ lat: number; lng: number; name: string } | null> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`,
+      {
+        headers: { "User-Agent": "TripJam/1.0 (travel planning app)" },
+        signal: controller.signal,
+      },
+    );
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    const row = data?.[0];
+    if (!row?.lat || !row?.lon) return null;
+    return {
+      lat: parseFloat(row.lat),
+      lng: parseFloat(row.lon),
+      name: row.name || row.display_name || "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Verify-place orchestrator. Runs the 5-tier ladder.
+//
+// Response shapes:
+//   Success:        { lat, lng, source, confidence, corrected_from?, place_id?, business_status?, repaired? }
+//   Needs picker:   { status: "needs_user_choice", alternatives: [{ name, hint, reason }], reason }
+//   Unresolved:     { status: "unresolved", reason }
+async function handleVerifyPlace(req: Request): Promise<Response> {
+  const { name, city, hint, type, tripId } = await req.json();
+  if (!name) {
+    return Response.json(
+      { error: "name required" },
+      { status: 400, headers: corsHeaders },
+    );
+  }
+
+  const normName = name.trim().toLowerCase();
+  const cityKey = (city || "").toLowerCase();
+  const cacheKey = `verify-place:${normName}|${cityKey}|${type || ""}`;
+
+  // 0. Cache hit — full verified result keyed by ORIGINAL name (so repeat
+  //    hallucinations cost zero).
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
+    incrementUsage("verify-place", "cache-hit", today()).catch(() => {});
+    return Response.json({ ...cached, cached: true }, { headers: corsHeaders });
+  }
+
+  // 0b. User override always wins.
+  const override = await checkOverride(name, city);
+  if (override) {
+    const payload = {
+      lat: override.lat,
+      lng: override.lng,
+      source: "user_corrected",
+      confidence: "high",
+    };
+    cacheSet(
+      cacheKey,
+      "verify-place",
+      payload,
+      "user_corrected",
+      VERIFY_TTL_DAYS,
+    ).catch(() => {});
+    incrementUsage("verify-place", "override", today()).catch(() => {});
+    return Response.json(payload, { headers: corsHeaders });
+  }
+
+  // Auth — needed for any tier that may spend credits (Haiku / Google).
+  const userId = await authenticateUserId(req);
+  if (!userId) {
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders },
+    );
+  }
+
+  // Resolve city centroid once. Used both for Photon bias and Google validation.
+  const centroid = await resolveCityBias(city || null);
+
+  const queryForLookups = (hint || name).trim();
+  const isRisky = RISKY_NAME_RE.test(name);
+
+  // ── Tier 1: Photon with name-similarity check ──
+  if (!isRisky) {
+    const photonQ = `${queryForLookups} ${city || ""}`.trim();
+    const r1 = await photonSearchNamed(photonQ, centroid?.lat, centroid?.lng);
+    if (r1) {
+      const sim = nameSimilarity(name, r1.name);
+      const post = postEscalateCheck(r1, centroid?.lat, centroid?.lng);
+      if (sim >= NAME_SIM_THRESHOLD && !post.escalate) {
+        const payload = {
+          lat: r1.lat,
+          lng: r1.lng,
+          source: "photon",
+          confidence: "medium" as const,
+        };
+        cacheSet(
+          cacheKey,
+          "verify-place",
+          payload,
+          "photon",
+          VERIFY_TTL_DAYS,
+        ).catch(() => {});
+        incrementUsage("verify-place", "tier1-photon", today()).catch(() => {});
+        return Response.json(payload, { headers: corsHeaders });
+      }
+      // similarity too low → fall through. Don't trust the wrong-named match.
+    }
+  }
+
+  // ── Tier 2: Nominatim direct ──
+  const r2 = await nominatimSearchNamed(
+    `${queryForLookups}, ${city || ""}`.trim(),
+  );
+  if (r2) {
+    const sim = nameSimilarity(name, r2.name);
+    if (sim >= NAME_SIM_THRESHOLD) {
+      const payload = {
+        lat: r2.lat,
+        lng: r2.lng,
+        source: "nominatim",
+        confidence: "medium" as const,
+      };
+      cacheSet(
+        cacheKey,
+        "verify-place",
+        payload,
+        "nominatim",
+        VERIFY_TTL_DAYS,
+      ).catch(() => {});
+      incrementUsage("verify-place", "tier2-nominatim", today()).catch(
+        () => {},
+      );
+      return Response.json(payload, { headers: corsHeaders });
+    }
+  }
+
+  // ── Tier 3: Haiku name-repair, then re-verify ──
+  const repair = await haikuRepair({
+    name,
+    city: city || null,
+    userId,
+    tripId: tripId || null,
+  });
+  if (
+    repair.canonical &&
+    repair.canonical.toLowerCase() !== name.trim().toLowerCase()
+  ) {
+    // Re-run Photon + Nominatim against the repaired name.
+    const repairQ = `${repair.canonical} ${city || ""}`.trim();
+    const r3a = await photonSearchNamed(repairQ, centroid?.lat, centroid?.lng);
+    if (r3a) {
+      const sim = nameSimilarity(repair.canonical, r3a.name);
+      const post = postEscalateCheck(r3a, centroid?.lat, centroid?.lng);
+      if (sim >= NAME_SIM_THRESHOLD && !post.escalate) {
+        const payload = {
+          lat: r3a.lat,
+          lng: r3a.lng,
+          source: "haiku-then-photon",
+          confidence: "medium" as const,
+          corrected_from: name,
+          corrected_to: repair.canonical,
+          repair_reason: repair.reason,
+          repaired: true,
+        };
+        cacheSet(
+          cacheKey,
+          "verify-place",
+          payload,
+          "haiku-then-photon",
+          VERIFY_TTL_DAYS,
+        ).catch(() => {});
+        incrementUsage("verify-place", "tier3-haiku-pass", today()).catch(
+          () => {},
+        );
+        return Response.json(payload, { headers: corsHeaders });
+      }
+    }
+    const r3b = await nominatimSearchNamed(
+      `${repair.canonical}, ${city || ""}`.trim(),
+    );
+    if (r3b) {
+      const sim = nameSimilarity(repair.canonical, r3b.name);
+      if (sim >= NAME_SIM_THRESHOLD) {
+        const payload = {
+          lat: r3b.lat,
+          lng: r3b.lng,
+          source: "haiku-then-nominatim",
+          confidence: "medium" as const,
+          corrected_from: name,
+          corrected_to: repair.canonical,
+          repair_reason: repair.reason,
+          repaired: true,
+        };
+        cacheSet(
+          cacheKey,
+          "verify-place",
+          payload,
+          "haiku-then-nominatim",
+          VERIFY_TTL_DAYS,
+        ).catch(() => {});
+        incrementUsage("verify-place", "tier3-haiku-pass", today()).catch(
+          () => {},
+        );
+        return Response.json(payload, { headers: corsHeaders });
+      }
+    }
+  }
+
+  // ── Tier 4: Google Places with strict validation ──
+  // Query Google with the repaired name if we have one, else original.
+  const googleQuery = repair.canonical || name;
+  const balance = await getUserCredits(userId);
+  const googleCredits = costToCreditsPassthrough(GOOGLE_PLACES_CALL_USD);
+
+  if (balance >= googleCredits) {
+    try {
+      const result = await googleFindPlace(googleQuery, city || null, type);
+      if (result) {
+        // Need displayName for validation — re-call with a fuller field mask
+        // OR rely on what googleFindPlace returns. Currently googleFindPlace
+        // returns place_id but not displayName as a separate field; the
+        // FieldMask includes places.displayName so we can extend. For now
+        // validate with what we have (business_status + distance).
+        const validation = validateGoogleResult({
+          query: googleQuery,
+          displayName: result.display_name ?? null,
+          businessStatus: result.business_status ?? null,
+          resultLat: result.lat,
+          resultLng: result.lng,
+          centroidLat: centroid?.lat,
+          centroidLng: centroid?.lng,
+          type: type ?? null,
+        });
+        await chargeGoogleCall(
+          userId,
+          GOOGLE_PLACES_CALL_USD,
+          `verify-place:google:${name}`,
+          tripId || null,
+        );
+        incrementUsage("verify-place", "tier4-google-call", today()).catch(
+          () => {},
+        );
+        if (validation.ok) {
+          const payload: Record<string, unknown> = {
+            lat: result.lat,
+            lng: result.lng,
+            source: repair.canonical ? "haiku-then-google" : "google_places",
+            confidence: "high" as const,
+            place_id: result.place_id,
+            business_status: result.business_status,
+          };
+          if (
+            repair.canonical &&
+            repair.canonical.toLowerCase() !== name.trim().toLowerCase()
+          ) {
+            payload.corrected_from = name;
+            payload.corrected_to = repair.canonical;
+            payload.repair_reason = repair.reason;
+            payload.repaired = true;
+          }
+          cacheSet(
+            cacheKey,
+            "verify-place",
+            payload,
+            payload.source as string,
+            VERIFY_TTL_DAYS,
+          ).catch(() => {});
+          incrementUsage("verify-place", "tier4-google-pass", today()).catch(
+            () => {},
+          );
+          return Response.json(payload, { headers: corsHeaders });
+        }
+        // Google returned something but it failed validation — fall to Tier 5
+        console.log(
+          `[verify-place] Google validation rejected "${googleQuery}": ${validation.reason}`,
+        );
+      }
+    } catch (e) {
+      console.warn(
+        `[verify-place] Google call exception: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  // ── Tier 5: Haiku alternatives → user picker ──
+  const alts = await haikuAlternatives({
+    name,
+    city: city || null,
+    userId,
+    tripId: tripId || null,
+  });
+  if (alts.length > 0) {
+    const payload = {
+      status: "needs_user_choice" as const,
+      alternatives: alts,
+      reason: repair.reason || "Could not verify automatically — please pick.",
+    };
+    // Cache the "needs picker" outcome too, with a shorter TTL — if user picks one,
+    // selectHotel-style replace will trigger a fresh verify on the new name.
+    cacheSet(
+      cacheKey,
+      "verify-place",
+      payload,
+      "needs-picker",
+      HAIKU_ALTS_TTL_DAYS,
+    ).catch(() => {});
+    incrementUsage("verify-place", "tier5-alternatives", today()).catch(
+      () => {},
+    );
+    return Response.json(payload, { headers: corsHeaders });
+  }
+
+  // ── Fallback: unresolved ──
+  const fallback = {
+    status: "unresolved" as const,
+    reason: repair.reason || "Could not resolve this place.",
+  };
+  // Short TTL on unresolved so we re-try in a few hours (transient API failures).
+  cacheSet(cacheKey, "verify-place", fallback, "unresolved", 1).catch(() => {});
+  incrementUsage("verify-place", "unresolved", today()).catch(() => {});
+  return Response.json(fallback, { headers: corsHeaders });
+}
+
 // ── router ───────────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -767,12 +1499,16 @@ serve(async (req) => {
   const action = url.searchParams.get("action");
 
   try {
-    if (action === "autocomplete")    return await handleAutocomplete(req);
-    if (action === "hotel-photo")     return await handleHotelPhoto(req);
-    if (action === "geocode")         return await handleGeocode(req);
-    if (action === "lookup-place")    return await handleLookupPlace(req);
-    if (action === "resolve-coords")  return await handleResolveCoords(req);
-    return Response.json({ error: "Unknown action" }, { status: 400, headers: corsHeaders });
+    if (action === "autocomplete") return await handleAutocomplete(req);
+    if (action === "hotel-photo") return await handleHotelPhoto(req);
+    if (action === "geocode") return await handleGeocode(req);
+    if (action === "lookup-place") return await handleLookupPlace(req);
+    if (action === "resolve-coords") return await handleResolveCoords(req);
+    if (action === "verify-place") return await handleVerifyPlace(req);
+    return Response.json(
+      { error: "Unknown action" },
+      { status: 400, headers: corsHeaders },
+    );
   } catch (err) {
     console.error("places-proxy error:", err.message);
     return Response.json(

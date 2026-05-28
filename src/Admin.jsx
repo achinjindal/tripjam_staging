@@ -44,6 +44,7 @@ export default function AdminConsole({ session, onHome }) {
   const [tripDetail, setTripDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [creditTxns, setCreditTxns] = useState([]);
+  const [verifyLadderRows, setVerifyLadderRows] = useState([]);
 
   // Check admin access
   useEffect(() => {
@@ -138,6 +139,26 @@ export default function AdminConsole({ session, onHome }) {
         .order("created_at", { ascending: false })
         .limit(500);
       setCreditTxns(data || []);
+    })();
+
+    // Verify-place ladder breakdown — last 30 days. Shows how many requests
+    // each tier of the cascading verification handled, so we can tune the
+    // thresholds based on real data (target: most hits in Tier 1/2 free
+    // paths, few in Tier 3+ paid paths).
+    (async () => {
+      const cutoff = new Date(Date.now() - 30 * 86400000)
+        .toISOString()
+        .slice(0, 10);
+      const { data } = await supabase
+        .from("api_usage")
+        .select("scope, count, period")
+        .eq("api", "verify-place")
+        .gte("period", cutoff);
+      const byScope = {};
+      (data || []).forEach((r) => {
+        byScope[r.scope] = (byScope[r.scope] || 0) + (r.count || 0);
+      });
+      setVerifyLadderRows(byScope);
     })();
   }, [isAdmin]);
 
@@ -800,6 +821,92 @@ export default function AdminConsole({ session, onHome }) {
                 </tbody>
               </table>
             </div>
+
+            {/* Verify-place ladder breakdown — last 30 days */}
+            {Object.keys(verifyLadderRows).length > 0 && (
+              <div style={{ marginBottom: 24 }}>
+                <div style={{ fontSize: 13, color: T.mist, marginBottom: 8 }}>
+                  Verify-place ladder (last 30 days)
+                </div>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={thStyle}>Tier</th>
+                      <th style={thStyle}>Hits</th>
+                      <th style={thStyle}>%</th>
+                      <th style={thStyle}>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      const order = [
+                        ["cache-hit", "Cache hit", "Free — repeat query"],
+                        [
+                          "override",
+                          "User override",
+                          "Free — geocode_overrides",
+                        ],
+                        ["tier1-photon", "Tier 1: Photon", "Free"],
+                        ["tier2-nominatim", "Tier 2: Nominatim", "Free"],
+                        [
+                          "tier3-haiku-pass",
+                          "Tier 3: Haiku repair",
+                          "~0.1 credits/call",
+                        ],
+                        [
+                          "tier4-google-call",
+                          "Tier 4: Google call",
+                          "1.7 credits/call (charged)",
+                        ],
+                        [
+                          "tier4-google-pass",
+                          "Tier 4: Google validated",
+                          "subset of tier4-google-call",
+                        ],
+                        [
+                          "tier5-alternatives",
+                          "Tier 5: User picker",
+                          "Haiku alts + user choice",
+                        ],
+                        [
+                          "unresolved",
+                          "Unresolved",
+                          "Fallback to Get Directions",
+                        ],
+                      ];
+                      const total = Object.values(verifyLadderRows).reduce(
+                        (s, n) => s + n,
+                        0,
+                      );
+                      return order
+                        .filter(([k]) => verifyLadderRows[k])
+                        .map(([k, label, note]) => (
+                          <tr key={k}>
+                            <td style={tdStyle}>{label}</td>
+                            <td style={{ ...tdStyle, fontWeight: 600 }}>
+                              {fmtNum(verifyLadderRows[k])}
+                            </td>
+                            <td style={tdStyle}>
+                              {total
+                                ? `${((verifyLadderRows[k] / total) * 100).toFixed(1)}%`
+                                : "—"}
+                            </td>
+                            <td
+                              style={{
+                                ...tdStyle,
+                                color: T.mist,
+                                fontSize: 11,
+                              }}
+                            >
+                              {note}
+                            </td>
+                          </tr>
+                        ));
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {/* Credit balances */}
             <div style={{ marginBottom: 24 }}>
