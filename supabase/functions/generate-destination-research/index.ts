@@ -104,7 +104,17 @@ OUTPUT FORMAT — return ONLY a single raw JSON object, no prose, no markdown fe
 }
 
 Rules:
-- 5–10 inspirations. Mix article and video. Mix well-known and less-known creators. No duplicates by author.
+- 6–10 inspirations TOTAL.
+- MANDATORY MIX — the final list must contain BOTH formats:
+    • at LEAST 3 entries with type="article" (named blog/Substack/journalist posts)
+    • at LEAST 3 entries with type="video" (YouTube videos by named individual creators)
+  If you can't surface 3 of either format, surface as many as you can find — but you MUST attempt explicit searches for both. Do not return only articles. Do not return only videos.
+- To find videos, run web_search queries that target YouTube specifically, e.g.:
+    site:youtube.com "<destination>" vlog
+    "<destination>" travel vlog YouTube
+    "<creator name>" "<destination>" YouTube
+  Prefer videos posted to a named YouTube channel (not auto-generated topic channels).
+- Mix well-known and less-known creators. No duplicates by author.
 - Every inspirations entry MUST also appear in sources (same URL, dedup by url; sources[].id is 1-indexed).
 - 0–6 place_insights. Each insight is short (≤ 15 words), in your own words, attributed via source_ids.
 - Do NOT fabricate authors, URLs, or dates. If web_search did not surface a fitting piece, return fewer entries. Better empty than fake.
@@ -307,11 +317,14 @@ serve(async (req) => {
       tripId,
     );
 
+    // `v` invalidates the 30-day cache when the prompt changes shape (e.g.
+    // requiring article+video mix). Bump on any breaking prompt change.
     const cacheKey = await sha1(
       JSON.stringify({
         d: destinations,
         t: tagResult.tags,
         m: monthBucket,
+        v: 2,
       }),
     );
 
@@ -375,10 +388,11 @@ serve(async (req) => {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 4000,
-        // Per F1 launch decision: cap at 4 web searches (down from 8 on the
-        // inspiration branch) — keeps cost predictable for a Haiku-tier call.
+        // Bumped to 6 (was 4) so Haiku has room for separate article-focused
+        // and YouTube-focused queries (enforced by the prompt's mandatory mix).
+        // Cost ceiling: 6 × $0.01 = $0.06 per cold call. Cache hits are free.
         tools: [
-          { type: "web_search_20250305", name: "web_search", max_uses: 4 },
+          { type: "web_search_20250305", name: "web_search", max_uses: 6 },
         ],
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userMessage }],

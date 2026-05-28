@@ -6931,11 +6931,26 @@ export default function App({
     destResearch.loading,
   ]);
 
-  // Background-load city-deep-dive for Magazine — destination only.
-  // D17 / R12 (Day 6 Part C): removed the auto top-2-cities pre-fetch that
-  // fired 2 extra deep dives users hadn't asked for. City deep dives now
-  // lazy-load on Magazine tab open (effect below) or on individual card click.
+  // Magazine view visibility — used to gate city-deep-dive prefetches so they
+  // don't race the Inspirations LLM call for Anthropic capacity. The user lands
+  // on Inspirations first; Magazine content only prefetches once they actually
+  // navigate to the Magazine view.
+  //   - Desktop pre-trip: separate top tab (pretripTab === "magazine")
+  //   - Mobile pre-trip: magazine bottom button + magazineSubTab === "magazine"
+  //   - Post-trip (mobile + desktop): magazine area + magazineSubTab === "magazine"
+  const magazineGridVisible =
+    (screen === "brainstorm" &&
+      pretripTab === "magazine" &&
+      (useDesktopShell || magazineSubTab === "magazine")) ||
+    (screen === "itinerary" &&
+      activeBottomTab === "brainstorm" &&
+      magazineSubTab === "magazine");
+
+  // Background-load city-deep-dive for the main destination — fires only when
+  // the Magazine view is actually visible so Inspirations gets the first
+  // Anthropic slot when the user lands on it.
   useEffect(() => {
+    if (!magazineGridVisible) return;
     if (pretripRoutes.length === 0) return;
     const rawDests = (pendingForm?.destinations || []).filter(
       (d) => !d.toLowerCase().includes("help me decide"),
@@ -6946,11 +6961,14 @@ export default function App({
       (rawDests.length ? rawDests.join(", ") : null);
     if (destination && !deepDiveCacheApp[destination])
       loadCityDeepDiveApp(destination);
-  }, [pretripRoutes.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [magazineGridVisible, pretripRoutes.length]);
 
-  // Lazy-load remaining city deep dives when Magazine tab opens — staggered to avoid burst
+  // Lazy-load remaining city deep dives when Magazine grid view becomes
+  // visible — staggered 500ms apart to avoid a burst.
   useEffect(() => {
-    if (pretripTab !== "magazine" || pretripRoutes.length === 0) return;
+    if (!magazineGridVisible) return;
+    if (pretripRoutes.length === 0) return;
     const allCities = new Set();
     for (const route of pretripRoutes) {
       for (const c of (route.city || "")
@@ -6966,7 +6984,8 @@ export default function App({
       setTimeout(() => loadCityDeepDiveApp(city), i * 500),
     );
     return () => timers.forEach(clearTimeout);
-  }, [pretripTab, pretripRoutes.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [magazineGridVisible, pretripRoutes.length]);
 
   const [chatUnread, setChatUnread] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
