@@ -87,6 +87,17 @@ export default function Avatar({ session }) {
     // PostHog reset + Sentry.setUser(null) are handled in main.jsx auth listener
   }
 
+  function goToTrips() {
+    setOpen(false);
+    if (window.location.pathname === "/") return;
+    window.history.pushState(null, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
+
+  // Hide "Your trips" when we're already on the home / trips list.
+  const onTripsList =
+    typeof window !== "undefined" && window.location.pathname === "/";
+
   return (
     <>
       <div
@@ -283,21 +294,23 @@ export default function Avatar({ session }) {
               </div>
             )}
 
+            {!onTripsList && (
+              <button
+                onClick={goToTrips}
+                style={menuItemStyle(T)}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.background = T.warm || "#FAF6F0")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.background = "white")
+                }
+              >
+                Your trips
+              </button>
+            )}
             <button
               onClick={signOut}
-              style={{
-                display: "block",
-                width: "100%",
-                padding: "12px 14px",
-                background: "white",
-                border: "none",
-                textAlign: "left",
-                fontSize: 13,
-                color: T.muted || "#8BA5BB",
-                cursor: "pointer",
-                fontFamily: "Georgia, serif",
-                transition: `background ${MOTION?.fast || "120ms"}`,
-              }}
+              style={menuItemStyle(T)}
               onMouseEnter={(e) =>
                 (e.currentTarget.style.background = T.warm || "#FAF6F0")
               }
@@ -317,4 +330,21 @@ export default function Avatar({ session }) {
       />
     </>
   );
+}
+
+// Shared style for the bottom-of-menu action buttons (Your trips, Sign out).
+function menuItemStyle(T) {
+  return {
+    display: "block",
+    width: "100%",
+    padding: "12px 14px",
+    background: "white",
+    border: "none",
+    textAlign: "left",
+    fontSize: 13,
+    color: T.muted || "#8BA5BB",
+    cursor: "pointer",
+    fontFamily: "Georgia, serif",
+    transition: `background 120ms`,
+  };
 }

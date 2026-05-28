@@ -888,6 +888,22 @@ const typeStyle = {
   hotel: { bg: "#F5F0FA", color: "#7B5EA7", label: "Stay" },
 };
 
+// Compact pill button shared by the desktop trip-context bar (Share +
+// Explore-other-plans). Same visual treatment as the mobile header buttons
+// so the actions look familiar across viewports.
+const tripContextBtnStyle = {
+  background: T.warm,
+  border: `1px solid ${T.sand}`,
+  borderRadius: RADIUS.full,
+  padding: "6px 12px",
+  color: T.ink,
+  fontSize: 12,
+  fontFamily: "Georgia,serif",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
+};
+
 const PACKAGE_PALETTE = [
   { bg: "#E8F4FD", color: "#1A6FA8" },
   { bg: "#FDE8F4", color: "#A8186F" },
@@ -9175,14 +9191,14 @@ export default function App({
                 margin: "0 auto",
                 position: "relative",
                 display: "grid",
-                gridTemplateColumns: "240px minmax(0, 1fr) minmax(0, 1fr)",
+                // 2-column layout (was 3-column). Left sidebar is gone — its
+                // contents (All trips, Share, Explore plans) moved into the
+                // Avatar dropdown and a slim header bar above the center tabs.
+                gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
                 // Right column splits ~60/40 between persistent map (top) and
-                // persistent Trippy chat (bottom). The named-area syntax lets
-                // the existing screen content stay a normal child of the grid
-                // and just claim the "center" cell via gridArea below.
+                // persistent Trippy chat (bottom).
                 gridTemplateRows: "60% 40%",
-                gridTemplateAreas:
-                  '"left center right-top" "left center right-bottom"',
+                gridTemplateAreas: '"center right-top" "center right-bottom"',
                 height: "100dvh",
                 overflow: "hidden",
                 paddingTop: "env(safe-area-inset-top, 0px)",
@@ -9508,11 +9524,15 @@ export default function App({
           </div>
         )}
 
-        {/* ── DESKTOP LEFT SIDEBAR (D22) ──
-            Lives in the "left" grid area on desktop, transparent on mobile.
-            Lightweight nav: trips link, trip name, edit/share, account avatar.
-            Phase 2 will expand this into the full trips-list sidebar. */}
-        {useDesktopShell && (
+        {/* ── DESKTOP LEFT SIDEBAR (D22) — REMOVED 2026-05-28 ──
+            The 240px sidebar was taking too much horizontal space. Its content
+            moved as follows:
+              - "All trips" link    → Avatar dropdown ("Your trips") on all viewports
+              - Trip name + dates   → slim trip-context bar above the center tab strip
+              - "Share trip" button → trip-context bar
+              - "Explore other plans" → trip-context bar (itinerary screen only)
+              - Map polylines       → removed entirely (didn't convey real route info) */}
+        {false && useDesktopShell && (
           <div
             style={{
               gridArea: "left",
@@ -9670,6 +9690,69 @@ export default function App({
               : { display: "contents" }
           }
         >
+          {/* ── DESKTOP TRIP-CONTEXT BAR (D22 — added 2026-05-28) ──
+            Slim header replacing the (removed) left sidebar's trip identity +
+            actions. Trip name + dates on the left; Explore-other-plans (only
+            on itinerary) and Share on the right. */}
+          {useDesktopShell && trip?.id && (
+            <div
+              style={{
+                flexShrink: 0,
+                background: T.chalk,
+                borderBottom: `1px solid ${T.sand}`,
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: "10px 16px",
+                minHeight: 44,
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontFamily: "'DM Serif Display',serif",
+                    fontSize: 15,
+                    color: T.ink,
+                    lineHeight: 1.2,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {trip?.name || trip?.destination || "Your trip"}
+                </div>
+                {trip?.start_date && trip?.end_date && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: T.mist,
+                      fontFamily: "Georgia,serif",
+                      marginTop: 1,
+                    }}
+                  >
+                    {trip.start_date} → {trip.end_date}
+                  </div>
+                )}
+              </div>
+              {screen === "itinerary" && (
+                <button
+                  onClick={() => {
+                    setScreen("brainstorm");
+                    if (onUrlChange) onUrlChange(`/trip/${trip.id}/plans`);
+                  }}
+                  style={tripContextBtnStyle}
+                >
+                  🛣 Explore plans
+                </button>
+              )}
+              <button
+                onClick={() => setShowShare(true)}
+                style={tripContextBtnStyle}
+              >
+                📤 Share
+              </button>
+            </div>
+          )}
           {/* ── DESKTOP TOP-TAB ROW (D22) ──
             Replaces the mobile bottom-nav. The Map tab is omitted (map is
             persistent in the right column) so brainstorm shows Route | Magazine

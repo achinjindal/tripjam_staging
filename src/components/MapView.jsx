@@ -1,12 +1,5 @@
 import { useState, useEffect, Fragment } from "react";
-import {
-  MapContainer,
-  TileLayer,
-  Marker,
-  Popup,
-  Polyline,
-  useMap,
-} from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { T } from "../theme";
@@ -651,17 +644,9 @@ export function RouteMapView({
               ];
             return (
               <Fragment key={route.id}>
-                {pins.length > 1 && (
-                  <Polyline
-                    positions={pins.map((p) => [p.lat, p.lng])}
-                    pathOptions={{
-                      color,
-                      weight: 3,
-                      opacity: 0.6,
-                      dashArray: "6 6",
-                    }}
-                  />
-                )}
+                {/* Polyline removed — dotted lines connecting pins didn't add
+                    information (we don't actually know the real route between
+                    cities; the markers are enough to convey route geography). */}
                 {pins.map((pin, j) => (
                   <Marker
                     key={j}
