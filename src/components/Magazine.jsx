@@ -1347,10 +1347,9 @@ export function InspirationsSection({
       >
         {sub}
       </div>
-      {/* Opt-in CTA — only shown when never loaded + not currently loading.
-          Once the user pays the ~8-credit cost, subsequent opens use the
-          30-day cache (free). */}
-      {!loading && !hasLoaded && !digest && onLoad && (
+      {/* Retry button — only when the load failed. Default state is auto-loaded
+          by the parent on tab open, so no opt-in CTA. */}
+      {!loading && errored && onLoad && (
         <button
           onClick={onLoad}
           style={{
@@ -1368,8 +1367,7 @@ export function InspirationsSection({
             cursor: "pointer",
           }}
         >
-          ✨ Get destination inspirations &nbsp;
-          <span style={{ opacity: 0.75, fontWeight: 400 }}>~8 credits</span>
+          ↻ Try again
         </button>
       )}
       {loading && (

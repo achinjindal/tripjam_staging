@@ -4845,6 +4845,55 @@ function VerifyAlternativesCard({
   );
 }
 
+/* ─── MAGAZINE SUB-TAB STRIP ─────────────────────────────────────────── */
+// Used inside the "magazine area" to toggle between Inspirations and
+// Magazine views on mobile (both pre- and post-trip) and desktop post-trip.
+// Hidden on desktop pre-trip where the two views are separate top tabs.
+function MagazineSubTabStrip({ value, onChange }) {
+  const tabs = [
+    { key: "inspirations", label: "Inspirations" },
+    { key: "magazine", label: "Magazine" },
+  ];
+  return (
+    <div
+      style={{
+        flexShrink: 0,
+        display: "flex",
+        gap: 4,
+        padding: "10px 16px",
+        background: T.chalk,
+        borderBottom: `1px solid ${T.sand}`,
+      }}
+    >
+      {tabs.map(({ key, label }) => {
+        const active = value === key;
+        return (
+          <button
+            key={key}
+            onClick={() => onChange(key)}
+            style={{
+              flex: 1,
+              padding: "8px 12px",
+              borderRadius: RADIUS.full,
+              border: "none",
+              background: active ? T.ocean : "transparent",
+              color: active ? T.chalk : T.mist,
+              fontFamily: "Georgia, serif",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              transition: `all ${MOTION.normal}`,
+              minHeight: 36,
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ─── LOADING HINT ───────────────────────────────────────────────────── */
 function LoadingHint() {
   return (
@@ -6679,7 +6728,17 @@ export default function App({
     trip?.departure_time,
   ]);
 
-  const [pretripTab, setPretripTab] = useState("brainstorm"); // pre-trip bottom nav tab
+  // Pre-trip tab. Values:
+  //   "brainstorm"  — Route selection (existing)
+  //   "inspirations" — Web-search-backed travel inspirations (new, desktop pre-trip only)
+  //   "magazine"    — Magazine grid (city deep-dives etc)
+  // Default: "inspirations" so the user lands on real-world content rather than
+  // an empty Route picker on first open.
+  const [pretripTab, setPretripTab] = useState("inspirations");
+  // Sub-tab inside the "magazine area" — used on mobile (both pre- and post-trip)
+  // and on desktop post-trip, where Inspirations and Magazine share one top-tab
+  // slot. Hidden on desktop pre-trip where they're separate top tabs.
+  const [magazineSubTab, setMagazineSubTab] = useState("inspirations");
   const [magazineFilterCities, setMagazineFilterCities] = useState(null); // cities to filter magazine by (from "Tell me more")
   const [pretripDeepDiveCity, setPretripDeepDiveCity] = useState(null); // city for deep dive in pre-trip magazine
   const [showPreIgSheet, setShowPreIgSheet] = useState(false); // pre-IG refinement bottom sheet
@@ -6807,12 +6866,21 @@ export default function App({
         },
       );
       if (!res.ok) {
+        // Read the body so the actual server error surfaces in the console
+        // (previously we threw "HTTP 500" with zero context — useless).
+        let detail = "";
+        try {
+          const body = await res.text();
+          detail = body.slice(0, 400);
+        } catch {
+          // ignore body read failure
+        }
         if (res.status === 402) {
           // Out of credits — surface the standard paywall (CreditsOverlay).
           const { openPaywall } = await import("./credits");
-          openPaywall("Inspirations needs ~8 credits");
+          openPaywall("Inspirations couldn't load");
         }
-        throw new Error(`HTTP ${res.status}`);
+        throw new Error(`HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
       }
       const data = await res.json();
       setDestResearch({
@@ -6831,6 +6899,37 @@ export default function App({
       }));
     }
   };
+
+  // Auto-load Inspirations when the user navigates anywhere that surfaces them:
+  //   - desktop pre-trip Inspirations top tab (pretripTab === "inspirations")
+  //   - any "magazine area" page where the active sub-tab is Inspirations
+  //     (mobile pre-trip with pretripTab === "magazine", or post-trip with
+  //      activeBottomTab === "brainstorm")
+  // Fires once per session (hasLoaded guard). Cached server-side for 30 days
+  // so subsequent calls are free.
+  useEffect(() => {
+    const onDesktopInspirations =
+      screen === "brainstorm" && pretripTab === "inspirations";
+    const onMobilePretripMagazine =
+      screen === "brainstorm" && pretripTab === "magazine";
+    const onPosttripMagazine =
+      screen === "itinerary" && activeBottomTab === "brainstorm";
+    const inspirationsVisible =
+      onDesktopInspirations ||
+      ((onMobilePretripMagazine || onPosttripMagazine) &&
+        magazineSubTab === "inspirations");
+    if (!inspirationsVisible) return;
+    if (destResearch.hasLoaded || destResearch.loading) return;
+    loadDestinationResearch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    screen,
+    pretripTab,
+    activeBottomTab,
+    magazineSubTab,
+    destResearch.hasLoaded,
+    destResearch.loading,
+  ]);
 
   // Background-load city-deep-dive for Magazine — destination only.
   // D17 / R12 (Day 6 Part C): removed the auto top-2-cities pre-fetch that
@@ -9030,6 +9129,21 @@ export default function App({
   const isTripView = screen === "brainstorm" || screen === "itinerary";
   const useDesktopShell = isDesktop && isTripView;
 
+  // Magazine-area view selection. The "magazine area" hosts two sub-views:
+  // Inspirations (web-search-backed reading list) and Magazine (city deep-dives).
+  //   - Desktop pre-trip: separate top tabs ("Inspirations" + "Magazine"), no sub-strip.
+  //   - Mobile pre-trip: one bottom-nav button labelled "Inspirations", page sub-tabbed.
+  //   - Post-trip (both): one top/bottom tab labelled "Inspirations", page sub-tabbed.
+  const pretripMagView =
+    pretripTab === "inspirations"
+      ? "inspirations"
+      : useDesktopShell
+        ? "magazine"
+        : magazineSubTab;
+  const showPretripSubTabs = pretripTab === "magazine" && !useDesktopShell;
+  const posttripMagView = magazineSubTab;
+  const showPosttripSubTabs = true;
+
   return (
     <ErrorBoundary>
       <div
@@ -9554,10 +9668,13 @@ export default function App({
               {(screen === "brainstorm"
                 ? [
                     { key: "brainstorm", icon: "🛣️", label: "Route" },
+                    { key: "inspirations", icon: "✨", label: "Inspirations" },
                     { key: "magazine", icon: "📖", label: "Magazine" },
                   ]
                 : [
-                    { key: "brainstorm", icon: "📖", label: "Magazine" },
+                    // Post-trip: "brainstorm" key is the magazine area; we relabel
+                    // to "Inspirations" because the default sub-tab is Inspirations.
+                    { key: "brainstorm", icon: "✨", label: "Inspirations" },
                     { key: "itinerary", icon: "🗓", label: "Itinerary" },
                     { key: "board", icon: "📋", label: "Board" },
                   ]
@@ -10111,344 +10228,372 @@ export default function App({
                     </div>
                   );
                 })()}
-              {pretripTab === "magazine" && !pretripDeepDiveCity && (
-                <div style={{ flex: 1, overflowY: "auto", background: T.warm }}>
+              {(pretripTab === "magazine" || pretripTab === "inspirations") &&
+                !pretripDeepDiveCity && (
                   <div
-                    style={{
-                      padding: "20px 16px 12px",
-                      background: T.chalk,
-                      borderBottom: `1px solid ${T.sand}`,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                    }}
+                    style={{ flex: 1, overflowY: "auto", background: T.warm }}
                   >
-                    {magazineFilterCities && (
-                      <button
-                        onClick={() => {
-                          setMagazineFilterCities(null);
-                          setMagazineFilterRouteId(null);
-                          setPretripTab("brainstorm");
-                        }}
-                        style={{
-                          background: "none",
-                          border: "none",
-                          fontSize: 20,
-                          cursor: "pointer",
-                          color: T.ocean,
-                          padding: "0 4px",
-                          lineHeight: 1,
-                        }}
-                      >
-                        ←
-                      </button>
-                    )}
-                    <div style={{ flex: 1 }}>
-                      <div
-                        style={{
-                          fontFamily: "'DM Serif Display',serif",
-                          fontSize: 20,
-                          color: T.ink,
-                        }}
-                      >
-                        {magazineFilterCities
-                          ? (() => {
-                              // Show country/region from route title (e.g. "Georgia – Caucasus Explorer" → "Georgia")
-                              const route = magazineFilterRouteId
-                                ? (pretripRoutes || []).find(
-                                    (r) => r.id === magazineFilterRouteId,
-                                  )
-                                : null;
-                              if (route?.title)
-                                return route.title
-                                  .split(/\s*[–—-]\s*/)[0]
-                                  .trim();
-                              return magazineFilterCities.join(", ");
-                            })()
-                          : editingTrip?.destination ||
-                            (pendingForm?.destinations || [])
-                              .filter(
-                                (d) =>
-                                  !d.toLowerCase().includes("help me decide"),
-                              )
-                              .join(", ") ||
-                            "Magazine"}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 12,
-                          color: T.mist,
-                          fontFamily: "Georgia,serif",
-                          marginTop: 4,
-                        }}
-                      >
-                        {magazineFilterCities
-                          ? "Explore this route's destinations"
-                          : "Explore the destinations across your trip plans"}
-                      </div>
-                    </div>
-                    {magazineFilterCities && (
-                      <button
-                        onClick={() => {
-                          setMagazineFilterCities(null);
-                          setMagazineFilterRouteId(null);
-                        }}
-                        style={{
-                          background: T.sand,
-                          border: "none",
-                          borderRadius: RADIUS.full,
-                          padding: "5px 11px",
-                          color: T.ink,
-                          fontSize: 11,
-                          cursor: "pointer",
-                          fontFamily: "Georgia,serif",
-                        }}
-                      >
-                        Show all
-                      </button>
-                    )}
-                  </div>
-                  <div
-                    style={{ display: "flex", flexDirection: "column", gap: 0 }}
-                  >
-                    {/* Destination-level intro — always shown with hero photo */}
-                    {(() => {
-                      // Derive destination: from trip, form, or route title (for "Help me decide" flows)
-                      const rawDest = (pendingForm?.destinations || []).filter(
-                        (d) => !d.toLowerCase().includes("help me decide"),
-                      );
-                      let dest =
-                        editingTrip?.destination ||
-                        (rawDest.length ? rawDest.join(", ") : null);
-                      // If filtered by a route, use country from route title
-                      if (!dest && magazineFilterRouteId) {
-                        const route = (pretripRoutes || []).find(
-                          (r) => r.id === magazineFilterRouteId,
-                        );
-                        if (route?.title)
-                          dest = route.title.split(/\s*[–—-]\s*/)[0].trim();
-                      }
-                      if (!dest) return null;
-                      // Load deep dive if not cached
-                      if (!deepDiveCacheApp[dest]) loadCityDeepDiveApp(dest);
-                      const dd = deepDiveCacheApp[dest] || null;
-                      const data = dd && typeof dd === "object" ? dd : null;
-                      const isLoading = dd === "loading";
-                      if (!dest) return null;
-                      return (
-                        <DestinationHero
-                          dest={dest}
-                          isLoading={isLoading}
-                          data={data}
+                    <div
+                      style={{
+                        padding: "20px 16px 12px",
+                        background: T.chalk,
+                        borderBottom: `1px solid ${T.sand}`,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                      }}
+                    >
+                      {magazineFilterCities && (
+                        <button
+                          onClick={() => {
+                            setMagazineFilterCities(null);
+                            setMagazineFilterRouteId(null);
+                            setPretripTab("brainstorm");
+                          }}
+                          style={{
+                            background: "none",
+                            border: "none",
+                            fontSize: 20,
+                            cursor: "pointer",
+                            color: T.ocean,
+                            padding: "0 4px",
+                            lineHeight: 1,
+                          }}
                         >
-                          <div
-                            style={{
-                              fontSize: 13,
-                              color: T.ink,
-                              fontFamily: "Georgia,serif",
-                              lineHeight: 1.6,
-                            }}
-                          >
-                            {data?.writeup}
-                          </div>
-                          {data?.didYouKnow && (
-                            <div
-                              style={{
-                                marginTop: 10,
-                                padding: "12px 16px",
-                                borderLeft: `3px solid ${T.ocean}`,
-                                background: `linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,
-                                borderRadius: "0 12px 12px 0",
-                                fontSize: 13,
-                                lineHeight: 1.55,
-                                color: T.ocean,
-                                fontFamily: "Georgia,serif",
-                                fontStyle: "italic",
-                              }}
-                            >
-                              💡 {data.didYouKnow}
-                            </div>
-                          )}
-                          <a
-                            href={`https://www.google.com/search?q=${encodeURIComponent("site:tripadvisor.com Tourism " + dest)}&btnI`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 5,
-                              marginTop: 12,
-                              padding: "8px 14px",
-                              borderRadius: RADIUS.md,
-                              border: `1px solid ${T.moss}33`,
-                              color: T.moss,
-                              fontFamily: "Georgia,serif",
-                              fontSize: 12,
-                              fontWeight: 600,
-                              textDecoration: "none",
-                            }}
-                          >
-                            🗺 Explore {dest} on TripAdvisor
-                          </a>
-                        </DestinationHero>
-                      );
-                    })()}
-                    {/* F1 Inspirations — web-search-backed reading list.
-                        Opt-in: shows the "Get destination inspirations · ~8 credits"
-                        button until the user clicks it. Result is cached for 30 days
-                        in destination_research table, so subsequent loads are free. */}
-                    <InspirationsSection
-                      digest={destResearch.digest}
-                      loading={destResearch.loading}
-                      errored={destResearch.errored}
-                      hasLoaded={destResearch.hasLoaded}
-                      onLoad={loadDestinationResearch}
-                    />
-                    {(() => {
-                      // Collect all unique cities — optionally filtered by route
-                      const filterSet = magazineFilterCities
-                        ? new Set(
-                            magazineFilterCities.map((c) => c.toLowerCase()),
-                          )
-                        : null;
-                      // Exclude cities that match the destination (already shown as DestinationHero)
-                      const rawDests = (pendingForm?.destinations || []).filter(
-                        (d) => !d.toLowerCase().includes("help me decide"),
-                      );
-                      const destName =
-                        editingTrip?.destination ||
-                        (rawDests.length ? rawDests.join(", ") : "");
-                      const destWords = destName
-                        .toLowerCase()
-                        .split(/[\s,]+/)
-                        .filter(Boolean);
-                      const isDestMatch = (city) => {
-                        const cl = city.toLowerCase();
-                        return (
-                          cl === destName.toLowerCase() ||
-                          destWords.some(
-                            (w) => w.length > 3 && cl.includes(w),
-                          ) ||
-                          cl.includes(destName.toLowerCase())
-                        );
-                      };
-                      const allCities = [];
-                      const seen = new Set();
-                      for (const route of pretripRoutes) {
-                        if (route.dismissed) continue; // skip dismissed routes
-                        for (const c of (route.city || "")
-                          .split(",")
-                          .map((s) => s.trim())
-                          .filter(Boolean)) {
-                          if (filterSet && !filterSet.has(c.toLowerCase()))
-                            continue;
-                          if (isDestMatch(c)) continue; // already shown as destination hero
-                          if (!seen.has(c.toLowerCase())) {
-                            seen.add(c.toLowerCase());
-                            allCities.push({ city: c, fromRoute: route.title });
+                          ←
+                        </button>
+                      )}
+                      <div style={{ flex: 1 }}>
+                        <div
+                          style={{
+                            fontFamily: "'DM Serif Display',serif",
+                            fontSize: 20,
+                            color: T.ink,
+                          }}
+                        >
+                          {magazineFilterCities
+                            ? (() => {
+                                // Show country/region from route title (e.g. "Georgia – Caucasus Explorer" → "Georgia")
+                                const route = magazineFilterRouteId
+                                  ? (pretripRoutes || []).find(
+                                      (r) => r.id === magazineFilterRouteId,
+                                    )
+                                  : null;
+                                if (route?.title)
+                                  return route.title
+                                    .split(/\s*[–—-]\s*/)[0]
+                                    .trim();
+                                return magazineFilterCities.join(", ");
+                              })()
+                            : editingTrip?.destination ||
+                              (pendingForm?.destinations || [])
+                                .filter(
+                                  (d) =>
+                                    !d.toLowerCase().includes("help me decide"),
+                                )
+                                .join(", ") ||
+                              "Magazine"}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: T.mist,
+                            fontFamily: "Georgia,serif",
+                            marginTop: 4,
+                          }}
+                        >
+                          {magazineFilterCities
+                            ? "Explore this route's destinations"
+                            : "Explore the destinations across your trip plans"}
+                        </div>
+                      </div>
+                      {magazineFilterCities && (
+                        <button
+                          onClick={() => {
+                            setMagazineFilterCities(null);
+                            setMagazineFilterRouteId(null);
+                          }}
+                          style={{
+                            background: T.sand,
+                            border: "none",
+                            borderRadius: RADIUS.full,
+                            padding: "5px 11px",
+                            color: T.ink,
+                            fontSize: 11,
+                            cursor: "pointer",
+                            fontFamily: "Georgia,serif",
+                          }}
+                        >
+                          Show all
+                        </button>
+                      )}
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 0,
+                      }}
+                    >
+                      {showPretripSubTabs && (
+                        <MagazineSubTabStrip
+                          value={magazineSubTab}
+                          onChange={setMagazineSubTab}
+                        />
+                      )}
+                      {/* Destination-level intro — Magazine view only */}
+                      {pretripMagView === "magazine" &&
+                        (() => {
+                          // Derive destination: from trip, form, or route title (for "Help me decide" flows)
+                          const rawDest = (
+                            pendingForm?.destinations || []
+                          ).filter(
+                            (d) => !d.toLowerCase().includes("help me decide"),
+                          );
+                          let dest =
+                            editingTrip?.destination ||
+                            (rawDest.length ? rawDest.join(", ") : null);
+                          // If filtered by a route, use country from route title
+                          if (!dest && magazineFilterRouteId) {
+                            const route = (pretripRoutes || []).find(
+                              (r) => r.id === magazineFilterRouteId,
+                            );
+                            if (route?.title)
+                              dest = route.title.split(/\s*[–—-]\s*/)[0].trim();
                           }
-                        }
-                      }
-                      if (allCities.length === 0) {
-                        return (
-                          <div
-                            style={{
-                              textAlign: "center",
-                              padding: "40px 0",
-                              color: T.mist,
-                              fontFamily: "Georgia,serif",
-                              fontSize: 13,
-                            }}
-                          >
-                            Routes are still loading — cities will appear here
-                            shortly
-                          </div>
-                        );
-                      }
-                      return allCities.map(({ city, fromRoute }, ci) => {
-                        const dd = deepDiveCacheApp[city];
-                        // Build highlights from moreSights
-                        const data = dd && typeof dd === "object" ? dd : null;
-                        const highlights = (data?.moreSights || []).map(
-                          (s) => ({
-                            ...s,
-                            type: "sight",
-                          }),
-                        );
-                        return (
-                          <Fragment key={city}>
-                            {ci > 0 && (
+                          if (!dest) return null;
+                          // Load deep dive if not cached
+                          if (!deepDiveCacheApp[dest])
+                            loadCityDeepDiveApp(dest);
+                          const dd = deepDiveCacheApp[dest] || null;
+                          const data = dd && typeof dd === "object" ? dd : null;
+                          const isLoading = dd === "loading";
+                          if (!dest) return null;
+                          return (
+                            <DestinationHero
+                              dest={dest}
+                              isLoading={isLoading}
+                              data={data}
+                            >
                               <div
                                 style={{
-                                  height: 8,
-                                  background: "#F3EDE4",
-                                  margin: "0 -16px",
+                                  fontSize: 13,
+                                  color: T.ink,
+                                  fontFamily: "Georgia,serif",
+                                  lineHeight: 1.6,
                                 }}
-                              />
-                            )}
-                            <CityCard
-                              city={city}
-                              cityDays={[{ label: fromRoute }]}
-                              writeup={data?.writeup || ""}
-                              deepDive={dd}
-                              onDeepDive={() => {
-                                loadCityDeepDiveApp(city);
-                                setPretripDeepDiveCity(city);
-                              }}
-                            >
-                              {highlights.length > 0 && (
-                                <>
-                                  <div
-                                    style={{
-                                      fontSize: 10,
-                                      color: T.mist,
-                                      fontFamily: "Georgia,serif",
-                                      textTransform: "uppercase",
-                                      letterSpacing: 1.2,
-                                      marginBottom: 10,
-                                    }}
-                                  >
-                                    Things to see
-                                  </div>
-                                  <div
-                                    style={{
-                                      display: "grid",
-                                      gridTemplateColumns: "1fr 1fr",
-                                      gap: 10,
-                                      marginBottom: 10,
-                                    }}
-                                  >
-                                    {highlights.map((act, i) => (
-                                      <MagazineHighlightCard
-                                        key={i}
-                                        item={act}
-                                        city={city}
-                                        masonry={true}
-                                        tall={i % 3 === 0}
-                                        onAskTrippy={(title) => {
-                                          setChatInput(
-                                            `Tell me about "${title}"`,
-                                          );
-                                          setChatOpen(true);
-                                          setChatUnread(false);
-                                          setTimeout(
-                                            () => chatInputRef.current?.focus(),
-                                            50,
-                                          );
-                                        }}
-                                      />
-                                    ))}
-                                  </div>
-                                </>
+                              >
+                                {data?.writeup}
+                              </div>
+                              {data?.didYouKnow && (
+                                <div
+                                  style={{
+                                    marginTop: 10,
+                                    padding: "12px 16px",
+                                    borderLeft: `3px solid ${T.ocean}`,
+                                    background: `linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,
+                                    borderRadius: "0 12px 12px 0",
+                                    fontSize: 13,
+                                    lineHeight: 1.55,
+                                    color: T.ocean,
+                                    fontFamily: "Georgia,serif",
+                                    fontStyle: "italic",
+                                  }}
+                                >
+                                  💡 {data.didYouKnow}
+                                </div>
                               )}
-                            </CityCard>
-                          </Fragment>
-                        );
-                      });
-                    })()}
+                              <a
+                                href={`https://www.google.com/search?q=${encodeURIComponent("site:tripadvisor.com Tourism " + dest)}&btnI`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 5,
+                                  marginTop: 12,
+                                  padding: "8px 14px",
+                                  borderRadius: RADIUS.md,
+                                  border: `1px solid ${T.moss}33`,
+                                  color: T.moss,
+                                  fontFamily: "Georgia,serif",
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  textDecoration: "none",
+                                }}
+                              >
+                                🗺 Explore {dest} on TripAdvisor
+                              </a>
+                            </DestinationHero>
+                          );
+                        })()}
+                      {/* F1 Inspirations — web-search-backed reading list. Auto-loads
+                        when the Inspirations view becomes visible. Cached server-side
+                        for 30 days. */}
+                      {pretripMagView === "inspirations" && (
+                        <InspirationsSection
+                          digest={destResearch.digest}
+                          loading={destResearch.loading}
+                          errored={destResearch.errored}
+                          hasLoaded={destResearch.hasLoaded}
+                          onLoad={loadDestinationResearch}
+                        />
+                      )}
+                      {pretripMagView === "magazine" &&
+                        (() => {
+                          // Collect all unique cities — optionally filtered by route
+                          const filterSet = magazineFilterCities
+                            ? new Set(
+                                magazineFilterCities.map((c) =>
+                                  c.toLowerCase(),
+                                ),
+                              )
+                            : null;
+                          // Exclude cities that match the destination (already shown as DestinationHero)
+                          const rawDests = (
+                            pendingForm?.destinations || []
+                          ).filter(
+                            (d) => !d.toLowerCase().includes("help me decide"),
+                          );
+                          const destName =
+                            editingTrip?.destination ||
+                            (rawDests.length ? rawDests.join(", ") : "");
+                          const destWords = destName
+                            .toLowerCase()
+                            .split(/[\s,]+/)
+                            .filter(Boolean);
+                          const isDestMatch = (city) => {
+                            const cl = city.toLowerCase();
+                            return (
+                              cl === destName.toLowerCase() ||
+                              destWords.some(
+                                (w) => w.length > 3 && cl.includes(w),
+                              ) ||
+                              cl.includes(destName.toLowerCase())
+                            );
+                          };
+                          const allCities = [];
+                          const seen = new Set();
+                          for (const route of pretripRoutes) {
+                            if (route.dismissed) continue; // skip dismissed routes
+                            for (const c of (route.city || "")
+                              .split(",")
+                              .map((s) => s.trim())
+                              .filter(Boolean)) {
+                              if (filterSet && !filterSet.has(c.toLowerCase()))
+                                continue;
+                              if (isDestMatch(c)) continue; // already shown as destination hero
+                              if (!seen.has(c.toLowerCase())) {
+                                seen.add(c.toLowerCase());
+                                allCities.push({
+                                  city: c,
+                                  fromRoute: route.title,
+                                });
+                              }
+                            }
+                          }
+                          if (allCities.length === 0) {
+                            return (
+                              <div
+                                style={{
+                                  textAlign: "center",
+                                  padding: "40px 0",
+                                  color: T.mist,
+                                  fontFamily: "Georgia,serif",
+                                  fontSize: 13,
+                                }}
+                              >
+                                Routes are still loading — cities will appear
+                                here shortly
+                              </div>
+                            );
+                          }
+                          return allCities.map(({ city, fromRoute }, ci) => {
+                            const dd = deepDiveCacheApp[city];
+                            // Build highlights from moreSights
+                            const data =
+                              dd && typeof dd === "object" ? dd : null;
+                            const highlights = (data?.moreSights || []).map(
+                              (s) => ({
+                                ...s,
+                                type: "sight",
+                              }),
+                            );
+                            return (
+                              <Fragment key={city}>
+                                {ci > 0 && (
+                                  <div
+                                    style={{
+                                      height: 8,
+                                      background: "#F3EDE4",
+                                      margin: "0 -16px",
+                                    }}
+                                  />
+                                )}
+                                <CityCard
+                                  city={city}
+                                  cityDays={[{ label: fromRoute }]}
+                                  writeup={data?.writeup || ""}
+                                  deepDive={dd}
+                                  onDeepDive={() => {
+                                    loadCityDeepDiveApp(city);
+                                    setPretripDeepDiveCity(city);
+                                  }}
+                                >
+                                  {highlights.length > 0 && (
+                                    <>
+                                      <div
+                                        style={{
+                                          fontSize: 10,
+                                          color: T.mist,
+                                          fontFamily: "Georgia,serif",
+                                          textTransform: "uppercase",
+                                          letterSpacing: 1.2,
+                                          marginBottom: 10,
+                                        }}
+                                      >
+                                        Things to see
+                                      </div>
+                                      <div
+                                        style={{
+                                          display: "grid",
+                                          gridTemplateColumns: "1fr 1fr",
+                                          gap: 10,
+                                          marginBottom: 10,
+                                        }}
+                                      >
+                                        {highlights.map((act, i) => (
+                                          <MagazineHighlightCard
+                                            key={i}
+                                            item={act}
+                                            city={city}
+                                            masonry={true}
+                                            tall={i % 3 === 0}
+                                            onAskTrippy={(title) => {
+                                              setChatInput(
+                                                `Tell me about "${title}"`,
+                                              );
+                                              setChatOpen(true);
+                                              setChatUnread(false);
+                                              setTimeout(
+                                                () =>
+                                                  chatInputRef.current?.focus(),
+                                                50,
+                                              );
+                                            }}
+                                          />
+                                        ))}
+                                      </div>
+                                    </>
+                                  )}
+                                </CityCard>
+                              </Fragment>
+                            );
+                          });
+                        })()}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
               {/* Bottom nav — pre-trip. Hidden on desktop (the Map tab is
                 redundant since the route map is persistent on the right; the
@@ -10464,7 +10609,10 @@ export default function App({
                 }}
               >
                 {[
-                  { key: "magazine", icon: "📖", label: "Magazine" },
+                  // Pre-trip bottom nav. "Magazine" key still drives the magazine
+                  // area state; we relabel to "Inspirations" because the default
+                  // sub-tab inside is Inspirations.
+                  { key: "magazine", icon: "📖", label: "Inspirations" },
                   { key: "brainstorm", icon: "🛣️", label: "Route" },
                   { key: "map", icon: "🗺", label: "Map" },
                 ].map(({ key, icon, label }) => {
@@ -11160,22 +11308,61 @@ export default function App({
                   })()}
                 </div>
 
-                {/* ── MAGAZINE TAB ── */}
+                {/* ── INSPIRATIONS / MAGAZINE TAB (post-trip) ──
+                     Bottom nav button is labelled "Inspirations" and opens a
+                     page with sub-tabs: Inspirations (web-search reading list)
+                     and Magazine (existing BrainstormView with routes + city
+                     content). Inspirations is the default sub-tab. */}
                 {activeBottomTab === "brainstorm" && (
-                  <BrainstormView
-                    trip={trip}
-                    session={session}
-                    days={days}
-                    onGeneratingChange={setRoutesGenerating}
-                    deepDiveCache={deepDiveCacheApp}
-                    loadCityDeepDive={loadCityDeepDiveApp}
-                    onAskTrippy={(title) => {
-                      setChatInput(`Tell me about "${title}"`);
-                      setChatOpen(true);
-                      setChatUnread(false);
-                      setTimeout(() => chatInputRef.current?.focus(), 50);
+                  <div
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      flexDirection: "column",
+                      overflow: "hidden",
                     }}
-                  />
+                  >
+                    {showPosttripSubTabs && (
+                      <MagazineSubTabStrip
+                        value={magazineSubTab}
+                        onChange={setMagazineSubTab}
+                      />
+                    )}
+                    {posttripMagView === "inspirations" && (
+                      <div
+                        style={{
+                          flex: 1,
+                          overflowY: "auto",
+                          background: T.warm,
+                          padding: "16px 0",
+                        }}
+                      >
+                        <InspirationsSection
+                          digest={destResearch.digest}
+                          loading={destResearch.loading}
+                          errored={destResearch.errored}
+                          hasLoaded={destResearch.hasLoaded}
+                          onLoad={loadDestinationResearch}
+                        />
+                      </div>
+                    )}
+                    {posttripMagView === "magazine" && (
+                      <BrainstormView
+                        trip={trip}
+                        session={session}
+                        days={days}
+                        onGeneratingChange={setRoutesGenerating}
+                        deepDiveCache={deepDiveCacheApp}
+                        loadCityDeepDive={loadCityDeepDiveApp}
+                        onAskTrippy={(title) => {
+                          setChatInput(`Tell me about "${title}"`);
+                          setChatOpen(true);
+                          setChatUnread(false);
+                          setTimeout(() => chatInputRef.current?.focus(), 50);
+                        }}
+                      />
+                    )}
+                  </div>
                 )}
 
                 {/* Chat sheet is rendered at App root */}
@@ -11270,7 +11457,10 @@ export default function App({
                   }}
                 >
                   {[
-                    { key: "brainstorm", icon: "📖", label: "Magazine" },
+                    // Post-trip bottom nav. "brainstorm" key still drives the
+                    // magazine area state; we relabel to "Inspirations" because
+                    // the default sub-tab inside is Inspirations.
+                    { key: "brainstorm", icon: "📖", label: "Inspirations" },
                     { key: "itinerary", icon: "🗓", label: "Itinerary" },
                     { key: "map", icon: "🗺", label: "Map" },
                     { key: "board", icon: "📋", label: "Board" },
