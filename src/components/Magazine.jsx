@@ -1160,11 +1160,49 @@ function authorTagStyle(type) {
   }
 }
 
+// Extract a YouTube video id from any standard YouTube URL shape:
+//   youtube.com/watch?v=XXX        | https
+//   youtu.be/XXX                   | short link
+//   youtube.com/embed/XXX          | already-embedded
+//   youtube.com/shorts/XXX         | shorts
+// Returns null when the URL isn't a YouTube video (any other host, or a
+// channel/playlist page rather than a single video).
+function extractYouTubeId(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    if (host === "youtu.be") {
+      const id = u.pathname.replace(/^\//, "").split("/")[0];
+      return /^[A-Za-z0-9_-]{6,15}$/.test(id) ? id : null;
+    }
+    if (
+      host === "youtube.com" ||
+      host === "m.youtube.com" ||
+      host === "youtube-nocookie.com"
+    ) {
+      if (u.pathname === "/watch") {
+        const id = u.searchParams.get("v");
+        return id && /^[A-Za-z0-9_-]{6,15}$/.test(id) ? id : null;
+      }
+      const m = u.pathname.match(
+        /^\/(?:embed|shorts|v)\/([A-Za-z0-9_-]{6,15})/,
+      );
+      if (m) return m[1];
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function InspirationCard({ item }) {
   const tag = authorTagStyle(
     item.author_type || (item.type === "video" ? "youtuber" : "personal_blog"),
   );
   const isVideo = item.type === "video";
+  const youTubeId = isVideo ? extractYouTubeId(item.url) : null;
+  const [playing, setPlaying] = useState(false);
   const dateLabel = (() => {
     if (!item.date) return null;
     const m = String(item.date).match(/^(\d{4})-(\d{2})/);
@@ -1227,6 +1265,85 @@ function InspirationCard({ item }) {
       >
         {[item.outlet, dateLabel].filter(Boolean).join(" · ")}
       </div>
+      {/* In-app YouTube playback (lite embed pattern). Thumbnail rendered as
+          a single image by default → zero iframe / no YT JS until user clicks
+          Play. On click, swap for the no-cookie autoplay iframe. */}
+      {youTubeId && (
+        <div
+          style={{
+            position: "relative",
+            width: "100%",
+            paddingBottom: "56.25%", // 16:9
+            background: "#000",
+            borderRadius: RADIUS.md,
+            overflow: "hidden",
+            marginBottom: 10,
+            cursor: playing ? "default" : "pointer",
+          }}
+          onClick={() => {
+            if (!playing) setPlaying(true);
+          }}
+        >
+          {playing ? (
+            <iframe
+              src={`https://www.youtube-nocookie.com/embed/${youTubeId}?autoplay=1&rel=0&modestbranding=1`}
+              title={item.title || "YouTube video"}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                border: "none",
+              }}
+            />
+          ) : (
+            <>
+              <img
+                src={`https://i.ytimg.com/vi/${youTubeId}/hqdefault.jpg`}
+                alt={item.title || "Video thumbnail"}
+                loading="lazy"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                }}
+              />
+              <div
+                aria-label="Play video"
+                style={{
+                  position: "absolute",
+                  top: "50%",
+                  left: "50%",
+                  transform: "translate(-50%, -50%)",
+                  width: 56,
+                  height: 56,
+                  borderRadius: "50%",
+                  background: "rgba(0,0,0,0.7)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  pointerEvents: "none",
+                }}
+              >
+                <div
+                  style={{
+                    width: 0,
+                    height: 0,
+                    borderLeft: "16px solid #fff",
+                    borderTop: "10px solid transparent",
+                    borderBottom: "10px solid transparent",
+                    marginLeft: 4,
+                  }}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      )}
       {item.title && (
         <div
           style={{
@@ -1269,7 +1386,8 @@ function InspirationCard({ item }) {
             fontWeight: 600,
           }}
         >
-          {isVideo ? "Watch" : "Read"} <span style={{ fontSize: 14 }}>↗</span>
+          {isVideo ? (youTubeId ? "Open on YouTube" : "Watch") : "Read"}{" "}
+          <span style={{ fontSize: 14 }}>↗</span>
         </a>
       )}
     </div>
