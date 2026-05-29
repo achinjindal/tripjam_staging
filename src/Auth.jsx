@@ -6,10 +6,9 @@ import { T, RADIUS, SHADOW, MOTION } from "./theme";
 // legacy username (pre-D9 accounts were created username-only).
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Google OAuth button is gated by env so we don't ship a broken button when
-// Google Cloud OAuth + Supabase Auth provider config aren't yet in place.
-// Set VITE_GOOGLE_AUTH_ENABLED=true once both are configured.
-const GOOGLE_AUTH_ENABLED = import.meta.env.VITE_GOOGLE_AUTH_ENABLED === "true";
+// Google OAuth button — always shown. Wire up the Supabase Google provider
+// (Auth → Providers → Google → Client ID + Secret) to make it functional.
+const GOOGLE_AUTH_ENABLED = true;
 
 // Legacy username → fake email shim so pre-D9 accounts can still sign in.
 function fakeEmail(u) {

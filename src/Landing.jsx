@@ -149,7 +149,7 @@ function Hero() {
             marginBottom: 22,
           }}
         >
-          AI travel planning · 300 credits free
+          AI travel planning
         </div>
         <h1
           style={{
@@ -163,7 +163,9 @@ function Hero() {
         >
           Plan trips that feel like
           <br />
-          <span style={{ color: T.ocean, fontStyle: "italic" }}>actually yours.</span>
+          <span style={{ color: T.ocean, fontStyle: "italic" }}>
+            actually yours.
+          </span>
         </h1>
         <p
           style={{
@@ -174,9 +176,8 @@ function Hero() {
             lineHeight: 1.55,
           }}
         >
-          Describe where you're going. TripJam drafts a day-by-day itinerary in seconds —
-          with maps, photos, transit tips, and a magazine-style guide to every city.
-          Tweak it, share it, take it offline.
+          Describe your trip. TripJam builds a full itinerary with maps, photos,
+          and a guide to every city — in seconds.
         </p>
         <div
           style={{
@@ -202,11 +203,13 @@ function Hero() {
               boxShadow: SHADOW.md,
             }}
           >
-            Start planning free
+            Start planning
           </button>
           <button
             onClick={() =>
-              document.getElementById("how")?.scrollIntoView({ behavior: "smooth" })
+              document
+                .getElementById("how")
+                ?.scrollIntoView({ behavior: "smooth" })
             }
             style={{
               padding: "14px 22px",
@@ -229,7 +232,7 @@ function Hero() {
             color: T.mist,
           }}
         >
-          No credit card. Free signup includes 300 credits (~5-10 trips).
+          No credit card. Free signup includes 100 credits.
         </div>
       </div>
     </section>
@@ -351,9 +354,9 @@ function Pricing() {
       label: "Free start",
       price: "$0",
       sub: "on signup",
-      credits: "300 credits",
+      credits: "100 credits",
       bullets: [
-        "Plan ~5-10 trips",
+        "Plan ~2-3 trips",
         "Full magazine + itinerary",
         "Offline access on mobile",
         "No card required",
@@ -365,7 +368,7 @@ function Pricing() {
     {
       label: "Small pack",
       price: "$5",
-      sub: "300 credits",
+      sub: "300 credits", // small pack stays at 300
       credits: "$0.017 / credit",
       bullets: [
         "Top up when you run low",
@@ -418,8 +421,9 @@ function Pricing() {
             marginRight: "auto",
           }}
         >
-          One credit ≈ $0.01 of AI cost. Most actions use 1-3 credits. Generating a full
-          itinerary uses 20-30. Free signup covers your first trips.
+          One credit ≈ $0.01 of AI cost. Most actions use 1-3 credits.
+          Generating a full itinerary uses 20-30. Free signup covers your first
+          trips.
         </p>
         <div
           style={{
@@ -433,7 +437,9 @@ function Pricing() {
               key={p.label}
               style={{
                 background: "white",
-                border: p.highlight ? `2px solid ${T.ocean}` : `1px solid ${T.border}`,
+                border: p.highlight
+                  ? `2px solid ${T.ocean}`
+                  : `1px solid ${T.border}`,
                 borderRadius: RADIUS.lg,
                 padding: "28px 24px",
                 display: "flex",
@@ -553,11 +559,11 @@ const FAQS = [
   },
   {
     q: "What's a credit?",
-    a: "A credit ≈ $0.01 of AI cost passed through to you. Generating a quick to-do list uses ~1 credit; a full multi-day itinerary uses 20-30. Most users get 5-10 trips out of the free 300 credits.",
+    a: "A credit ≈ $0.01 of AI cost passed through to you. Generating a quick to-do list uses ~1 credit; a full multi-day itinerary uses 20-30. The free 100 credits cover a couple of full trips.",
   },
   {
     q: "Do credits expire?",
-    a: "No. Buy whenever; use whenever. Refunds available within 30 days if something is broken on our end — just email support.",
+    a: "No. Buy whenever; use whenever. Refunds available within 30 days if something is broken on our end — just email us.",
   },
   {
     q: "Can I plan offline?",
@@ -686,7 +692,14 @@ function Footer() {
         }}
       >
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 10,
+            }}
+          >
             <span style={{ fontSize: 20 }}>✈️</span>
             <span
               style={{
@@ -698,9 +711,11 @@ function Footer() {
               TripJam
             </span>
           </div>
-          <p style={{ fontSize: 13, color: T.mist, margin: 0, lineHeight: 1.55 }}>
-            AI travel planning that feels personal. Made for travelers who want to spend
-            less time planning and more time being there.
+          <p
+            style={{ fontSize: 13, color: T.mist, margin: 0, lineHeight: 1.55 }}
+          >
+            AI travel planning that feels personal. Made for travelers who want
+            to spend less time planning and more time being there.
           </p>
         </div>
         <div>
@@ -720,7 +735,9 @@ function Footer() {
           <FooterLink onClick={() => navTo("/signin")}>Sign in</FooterLink>
           <FooterLink
             onClick={() =>
-              document.getElementById("how")?.scrollIntoView({ behavior: "smooth" })
+              document
+                .getElementById("how")
+                ?.scrollIntoView({ behavior: "smooth" })
             }
           >
             How it works
