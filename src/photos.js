@@ -632,11 +632,20 @@ export async function verifyActivity(activity, city, session, tripId) {
 }
 
 // Helper: does an activity need verification?
-// Skip if (a) no id, (b) already has stored coords, (c) verified_at is set
-// (we've already tried — even if it failed, don't retry on every render).
+//   - No id → can't verify (skip).
+//   - geocode_verified_at IS NOT NULL → already tried via the verify ladder,
+//     don't retry (success or graceful failure both set this).
+//   - Pure new row (no lat, no verified_at) → needs verification.
+//   - Legacy backfill row (lat IS NOT NULL but geocode_verified_at AND
+//     geocode_source are both NULL) → the coord came from MapView's old
+//     geocodePlace path (pre verify-ladder) which had no name-similarity
+//     guard and produced known-bad results (e.g. Romanian cathedral matched
+//     for "Orthodox Metropolitan Cathedral, Fira, Santorini"). Re-verify and
+//     overwrite once.
 export function needsVerification(activity) {
   if (!activity?.id) return false;
-  if (activity.lat != null && activity.lng != null) return false;
   if (activity.geocode_verified_at) return false;
-  return true;
+  if (activity.lat == null || activity.lng == null) return true;
+  // lat + lng present without metadata = legacy backfill, suspect → re-verify
+  return !activity.geocode_source;
 }

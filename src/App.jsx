@@ -11523,7 +11523,7 @@ export default function App({
                 {!useDesktopShell &&
                   activeBottomTab === "map" &&
                   (days.length > 0 ? (
-                    <MapView days={days} />
+                    <MapView days={days} session={session} tripId={trip?.id} />
                   ) : (
                     <div
                       style={{
@@ -13071,7 +13071,7 @@ export default function App({
                 }
               />
             ) : days.length > 0 ? (
-              <MapView days={days} />
+              <MapView days={days} session={session} tripId={trip?.id} />
             ) : (
               <div
                 style={{

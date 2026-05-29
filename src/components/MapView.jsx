@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { T } from "../theme";
-import { geocodePlace } from "../photos";
+import { geocodePlace, verifyActivity, needsVerification } from "../photos";
 import { supabase } from "../supabase";
 
 /* ─── DAY COLOURS (map + board) ─────────────────────────────────────── */
@@ -50,7 +50,7 @@ function FitBounds({ pins, fallback }) {
   return null;
 }
 
-export function MapView({ days }) {
+export function MapView({ days, session = null, tripId = null }) {
   const [pins, setPins] = useState(null);
   const [resolving, setResolving] = useState(true);
   const [selectedDays, setSelectedDays] = useState(new Set()); // empty = show all
@@ -76,32 +76,60 @@ export function MapView({ days }) {
                 return true;
               })
               .map(async (act) => {
-                // Use persisted coords if present — avoids re-geocoding 60+ activities on every Map open.
-                if (act.lat != null && act.lng != null) {
+                // 1. Properly verified coords (or non-legacy stored coords) — use as is.
+                //    needsVerification handles three cases:
+                //      - new row with no coords → returns true
+                //      - legacy backfill (lat set, no metadata) → returns true (re-verify)
+                //      - properly verified row → returns false (use stored)
+                if (!needsVerification(act) && act.lat != null) {
                   return {
                     ...act,
                     dayIndex: di,
                     dayLabel: day.label,
                   };
                 }
-                // Otherwise resolve via geocodePlace (server has permanent DB cache for known places).
+                // 2. Authenticated path — full verify-place ladder (Photon
+                //    with name-similarity → Nominatim → Haiku repair → Google
+                //    with validation). Persists coords + metadata so this
+                //    activity never goes through this slow path again.
+                if (session?.access_token) {
+                  const r = await verifyActivity(
+                    act,
+                    day.city,
+                    session,
+                    tripId,
+                  );
+                  if (r?.status === "verified" && r.coords) {
+                    return {
+                      ...act,
+                      ...(r.updateFields || {}),
+                      dayIndex: di,
+                      dayLabel: day.label,
+                    };
+                  }
+                  // Picker / unresolved — if the row already had legacy coords,
+                  // keep them rather than dropping the pin entirely (still better
+                  // than no pin while the user sorts out alternatives via the
+                  // ActivityCard picker UI).
+                  if (act.lat != null && act.lng != null) {
+                    return {
+                      ...act,
+                      dayIndex: di,
+                      dayLabel: day.label,
+                    };
+                  }
+                  return null;
+                }
+                // 3. Unauthenticated fallback (public share view, etc) — legacy
+                //    geocodePlace path. No name-similarity guard, may produce
+                //    wrong coords; but the public view has no session to drive
+                //    the verify ladder. Write-back is intentionally skipped
+                //    here so suspect coords don't pollute the DB.
                 const coords = await geocodePlace(
                   act.title,
                   day.city,
                   act.geocode,
                 );
-                if (coords && act.id) {
-                  // Persist so subsequent loads are instant. supabase-js v2 builders are lazy,
-                  // so a trailing .then() is required to actually flush — without it the PATCH never fires.
-                  supabase
-                    .from("activities")
-                    .update({ lat: coords.lat, lng: coords.lng })
-                    .eq("id", act.id)
-                    .then(
-                      () => {},
-                      () => {},
-                    );
-                }
                 return coords
                   ? {
                       ...act,
