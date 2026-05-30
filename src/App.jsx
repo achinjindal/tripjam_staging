@@ -6889,31 +6889,14 @@ export default function App({
     }
   };
   // F1 Inspirations state. Shape: { digest, loading, errored, hasLoaded }.
-  // Digest is persisted to localStorage (key: tripjam_inspirations_<tripId>)
-  // so page refreshes don't re-fetch already-loaded content. The server still
-  // has a 30-day cache so cold calls are rare, but even cache-hit fetches add
-  // latency on mobile. localStorage eliminates that for the common "revisit" case.
-  const _inspirationsStorageKey = trip?.id
-    ? `tripjam_inspirations_${trip.id}`
-    : null;
+  // Digest is persisted to trips.inspirations_digest (JSONB column) so
+  // revisiting a trip on any device shows Inspirations instantly — the data
+  // is already in the trip object loaded by main.jsx (SELECT *), no extra
+  // network call needed. Written back via supabase.update after each load.
   const [destResearch, setDestResearch] = useState(() => {
-    if (!trip?.id)
-      return { digest: null, loading: false, errored: false, hasLoaded: false };
-    try {
-      const saved = localStorage.getItem(`tripjam_inspirations_${trip.id}`);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed?.inspirations) {
-          return {
-            digest: parsed,
-            loading: false,
-            errored: false,
-            hasLoaded: true,
-          };
-        }
-      }
-    } catch {
-      // ignore parse errors
+    const saved = initialTrip?.inspirations_digest;
+    if (saved?.inspirations) {
+      return { digest: saved, loading: false, errored: false, hasLoaded: true };
     }
     return { digest: null, loading: false, errored: false, hasLoaded: false };
   });
@@ -7002,16 +6985,18 @@ export default function App({
         } else {
           finalDigest = newDigest;
         }
-        // Persist to localStorage so page refreshes don't need to re-fetch.
-        if (finalDigest && _inspirationsStorageKey) {
-          try {
-            localStorage.setItem(
-              _inspirationsStorageKey,
-              JSON.stringify(finalDigest),
+        // Persist to trips.inspirations_digest so revisiting the trip on any
+        // device shows Inspirations instantly without an extra network call.
+        // Fire-and-forget — failure doesn't break the UI.
+        if (finalDigest && trip?.id) {
+          supabase
+            .from("trips")
+            .update({ inspirations_digest: finalDigest })
+            .eq("id", trip.id)
+            .then(
+              () => {},
+              () => {},
             );
-          } catch {
-            // ignore storage quota errors
-          }
         }
         return {
           digest: finalDigest,
@@ -7675,13 +7660,16 @@ export default function App({
         errored: false,
         hasLoaded: false,
       });
-      // Clear cached digest — destinations changed so old content is stale.
-      if (trip?.id) {
-        try {
-          localStorage.removeItem(`tripjam_inspirations_${trip.id}`);
-        } catch {
-          /**/
-        }
+      // Clear persisted digest in DB — destinations changed so old content is stale.
+      if (editingTrip?.id) {
+        supabase
+          .from("trips")
+          .update({ inspirations_digest: null })
+          .eq("id", editingTrip.id)
+          .then(
+            () => {},
+            () => {},
+          );
       }
       setPretripRoutes([]);
       setPretripSelectedRouteId(null);
