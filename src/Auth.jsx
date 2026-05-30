@@ -209,6 +209,29 @@ export default function Auth({ initialMode }) {
           border: `1px solid ${T.border}`,
         }}
       >
+        {/* Back to landing */}
+        <div style={{ marginBottom: 20 }}>
+          <a
+            href="/"
+            onClick={(e) => {
+              e.preventDefault();
+              window.history.pushState(null, "", "/");
+              window.dispatchEvent(new PopStateEvent("popstate"));
+            }}
+            style={{
+              fontSize: 12,
+              color: T.mist,
+              textDecoration: "none",
+              fontFamily: "Georgia, serif",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            ← TripJam
+          </a>
+        </div>
+
         {/* Logo + title */}
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ fontSize: 28, marginBottom: 6 }}>✈️</div>
