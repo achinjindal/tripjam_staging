@@ -6888,16 +6888,34 @@ export default function App({
       setDeepDiveCacheApp((prev) => ({ ...prev, [city]: "error" }));
     }
   };
-  // F1 Inspirations (merged 2026-05-27 from `inspiration` branch).
-  // State shape: { digest, loading: bool, errored: bool, hasLoaded: bool }.
-  // Triggered by the user clicking "Get destination inspirations" inside the
-  // Magazine view — opt-in because it costs ~8 credits per cold call (cached
-  // result is free for 30 days, served from `destination_research` table).
-  const [destResearch, setDestResearch] = useState({
-    digest: null,
-    loading: false,
-    errored: false,
-    hasLoaded: false,
+  // F1 Inspirations state. Shape: { digest, loading, errored, hasLoaded }.
+  // Digest is persisted to localStorage (key: tripjam_inspirations_<tripId>)
+  // so page refreshes don't re-fetch already-loaded content. The server still
+  // has a 30-day cache so cold calls are rare, but even cache-hit fetches add
+  // latency on mobile. localStorage eliminates that for the common "revisit" case.
+  const _inspirationsStorageKey = trip?.id
+    ? `tripjam_inspirations_${trip.id}`
+    : null;
+  const [destResearch, setDestResearch] = useState(() => {
+    if (!trip?.id)
+      return { digest: null, loading: false, errored: false, hasLoaded: false };
+    try {
+      const saved = localStorage.getItem(`tripjam_inspirations_${trip.id}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed?.inspirations) {
+          return {
+            digest: parsed,
+            loading: false,
+            errored: false,
+            hasLoaded: true,
+          };
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+    return { digest: null, loading: false, errored: false, hasLoaded: false };
   });
   // Deduplicate inspirations by URL — used when appending "Load more" results
   // to prevent the same article appearing twice if the LLM surfaces it again.
@@ -6972,22 +6990,31 @@ export default function App({
       const data = await res.json();
       setDestResearch((prev) => {
         const newDigest = data?.digest || null;
+        let finalDigest;
         if (append && prev.digest && newDigest) {
-          return {
-            digest: {
-              ...newDigest,
-              inspirations: dedupeByUrl([
-                ...(prev.digest.inspirations || []),
-                ...(newDigest.inspirations || []),
-              ]),
-            },
-            loading: false,
-            errored: false,
-            hasLoaded: true,
+          finalDigest = {
+            ...newDigest,
+            inspirations: dedupeByUrl([
+              ...(prev.digest.inspirations || []),
+              ...(newDigest.inspirations || []),
+            ]),
           };
+        } else {
+          finalDigest = newDigest;
+        }
+        // Persist to localStorage so page refreshes don't need to re-fetch.
+        if (finalDigest && _inspirationsStorageKey) {
+          try {
+            localStorage.setItem(
+              _inspirationsStorageKey,
+              JSON.stringify(finalDigest),
+            );
+          } catch {
+            // ignore storage quota errors
+          }
         }
         return {
-          digest: newDigest,
+          digest: finalDigest,
           loading: false,
           errored: false,
           hasLoaded: true,
@@ -7007,9 +7034,13 @@ export default function App({
   // Eager pre-load: as soon as the first batch of routes arrives from RG,
   // kick off both Inspirations and the destination deep-dive in the background
   // so they're ready by the time the user navigates to those tabs.
-  // Previously both only loaded on tab navigate; this eliminates the wait.
+  // Uses a ref so the effect is truly one-shot per session — routes briefly
+  // cycle to [] and back when BrainstormView reloads saved items on "Explore
+  // more plans" navigation, which would otherwise re-trigger the load.
   useEffect(() => {
     if (pretripRoutes.length === 0) return;
+    if (hasEagerLoadedRef.current) return;
+    hasEagerLoadedRef.current = true;
     // Inspirations
     if (!destResearch.hasLoaded && !destResearch.loading) {
       loadDestinationResearch();
@@ -7199,6 +7230,11 @@ export default function App({
   const isJumping = useRef(false);
   const undoDismissRef = useRef(null);
   const triggerRgRef = useRef(null); // imperative trigger for RG generation
+  // Tracks whether the eager Inspirations + magazine pre-load has already been
+  // fired for the current editing session. Prevents re-loading when routes
+  // briefly cycle to [] and back (which happens when BrainstormView reloads
+  // saved items after "Explore more plans" navigation).
+  const hasEagerLoadedRef = useRef(false);
   const igAbortRef = useRef(null); // abort controller for in-flight IG generation
 
   const editActivity = (dayId, updated) => {
@@ -7630,6 +7666,23 @@ export default function App({
     setScreen("brainstorm");
 
     if (regenerate) {
+      // Reset the eager-load guard so the new RG session triggers pre-loads
+      // for Inspirations + magazine deep-dive with the updated destinations.
+      hasEagerLoadedRef.current = false;
+      setDestResearch({
+        digest: null,
+        loading: false,
+        errored: false,
+        hasLoaded: false,
+      });
+      // Clear cached digest — destinations changed so old content is stale.
+      if (trip?.id) {
+        try {
+          localStorage.removeItem(`tripjam_inspirations_${trip.id}`);
+        } catch {
+          /**/
+        }
+      }
       setPretripRoutes([]);
       setPretripSelectedRouteId(null);
       // If regenerating routes and trip had an itinerary, reset it
@@ -10437,12 +10490,17 @@ export default function App({
                   <div
                     style={{ flex: 1, overflowY: "auto", background: T.warm }}
                   >
+                    {/* Header only on Magazine view — Inspirations has its own
+                        section heading inside InspirationsSection. Showing the
+                        "Magazine" destination header on the Inspirations tab was
+                        confusing (issue: header said "Magazine" on Inspirations). */}
                     <div
                       style={{
                         padding: "20px 16px 12px",
                         background: T.chalk,
                         borderBottom: `1px solid ${T.sand}`,
-                        display: "flex",
+                        display:
+                          pretripMagView === "inspirations" ? "none" : "flex",
                         alignItems: "center",
                         gap: 10,
                       }}
