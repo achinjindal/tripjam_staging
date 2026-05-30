@@ -9886,40 +9886,54 @@ export default function App({
               );
             }
 
-            // ── MOBILE: existing layout (unchanged) ──
+            // ── MOBILE: compact banner + flex-fill form (no outer scroll) ──
             return (
-              <div style={{ flex: 1, overflowY: "auto" }}>
+              <div
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  overflow: "hidden",
+                }}
+              >
+                {/* Compact banner — smaller on later steps to give form more room */}
                 <div
                   style={{
                     background: `linear-gradient(160deg,${T.dusk},${T.ocean})`,
-                    padding: "44px 20px 36px",
+                    padding:
+                      setupStep === 0 ? "40px 20px 24px" : "18px 20px 16px",
                     color: "white",
                     position: "relative",
                     overflow: "hidden",
+                    flexShrink: 0,
+                    transition: "padding 0.25s ease",
                   }}
                 >
+                  {/* Decorative circle — smaller on later steps */}
+                  {setupStep === 0 && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: -40,
+                        right: -40,
+                        width: 160,
+                        height: 160,
+                        borderRadius: "50%",
+                        background: "rgba(255,255,255,0.04)",
+                        pointerEvents: "none",
+                      }}
+                    />
+                  )}
+                  {/* Top row: All Trips link */}
                   <div
                     style={{
-                      position: "absolute",
-                      top: -50,
-                      right: -50,
-                      width: 200,
-                      height: 200,
-                      borderRadius: "50%",
-                      background: "rgba(255,255,255,0.04)",
-                      pointerEvents: "none",
-                    }}
-                  />
-                  <div
-                    style={{
-                      position: "relative",
                       display: "flex",
-                      justifyContent: "flex-end",
+                      justifyContent: "space-between",
                       alignItems: "center",
-                      marginBottom: 14,
+                      marginBottom: setupStep === 0 ? 14 : 4,
                     }}
                   >
-                    {onHome && (
+                    {onHome ? (
                       <button
                         onClick={onHome}
                         style={{
@@ -9933,44 +9947,72 @@ export default function App({
                           fontFamily: "Georgia,serif",
                         }}
                       >
-                        All Trips
+                        ← All trips
                       </button>
+                    ) : (
+                      <div />
                     )}
                   </div>
+                  {/* Hero title — large on step 0, compact on steps 1+ */}
                   <div
                     style={{
                       fontFamily: "'DM Serif Display',serif",
-                      fontSize: 34,
+                      fontSize: setupStep === 0 ? 30 : 20,
                       lineHeight: 1.2,
-                      marginBottom: heroSubline ? 10 : 0,
+                      marginBottom: heroSubline && setupStep === 0 ? 8 : 0,
+                      transition: "font-size 0.25s ease",
                     }}
                   >
                     {heroTitle}
                   </div>
-                  {heroSubline && (
+                  {heroSubline && setupStep === 0 && (
                     <div
                       style={{
-                        fontSize: 14,
-                        opacity: 0.7,
+                        fontSize: 13,
+                        opacity: 0.75,
                         fontFamily: "Georgia,serif",
                       }}
                     >
                       {heroSubline}
                     </div>
                   )}
+                  {/* On steps 1+: show traveler + date summary in banner */}
+                  {setupStep > 0 && hasSummary && (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        opacity: 0.85,
+                        fontFamily: "Georgia,serif",
+                        marginTop: 4,
+                      }}
+                    >
+                      {summaryText}
+                    </div>
+                  )}
                 </div>
-                <div style={{ padding: "28px 0 0" }}>
+
+                {/* Form area — flex-fill, no outer scroll */}
+                <div
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    flexDirection: "column",
+                    overflow: "hidden",
+                    padding: "16px 0 0",
+                  }}
+                >
                   {generateError && (
                     <div
                       style={{
-                        margin: "0 20px 16px",
-                        padding: "12px 16px",
+                        margin: "0 16px 12px",
+                        padding: "10px 14px",
                         borderRadius: RADIUS.lg,
                         background: T.errorLight,
                         border: `1.5px solid ${T.error}`,
                         fontSize: 13,
                         color: T.error,
                         fontFamily: "Georgia,serif",
+                        flexShrink: 0,
                       }}
                     >
                       {generateError}

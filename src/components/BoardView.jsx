@@ -2215,6 +2215,7 @@ function CityInput({
   inputStyle,
   airportOnly = false,
   hotelCity = null,
+  openUpward = false,
 }) {
   const [suggs, setSuggs] = useState([]);
   const [show, setShow] = useState(false);
@@ -2292,7 +2293,9 @@ function CityInput({
         <div
           style={{
             position: "absolute",
-            top: "calc(100% + 4px)",
+            ...(openUpward
+              ? { bottom: "calc(100% + 4px)", top: "auto" }
+              : { top: "calc(100% + 4px)", bottom: "auto" }),
             left: 0,
             right: 0,
             background: T.chalk,

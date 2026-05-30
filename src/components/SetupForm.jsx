@@ -9,7 +9,7 @@ import {
 } from "../theme";
 import { CityInput } from "./BoardView.jsx";
 
-function DateRangePicker({ startDate, endDate, onChange }) {
+function DateRangePicker({ startDate, endDate, onChange, isDesktop = false }) {
   const todayISO = new Date().toISOString().slice(0, 10);
 
   const MONTHS = [
@@ -196,16 +196,27 @@ function DateRangePicker({ startDate, endDate, onChange }) {
     );
   };
 
-  // Roughly 1.5 months visible: one full month (~230px including header) + half of next.
+  // On desktop use a fixed height; on mobile the calendar fills the remaining
+  // flex space and is internally scrollable (the parent step div is flex-column).
   const CALENDAR_HEIGHT = 340;
 
   return (
-    <div style={{ marginBottom: 12 }}>
+    <div
+      style={{
+        marginBottom: 12,
+        flex: isDesktop ? undefined : 1,
+        display: isDesktop ? "block" : "flex",
+        flexDirection: isDesktop ? undefined : "column",
+        minHeight: 0,
+      }}
+    >
       {/* Scrollable month list — 1.5 months visible at a time */}
       <div
         ref={scrollRef}
         style={{
-          height: CALENDAR_HEIGHT,
+          height: isDesktop ? CALENDAR_HEIGHT : undefined,
+          flex: isDesktop ? undefined : 1,
+          minHeight: isDesktop ? undefined : 0,
           overflowY: "auto",
           border: `1px solid ${T.sand}`,
           borderRadius: RADIUS.lg,
@@ -252,9 +263,8 @@ function SetupForm({
   prefillForm = null,
   initialStep = 0,
   onDestinationsChange = null,
-  // Desktop-specific props
   isDesktop = false,
-  onFormChange = null, // (form) => void — called on every field change; drives desktop left-panel summary
+  onFormChange = null,
 }) {
   const [step, setStep] = useState(initialStep);
   useEffect(() => {
@@ -355,6 +365,19 @@ function SetupForm({
   const destTimer = useRef(null);
   const destAbortRef = useRef(null);
   const destCacheRef = useRef(new Map());
+
+  // Track visual viewport height (shrinks when the software keyboard opens on mobile).
+  // Used to position the suggestions dropdown above the keyboard.
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.visualViewport) return;
+    const onResize = () => {
+      const diff = window.innerHeight - window.visualViewport.height;
+      setKeyboardHeight(diff > 60 ? diff : 0); // only count meaningful keyboard presence
+    };
+    window.visualViewport.addEventListener("resize", onResize);
+    return () => window.visualViewport.removeEventListener("resize", onResize);
+  }, []);
   const set = (k, v) =>
     setForm((f) => {
       const next = { ...f, [k]: v };
@@ -463,32 +486,46 @@ function SetupForm({
 
   const stepViews = [
     /* 0 – destination */
-    <div key={0} style={{ animation: "fadeUp 0.3s ease" }}>
-      <div style={{ textAlign: "center", fontSize: 40, marginBottom: 8 }}>
-        🌍
-      </div>
-      <div
-        style={{
-          fontFamily: "'DM Serif Display',serif",
-          fontSize: 24,
-          color: T.ink,
-          textAlign: "center",
-          marginBottom: 4,
-        }}
-      >
-        Where to?
-      </div>
-      <div
-        style={{
-          fontSize: 13,
-          color: T.mist,
-          textAlign: "center",
-          marginBottom: 22,
-          fontFamily: "Georgia,serif",
-        }}
-      >
-        Add one or more destinations
-      </div>
+    <div
+      key={0}
+      style={{
+        animation: "fadeUp 0.3s ease",
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
+    >
+      {/* On desktop only: show the icon + heading (mobile banner already shows contextual hero) */}
+      {isDesktop && (
+        <>
+          <div style={{ textAlign: "center", fontSize: 40, marginBottom: 8 }}>
+            🌍
+          </div>
+          <div
+            style={{
+              fontFamily: "'DM Serif Display',serif",
+              fontSize: 24,
+              color: T.ink,
+              textAlign: "center",
+              marginBottom: 4,
+            }}
+          >
+            Where to?
+          </div>
+          <div
+            style={{
+              fontSize: 13,
+              color: T.mist,
+              textAlign: "center",
+              marginBottom: 22,
+              fontFamily: "Georgia,serif",
+            }}
+          >
+            Add one or more destinations
+          </div>
+        </>
+      )}
 
       {/* Added destination chips */}
       {form.destinations.length > 0 && (
@@ -570,7 +607,11 @@ function SetupForm({
           <div
             style={{
               position: "absolute",
-              top: "calc(100% + 6px)",
+              // On mobile with keyboard open: open suggestions UPWARD so they
+              // stay visible above the keyboard. On desktop or no keyboard: open down.
+              ...(keyboardHeight > 0 && !isDesktop
+                ? { bottom: "calc(100% + 6px)", top: "auto" }
+                : { top: "calc(100% + 6px)", bottom: "auto" }),
               left: 0,
               right: 0,
               background: T.chalk,
@@ -579,7 +620,7 @@ function SetupForm({
               overflow: "hidden",
               zIndex: 100,
               boxShadow: "0 4px 18px rgba(0,0,0,0.10)",
-              maxHeight: 300,
+              maxHeight: isDesktop ? 300 : 220,
               overflowY: "auto",
             }}
           >
@@ -661,7 +702,18 @@ function SetupForm({
         )}
       </div>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+      {/* Popular destinations — horizontal scroll on mobile to save vertical space */}
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          marginTop: 14,
+          overflowX: isDesktop ? "visible" : "auto",
+          flexWrap: isDesktop ? "wrap" : "nowrap",
+          paddingBottom: isDesktop ? 0 : 4, // room for scrollbar on some devices
+          WebkitOverflowScrolling: "touch",
+        }}
+      >
         {[
           "Rajasthan 🏰",
           "Japan 🌸",
@@ -692,6 +744,7 @@ function SetupForm({
                 fontSize: 13,
                 cursor: "pointer",
                 fontFamily: "Georgia,serif",
+                flexShrink: 0, // prevent pill compression in horizontal scroll
               }}
             >
               {d}
@@ -729,21 +782,35 @@ function SetupForm({
     </div>,
 
     /* 1 – dates & travelers */
-    <div key={1} style={{ animation: "fadeUp 0.3s ease" }}>
-      <div style={{ textAlign: "center", fontSize: 32, marginBottom: 6 }}>
-        📅
-      </div>
-      <div
-        style={{
-          fontFamily: "'DM Serif Display',serif",
-          fontSize: 22,
-          color: T.ink,
-          textAlign: "center",
-          marginBottom: 14,
-        }}
-      >
-        Dates
-      </div>
+    <div
+      key={1}
+      style={{
+        animation: "fadeUp 0.3s ease",
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
+    >
+      {/* Desktop only: show emoji + heading (mobile banner carries this context) */}
+      {isDesktop && (
+        <>
+          <div style={{ textAlign: "center", fontSize: 32, marginBottom: 6 }}>
+            📅
+          </div>
+          <div
+            style={{
+              fontFamily: "'DM Serif Display',serif",
+              fontSize: 22,
+              color: T.ink,
+              textAlign: "center",
+              marginBottom: 14,
+            }}
+          >
+            Dates
+          </div>
+        </>
+      )}
       {/* Travelers — placed above calendar so calendar can be a fixed-height scroll area */}
       <div
         style={{
@@ -834,6 +901,7 @@ function SetupForm({
           set("startDate", start);
           set("endDate", end);
         }}
+        isDesktop={isDesktop}
       />
     </div>,
 
@@ -843,18 +911,30 @@ function SetupForm({
         d.toLowerCase().includes("help me decide"),
       );
       return (
-        <div key={3} style={{ animation: "fadeUp 0.3s ease" }}>
-          <div
-            style={{
-              fontFamily: "'DM Serif Display',serif",
-              fontSize: 20,
-              color: T.ink,
-              textAlign: "center",
-              marginBottom: 24,
-            }}
-          >
-            🛤 Preferences
-          </div>
+        <div
+          key={3}
+          style={{
+            animation: "fadeUp 0.3s ease",
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+          }}
+        >
+          {/* Desktop only: heading (mobile banner already has contextual context) */}
+          {isDesktop && (
+            <div
+              style={{
+                fontFamily: "'DM Serif Display',serif",
+                fontSize: 20,
+                color: T.ink,
+                textAlign: "center",
+                marginBottom: 24,
+              }}
+            >
+              🛤 Preferences
+            </div>
+          )}
 
           {/* Base Location */}
           <div style={{ marginBottom: 18 }}>
@@ -880,6 +960,7 @@ function SetupForm({
               value={form.baseLocation}
               onChange={(v) => set("baseLocation", v)}
               placeholder="Your home city"
+              openUpward={!isDesktop && keyboardHeight > 0}
               inputStyle={{
                 width: "100%",
                 padding: "11px 14px",
@@ -1013,8 +1094,12 @@ function SetupForm({
   return (
     <div
       style={{
-        padding: isDesktop ? 0 : "0 20px",
-        paddingBottom: isDesktop ? 0 : 80,
+        padding: isDesktop ? 0 : "0 16px",
+        paddingBottom: isDesktop ? 0 : 0,
+        flex: isDesktop ? undefined : 1,
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
       }}
     >
       {/* Back button + Progress dots — hidden on desktop (left panel owns step progress) */}
@@ -1099,28 +1184,41 @@ function SetupForm({
         </button>
       )}
 
-      {stepViews[step]}
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+          overflowY: isDesktop ? "visible" : "hidden",
+        }}
+      >
+        {stepViews[step]}
+      </div>
       {destError && (
         <div
           style={{
             color: T.error,
             fontSize: 13,
             fontFamily: "Georgia,serif",
-            marginTop: 8,
+            marginTop: 4,
             textAlign: "center",
+            flexShrink: 0,
           }}
         >
           {destError}
         </div>
       )}
 
-      {/* Navigation footer */}
+      {/* Navigation footer — always at the bottom of the flex column */}
       <div
         style={{
           display: "flex",
           gap: 10,
-          marginTop: isDesktop ? 28 : 24,
+          marginTop: isDesktop ? 28 : 12,
+          paddingBottom: isDesktop ? 0 : 16,
           alignItems: "center",
+          flexShrink: 0,
         }}
       >
         {/* Back button in footer — desktop only; on mobile it's in the dots row */}
