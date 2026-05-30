@@ -1422,8 +1422,11 @@ export function InspirationsSection({
   errored,
   onLoad,
   hasLoaded,
+  onLoadMore,
 }) {
   const items = (digest?.inspirations || []).filter((i) => i?.url);
+  const [refinementInput, setRefinementInput] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
   const sub = loading
     ? "Looking up recent articles and vlogs…"
     : errored || items.length === 0
@@ -1574,6 +1577,121 @@ export function InspirationsSection({
           }}
         >
           Surfaced from the open web. Links open in a new tab.
+        </div>
+      )}
+      {/* Load more — shown after a successful load (not while initial loading,
+          not in error state). Skeletons for the "loading more" state appear
+          below the existing items so the user never loses what they've seen. */}
+      {hasLoaded && !errored && onLoadMore && (
+        <div
+          style={{
+            marginTop: 20,
+            paddingTop: 16,
+            borderTop: `1px solid ${T.sand}`,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: "Georgia,serif",
+              fontSize: 12,
+              color: T.mist,
+              marginBottom: 8,
+            }}
+          >
+            Want a different angle?
+          </div>
+          <input
+            type="text"
+            placeholder="e.g. hiking, budget travel, solo female..."
+            value={refinementInput}
+            onChange={(e) => setRefinementInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !loadingMore && !loading) {
+                const focus = refinementInput.trim();
+                setRefinementInput("");
+                setLoadingMore(true);
+                onLoadMore(focus).finally(() => setLoadingMore(false));
+              }
+            }}
+            disabled={loadingMore || loading}
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "9px 12px",
+              borderRadius: RADIUS.md,
+              border: `1.5px solid ${T.border}`,
+              background: T.chalk,
+              color: T.ink,
+              fontSize: 13,
+              fontFamily: "Georgia,serif",
+              outline: "none",
+              marginBottom: 10,
+              opacity: loadingMore || loading ? 0.6 : 1,
+            }}
+          />
+          <button
+            onClick={() => {
+              if (loadingMore || loading) return;
+              const focus = refinementInput.trim();
+              setRefinementInput("");
+              setLoadingMore(true);
+              onLoadMore(focus).finally(() => setLoadingMore(false));
+            }}
+            disabled={loadingMore || loading}
+            style={{
+              padding: "9px 20px",
+              borderRadius: RADIUS.full,
+              border: "none",
+              background: loadingMore || loading ? T.disabled : T.ocean,
+              color: T.chalk,
+              fontFamily: "Georgia,serif",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: loadingMore || loading ? "not-allowed" : "pointer",
+              opacity: loadingMore || loading ? 0.7 : 1,
+              transition: `all ${MOTION.normal}`,
+            }}
+          >
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
+          {/* Skeleton rows while appending — existing items stay visible */}
+          {loadingMore && (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 12,
+                marginTop: 16,
+              }}
+            >
+              {[0, 1, 2].map((i) => (
+                <div key={i}>
+                  <div
+                    style={{
+                      height: 14,
+                      width: "50%",
+                      background: T.sand,
+                      borderRadius: 6,
+                      animation: "shimmer 1.5s ease-in-out infinite",
+                      marginBottom: 8,
+                      animationDelay: `${i * 0.12}s`,
+                    }}
+                  />
+                  <div
+                    style={{
+                      height: 14,
+                      width: "75%",
+                      background: T.sand,
+                      borderRadius: 6,
+                      animation: "shimmer 1.5s ease-in-out infinite",
+                      marginBottom: 6,
+                      animationDelay: `${i * 0.12 + 0.08}s`,
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

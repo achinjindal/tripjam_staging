@@ -290,6 +290,14 @@ serve(async (req) => {
     const notes: string = typeof body.notes === "string" ? body.notes : "";
     const monthBucket = monthBucketFor(body.startDate);
     const tripId: string | null = body.tripId || null;
+    // Refinement: free-text focus for "Load more" batches (e.g. "hiking blogs").
+    // Empty string = default load with no specific focus.
+    const refinement: string =
+      typeof body.refinement === "string" ? body.refinement.trim() : "";
+    // bypass_cache: when true, skip the 30-day cache so the user gets a fresh
+    // batch instead of the same cached result. Used when Load more is clicked
+    // with no refinement (user explicitly wants something new).
+    const bypassCache: boolean = !!body.bypass_cache;
 
     if (destinations.length === 0) {
       return new Response(JSON.stringify({ error: "destinations required" }), {
@@ -319,50 +327,55 @@ serve(async (req) => {
 
     // `v` invalidates the 30-day cache when the prompt changes shape (e.g.
     // requiring article+video mix). Bump on any breaking prompt change.
+    // `r` scopes the cache to the refinement so each distinct focus phrase
+    // ("hiking", "solo female travel", …) gets its own 30-day cache entry.
     const cacheKey = await sha1(
       JSON.stringify({
         d: destinations,
         t: tagResult.tags,
         m: monthBucket,
         v: 2,
+        r: refinement,
       }),
     );
 
-    // Cache lookup
-    try {
-      const lookup = await fetch(
-        `${supabaseUrl}/rest/v1/destination_research?cache_key=eq.${encodeURIComponent(cacheKey)}&select=digest,generated_at,expires_at&limit=1`,
-        { headers: dbHeaders },
-      );
-      if (lookup.ok) {
-        const rows = await lookup.json();
-        const hit = Array.isArray(rows) && rows[0];
-        if (
-          hit &&
-          hit.expires_at &&
-          new Date(hit.expires_at).getTime() > Date.now()
-        ) {
-          return new Response(
-            JSON.stringify({
-              digest: hit.digest,
-              cached: true,
-              tags: tagResult.tags,
-              generated_at: hit.generated_at,
-            }),
-            {
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
-            },
-          );
+    // Cache lookup — skipped when the caller explicitly wants a fresh batch
+    // (bypass_cache=true, used for Load-more with no refinement).
+    if (!bypassCache)
+      try {
+        const lookup = await fetch(
+          `${supabaseUrl}/rest/v1/destination_research?cache_key=eq.${encodeURIComponent(cacheKey)}&select=digest,generated_at,expires_at&limit=1`,
+          { headers: dbHeaders },
+        );
+        if (lookup.ok) {
+          const rows = await lookup.json();
+          const hit = Array.isArray(rows) && rows[0];
+          if (
+            hit &&
+            hit.expires_at &&
+            new Date(hit.expires_at).getTime() > Date.now()
+          ) {
+            return new Response(
+              JSON.stringify({
+                digest: hit.digest,
+                cached: true,
+                tags: tagResult.tags,
+                generated_at: hit.generated_at,
+              }),
+              {
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
         }
+      } catch (e) {
+        console.warn(
+          "destination_research cache lookup failed:",
+          (e as Error).message,
+        );
       }
-    } catch (e) {
-      console.warn(
-        "destination_research cache lookup failed:",
-        (e as Error).message,
-      );
-    }
 
-    // Cache miss → cold call. Now we enforce the min-credits gate.
+    // Cache miss (or bypassed) → cold call. Now we enforce the min-credits gate.
     if (noFunds) return noFunds;
 
     // Cache miss → LLM call with web_search. Append the raw notes so the
@@ -375,6 +388,9 @@ serve(async (req) => {
       (monthBucket !== "any" ? `\nTravelling around: ${monthBucket}.` : "") +
       (notes.trim()
         ? `\n\nFree-text traveller notes (use these to bias what you surface):\n"${notes.trim()}"`
+        : "") +
+      (refinement
+        ? `\n\nAdditional focus for this batch: "${refinement}". Prioritise content that specifically addresses this angle. The person has already seen general inspiration for this destination — find something they haven't seen yet.`
         : "") +
       `\n\nUse web_search to find recent (≤ 24 months) first-person articles and YouTube videos by named individual creators. Return the JSON object only.`;
 

@@ -6429,6 +6429,10 @@ export default function App({
   // Draft trip (RG done, no IG yet) → go straight to routes, not setup form
   const isDraft = initialTrip && !initialTrip.ig_response;
   const [screen, setScreen] = useState(isDraft ? "brainstorm" : initialScreen);
+  // Trip-view shell (desktop 2-column layout). Must be defined before any hook
+  // or derived state that references it (e.g. magazineGridVisible, pretripMagView).
+  const isTripView = screen === "brainstorm" || screen === "itinerary";
+  const useDesktopShell = isDesktop && isTripView;
   const [setupStep, setSetupStep] = useState(0);
   const [trip, setTrip] = useState(initialTrip || SAMPLE_TRIP);
   useEffect(() => {
@@ -6751,9 +6755,11 @@ export default function App({
   //   "brainstorm"  — Route selection (existing)
   //   "inspirations" — Web-search-backed travel inspirations (new, desktop pre-trip only)
   //   "magazine"    — Magazine grid (city deep-dives etc)
-  // Default: "inspirations" so the user lands on real-world content rather than
-  // an empty Route picker on first open.
-  const [pretripTab, setPretripTab] = useState("inspirations");
+  // Desktop pre-trip: separate "inspirations" top tab. Mobile pre-trip: bottom nav
+  // uses the "magazine" key (Inspirations label) with sub-tabs inside.
+  const [pretripTab, setPretripTab] = useState(() =>
+    isDesktop ? "inspirations" : "magazine",
+  );
   // Sub-tab inside the "magazine area" — used on mobile (both pre- and post-trip)
   // and on desktop post-trip, where Inspirations and Magazine share one top-tab
   // slot. Hidden on desktop pre-trip where they're separate top tabs.
@@ -6893,7 +6899,22 @@ export default function App({
     errored: false,
     hasLoaded: false,
   });
-  const loadDestinationResearch = async () => {
+  // Deduplicate inspirations by URL — used when appending "Load more" results
+  // to prevent the same article appearing twice if the LLM surfaces it again.
+  function dedupeByUrl(items) {
+    return [...new Map(items.map((i) => [i.url, i])).values()];
+  }
+
+  // loadDestinationResearch accepts optional params for the "Load more" flow:
+  //   refinement  — free-text focus (e.g. "hiking blogs", "budget travel")
+  //   append      — if true, new items are merged onto the existing list
+  //   bypassCache — if true, skip the 30-day server cache (used for unrefined
+  //                 Load-more so the user gets a fresh batch, not the same set)
+  const loadDestinationResearch = async ({
+    refinement = "",
+    append = false,
+    bypassCache = false,
+  } = {}) => {
     if (destResearch.loading) return;
     const rawDests = (pendingForm?.destinations || []).filter(
       (d) => !d.toLowerCase().includes("help me decide"),
@@ -6926,6 +6947,8 @@ export default function App({
               "",
             startDate: trip?.start_date || pendingForm?.startDate || null,
             tripId: trip?.id || null,
+            refinement,
+            bypass_cache: bypassCache,
           }),
         },
       );
@@ -6947,11 +6970,28 @@ export default function App({
         throw new Error(`HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
       }
       const data = await res.json();
-      setDestResearch({
-        digest: data?.digest || null,
-        loading: false,
-        errored: false,
-        hasLoaded: true,
+      setDestResearch((prev) => {
+        const newDigest = data?.digest || null;
+        if (append && prev.digest && newDigest) {
+          return {
+            digest: {
+              ...newDigest,
+              inspirations: dedupeByUrl([
+                ...(prev.digest.inspirations || []),
+                ...(newDigest.inspirations || []),
+              ]),
+            },
+            loading: false,
+            errored: false,
+            hasLoaded: true,
+          };
+        }
+        return {
+          digest: newDigest,
+          loading: false,
+          errored: false,
+          hasLoaded: true,
+        };
       });
     } catch (e) {
       console.warn("destination-research failed:", e.message);
@@ -9207,11 +9247,6 @@ export default function App({
     setChatLoading(false);
   };
 
-  // D22 desktop shell — applies only on trip-view screens. Setup / Home /
-  // public / auth keep the mobile-stretched layout in this phase.
-  const isTripView = screen === "brainstorm" || screen === "itinerary";
-  const useDesktopShell = isDesktop && isTripView;
-
   // Magazine-area view selection. The "magazine area" hosts two sub-views:
   // Inspirations (web-search-backed reading list) and Magazine (city deep-dives).
   //   - Desktop pre-trip: separate top tabs ("Inspirations" + "Magazine"), no sub-strip.
@@ -10587,6 +10622,13 @@ export default function App({
                           errored={destResearch.errored}
                           hasLoaded={destResearch.hasLoaded}
                           onLoad={loadDestinationResearch}
+                          onLoadMore={(refinement) =>
+                            loadDestinationResearch({
+                              refinement,
+                              append: true,
+                              bypassCache: !refinement,
+                            })
+                          }
                         />
                       )}
                       {pretripMagView === "magazine" &&
@@ -11493,6 +11535,13 @@ export default function App({
                           errored={destResearch.errored}
                           hasLoaded={destResearch.hasLoaded}
                           onLoad={loadDestinationResearch}
+                          onLoadMore={(refinement) =>
+                            loadDestinationResearch({
+                              refinement,
+                              append: true,
+                              bypassCache: !refinement,
+                            })
+                          }
                         />
                       </div>
                     )}
