@@ -252,6 +252,9 @@ function SetupForm({
   prefillForm = null,
   initialStep = 0,
   onDestinationsChange = null,
+  // Desktop-specific props
+  isDesktop = false,
+  onFormChange = null, // (form) => void — called on every field change; drives desktop left-panel summary
 }) {
   const [step, setStep] = useState(initialStep);
   useEffect(() => {
@@ -352,7 +355,12 @@ function SetupForm({
   const destTimer = useRef(null);
   const destAbortRef = useRef(null);
   const destCacheRef = useRef(new Map());
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const set = (k, v) =>
+    setForm((f) => {
+      const next = { ...f, [k]: v };
+      onFormChange?.(next);
+      return next;
+    });
 
   // Notify parent whenever destinations change so the page hero can become contextual.
   useEffect(() => {
@@ -734,7 +742,7 @@ function SetupForm({
           marginBottom: 14,
         }}
       >
-        Trip details
+        Dates
       </div>
       {/* Travelers — placed above calendar so calendar can be a fixed-height scroll area */}
       <div
@@ -829,8 +837,7 @@ function SetupForm({
       />
     </div>,
 
-    /* 2 – style */
-    /* 2 – base city + notes + generate */
+    /* 2 – preferences (base city + notes + generate) */
     (() => {
       const isOpenToIdeas = form.destinations.some((d) =>
         d.toLowerCase().includes("help me decide"),
@@ -846,7 +853,7 @@ function SetupForm({
               marginBottom: 24,
             }}
           >
-            🛤 A few more details
+            🛤 Preferences
           </div>
 
           {/* Base Location */}
@@ -948,52 +955,150 @@ function SetupForm({
     })(),
   ];
 
+  // Advance to the next step with validation
+  const handleContinue = () => {
+    if (step === 0) {
+      if (destInput.trim()) {
+        const added = addDestination(destInput);
+        if (!added) {
+          setDestError(
+            "We don't recognise this destination — try picking from the suggestions.",
+          );
+          return;
+        }
+      }
+      if (form.destinations.length === 0 && !destInput.trim()) {
+        setDestError("Please add at least one destination.");
+        return;
+      }
+    }
+    if (step === 1) {
+      if (!form.startDate || !form.endDate) {
+        setDestError("Please select both start and end dates.");
+        return;
+      }
+      if (new Date(form.endDate) < new Date(form.startDate)) {
+        setDestError("End date cannot be before start date.");
+        return;
+      }
+    }
+    setDestError("");
+    setStep((s) => {
+      const next = s + 1;
+      window.history.pushState({ step: next }, "");
+      return next;
+    });
+  };
+
+  // Mobile trip-summary bar — shown on steps 1+ when dates/travelers are set
+  const hasSummary =
+    (form.startDate && form.endDate) || Number(form.travelers) > 1;
+  const summaryText = (() => {
+    const parts = [];
+    if (Number(form.travelers) > 1)
+      parts.push(
+        `${form.travelers} traveler${Number(form.travelers) > 1 ? "s" : ""}`,
+      );
+    if (form.startDate && form.endDate) {
+      const fmt = (iso) =>
+        new Date(iso + "T12:00:00").toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+        });
+      parts.push(`${fmt(form.startDate)} – ${fmt(form.endDate)}`);
+    }
+    return parts.join(" · ");
+  })();
+
   return (
-    <div style={{ padding: "0 20px", paddingBottom: 80 }}>
-      {/* Back button + Progress dots */}
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 28 }}>
-        {step > 0 ? (
-          <button
-            onClick={() => setStep((s) => s - 1)}
+    <div
+      style={{
+        padding: isDesktop ? 0 : "0 20px",
+        paddingBottom: isDesktop ? 0 : 80,
+      }}
+    >
+      {/* Back button + Progress dots — hidden on desktop (left panel owns step progress) */}
+      {!isDesktop && (
+        <div
+          style={{ display: "flex", alignItems: "center", marginBottom: 16 }}
+        >
+          {step > 0 ? (
+            <button
+              onClick={() => setStep((s) => s - 1)}
+              style={{
+                background: T.sand,
+                border: "none",
+                cursor: "pointer",
+                fontSize: 18,
+                color: T.ink,
+                padding: "6px 10px",
+                lineHeight: 1,
+                borderRadius: RADIUS.md,
+                minWidth: 36,
+                minHeight: 36,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              ←
+            </button>
+          ) : (
+            <div style={{ width: 28 }} />
+          )}
+          <div
             style={{
-              background: T.sand,
-              border: "none",
-              cursor: "pointer",
-              fontSize: 18,
-              color: T.ink,
-              padding: "6px 10px",
-              lineHeight: 1,
-              borderRadius: RADIUS.md,
-              minWidth: 36,
-              minHeight: 36,
+              flex: 1,
               display: "flex",
-              alignItems: "center",
               justifyContent: "center",
+              gap: 8,
             }}
           >
-            ←
-          </button>
-        ) : (
+            {stepViews.map((_, i) => (
+              <div
+                key={i}
+                style={{
+                  width: i === step ? 26 : 8,
+                  height: 8,
+                  borderRadius: RADIUS.sm,
+                  background: i <= step ? T.ocean : T.sand,
+                  transition: `all ${MOTION.slow}`,
+                }}
+              />
+            ))}
+          </div>
           <div style={{ width: 28 }} />
-        )}
-        <div
-          style={{ flex: 1, display: "flex", justifyContent: "center", gap: 8 }}
-        >
-          {stepViews.map((_, i) => (
-            <div
-              key={i}
-              style={{
-                width: i === step ? 26 : 8,
-                height: 8,
-                borderRadius: RADIUS.sm,
-                background: i <= step ? T.ocean : T.sand,
-                transition: `all ${MOTION.slow}`,
-              }}
-            />
-          ))}
         </div>
-        <div style={{ width: 28 }} />
-      </div>
+      )}
+
+      {/* Mobile trip-summary bar — visible on steps 1+ once values are set.
+          Tapping it jumps back to step 1 to adjust dates/travelers. */}
+      {!isDesktop && step > 0 && hasSummary && (
+        <button
+          onClick={() => setStep(1)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            marginBottom: 16,
+            padding: "10px 14px",
+            borderRadius: RADIUS.lg,
+            border: `1px solid ${T.sand}`,
+            background: T.chalk,
+            textAlign: "left",
+            cursor: "pointer",
+            fontFamily: "Georgia,serif",
+          }}
+        >
+          <span style={{ fontSize: 16 }}>🗓</span>
+          <span style={{ flex: 1, fontSize: 13, color: T.ink }}>
+            {summaryText}
+          </span>
+          <span style={{ fontSize: 11, color: T.ocean }}>Edit</span>
+        </button>
+      )}
+
       {stepViews[step]}
       {destError && (
         <div
@@ -1008,44 +1113,40 @@ function SetupForm({
           {destError}
         </div>
       )}
-      <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
+
+      {/* Navigation footer */}
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          marginTop: isDesktop ? 28 : 24,
+          alignItems: "center",
+        }}
+      >
+        {/* Back button in footer — desktop only; on mobile it's in the dots row */}
+        {isDesktop && step > 0 && (
+          <button
+            onClick={() => setStep((s) => s - 1)}
+            style={{
+              padding: "12px 20px",
+              borderRadius: RADIUS.lg,
+              border: `1.5px solid ${T.border}`,
+              background: T.chalk,
+              color: T.ink,
+              fontFamily: "Georgia,serif",
+              fontSize: 14,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            ← Back
+          </button>
+        )}
         {step < stepViews.length - 1 && (
           <button
-            onClick={() => {
-              if (step === 0) {
-                if (destInput.trim()) {
-                  const added = addDestination(destInput);
-                  if (!added) {
-                    setDestError(
-                      "We don't recognise this destination — try picking from the suggestions.",
-                    );
-                    return;
-                  }
-                }
-                if (form.destinations.length === 0 && !destInput.trim()) {
-                  setDestError("Please add at least one destination.");
-                  return;
-                }
-              }
-              if (step === 1) {
-                if (!form.startDate || !form.endDate) {
-                  setDestError("Please select both start and end dates.");
-                  return;
-                }
-                if (new Date(form.endDate) < new Date(form.startDate)) {
-                  setDestError("End date cannot be before start date.");
-                  return;
-                }
-              }
-              setDestError("");
-              setStep((s) => {
-                const next = s + 1;
-                window.history.pushState({ step: next }, "");
-                return next;
-              });
-            }}
+            onClick={handleContinue}
             style={{
-              flex: 2,
+              flex: 1,
               padding: 14,
               borderRadius: RADIUS.lg,
               border: "none",
@@ -1054,7 +1155,6 @@ function SetupForm({
               color: "white",
               fontFamily: "'DM Serif Display',serif",
               fontSize: 16,
-              opacity: 1,
               boxShadow: "0 4px 14px rgba(37,99,168,0.3)",
             }}
           >

@@ -6880,6 +6880,7 @@ export default function App({
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
   const [routesGenerating, setRoutesGenerating] = useState(false); // true while RG (brainstorm) is in flight — used to hide chat suggestions
   const [setupDestinations, setSetupDestinations] = useState([]); // current destinations during SetupForm — drives contextual hero copy
+  const [setupForm, setSetupForm] = useState(null); // live form snapshot from SetupForm — drives desktop left-panel summary
   const [fabPos, setFabPos] = useState({ right: 0, bottom: 140 }); // draggable FAB position, flush right
   const fabDragRef = useRef({
     dragging: false,
@@ -9550,160 +9551,91 @@ export default function App({
         )}
 
         {/* ── SETUP ── */}
-        {screen === "setup" && (
-          <div style={{ flex: 1, overflowY: "auto" }}>
-            <div
-              style={{
-                background: `linear-gradient(160deg,${T.dusk},${T.ocean})`,
-                padding: "44px 20px 36px",
-                color: "white",
-                position: "relative",
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  position: "absolute",
-                  top: -50,
-                  right: -50,
-                  width: 200,
-                  height: 200,
-                  borderRadius: "50%",
-                  background: "rgba(255,255,255,0.04)",
-                  pointerEvents: "none",
-                }}
-              />
-              <div
-                style={{
-                  position: "relative",
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  alignItems: "center",
-                  marginBottom: 14,
-                }}
-              >
-                {onHome && (
-                  <button
-                    onClick={onHome}
-                    style={{
-                      background: "rgba(255,255,255,0.15)",
-                      border: "none",
-                      borderRadius: RADIUS.full,
-                      padding: "4px 13px",
-                      color: "white",
-                      fontSize: 12,
-                      cursor: "pointer",
-                      fontFamily: "Georgia,serif",
-                    }}
-                  >
-                    All Trips
-                  </button>
-                )}
-              </div>
-              {(() => {
-                // Contextual hero: changes based on the user's destination selection in SetupForm.
-                const real = (setupDestinations || []).filter(
-                  (d) => !d.toLowerCase().includes("help me decide"),
-                );
-                const helpMeDecide = (setupDestinations || []).some((d) =>
-                  d.toLowerCase().includes("help me decide"),
-                );
-                let title,
-                  subline = null;
-                if (real.length === 0 && helpMeDecide) {
-                  title = (
-                    <>
-                      The world is your
-                      <br />
-                      oyster 🌍
-                    </>
-                  );
-                  subline = "Tell us how you travel — we'll find your match";
-                } else if (real.length === 0) {
-                  title = (
-                    <>
-                      Plan your next
-                      <br />
-                      adventure ✈️
-                    </>
-                  );
-                } else if (real.length === 1) {
-                  title = (
-                    <>
-                      We're going to
-                      <br />
-                      {real[0]}! ✈️
-                    </>
-                  );
-                } else if (real.length === 2) {
-                  title = (
-                    <>
-                      We're going to
-                      <br />
-                      {real[0]} & {real[1]}! ✈️
-                    </>
-                  );
-                } else if (real.length === 3) {
-                  title = (
-                    <>
-                      We're going to
-                      <br />
-                      {real[0]}, {real[1]} & {real[2]}! ✈️
-                    </>
-                  );
-                } else {
-                  title = (
-                    <>
-                      We're going to
-                      <br />
-                      {real[0]}, {real[1]}, {real[2]} & beyond! ✈️
-                    </>
-                  );
-                }
-                return (
-                  <>
-                    <div
-                      style={{
-                        fontFamily: "'DM Serif Display',serif",
-                        fontSize: 34,
-                        lineHeight: 1.2,
-                        marginBottom: subline ? 10 : 0,
-                      }}
-                    >
-                      {title}
-                    </div>
-                    {subline && (
-                      <div
-                        style={{
-                          fontSize: 14,
-                          opacity: 0.7,
-                          fontFamily: "Georgia,serif",
-                        }}
-                      >
-                        {subline}
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-            <div style={{ padding: "28px 0 0" }}>
-              {generateError && (
-                <div
-                  style={{
-                    margin: "0 20px 16px",
-                    padding: "12px 16px",
-                    borderRadius: RADIUS.lg,
-                    background: T.errorLight,
-                    border: `1.5px solid ${T.error}`,
-                    fontSize: 13,
-                    color: T.error,
-                    fontFamily: "Georgia,serif",
-                  }}
-                >
-                  {generateError}
-                </div>
-              )}
+        {screen === "setup" &&
+          (() => {
+            // ── Shared: contextual hero title (used by both mobile banner + desktop left panel) ──
+            const heroReal = (setupDestinations || []).filter(
+              (d) => !d.toLowerCase().includes("help me decide"),
+            );
+            const heroHelpMeDecide = (setupDestinations || []).some((d) =>
+              d.toLowerCase().includes("help me decide"),
+            );
+            let heroTitle, heroSubline;
+            if (heroReal.length === 0 && heroHelpMeDecide) {
+              heroTitle = (
+                <>
+                  The world is your
+                  <br />
+                  oyster 🌍
+                </>
+              );
+              heroSubline = "Tell us how you travel — we'll find your match";
+            } else if (heroReal.length === 0) {
+              heroTitle = (
+                <>
+                  Plan your next
+                  <br />
+                  adventure ✈️
+                </>
+              );
+            } else if (heroReal.length === 1) {
+              heroTitle = (
+                <>
+                  We&rsquo;re going to
+                  <br />
+                  {heroReal[0]}! ✈️
+                </>
+              );
+            } else if (heroReal.length === 2) {
+              heroTitle = (
+                <>
+                  We&rsquo;re going to
+                  <br />
+                  {heroReal[0]} & {heroReal[1]}! ✈️
+                </>
+              );
+            } else if (heroReal.length === 3) {
+              heroTitle = (
+                <>
+                  We&rsquo;re going to
+                  <br />
+                  {heroReal[0]}, {heroReal[1]} & {heroReal[2]}! ✈️
+                </>
+              );
+            } else {
+              heroTitle = (
+                <>
+                  We&rsquo;re going to
+                  <br />
+                  {heroReal[0]}, {heroReal[1]}, {heroReal[2]} & beyond! ✈️
+                </>
+              );
+            }
+
+            // Desktop left-panel trip summary (dates + travelers)
+            const sf = setupForm;
+            const hasSummary =
+              sf && ((sf.startDate && sf.endDate) || Number(sf.travelers) > 1);
+            const summaryText = (() => {
+              if (!sf) return "";
+              const parts = [];
+              if (Number(sf.travelers) > 1)
+                parts.push(`${sf.travelers} travelers`);
+              if (sf.startDate && sf.endDate) {
+                const fmt = (iso) =>
+                  new Date(iso + "T12:00:00").toLocaleDateString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                  });
+                parts.push(`${fmt(sf.startDate)} – ${fmt(sf.endDate)}`);
+              }
+              return parts.join(" · ");
+            })();
+
+            // Step labels
+            const stepLabels = ["Destination", "Dates", "Preferences"];
+
+            const sharedSetupForm = (
               <SetupForm
                 key={pendingForm ? "resume" : "fresh"}
                 onGenerate={handleSetupComplete}
@@ -9718,12 +9650,337 @@ export default function App({
                   if (onUrlChange && !editingTrip) onUrlChange(`/new/${s}`);
                 }}
                 onDestinationsChange={setSetupDestinations}
+                onFormChange={setSetupForm}
                 prefillForm={pendingForm}
                 initialStep={setupStep}
+                isDesktop={isDesktop}
               />
-            </div>
-          </div>
-        )}
+            );
+
+            if (isDesktop) {
+              // ── DESKTOP: two-column layout ──
+              return (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "2fr 3fr",
+                    height: "100dvh",
+                    overflow: "hidden",
+                    background: T.bgPage,
+                  }}
+                >
+                  {/* LEFT panel — gradient + hero + step list */}
+                  <div
+                    style={{
+                      background: `linear-gradient(160deg,${T.dusk},${T.ocean})`,
+                      display: "flex",
+                      flexDirection: "column",
+                      padding: "44px 40px 40px",
+                      color: "white",
+                      overflowY: "auto",
+                      position: "relative",
+                    }}
+                  >
+                    {/* Decorative circle */}
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: -60,
+                        right: -60,
+                        width: 240,
+                        height: 240,
+                        borderRadius: "50%",
+                        background: "rgba(255,255,255,0.04)",
+                        pointerEvents: "none",
+                      }}
+                    />
+                    {/* All trips link */}
+                    {onHome && (
+                      <button
+                        onClick={onHome}
+                        style={{
+                          alignSelf: "flex-start",
+                          background: "rgba(255,255,255,0.15)",
+                          border: "none",
+                          borderRadius: RADIUS.full,
+                          padding: "4px 14px",
+                          color: "rgba(255,255,255,0.85)",
+                          fontSize: 12,
+                          cursor: "pointer",
+                          fontFamily: "Georgia,serif",
+                          marginBottom: 32,
+                        }}
+                      >
+                        ← All trips
+                      </button>
+                    )}
+                    {/* Contextual hero title */}
+                    <div
+                      style={{
+                        fontFamily: "'DM Serif Display',serif",
+                        fontSize: 36,
+                        lineHeight: 1.2,
+                        marginBottom: heroSubline ? 12 : 24,
+                        position: "relative",
+                      }}
+                    >
+                      {heroTitle}
+                    </div>
+                    {heroSubline && (
+                      <div
+                        style={{
+                          fontSize: 14,
+                          opacity: 0.7,
+                          fontFamily: "Georgia,serif",
+                          marginBottom: 24,
+                        }}
+                      >
+                        {heroSubline}
+                      </div>
+                    )}
+                    {/* Persistent trip summary pill (appears once dates/travelers are set) */}
+                    {hasSummary && (
+                      <div
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 7,
+                          background: "rgba(255,255,255,0.14)",
+                          borderRadius: RADIUS.full,
+                          padding: "6px 14px",
+                          fontSize: 13,
+                          fontFamily: "Georgia,serif",
+                          marginBottom: 32,
+                          alignSelf: "flex-start",
+                        }}
+                      >
+                        <span>🗓</span>
+                        <span>{summaryText}</span>
+                      </div>
+                    )}
+                    {/* Step progress list */}
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 0,
+                        marginTop: "auto",
+                      }}
+                    >
+                      {stepLabels.map((label, i) => {
+                        const done = i < setupStep;
+                        const current = i === setupStep;
+                        return (
+                          <div
+                            key={i}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 12,
+                              padding: "10px 0",
+                              borderBottom:
+                                i < stepLabels.length - 1
+                                  ? "1px solid rgba(255,255,255,0.1)"
+                                  : "none",
+                              opacity: done || current ? 1 : 0.45,
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: 24,
+                                height: 24,
+                                borderRadius: "50%",
+                                border: "2px solid rgba(255,255,255,0.6)",
+                                background: done
+                                  ? "rgba(255,255,255,0.9)"
+                                  : current
+                                    ? "white"
+                                    : "transparent",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                flexShrink: 0,
+                              }}
+                            >
+                              {done ? (
+                                <span style={{ fontSize: 12, color: T.ocean }}>
+                                  ✓
+                                </span>
+                              ) : current ? (
+                                <div
+                                  style={{
+                                    width: 8,
+                                    height: 8,
+                                    borderRadius: "50%",
+                                    background: T.ocean,
+                                  }}
+                                />
+                              ) : (
+                                <span
+                                  style={{
+                                    fontSize: 10,
+                                    color: "rgba(255,255,255,0.6)",
+                                  }}
+                                >
+                                  {i + 1}
+                                </span>
+                              )}
+                            </div>
+                            <span
+                              style={{
+                                fontFamily: "Georgia,serif",
+                                fontSize: 14,
+                                fontWeight: current ? 600 : 400,
+                              }}
+                            >
+                              {label}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* RIGHT panel — scrollable, centered white card */}
+                  <div
+                    style={{
+                      overflowY: "auto",
+                      display: "flex",
+                      alignItems: "flex-start",
+                      justifyContent: "center",
+                      padding: "48px 40px",
+                      background: T.bgPage,
+                    }}
+                  >
+                    <div
+                      style={{
+                        background: T.chalk,
+                        borderRadius: RADIUS.lg,
+                        boxShadow: SHADOW.lg,
+                        border: `1px solid ${T.border}`,
+                        padding: "36px 40px",
+                        width: "100%",
+                        maxWidth: 520,
+                      }}
+                    >
+                      {generateError && (
+                        <div
+                          style={{
+                            marginBottom: 16,
+                            padding: "12px 16px",
+                            borderRadius: RADIUS.lg,
+                            background: T.errorLight,
+                            border: `1.5px solid ${T.error}`,
+                            fontSize: 13,
+                            color: T.error,
+                            fontFamily: "Georgia,serif",
+                          }}
+                        >
+                          {generateError}
+                        </div>
+                      )}
+                      {sharedSetupForm}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            // ── MOBILE: existing layout (unchanged) ──
+            return (
+              <div style={{ flex: 1, overflowY: "auto" }}>
+                <div
+                  style={{
+                    background: `linear-gradient(160deg,${T.dusk},${T.ocean})`,
+                    padding: "44px 20px 36px",
+                    color: "white",
+                    position: "relative",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: -50,
+                      right: -50,
+                      width: 200,
+                      height: 200,
+                      borderRadius: "50%",
+                      background: "rgba(255,255,255,0.04)",
+                      pointerEvents: "none",
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: "relative",
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      alignItems: "center",
+                      marginBottom: 14,
+                    }}
+                  >
+                    {onHome && (
+                      <button
+                        onClick={onHome}
+                        style={{
+                          background: "rgba(255,255,255,0.15)",
+                          border: "none",
+                          borderRadius: RADIUS.full,
+                          padding: "4px 13px",
+                          color: "white",
+                          fontSize: 12,
+                          cursor: "pointer",
+                          fontFamily: "Georgia,serif",
+                        }}
+                      >
+                        All Trips
+                      </button>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "'DM Serif Display',serif",
+                      fontSize: 34,
+                      lineHeight: 1.2,
+                      marginBottom: heroSubline ? 10 : 0,
+                    }}
+                  >
+                    {heroTitle}
+                  </div>
+                  {heroSubline && (
+                    <div
+                      style={{
+                        fontSize: 14,
+                        opacity: 0.7,
+                        fontFamily: "Georgia,serif",
+                      }}
+                    >
+                      {heroSubline}
+                    </div>
+                  )}
+                </div>
+                <div style={{ padding: "28px 0 0" }}>
+                  {generateError && (
+                    <div
+                      style={{
+                        margin: "0 20px 16px",
+                        padding: "12px 16px",
+                        borderRadius: RADIUS.lg,
+                        background: T.errorLight,
+                        border: `1.5px solid ${T.error}`,
+                        fontSize: 13,
+                        color: T.error,
+                        fontFamily: "Georgia,serif",
+                      }}
+                    >
+                      {generateError}
+                    </div>
+                  )}
+                  {sharedSetupForm}
+                </div>
+              </div>
+            );
+          })()}
 
         {/* Left sidebar fully removed 2026-05-28/30. Contents moved to Avatar
             dropdown ("Your trips") and the desktop trip-context bar. */}
