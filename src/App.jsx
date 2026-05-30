@@ -7004,13 +7004,33 @@ export default function App({
     }
   };
 
-  // Auto-load Inspirations when the user navigates anywhere that surfaces them:
-  //   - desktop pre-trip Inspirations top tab (pretripTab === "inspirations")
-  //   - any "magazine area" page where the active sub-tab is Inspirations
-  //     (mobile pre-trip with pretripTab === "magazine", or post-trip with
-  //      activeBottomTab === "brainstorm")
-  // Fires once per session (hasLoaded guard). Cached server-side for 30 days
-  // so subsequent calls are free.
+  // Eager pre-load: as soon as the first batch of routes arrives from RG,
+  // kick off both Inspirations and the destination deep-dive in the background
+  // so they're ready by the time the user navigates to those tabs.
+  // Previously both only loaded on tab navigate; this eliminates the wait.
+  useEffect(() => {
+    if (pretripRoutes.length === 0) return;
+    // Inspirations
+    if (!destResearch.hasLoaded && !destResearch.loading) {
+      loadDestinationResearch();
+    }
+    // Destination deep-dive (first fold of Magazine)
+    const rawDests = (pendingForm?.destinations || []).filter(
+      (d) => !d.toLowerCase().includes("help me decide"),
+    );
+    const destination =
+      editingTrip?.destination ||
+      trip?.destination ||
+      (rawDests.length ? rawDests.join(", ") : null);
+    if (destination && !deepDiveCacheApp[destination]) {
+      loadCityDeepDiveApp(destination);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pretripRoutes.length]);
+
+  // Lazy fallback: fire Inspirations load if the user navigates to the tab
+  // before routes have been generated (e.g. opening an existing itinerary
+  // directly). Guards against double-loading via hasLoaded/loading flags.
   useEffect(() => {
     const onDesktopInspirations =
       screen === "brainstorm" && pretripTab === "inspirations";
@@ -7050,9 +7070,8 @@ export default function App({
       activeBottomTab === "brainstorm" &&
       magazineSubTab === "magazine");
 
-  // Background-load city-deep-dive for the main destination — fires only when
-  // the Magazine view is actually visible so Inspirations gets the first
-  // Anthropic slot when the user lands on it.
+  // Fallback deep-dive load: if the user navigates to the Magazine view before
+  // routes were available (or the eager pre-load above missed for some reason).
   useEffect(() => {
     if (!magazineGridVisible) return;
     if (pretripRoutes.length === 0) return;

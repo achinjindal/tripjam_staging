@@ -104,15 +104,11 @@ OUTPUT FORMAT — return ONLY a single raw JSON object, no prose, no markdown fe
 }
 
 Rules:
-- 6–10 inspirations TOTAL.
-- MANDATORY MIX — the final list must contain BOTH formats:
-    • at LEAST 3 entries with type="article" (named blog/Substack/journalist posts)
-    • at LEAST 3 entries with type="video" (YouTube videos by named individual creators)
-  If you can't surface 3 of either format, surface as many as you can find — but you MUST attempt explicit searches for both. Do not return only articles. Do not return only videos.
-- To find videos, run web_search queries that target YouTube specifically, e.g.:
-    site:youtube.com "<destination>" vlog
-    "<destination>" travel vlog YouTube
-    "<creator name>" "<destination>" YouTube
+- 5–10 inspirations TOTAL.
+- AIM for a mix of articles and videos where possible:
+    • Search explicitly for YouTube vlogs (site:youtube.com "<destination>" vlog, "<destination>" travel vlog YouTube) as well as blog/Substack posts.
+    • If you find quality vlogs, include them. If web_search only surfaces strong articles, return those — quality over format balance.
+    • Never return fewer good results just to satisfy a format ratio. Better 8 great articles than 4 articles + 4 fabricated or low-quality videos.
   Prefer videos posted to a named YouTube channel (not auto-generated topic channels).
 - Mix well-known and less-known creators. No duplicates by author.
 - Every inspirations entry MUST also appear in sources (same URL, dedup by url; sources[].id is 1-indexed).
@@ -334,7 +330,7 @@ serve(async (req) => {
         d: destinations,
         t: tagResult.tags,
         m: monthBucket,
-        v: 2,
+        v: 3,
         r: refinement,
       }),
     );
