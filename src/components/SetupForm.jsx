@@ -393,7 +393,9 @@ function SetupForm({
   const handleDestChange = (val) => {
     setDestInput(val);
     setDestError("");
-    if (val.trim().length < 1) {
+    // Require ≥2 characters — single-character queries are too broad and
+    // the autocomplete API charges per call.
+    if (val.trim().length < 2) {
       setSuggestions([]);
       setShowSugg(false);
       setDestLoading(false);
@@ -402,6 +404,7 @@ function SetupForm({
       return;
     }
     const cacheKey = val.trim().toLowerCase();
+    // In-memory cache (per component mount) — instant, no network round-trip.
     const cached = destCacheRef.current.get(cacheKey);
     if (cached) {
       setSuggestions(cached);
@@ -413,9 +416,14 @@ function SetupForm({
     setDestLoading(true);
     clearTimeout(destTimer.current);
     destAbortRef.current?.abort();
+    // 400ms debounce — more forgiving on mobile where typing is slower and
+    // edge-function cold-starts add latency.
     destTimer.current = setTimeout(async () => {
       const ctrl = new AbortController();
       destAbortRef.current = ctrl;
+      // 6s client timeout: edge functions occasionally cold-start (1–3s).
+      // If it takes longer than 6s, fail fast rather than hanging indefinitely.
+      const timeoutId = setTimeout(() => ctrl.abort(), 6000);
       try {
         const res = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
           method: "POST",
@@ -423,19 +431,26 @@ function SetupForm({
           body: JSON.stringify({ q: val }),
           signal: ctrl.signal,
         });
+        clearTimeout(timeoutId);
         const data = await res.json();
         const items = (data.suggestions || []).slice(0, 8);
+        // Cache the result so typing back to the same prefix is instant.
         destCacheRef.current.set(cacheKey, items);
         if (ctrl.signal.aborted) return;
         setSuggestions(items);
         setShowSugg(items.length > 0);
         setDestLoading(false);
       } catch (err) {
-        if (err.name === "AbortError") return;
+        clearTimeout(timeoutId);
+        if (err.name === "AbortError") {
+          // Timeout or newer keystroke — don't show an error, just clear.
+          if (!ctrl.signal.aborted) setDestLoading(false);
+          return;
+        }
         setSuggestions([]);
         setDestLoading(false);
       }
-    }, 200);
+    }, 400);
   };
 
   const addDestination = (name, currentDests) => {

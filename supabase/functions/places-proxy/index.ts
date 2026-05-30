@@ -393,23 +393,22 @@ async function handleAutocomplete(req: Request): Promise<Response> {
   const { q, types } = await req.json();
   if (!q) return Response.json({ error: "q required" }, { status: 400 });
 
-  // Cache queries ≤4 chars in DB (highly reusable, saves API calls)
-  const shouldCache = q.trim().length <= 4;
-  if (shouldCache) {
-    const cacheKey = `autocomplete:${q.trim().toLowerCase()}:${types || ""}`;
-    const cached = await cacheGet(cacheKey);
-    if (cached) {
-      incrementUsage("autocomplete", "cache-hit", today()).catch(() => {});
-      return Response.json(cached, { headers: corsHeaders });
-    }
-    const data = await autocomplete(q, types);
-    incrementUsage("autocomplete", "google", today()).catch(() => {});
-    cacheSet(cacheKey, "autocomplete", data, "google").catch(() => {});
-    return Response.json(data, { headers: corsHeaders });
+  // Cache ALL queries in DB — popular destination prefixes ("jap", "bali",
+  // "sant", etc.) are highly reusable across users and the cache hit is
+  // a single Postgres read (~5ms) vs. a Google API call (~150–400ms).
+  // Previously only ≤4-char queries were cached; extending to all queries
+  // dramatically reduces latency for returning/repeat users.
+  const cacheKey = `autocomplete:${q.trim().toLowerCase()}:${types || ""}`;
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
+    incrementUsage("autocomplete", "cache-hit", today()).catch(() => {});
+    return Response.json(cached, { headers: corsHeaders });
   }
-
   const data = await autocomplete(q, types);
   incrementUsage("autocomplete", "google", today()).catch(() => {});
+  // Cache results for 7 days — city/destination autocomplete results are
+  // stable. A TTL of null (permanent) would also be safe here.
+  cacheSet(cacheKey, "autocomplete", data, "google", 7).catch(() => {});
   return Response.json(data, { headers: corsHeaders });
 }
 
