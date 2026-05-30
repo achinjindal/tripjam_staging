@@ -1,5 +1,25 @@
 import { useState, useEffect } from "react";
 import { T, RADIUS, SHADOW, MOTION } from "../theme";
+
+// Open a URL in the Capacitor in-app browser on Android (Chrome Custom Tab)
+// so the user can swipe back to TripJam. Falls back to a new browser tab on
+// web / any environment where @capacitor/browser isn't available.
+async function openUrl(url) {
+  if (!url) return;
+  try {
+    // Dynamic import so the web bundle doesn't error when @capacitor/core
+    // isn't present in the browser context.
+    const { Capacitor } = await import("@capacitor/core");
+    if (Capacitor.isNativePlatform()) {
+      const { Browser } = await import("@capacitor/browser");
+      await Browser.open({ url, presentationStyle: "popover" });
+      return;
+    }
+  } catch {
+    // not on native — fall through
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
 import {
   _fetchPhoto,
   _usedPhotoUrls,
@@ -1371,24 +1391,26 @@ function InspirationCard({ item }) {
         </div>
       )}
       {item.url && (
-        <a
-          href={item.url}
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          onClick={() => openUrl(item.url)}
           style={{
             display: "inline-flex",
             alignItems: "center",
             gap: 5,
+            background: "none",
+            border: "none",
+            padding: 0,
             fontFamily: "Georgia,serif",
             fontSize: 13,
             color: T.ocean,
             textDecoration: "none",
             fontWeight: 600,
+            cursor: "pointer",
           }}
         >
           {isVideo ? (youTubeId ? "Open on YouTube" : "Watch") : "Read"}{" "}
           <span style={{ fontSize: 14 }}>↗</span>
-        </a>
+        </button>
       )}
     </div>
   );
