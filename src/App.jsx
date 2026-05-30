@@ -9554,13 +9554,18 @@ export default function App({
         {screen === "setup" &&
           (() => {
             // ── Shared: contextual hero title (used by both mobile banner + desktop left panel) ──
-            const heroReal = (setupDestinations || []).filter(
-              (d) => !d.toLowerCase().includes("help me decide"),
-            );
+            // Strip comma-suffixes from full place names so "Bangalore, Karnataka, India"
+            // → "Bangalore" in the hero title. Keeps the first segment only.
+            const firstName = (name) => name.split(",")[0].trim();
+            const heroReal = (setupDestinations || [])
+              .filter((d) => !d.toLowerCase().includes("help me decide"))
+              .map(firstName);
             const heroHelpMeDecide = (setupDestinations || []).some((d) =>
               d.toLowerCase().includes("help me decide"),
             );
-            let heroTitle, heroSubline;
+            // heroTitle: full version with <br /> (desktop left panel + mobile step 0 banner)
+            // heroTitleCompact: single line, no <br /> (mobile steps 1+ compact banner)
+            let heroTitle, heroTitleCompact, heroSubline;
             if (heroReal.length === 0 && heroHelpMeDecide) {
               heroTitle = (
                 <>
@@ -9569,6 +9574,7 @@ export default function App({
                   oyster 🌍
                 </>
               );
+              heroTitleCompact = "The world is your oyster 🌍";
               heroSubline = "Tell us how you travel — we'll find your match";
             } else if (heroReal.length === 0) {
               heroTitle = (
@@ -9578,6 +9584,7 @@ export default function App({
                   adventure ✈️
                 </>
               );
+              heroTitleCompact = "Plan your next adventure ✈️";
             } else if (heroReal.length === 1) {
               heroTitle = (
                 <>
@@ -9586,6 +9593,7 @@ export default function App({
                   {heroReal[0]}! ✈️
                 </>
               );
+              heroTitleCompact = `We're going to ${heroReal[0]}! ✈️`;
             } else if (heroReal.length === 2) {
               heroTitle = (
                 <>
@@ -9594,6 +9602,7 @@ export default function App({
                   {heroReal[0]} & {heroReal[1]}! ✈️
                 </>
               );
+              heroTitleCompact = `We're going to ${heroReal[0]} & ${heroReal[1]}! ✈️`;
             } else if (heroReal.length === 3) {
               heroTitle = (
                 <>
@@ -9602,6 +9611,7 @@ export default function App({
                   {heroReal[0]}, {heroReal[1]} & {heroReal[2]}! ✈️
                 </>
               );
+              heroTitleCompact = `We're going to ${heroReal[0]}, ${heroReal[1]} & ${heroReal[2]}! ✈️`;
             } else {
               heroTitle = (
                 <>
@@ -9610,6 +9620,7 @@ export default function App({
                   {heroReal[0]}, {heroReal[1]}, {heroReal[2]} & beyond! ✈️
                 </>
               );
+              heroTitleCompact = `We're going to ${heroReal[0]}, ${heroReal[1]}, ${heroReal[2]} & beyond! ✈️`;
             }
 
             // Desktop left-panel trip summary (dates + travelers)
@@ -9953,17 +9964,18 @@ export default function App({
                       <div />
                     )}
                   </div>
-                  {/* Hero title — large on step 0, compact on steps 1+ */}
+                  {/* Hero title — large multi-line on step 0, single-line compact on steps 1+ */}
                   <div
                     style={{
                       fontFamily: "'DM Serif Display',serif",
-                      fontSize: setupStep === 0 ? 30 : 20,
-                      lineHeight: 1.2,
+                      fontSize: setupStep === 0 ? 30 : 22,
+                      lineHeight: setupStep === 0 ? 1.2 : 1.15,
                       marginBottom: heroSubline && setupStep === 0 ? 8 : 0,
+                      whiteSpace: setupStep === 0 ? "normal" : "normal",
                       transition: "font-size 0.25s ease",
                     }}
                   >
-                    {heroTitle}
+                    {setupStep === 0 ? heroTitle : heroTitleCompact}
                   </div>
                   {heroSubline && setupStep === 0 && (
                     <div

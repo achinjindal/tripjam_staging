@@ -486,14 +486,12 @@ function SetupForm({
 
   const stepViews = [
     /* 0 – destination */
+    // No flex:1 here — let content height be natural so Continue sits right below,
+    // not at the very bottom of a tall screen with empty space in between.
     <div
       key={0}
       style={{
         animation: "fadeUp 0.3s ease",
-        flex: 1,
-        display: "flex",
-        flexDirection: "column",
-        minHeight: 0,
       }}
     >
       {/* On desktop only: show the icon + heading (mobile banner already shows contextual hero) */}
@@ -607,9 +605,10 @@ function SetupForm({
           <div
             style={{
               position: "absolute",
-              // On mobile with keyboard open: open suggestions UPWARD so they
-              // stay visible above the keyboard. On desktop or no keyboard: open down.
-              ...(keyboardHeight > 0 && !isDesktop
+              // On mobile: always open suggestions UPWARD — when typing, the
+              // software keyboard is almost certainly open, which would cover
+              // a downward dropdown. Desktop opens downward as normal.
+              ...(!isDesktop
                 ? { bottom: "calc(100% + 6px)", top: "auto" }
                 : { top: "calc(100% + 6px)", bottom: "auto" }),
               left: 0,
@@ -702,16 +701,13 @@ function SetupForm({
         )}
       </div>
 
-      {/* Popular destinations — horizontal scroll on mobile to save vertical space */}
+      {/* Popular destinations — always wrap so all 8 options are visible */}
       <div
         style={{
           display: "flex",
           gap: 8,
           marginTop: 14,
-          overflowX: isDesktop ? "visible" : "auto",
-          flexWrap: isDesktop ? "wrap" : "nowrap",
-          paddingBottom: isDesktop ? 0 : 4, // room for scrollbar on some devices
-          WebkitOverflowScrolling: "touch",
+          flexWrap: "wrap",
         }}
       >
         {[
@@ -744,7 +740,6 @@ function SetupForm({
                 fontSize: 13,
                 cursor: "pointer",
                 fontFamily: "Georgia,serif",
-                flexShrink: 0, // prevent pill compression in horizontal scroll
               }}
             >
               {d}
@@ -915,10 +910,6 @@ function SetupForm({
           key={3}
           style={{
             animation: "fadeUp 0.3s ease",
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            minHeight: 0,
           }}
         >
           {/* Desktop only: heading (mobile banner already has contextual context) */}
@@ -1156,33 +1147,7 @@ function SetupForm({
         </div>
       )}
 
-      {/* Mobile trip-summary bar — visible on steps 1+ once values are set.
-          Tapping it jumps back to step 1 to adjust dates/travelers. */}
-      {!isDesktop && step > 0 && hasSummary && (
-        <button
-          onClick={() => setStep(1)}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            width: "100%",
-            marginBottom: 16,
-            padding: "10px 14px",
-            borderRadius: RADIUS.lg,
-            border: `1px solid ${T.sand}`,
-            background: T.chalk,
-            textAlign: "left",
-            cursor: "pointer",
-            fontFamily: "Georgia,serif",
-          }}
-        >
-          <span style={{ fontSize: 16 }}>🗓</span>
-          <span style={{ flex: 1, fontSize: 13, color: T.ink }}>
-            {summaryText}
-          </span>
-          <span style={{ fontSize: 11, color: T.ocean }}>Edit</span>
-        </button>
-      )}
+      {/* Trip summary is shown in the mobile banner (App.jsx), not duplicated here */}
 
       <div
         style={{
