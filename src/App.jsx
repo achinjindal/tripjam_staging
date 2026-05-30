@@ -6433,6 +6433,54 @@ export default function App({
   // or derived state that references it (e.g. magazineGridVisible, pretripMagView).
   const isTripView = screen === "brainstorm" || screen === "itinerary";
   const useDesktopShell = isDesktop && isTripView;
+
+  // Resizable panels — percentage of total width taken by the center column.
+  // Min 25% / Max 75% so neither panel can be hidden completely.
+  // Persisted to localStorage so the split survives page refreshes.
+  const [panelSplit, setPanelSplit] = useState(() => {
+    try {
+      const saved = localStorage.getItem("tripjam_panel_split");
+      if (saved) {
+        const n = Number(saved);
+        if (n >= 25 && n <= 75) return n;
+      }
+    } catch {
+      // ignore
+    }
+    return 50;
+  });
+  const panelContainerRef = useRef(null);
+
+  const startPanelDrag = useCallback((e) => {
+    e.preventDefault();
+    const container = panelContainerRef.current;
+    if (!container) return;
+    let lastPct = 50;
+    const onMove = (ev) => {
+      const rect = container.getBoundingClientRect();
+      const x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+      lastPct = Math.min(75, Math.max(25, (x / rect.width) * 100));
+      setPanelSplit(lastPct);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+      try {
+        localStorage.setItem(
+          "tripjam_panel_split",
+          String(Math.round(lastPct)),
+        );
+      } catch {
+        /**/
+      }
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+  }, []);
   const [setupStep, setSetupStep] = useState(0);
   const [trip, setTrip] = useState(initialTrip || SAMPLE_TRIP);
   useEffect(() => {
@@ -9325,6 +9373,7 @@ export default function App({
   return (
     <ErrorBoundary>
       <div
+        ref={useDesktopShell ? panelContainerRef : null}
         style={
           useDesktopShell
             ? {
@@ -9334,14 +9383,12 @@ export default function App({
                 margin: "0 auto",
                 position: "relative",
                 display: "grid",
-                // 2-column layout (was 3-column). Left sidebar is gone — its
-                // contents (All trips, Share, Explore plans) moved into the
-                // Avatar dropdown and a slim header bar above the center tabs.
-                gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-                // Right column splits ~60/40 between persistent map (top) and
-                // persistent Trippy chat (bottom).
+                // Center column width is controlled by panelSplit (drag-resizable).
+                // The 5px "resizer" column is the drag handle between center and right.
+                gridTemplateColumns: `minmax(0, ${panelSplit}fr) 5px minmax(0, ${100 - panelSplit}fr)`,
                 gridTemplateRows: "60% 40%",
-                gridTemplateAreas: '"center right-top" "center right-bottom"',
+                gridTemplateAreas:
+                  '"center resizer right-top" "center resizer right-bottom"',
                 height: "100dvh",
                 overflow: "hidden",
                 paddingTop: "env(safe-area-inset-top, 0px)",
@@ -9812,6 +9859,60 @@ export default function App({
             >
               TripJam
             </div>
+          </div>
+        )}
+
+        {/* ── PANEL RESIZER (desktop only) ──
+            Thin drag handle between the center column and the right columns.
+            Sits in the "resizer" grid area which spans both right-top and
+            right-bottom rows. Dragging it adjusts panelSplit (center column %).
+            Double-clicking resets to 50/50. */}
+        {useDesktopShell && (
+          <div
+            data-resizer
+            onMouseDown={startPanelDrag}
+            onTouchStart={startPanelDrag}
+            onDoubleClick={() => {
+              setPanelSplit(50);
+              try {
+                localStorage.setItem("tripjam_panel_split", "50");
+              } catch {
+                /**/
+              }
+            }}
+            title="Drag to resize · Double-click to reset"
+            style={{
+              gridArea: "resizer",
+              cursor: "col-resize",
+              background: "transparent",
+              zIndex: 50,
+              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              userSelect: "none",
+            }}
+          >
+            {/* Visual indicator — a subtle vertical dotted line */}
+            <div
+              style={{
+                width: 1,
+                height: "100%",
+                background: T.border,
+                position: "absolute",
+              }}
+            />
+            {/* Grip dots — appear on hover via CSS (pointer-events passthrough) */}
+            <div
+              style={{
+                width: 4,
+                height: 40,
+                borderRadius: 2,
+                background: T.sand,
+                zIndex: 1,
+                opacity: 0.8,
+              }}
+            />
           </div>
         )}
 
