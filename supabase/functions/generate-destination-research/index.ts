@@ -113,6 +113,7 @@ Rules:
 - Mix well-known and less-known creators. No duplicates by author.
 - Every inspirations entry MUST also appear in sources (same URL, dedup by url; sources[].id is 1-indexed).
 - 0–6 place_insights. Each insight is short (≤ 15 words), in your own words, attributed via source_ids.
+- CRITICAL URL RULE: Every URL you include MUST be one that web_search actually returned to you in this session. Do NOT construct, guess, or infer URLs — even if you know the website or author. If you did not receive a specific URL from web_search, do not include that article. A missing entry is far better than a broken link.
 - Do NOT fabricate authors, URLs, or dates. If web_search did not surface a fitting piece, return fewer entries. Better empty than fake.
 - No markdown, no code fences, no commentary outside the JSON.`;
 
@@ -330,7 +331,7 @@ serve(async (req) => {
         d: destinations,
         t: tagResult.tags,
         m: monthBucket,
-        v: 3,
+        v: 4, // bump: critical URL-fabrication rule added
         r: refinement,
       }),
     );

@@ -1427,6 +1427,7 @@ export function InspirationsSection({
   const items = (digest?.inspirations || []).filter((i) => i?.url);
   const [refinementInput, setRefinementInput] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
+  const [showRefinement, setShowRefinement] = useState(false);
   const sub = loading
     ? "Looking up recent articles and vlogs…"
     : errored || items.length === 0
@@ -1579,9 +1580,9 @@ export function InspirationsSection({
           Surfaced from the open web. Links open in a new tab.
         </div>
       )}
-      {/* Load more — shown after a successful load (not while initial loading,
-          not in error state). Skeletons for the "loading more" state appear
-          below the existing items so the user never loses what they've seen. */}
+      {/* Load more — shown after a successful load. Default shows just the
+          "Load more" button. A secondary link reveals the refinement input
+          for users who want to specify a particular angle. */}
       {hasLoaded && !errored && onLoadMore && (
         <div
           style={{
@@ -1590,70 +1591,148 @@ export function InspirationsSection({
             borderTop: `1px solid ${T.sand}`,
           }}
         >
+          {/* Primary action row */}
           <div
             style={{
-              fontFamily: "Georgia,serif",
-              fontSize: 12,
-              color: T.mist,
-              marginBottom: 8,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
             }}
           >
-            Want a different angle?
-          </div>
-          <input
-            type="text"
-            placeholder="e.g. hiking, budget travel, solo female..."
-            value={refinementInput}
-            onChange={(e) => setRefinementInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !loadingMore && !loading) {
-                const focus = refinementInput.trim();
+            <button
+              onClick={() => {
+                if (loadingMore || loading) return;
+                setShowRefinement(false);
                 setRefinementInput("");
                 setLoadingMore(true);
-                onLoadMore(focus).finally(() => setLoadingMore(false));
-              }
-            }}
-            disabled={loadingMore || loading}
-            style={{
-              width: "100%",
-              boxSizing: "border-box",
-              padding: "9px 12px",
-              borderRadius: RADIUS.md,
-              border: `1.5px solid ${T.border}`,
-              background: T.chalk,
-              color: T.ink,
-              fontSize: 13,
-              fontFamily: "Georgia,serif",
-              outline: "none",
-              marginBottom: 10,
-              opacity: loadingMore || loading ? 0.6 : 1,
-            }}
-          />
-          <button
-            onClick={() => {
-              if (loadingMore || loading) return;
-              const focus = refinementInput.trim();
-              setRefinementInput("");
-              setLoadingMore(true);
-              onLoadMore(focus).finally(() => setLoadingMore(false));
-            }}
-            disabled={loadingMore || loading}
-            style={{
-              padding: "9px 20px",
-              borderRadius: RADIUS.full,
-              border: "none",
-              background: loadingMore || loading ? T.disabled : T.ocean,
-              color: T.chalk,
-              fontFamily: "Georgia,serif",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: loadingMore || loading ? "not-allowed" : "pointer",
-              opacity: loadingMore || loading ? 0.7 : 1,
-              transition: `all ${MOTION.normal}`,
-            }}
-          >
-            {loadingMore ? "Loading…" : "Load more"}
-          </button>
+                onLoadMore("").finally(() => setLoadingMore(false));
+              }}
+              disabled={loadingMore || loading}
+              style={{
+                padding: "9px 20px",
+                borderRadius: RADIUS.full,
+                border: "none",
+                background: loadingMore || loading ? T.disabled : T.ocean,
+                color: T.chalk,
+                fontFamily: "Georgia,serif",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: loadingMore || loading ? "not-allowed" : "pointer",
+                opacity: loadingMore || loading ? 0.7 : 1,
+                transition: `all ${MOTION.normal}`,
+              }}
+            >
+              {loadingMore ? "Loading…" : "Load more"}
+            </button>
+            {/* Toggle to reveal refinement input */}
+            {!showRefinement && !loadingMore && (
+              <button
+                onClick={() => setShowRefinement(true)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  fontFamily: "Georgia,serif",
+                  fontSize: 12,
+                  color: T.ocean,
+                  cursor: "pointer",
+                  textDecoration: "underline",
+                }}
+              >
+                Focus on a specific angle →
+              </button>
+            )}
+          </div>
+          {/* Refinement input — revealed only when user asks */}
+          {showRefinement && (
+            <div style={{ marginTop: 12 }}>
+              <input
+                type="text"
+                placeholder="e.g. hiking, budget travel, solo female..."
+                value={refinementInput}
+                onChange={(e) => setRefinementInput(e.target.value)}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !loadingMore && !loading) {
+                    const focus = refinementInput.trim();
+                    setRefinementInput("");
+                    setShowRefinement(false);
+                    setLoadingMore(true);
+                    onLoadMore(focus).finally(() => setLoadingMore(false));
+                  }
+                  if (e.key === "Escape") {
+                    setShowRefinement(false);
+                    setRefinementInput("");
+                  }
+                }}
+                disabled={loadingMore || loading}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "9px 12px",
+                  borderRadius: RADIUS.md,
+                  border: `1.5px solid ${T.ocean}`,
+                  background: T.chalk,
+                  color: T.ink,
+                  fontSize: 13,
+                  fontFamily: "Georgia,serif",
+                  outline: "none",
+                  marginBottom: 8,
+                }}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => {
+                    if (loadingMore || loading) return;
+                    const focus = refinementInput.trim();
+                    setRefinementInput("");
+                    setShowRefinement(false);
+                    setLoadingMore(true);
+                    onLoadMore(focus).finally(() => setLoadingMore(false));
+                  }}
+                  disabled={!refinementInput.trim() || loadingMore || loading}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: RADIUS.full,
+                    border: "none",
+                    background:
+                      !refinementInput.trim() || loadingMore || loading
+                        ? T.disabled
+                        : T.ocean,
+                    color: T.chalk,
+                    fontFamily: "Georgia,serif",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor:
+                      !refinementInput.trim() || loadingMore || loading
+                        ? "not-allowed"
+                        : "pointer",
+                  }}
+                >
+                  Search
+                </button>
+                <button
+                  onClick={() => {
+                    setShowRefinement(false);
+                    setRefinementInput("");
+                  }}
+                  style={{
+                    padding: "8px 14px",
+                    borderRadius: RADIUS.full,
+                    border: `1px solid ${T.border}`,
+                    background: T.chalk,
+                    color: T.mist,
+                    fontFamily: "Georgia,serif",
+                    fontSize: 13,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
           {/* Skeleton rows while appending — existing items stay visible */}
           {loadingMore && (
             <div

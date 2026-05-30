@@ -10893,7 +10893,12 @@ export default function App({
               {(pretripTab === "magazine" || pretripTab === "inspirations") &&
                 !pretripDeepDiveCity && (
                   <div
-                    style={{ flex: 1, overflowY: "auto", background: T.warm }}
+                    style={{
+                      flex: 1,
+                      overflowY: "auto",
+                      background: T.warm,
+                      paddingBottom: 80, // clears Trippy chat bar at bottom
+                    }}
                   >
                     {/* Header only on Magazine view — Inspirations has its own
                         section heading inside InspirationsSection. */}
@@ -12009,7 +12014,7 @@ export default function App({
                           flex: 1,
                           overflowY: "auto",
                           background: T.warm,
-                          padding: "16px 0",
+                          padding: "16px 0 80px", // 80px bottom clears the Trippy chat bar
                         }}
                       >
                         <InspirationsSection
