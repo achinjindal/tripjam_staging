@@ -6451,11 +6451,19 @@ export default function App({
   });
   const panelContainerRef = useRef(null);
 
+  // panelSplitRef mirrors panelSplit so startPanelDrag can read the current
+  // value without being in its dependency array (the callback is stable).
+  const panelSplitRef = useRef(50);
+  useEffect(() => {
+    panelSplitRef.current = panelSplit;
+  }, [panelSplit]);
+
   const startPanelDrag = useCallback((e) => {
     e.preventDefault();
     const container = panelContainerRef.current;
     if (!container) return;
-    let lastPct = 50;
+    // Start from the current split so a click-release leaves the value unchanged.
+    let lastPct = panelSplitRef.current;
     const onMove = (ev) => {
       const rect = container.getBoundingClientRect();
       const x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
@@ -6995,7 +7003,7 @@ export default function App({
               trip?.ig_request?.notes ||
               "",
             startDate: trip?.start_date || pendingForm?.startDate || null,
-            tripId: trip?.id || null,
+            tripId: trip?.id || editingTrip?.id || null,
             refinement,
             bypass_cache: bypassCache,
           }),
@@ -7035,12 +7043,14 @@ export default function App({
         }
         // Persist to trips.inspirations_digest so revisiting the trip on any
         // device shows Inspirations instantly without an extra network call.
-        // Fire-and-forget — failure doesn't break the UI.
-        if (finalDigest && trip?.id) {
+        // Use editingTrip?.id as fallback: trip.id is SAMPLE_TRIP's id during
+        // RG before the first IG completes; editingTrip has the real trip id.
+        const persistTripId = trip?.id || editingTrip?.id;
+        if (finalDigest && persistTripId) {
           supabase
             .from("trips")
             .update({ inspirations_digest: finalDigest })
-            .eq("id", trip.id)
+            .eq("id", persistTripId)
             .then(
               () => {},
               () => {},
@@ -7063,6 +7073,12 @@ export default function App({
       }));
     }
   };
+
+  // Tracks whether the eager Inspirations + magazine pre-load has already been
+  // fired for the current editing session. Prevents re-loading when routes
+  // briefly cycle to [] and back (which happens when BrainstormView reloads
+  // saved items after "Explore more plans" navigation).
+  const hasEagerLoadedRef = useRef(false);
 
   // Eager pre-load: as soon as the first batch of routes arrives from RG,
   // kick off both Inspirations and the destination deep-dive in the background
@@ -7263,11 +7279,6 @@ export default function App({
   const isJumping = useRef(false);
   const undoDismissRef = useRef(null);
   const triggerRgRef = useRef(null); // imperative trigger for RG generation
-  // Tracks whether the eager Inspirations + magazine pre-load has already been
-  // fired for the current editing session. Prevents re-loading when routes
-  // briefly cycle to [] and back (which happens when BrainstormView reloads
-  // saved items after "Explore more plans" navigation).
-  const hasEagerLoadedRef = useRef(false);
   const igAbortRef = useRef(null); // abort controller for in-flight IG generation
 
   const editActivity = (dayId, updated) => {
@@ -9714,15 +9725,9 @@ export default function App({
           </div>
         )}
 
-        {/* ── DESKTOP LEFT SIDEBAR (D22) — REMOVED 2026-05-28 ──
-            The 240px sidebar was taking too much horizontal space. Its content
-            moved as follows:
-              - "All trips" link    → Avatar dropdown ("Your trips") on all viewports
-              - Trip name + dates   → slim trip-context bar above the center tab strip
-              - "Share trip" button → trip-context bar
-              - "Explore other plans" → trip-context bar (itinerary screen only)
-              - Map polylines       → removed entirely (didn't convey real route info) */}
-        {false && useDesktopShell && (
+        {/* Left sidebar fully removed 2026-05-28/30. Contents moved to Avatar
+            dropdown ("Your trips") and the desktop trip-context bar. */}
+        {false && (
           <div
             style={{
               gridArea: "left",
@@ -10580,105 +10585,106 @@ export default function App({
                     style={{ flex: 1, overflowY: "auto", background: T.warm }}
                   >
                     {/* Header only on Magazine view — Inspirations has its own
-                        section heading inside InspirationsSection. Showing the
-                        "Magazine" destination header on the Inspirations tab was
-                        confusing (issue: header said "Magazine" on Inspirations). */}
-                    <div
-                      style={{
-                        padding: "20px 16px 12px",
-                        background: T.chalk,
-                        borderBottom: `1px solid ${T.sand}`,
-                        display:
-                          pretripMagView === "inspirations" ? "none" : "flex",
-                        alignItems: "center",
-                        gap: 10,
-                      }}
-                    >
-                      {magazineFilterCities && (
-                        <button
-                          onClick={() => {
-                            setMagazineFilterCities(null);
-                            setMagazineFilterRouteId(null);
-                            setPretripTab("brainstorm");
-                          }}
-                          style={{
-                            background: "none",
-                            border: "none",
-                            fontSize: 20,
-                            cursor: "pointer",
-                            color: T.ocean,
-                            padding: "0 4px",
-                            lineHeight: 1,
-                          }}
-                        >
-                          ←
-                        </button>
-                      )}
-                      <div style={{ flex: 1 }}>
-                        <div
-                          style={{
-                            fontFamily: "'DM Serif Display',serif",
-                            fontSize: 20,
-                            color: T.ink,
-                          }}
-                        >
-                          {magazineFilterCities
-                            ? (() => {
-                                // Show country/region from route title (e.g. "Georgia – Caucasus Explorer" → "Georgia")
-                                const route = magazineFilterRouteId
-                                  ? (pretripRoutes || []).find(
-                                      (r) => r.id === magazineFilterRouteId,
-                                    )
-                                  : null;
-                                if (route?.title)
-                                  return route.title
-                                    .split(/\s*[–—-]\s*/)[0]
-                                    .trim();
-                                return magazineFilterCities.join(", ");
-                              })()
-                            : editingTrip?.destination ||
-                              (pendingForm?.destinations || [])
-                                .filter(
-                                  (d) =>
-                                    !d.toLowerCase().includes("help me decide"),
-                                )
-                                .join(", ") ||
-                              "Magazine"}
+                        section heading inside InspirationsSection. */}
+                    {pretripMagView !== "inspirations" && (
+                      <div
+                        style={{
+                          padding: "20px 16px 12px",
+                          background: T.chalk,
+                          borderBottom: `1px solid ${T.sand}`,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                        }}
+                      >
+                        {magazineFilterCities && (
+                          <button
+                            onClick={() => {
+                              setMagazineFilterCities(null);
+                              setMagazineFilterRouteId(null);
+                              setPretripTab("brainstorm");
+                            }}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              fontSize: 20,
+                              cursor: "pointer",
+                              color: T.ocean,
+                              padding: "0 4px",
+                              lineHeight: 1,
+                            }}
+                          >
+                            ←
+                          </button>
+                        )}
+                        <div style={{ flex: 1 }}>
+                          <div
+                            style={{
+                              fontFamily: "'DM Serif Display',serif",
+                              fontSize: 20,
+                              color: T.ink,
+                            }}
+                          >
+                            {magazineFilterCities
+                              ? (() => {
+                                  // Show country/region from route title (e.g. "Georgia – Caucasus Explorer" → "Georgia")
+                                  const route = magazineFilterRouteId
+                                    ? (pretripRoutes || []).find(
+                                        (r) => r.id === magazineFilterRouteId,
+                                      )
+                                    : null;
+                                  if (route?.title)
+                                    return route.title
+                                      .split(/\s*[–—-]\s*/)[0]
+                                      .trim();
+                                  return magazineFilterCities.join(", ");
+                                })()
+                              : editingTrip?.destination ||
+                                (pendingForm?.destinations || [])
+                                  .filter(
+                                    (d) =>
+                                      !d
+                                        .toLowerCase()
+                                        .includes("help me decide"),
+                                  )
+                                  .join(", ") ||
+                                "Magazine"}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 12,
+                              color: T.mist,
+                              fontFamily: "Georgia,serif",
+                              marginTop: 4,
+                            }}
+                          >
+                            {magazineFilterCities
+                              ? "Explore this route's destinations"
+                              : "Explore the destinations across your trip plans"}
+                          </div>
                         </div>
-                        <div
-                          style={{
-                            fontSize: 12,
-                            color: T.mist,
-                            fontFamily: "Georgia,serif",
-                            marginTop: 4,
-                          }}
-                        >
-                          {magazineFilterCities
-                            ? "Explore this route's destinations"
-                            : "Explore the destinations across your trip plans"}
-                        </div>
+                        {magazineFilterCities && (
+                          <button
+                            onClick={() => {
+                              setMagazineFilterCities(null);
+                              setMagazineFilterRouteId(null);
+                            }}
+                            style={{
+                              background: T.sand,
+                              border: "none",
+                              borderRadius: RADIUS.full,
+                              padding: "5px 11px",
+                              color: T.ink,
+                              fontSize: 11,
+                              cursor: "pointer",
+                              fontFamily: "Georgia,serif",
+                            }}
+                          >
+                            Show all
+                          </button>
+                        )}
                       </div>
-                      {magazineFilterCities && (
-                        <button
-                          onClick={() => {
-                            setMagazineFilterCities(null);
-                            setMagazineFilterRouteId(null);
-                          }}
-                          style={{
-                            background: T.sand,
-                            border: "none",
-                            borderRadius: RADIUS.full,
-                            padding: "5px 11px",
-                            color: T.ink,
-                            fontSize: 11,
-                            cursor: "pointer",
-                            fontFamily: "Georgia,serif",
-                          }}
-                        >
-                          Show all
-                        </button>
-                      )}
-                    </div>
+                    )}
                     <div
                       style={{
                         display: "flex",
