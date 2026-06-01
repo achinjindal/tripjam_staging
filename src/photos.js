@@ -360,6 +360,37 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
   return null;
 }
 
+/** Split combined LLM sight names ("Bhadra Fort and Teen Darwaza") for Wikipedia lookup. */
+function _splitCombinedGeocode(name) {
+  if (!name) return [""];
+  const parts = name
+    .split(/\s+(?:and|&|·)\s+/i)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return parts.length ? parts : [name];
+}
+
+/** Fetch Wikipedia photos for city-deep-dive moreSights sequentially (non-blocking in App). */
+export async function attachPhotosToMoreSights(data, city) {
+  if (!data?.moreSights?.length) return data;
+  const moreSights = [];
+  for (const sight of data.moreSights) {
+    const searchKey = sight.geocode || sight.title || "";
+    let photo_url = sight.photo_url || null;
+    if (!photo_url && searchKey) {
+      for (const candidate of _splitCombinedGeocode(searchKey)) {
+        const url = await _fetchPhoto(candidate, city, sight.type || "sight");
+        if (url) {
+          photo_url = url;
+          break;
+        }
+      }
+    }
+    moreSights.push(photo_url ? { ...sight, photo_url } : sight);
+  }
+  return { ...data, moreSights };
+}
+
 // ── Geocoding utilities (shared by Map components and commute calculations) ──
 
 // "Star Ferry to Elephanta Island"          → "Elephanta Island"
