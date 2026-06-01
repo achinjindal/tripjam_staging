@@ -2514,7 +2514,7 @@ function BrainstormView({
                       fontFamily: "Georgia,serif",
                     }}
                   >
-                    Dismiss some ideas to generate new ones
+                    Dismiss some plans to generate new ones
                   </div>
                 </div>
               ) : (
