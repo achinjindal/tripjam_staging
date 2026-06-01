@@ -936,6 +936,48 @@ function cityMatchesDestination(city, dest) {
   return city.toLowerCase() === dest.toLowerCase();
 }
 
+/** Unique route cities for Inspirations when the user picked "Help me decide". */
+function collectRouteCities(pretripRoutes) {
+  const seen = new Set();
+  const cities = [];
+  for (const route of pretripRoutes || []) {
+    if (route.dismissed) continue;
+    for (const c of (route.city || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)) {
+      if (isHelpMeDecideDest(c)) continue;
+      const key = c.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        cities.push(c);
+      }
+    }
+  }
+  return cities;
+}
+
+/** Destinations passed to generate-destination-research (Inspirations tab). */
+function resolveInspirationDestinations({
+  pendingForm,
+  editingTrip,
+  trip,
+  pretripRoutes,
+}) {
+  const rawDests = (pendingForm?.destinations || []).filter(
+    (d) => !isHelpMeDecideDest(d),
+  );
+  if (rawDests.length) return rawDests;
+  const fromTrip = (editingTrip?.destination || trip?.destination || "")
+    .split(/\s*→\s*|\s*,\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((d) => !isHelpMeDecideDest(d));
+  if (fromTrip.length) return fromTrip;
+  // Help-me-decide flow: derive from generated route cities once RG completes.
+  return collectRouteCities(pretripRoutes).slice(0, 6);
+}
+
 // Compact pill button shared by the desktop trip-context bar (Share +
 // Explore-other-plans). Same visual treatment as the mobile header buttons
 // so the actions look familiar across viewports.
@@ -7016,17 +7058,12 @@ export default function App({
     bypassCache = false,
   } = {}) => {
     if (destResearch.loading) return;
-    const rawDests = (pendingForm?.destinations || []).filter(
-      (d) => !d.toLowerCase().includes("help me decide"),
-    );
-    const destinations = rawDests.length
-      ? rawDests
-      : trip?.destination
-        ? trip.destination
-            .split(/\s*→\s*|\s*,\s*/)
-            .map((s) => s.trim())
-            .filter(Boolean)
-        : [];
+    const destinations = resolveInspirationDestinations({
+      pendingForm,
+      editingTrip,
+      trip,
+      pretripRoutes,
+    });
     if (destinations.length === 0) return;
     setDestResearch((s) => ({ ...s, loading: true, errored: false }));
     try {
@@ -10514,9 +10551,17 @@ export default function App({
                     selectedId={pretripSelectedRouteId}
                     onSelectRoute={setPretripSelectedRouteId}
                     destination={
-                      (pendingForm?.destinations || []).join(", ") ||
-                      editingTrip?.destination ||
-                      ""
+                      // Pass null for "Help me decide" — each route is in a
+                      // different country, so a single bias centroid is wrong
+                      // and actively hurts geocoding. Let cities resolve on
+                      // their own without a misleading location context.
+                      (pendingForm?.destinations || []).some((d) =>
+                        d.toLowerCase().includes("help me decide"),
+                      )
+                        ? null
+                        : (pendingForm?.destinations || []).join(", ") ||
+                          editingTrip?.destination ||
+                          null
                     }
                   />
                 </div>
@@ -13531,9 +13576,15 @@ export default function App({
                 selectedId={pretripSelectedRouteId}
                 onSelectRoute={setPretripSelectedRouteId}
                 destination={
-                  pendingForm?.destinations?.[0] ||
-                  trip?.destination?.split("→")[0]?.trim() ||
-                  null
+                  // Same fix as mobile: pass null for "Help me decide" so
+                  // globally-distributed cities geocode without a wrong bias.
+                  (pendingForm?.destinations || []).some((d) =>
+                    d.toLowerCase().includes("help me decide"),
+                  )
+                    ? null
+                    : pendingForm?.destinations?.[0] ||
+                      trip?.destination?.split("→")[0]?.trim() ||
+                      null
                 }
               />
             ) : days.length > 0 ? (

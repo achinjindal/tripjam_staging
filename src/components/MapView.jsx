@@ -441,9 +441,13 @@ export function RouteMapView({
             .split(",")
             .map((s) => s.trim())
             .filter(Boolean);
+          // For "Help me decide" routes (destination = null), each route is
+          // in a different country. Use the route's own first city as the
+          // geocode hint context so cities resolve against the right region.
+          const routeBias = destination || cities[0] || null;
           const coords = await Promise.all(
             cities.map(async (c) => {
-              const pt = await geocodePlace(c, destination || null, c);
+              const pt = await geocodePlace(c, routeBias, c);
               return pt ? { ...pt, city: c } : null;
             }),
           );
