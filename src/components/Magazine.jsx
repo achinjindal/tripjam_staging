@@ -22,6 +22,7 @@ async function openUrl(url) {
 }
 import {
   _fetchPhoto,
+  _photoCache,
   _usedPhotoUrls,
   _isPortrait,
   _enqueueMagazineFallback,
@@ -657,10 +658,18 @@ export function MagazineHighlightCard({
   onAskTrippy = null,
 }) {
   const searchKey = item.geocode || item.title || "";
+  const photoCacheKey = `${searchKey}||${city || ""}`;
   const [photoUrl, setPhotoUrl] = useState(item.photo_url || null);
   const [loaded, setLoaded] = useState(!!item.photo_url);
+  // Parent may attach photo_url after deep-dive + sequential photo fetch completes.
   useEffect(() => {
-    if (photoUrl) {
+    if (item.photo_url) {
+      setPhotoUrl(item.photo_url);
+      setLoaded(true);
+    }
+  }, [item.photo_url]);
+  useEffect(() => {
+    if (photoUrl || item.photo_url) {
       setLoaded(true);
       return;
     }
@@ -669,8 +678,9 @@ export function MagazineHighlightCard({
     // since _fetchPhoto may reject due to dedup (_usedPhotoUrls)
     _fetchPhoto(searchKey, city, item.type || "sight").then((url) => {
       if (cancelled) return;
-      if (url) {
-        setPhotoUrl(url);
+      const resolved = url || _photoCache[photoCacheKey];
+      if (resolved) {
+        setPhotoUrl(resolved);
         setLoaded(true);
         return;
       }
@@ -743,7 +753,7 @@ export function MagazineHighlightCard({
               !BAD.test(src) &&
               !_isPortrait(src) &&
               isFilenameRelevant(src) &&
-              !_usedPhotoUrls.has(src)
+              (!_usedPhotoUrls.has(src) || _photoCache[photoCacheKey] === src)
             ) {
               _usedPhotoUrls.add(src);
               if (!cancelled) {
@@ -762,7 +772,7 @@ export function MagazineHighlightCard({
     return () => {
       cancelled = true;
     };
-  }, [searchKey, city]);
+  }, [searchKey, city, photoCacheKey]);
   const mapsQuery = encodeURIComponent(
     (item.geocode || item.title) + (city ? `, ${city}` : ""),
   );
@@ -823,6 +833,10 @@ export function MagazineHighlightCard({
           <img
             src={photoUrl}
             onLoad={() => setLoaded(true)}
+            onError={() => {
+              setPhotoUrl(null);
+              setLoaded(true);
+            }}
             alt={item.title}
             style={{
               width: "100%",
@@ -1424,7 +1438,19 @@ export function InspirationsSection({
   hasLoaded,
   onLoadMore,
 }) {
-  const items = (digest?.inspirations || []).filter((i) => i?.url);
+  // Deduplicate by author — keep only the first item per creator.
+  // The prompt instructs "No duplicates by author" but Haiku occasionally
+  // returns multiple entries from the same person (e.g. two Brandon Shaw videos).
+  const items = (() => {
+    const seen = new Set();
+    return (digest?.inspirations || []).filter((i) => {
+      if (!i?.url) return false;
+      const key = (i.author || "").toLowerCase().trim();
+      if (key && seen.has(key)) return false;
+      if (key) seen.add(key);
+      return true;
+    });
+  })();
   const [refinementInput, setRefinementInput] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [showRefinement, setShowRefinement] = useState(false);

@@ -110,7 +110,7 @@ Rules:
     • If you find quality vlogs, include them. If web_search only surfaces strong articles, return those — quality over format balance.
     • Never return fewer good results just to satisfy a format ratio. Better 8 great articles than 4 articles + 4 fabricated or low-quality videos.
   Prefer videos posted to a named YouTube channel (not auto-generated topic channels).
-- Mix well-known and less-known creators. No duplicates by author.
+- Mix well-known and less-known creators. STRICT: only ONE entry per author/creator — if you find multiple videos or articles from the same person, include only the single best one. Never list the same creator twice regardless of how many pieces they have published.
 - Every inspirations entry MUST also appear in sources (same URL, dedup by url; sources[].id is 1-indexed).
 - 0–6 place_insights. Each insight is short (≤ 15 words), in your own words, attributed via source_ids.
 - CRITICAL URL RULE: Every URL you include MUST be one that web_search actually returned to you in this session. Do NOT construct, guess, or infer URLs — even if you know the website or author. If you did not receive a specific URL from web_search, do not include that article. A missing entry is far better than a broken link.
@@ -366,7 +366,7 @@ serve(async (req) => {
         d: destinations,
         t: tagResult.tags,
         m: monthBucket,
-        v: 4, // bump: critical URL-fabrication rule added
+        v: 5, // bump: strict one-per-creator rule added
         r: refinement,
       }),
     );
