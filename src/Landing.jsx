@@ -157,7 +157,7 @@ function Hero() {
           <span
             style={{ color: T.ocean, fontStyle: "italic", fontWeight: 700 }}
           >
-            your rules. 😅
+            your rules.
           </span>
         </h1>
         <p
