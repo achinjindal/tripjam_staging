@@ -478,6 +478,20 @@ function SetupForm({
       form.destinations.filter((_, i) => i !== idx),
     );
 
+  // Popular destination pills: { label (shown to user), name (stored + sent to LLM/geocoder) }
+  // Fully-qualified names prevent geocoding ambiguity (e.g. "Santorini, Georgia, USA"
+  // vs the Greek island; "Amalfi" vs the car brand).
+  const POPULAR_DESTINATIONS = [
+    { label: "Rajasthan 🏰", name: "Rajasthan, India" },
+    { label: "Japan 🌸", name: "Japan" },
+    { label: "Amalfi 🌊", name: "Amalfi Coast, Italy" },
+    { label: "Patagonia 🏔️", name: "Patagonia, Argentina" },
+    { label: "Morocco 🕌", name: "Morocco" },
+    { label: "Koh Samui 🏝️", name: "Koh Samui, Thailand" },
+    { label: "Bali 🌴", name: "Bali, Indonesia" },
+    { label: "Santorini ☀️", name: "Santorini, Greece" },
+  ];
+
   const pickSuggestion = (suggestion) => {
     // Prefer mainText (just the city/region name e.g. "Ahmedabad") over the
     // full text string ("Ahmedabad, Gujarat, India") for cleaner display.
@@ -716,44 +730,27 @@ function SetupForm({
               Popular destinations
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {[
-                "Rajasthan 🏰",
-                "Japan 🌸",
-                "Amalfi 🌊",
-                "Patagonia 🏔️",
-                "Morocco 🕌",
-                "Koh Samui 🏝️",
-                "Bali 🌴",
-                "Santorini ☀️",
-              ].map((d) => {
-                const name = d
-                  .replace(
-                    /\s*[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE00}-\u{FEFF}]+$/u,
-                    "",
-                  )
-                  .trim();
-                return (
-                  <button
-                    key={d}
-                    onClick={() => {
-                      addDestination(name);
-                      closeDestSheet();
-                    }}
-                    style={{
-                      background: T.sand,
-                      color: T.ink,
-                      border: "none",
-                      borderRadius: RADIUS.full,
-                      padding: "8px 16px",
-                      fontSize: 14,
-                      cursor: "pointer",
-                      fontFamily: "Georgia,serif",
-                    }}
-                  >
-                    {d}
-                  </button>
-                );
-              })}
+              {POPULAR_DESTINATIONS.map(({ label, name }) => (
+                <button
+                  key={label}
+                  onClick={() => {
+                    addDestination(name);
+                    closeDestSheet();
+                  }}
+                  style={{
+                    background: T.sand,
+                    color: T.ink,
+                    border: "none",
+                    borderRadius: RADIUS.full,
+                    padding: "8px 16px",
+                    fontSize: 14,
+                    cursor: "pointer",
+                    fontFamily: "Georgia,serif",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
         )}
@@ -1032,41 +1029,24 @@ function SetupForm({
               marginTop: 14,
             }}
           >
-            {[
-              "Rajasthan 🏰",
-              "Japan 🌸",
-              "Amalfi 🌊",
-              "Patagonia 🏔️",
-              "Morocco 🕌",
-              "Koh Samui 🏝️",
-              "Bali 🌴",
-              "Santorini ☀️",
-            ].map((d) => {
-              const name = d
-                .replace(
-                  /\s*[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE00}-\u{FEFF}]+$/u,
-                  "",
-                )
-                .trim();
-              return (
-                <button
-                  key={d}
-                  onClick={() => addDestination(name)}
-                  style={{
-                    background: T.sand,
-                    color: T.ink,
-                    border: "none",
-                    borderRadius: RADIUS.full,
-                    padding: "8px 14px",
-                    fontSize: 13,
-                    cursor: "pointer",
-                    fontFamily: "Georgia,serif",
-                  }}
-                >
-                  {d}
-                </button>
-              );
-            })}
+            {POPULAR_DESTINATIONS.map(({ label, name }) => (
+              <button
+                key={label}
+                onClick={() => addDestination(name)}
+                style={{
+                  background: T.sand,
+                  color: T.ink,
+                  border: "none",
+                  borderRadius: RADIUS.full,
+                  padding: "8px 14px",
+                  fontSize: 13,
+                  cursor: "pointer",
+                  fontFamily: "Georgia,serif",
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
           <button
             onClick={() => {
