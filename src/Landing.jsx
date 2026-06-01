@@ -38,7 +38,8 @@ export default function Landing() {
       style={{
         background: T.bgPage,
         color: T.ink,
-        fontFamily: "Georgia, serif",
+        fontFamily:
+          "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
         minHeight: "100vh",
       }}
     >
@@ -79,7 +80,8 @@ function Header() {
           <span style={{ fontSize: 22 }}>✈️</span>
           <span
             style={{
-              fontFamily: "'DM Serif Display', Georgia, serif",
+              fontFamily:
+                "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
               fontSize: 22,
               color: T.ink,
               letterSpacing: 0.3,
@@ -97,7 +99,8 @@ function Header() {
               border: "none",
               background: "transparent",
               color: T.ink,
-              fontFamily: "Georgia, serif",
+              fontFamily:
+                "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
               fontSize: 14,
               cursor: "pointer",
             }}
@@ -112,7 +115,8 @@ function Header() {
               border: "none",
               background: T.ocean,
               color: "white",
-              fontFamily: "Georgia, serif",
+              fontFamily:
+                "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
               fontWeight: 600,
               fontSize: 14,
               cursor: "pointer",
@@ -136,35 +140,24 @@ function Hero() {
       }}
     >
       <div style={{ maxWidth: 880, margin: "0 auto", textAlign: "center" }}>
-        <div
-          style={{
-            display: "inline-block",
-            padding: "5px 12px",
-            borderRadius: RADIUS.full,
-            background: "rgba(37,99,168,0.10)",
-            color: T.ocean,
-            fontSize: 12,
-            fontWeight: 600,
-            letterSpacing: 0.3,
-            marginBottom: 22,
-          }}
-        >
-          AI travel planning
-        </div>
         <h1
           style={{
-            fontFamily: "'DM Serif Display', Georgia, serif",
+            fontFamily:
+              "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
             fontSize: "clamp(34px, 6vw, 52px)",
             lineHeight: 1.05,
             color: T.ink,
             margin: 0,
-            fontWeight: 400,
+            fontWeight: 700,
+            letterSpacing: "-0.02em",
           }}
         >
-          Plan trips that feel like
+          Your trip,
           <br />
-          <span style={{ color: T.ocean, fontStyle: "italic" }}>
-            actually yours.
+          <span
+            style={{ color: T.ocean, fontStyle: "italic", fontWeight: 700 }}
+          >
+            your rules. 😅
           </span>
         </h1>
         <p
@@ -198,7 +191,8 @@ function Hero() {
               color: "white",
               fontSize: 15,
               fontWeight: 600,
-              fontFamily: "Georgia, serif",
+              fontFamily:
+                "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
               cursor: "pointer",
               boxShadow: SHADOW.md,
             }}
@@ -218,7 +212,8 @@ function Hero() {
               background: "white",
               color: T.ink,
               fontSize: 15,
-              fontFamily: "Georgia, serif",
+              fontFamily:
+                "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
               cursor: "pointer",
             }}
           >
@@ -275,11 +270,12 @@ function HowItWorks() {
       <div style={{ maxWidth: 1080, margin: "0 auto" }}>
         <h2
           style={{
-            fontFamily: "'DM Serif Display', Georgia, serif",
+            fontFamily:
+              "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
             fontSize: "clamp(26px, 4vw, 36px)",
             color: T.ink,
             margin: "0 0 50px",
-            fontWeight: 400,
+            fontWeight: 700,
             textAlign: "center",
           }}
         >
@@ -319,11 +315,12 @@ function HowItWorks() {
               <div style={{ fontSize: 38, marginBottom: 14 }}>{s.icon}</div>
               <h3
                 style={{
-                  fontFamily: "'DM Serif Display', Georgia, serif",
+                  fontFamily:
+                    "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
                   fontSize: 19,
                   margin: "0 0 8px",
                   color: T.ink,
-                  fontWeight: 400,
+                  fontWeight: 700,
                   lineHeight: 1.25,
                 }}
               >
@@ -400,11 +397,12 @@ function Pricing() {
       <div style={{ maxWidth: 1080, margin: "0 auto" }}>
         <h2
           style={{
-            fontFamily: "'DM Serif Display', Georgia, serif",
+            fontFamily:
+              "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
             fontSize: "clamp(26px, 4vw, 36px)",
             color: T.ink,
             margin: "0 0 8px",
-            fontWeight: 400,
+            fontWeight: 700,
             textAlign: "center",
           }}
         >
@@ -488,7 +486,8 @@ function Pricing() {
               >
                 <span
                   style={{
-                    fontFamily: "'DM Serif Display', Georgia, serif",
+                    fontFamily:
+                      "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
                     fontSize: 38,
                     color: T.ink,
                     lineHeight: 1,
@@ -534,7 +533,8 @@ function Pricing() {
                   border: p.highlight ? "none" : `1px solid ${T.border}`,
                   background: p.highlight ? T.ocean : "white",
                   color: p.highlight ? "white" : T.ink,
-                  fontFamily: "Georgia, serif",
+                  fontFamily:
+                    "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
                   fontSize: 14,
                   fontWeight: 600,
                   cursor: "pointer",
@@ -593,11 +593,12 @@ function FAQ() {
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
         <h2
           style={{
-            fontFamily: "'DM Serif Display', Georgia, serif",
+            fontFamily:
+              "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
             fontSize: "clamp(26px, 4vw, 36px)",
             color: T.ink,
             margin: "0 0 30px",
-            fontWeight: 400,
+            fontWeight: 700,
             textAlign: "center",
           }}
         >
@@ -628,7 +629,8 @@ function FAQ() {
                     background: "transparent",
                     border: "none",
                     cursor: "pointer",
-                    fontFamily: "Georgia, serif",
+                    fontFamily:
+                      "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
                     fontSize: 15,
                     color: T.ink,
                     fontWeight: 600,
@@ -703,7 +705,8 @@ function Footer() {
             <span style={{ fontSize: 20 }}>✈️</span>
             <span
               style={{
-                fontFamily: "'DM Serif Display', Georgia, serif",
+                fontFamily:
+                  "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
                 fontSize: 22,
                 color: "white",
               }}
@@ -791,7 +794,8 @@ function FooterLink({ children, onClick, href }) {
     background: "transparent",
     border: "none",
     cursor: "pointer",
-    fontFamily: "Georgia, serif",
+    fontFamily:
+      "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
     textAlign: "left",
   };
   if (href) {
