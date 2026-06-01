@@ -168,6 +168,11 @@ serve(async (req) => {
 
     if (!response.ok) {
       const err = await response.text();
+      // Log status + first 300 chars for diagnostics (avoid logging full body in prod)
+      console.error(
+        `generate-brainstorm: Anthropic ${response.status}:`,
+        err.slice(0, 300),
+      );
       throw new Error("Anthropic error: " + err);
     }
 

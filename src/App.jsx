@@ -892,6 +892,10 @@ function magazinePlaceShort(name) {
   return (name || "").split(",")[0].trim();
 }
 
+function isHelpMeDecideDest(name) {
+  return (name || "").toLowerCase().includes("help me decide");
+}
+
 /** Destination-level Magazine title — e.g. "New York" before Manhattan / West Village cards. */
 function resolveMagazineDestination({
   pendingForm,
@@ -905,21 +909,24 @@ function resolveMagazineDestination({
       (r) => r.id === magazineFilterRouteId,
     );
     if (route?.title) {
-      return route.title.split(/\s*[–—-]\s*/)[0].trim();
+      const part = route.title.split(/\s*[–—-]\s*/)[0].trim();
+      if (!isHelpMeDecideDest(part)) return part;
     }
   }
   const rawDests = (pendingForm?.destinations || []).filter(
-    (d) => !d.toLowerCase().includes("help me decide"),
+    (d) => !isHelpMeDecideDest(d),
   );
   if (rawDests.length === 1) {
-    return magazinePlaceShort(rawDests[0]);
+    const short = magazinePlaceShort(rawDests[0]);
+    if (!isHelpMeDecideDest(short)) return short;
   }
   const fromTrip =
     editingTrip?.destination ||
     trip?.destination ||
     (rawDests.length ? rawDests.join(", ") : null);
-  if (fromTrip) {
-    return magazinePlaceShort(fromTrip.split(/\s*→\s*/)[0]);
+  if (fromTrip && !isHelpMeDecideDest(fromTrip)) {
+    const short = magazinePlaceShort(fromTrip.split(/\s*→\s*/)[0]);
+    if (!isHelpMeDecideDest(short)) return short;
   }
   return null;
 }
@@ -1978,7 +1985,7 @@ function BrainstormView({
         }
       }
 
-      if (!streamedItems.length) throw new Error("No items received");
+      if (!streamedItems.length) throw new Error("no_items");
 
       const targetTripId = trip?.id || editTripIdRef.current;
       if (targetTripId) {
@@ -2051,7 +2058,21 @@ function BrainstormView({
       }
     } catch (e) {
       console.error("Brainstorm generate error:", e);
-      setGenError(e.message);
+      // Map raw error codes/messages to user-friendly copy.
+      const msg = e?.message || "";
+      const userMsg =
+        msg === "no_items" ||
+        msg.includes("No items") ||
+        msg.includes("no_items")
+          ? "Took too long to respond — please try again."
+          : msg.includes("529") ||
+              msg.includes("overloaded") ||
+              msg.includes("529")
+            ? "The AI is busy right now — wait a moment and try again."
+            : msg.includes("402") || msg.includes("credits")
+              ? null // paywall already surfaced
+              : "Something went wrong — please try again.";
+      if (userMsg) setGenError(userMsg);
     }
     if (session?.user?.id) refreshCredits(session.user.id);
     setGenerating(false);
@@ -2364,17 +2385,33 @@ function BrainstormView({
                       marginBottom: 8,
                     }}
                   >
-                    Nothing came back
+                    Generating your plans…
                   </div>
                   <div
                     style={{
                       fontFamily: "Georgia,serif",
                       fontSize: 13,
                       color: T.mist,
+                      marginBottom: 16,
                     }}
                   >
-                    Try again.
+                    Tap below if it&rsquo;s taking too long.
                   </div>
+                  <button
+                    onClick={generate}
+                    style={{
+                      background: T.ocean,
+                      color: "white",
+                      border: "none",
+                      borderRadius: RADIUS.md,
+                      padding: "9px 20px",
+                      fontFamily: "Georgia,serif",
+                      fontSize: 13,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Generate plans
+                  </button>
                 </div>
               )}
             {/* Full spinner only before first route arrives — centered vertically */}
@@ -6888,7 +6925,7 @@ export default function App({
   };
 
   const loadCityDeepDiveApp = async (city) => {
-    if (!city) return;
+    if (!city || isHelpMeDecideDest(city)) return;
     const existing = deepDiveCacheRef.current[city];
     if (existing && existing !== "error") return;
     if (deepDiveInflightRef.current.has(city)) return;
@@ -10942,16 +10979,16 @@ export default function App({
                                       .trim();
                                   return magazineFilterCities.join(", ");
                                 })()
-                              : editingTrip?.destination ||
-                                (pendingForm?.destinations || [])
-                                  .filter(
-                                    (d) =>
-                                      !d
-                                        .toLowerCase()
-                                        .includes("help me decide"),
-                                  )
-                                  .join(", ") ||
-                                "Magazine"}
+                              : (() => {
+                                  const d =
+                                    editingTrip?.destination ||
+                                    (pendingForm?.destinations || [])
+                                      .filter((x) => !isHelpMeDecideDest(x))
+                                      .join(", ");
+                                  return d && !isHelpMeDecideDest(d)
+                                    ? d
+                                    : "Magazine";
+                                })()}
                           </div>
                           <div
                             style={{
@@ -11046,6 +11083,7 @@ export default function App({
                               .filter(Boolean)) {
                               if (filterSet && !filterSet.has(c.toLowerCase()))
                                 continue;
+                              if (isHelpMeDecideDest(c)) continue;
                               if (cityMatchesDestination(c, destLevel))
                                 continue;
                               if (!seen.has(c.toLowerCase())) {
