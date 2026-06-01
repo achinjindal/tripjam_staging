@@ -25,6 +25,7 @@ import {
   _photoCache,
   _usedPhotoUrls,
   _fetchPhoto,
+  attachPhotosToMoreSights,
   setActiveTripId,
   setTripDestination,
   extractPlace,
@@ -36,7 +37,6 @@ import {
 import { MapView, RouteMapView } from "./components/MapView.jsx";
 import { useIsDesktop } from "./hooks/useViewport.js";
 import {
-  DestinationHero,
   FoodSpotlightCard,
   CityCard,
   MagazineHighlightCard,
@@ -887,6 +887,47 @@ const typeStyle = {
   transit: { bg: "#F0F4F0", color: T.moss, label: "Transit" },
   hotel: { bg: "#F5F0FA", color: "#7B5EA7", label: "Stay" },
 };
+
+function magazinePlaceShort(name) {
+  return (name || "").split(",")[0].trim();
+}
+
+/** Destination-level Magazine title — e.g. "New York" before Manhattan / West Village cards. */
+function resolveMagazineDestination({
+  pendingForm,
+  editingTrip,
+  trip,
+  magazineFilterRouteId,
+  pretripRoutes,
+}) {
+  if (magazineFilterRouteId) {
+    const route = (pretripRoutes || []).find(
+      (r) => r.id === magazineFilterRouteId,
+    );
+    if (route?.title) {
+      return route.title.split(/\s*[–—-]\s*/)[0].trim();
+    }
+  }
+  const rawDests = (pendingForm?.destinations || []).filter(
+    (d) => !d.toLowerCase().includes("help me decide"),
+  );
+  if (rawDests.length === 1) {
+    return magazinePlaceShort(rawDests[0]);
+  }
+  const fromTrip =
+    editingTrip?.destination ||
+    trip?.destination ||
+    (rawDests.length ? rawDests.join(", ") : null);
+  if (fromTrip) {
+    return magazinePlaceShort(fromTrip.split(/\s*→\s*/)[0]);
+  }
+  return null;
+}
+
+function cityMatchesDestination(city, dest) {
+  if (!city || !dest) return false;
+  return city.toLowerCase() === dest.toLowerCase();
+}
 
 // Compact pill button shared by the desktop trip-context bar (Share +
 // Explore-other-plans). Same visual treatment as the mobile header buttons
@@ -3144,68 +3185,6 @@ function BrainstormView({
             );
           })()}
 
-        {/* ── IN-TRIP: Destination intro ── */}
-        {!isPretripMode &&
-          !deepDiveCity &&
-          (() => {
-            const dest = trip?.destination;
-            const dd = dest ? deepDiveCache[dest] : null;
-            const data = dd && typeof dd === "object" ? dd : null;
-            const isLoading = dd === "loading";
-            // Trigger load if not cached
-            if (dest && !deepDiveCache[dest]) loadCityDeepDive(dest);
-            if (!dest) return null;
-            return (
-              <DestinationHero dest={dest} isLoading={isLoading} data={data}>
-                <div
-                  style={{
-                    fontSize: 13,
-                    color: T.ink,
-                    fontFamily: "Georgia,serif",
-                    lineHeight: 1.6,
-                  }}
-                >
-                  {data?.writeup}
-                </div>
-                {data?.didYouKnow && (
-                  <div
-                    style={{
-                      marginTop: 10,
-                      fontSize: 12,
-                      color: T.ocean,
-                      fontFamily: "Georgia,serif",
-                      fontStyle: "italic",
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    💡 {data.didYouKnow}
-                  </div>
-                )}
-                <a
-                  href={`https://www.google.com/search?q=${encodeURIComponent("site:tripadvisor.com Tourism " + dest)}&btnI`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 5,
-                    marginTop: 12,
-                    padding: "6px 12px",
-                    borderRadius: RADIUS.md,
-                    border: `1px solid ${T.moss}33`,
-                    color: T.moss,
-                    fontFamily: "Georgia,serif",
-                    fontSize: 11,
-                    fontWeight: 600,
-                    textDecoration: "none",
-                  }}
-                >
-                  🗺 Explore {dest} on TripAdvisor
-                </a>
-              </DestinationHero>
-            );
-          })()}
-
         {/* ── IN-TRIP: Destinations cards ── */}
         {!isPretripMode &&
           !deepDiveCity &&
@@ -3227,122 +3206,130 @@ function BrainstormView({
               }
               cityGroups[city].push(d);
             }
+            const destLevel = resolveMagazineDestination({ trip });
+            const neighborhoodCities = cityOrder.filter(
+              (c) => !cityMatchesDestination(c, destLevel),
+            );
+            const renderItineraryCityCard = (city, ci, keyPrefix) => {
+              const isDestCard = keyPrefix === "dest-";
+              const cityDays = cityGroups[city] || [];
+              const allActs = cityDays.flatMap((d) => d.activities || []);
+              const cityEntry = (trip?.ig_response?.cities || []).find(
+                (c) => (c.name || "").toLowerCase() === city.toLowerCase(),
+              );
+              const writeup =
+                cityEntry?.writeup ||
+                cityDays
+                  .map((d) => (d.description || "").trim())
+                  .filter(Boolean)
+                  .join(" ");
+              const seenTitles = new Set();
+              const highlights = [];
+              for (const a of allActs) {
+                if (a.type === "transit" || a.type === "hotel") continue;
+                if (!a.title?.trim()) continue;
+                const key = (a.title || "").toLowerCase();
+                if (seenTitles.has(key)) continue;
+                seenTitles.add(key);
+                highlights.push(a);
+              }
+              for (const d of cityDays) {
+                for (const w of d.wishlist || []) {
+                  const key = (w.title || "").toLowerCase();
+                  if (seenTitles.has(key)) continue;
+                  seenTitles.add(key);
+                  highlights.push({ ...w, type: "wishlist" });
+                }
+              }
+              for (const bi of items || []) {
+                if ((bi.tier || 2) !== 2) continue;
+                if (!(bi.city || "").toLowerCase().includes(city.toLowerCase()))
+                  continue;
+                const key = (bi.title || "").toLowerCase();
+                if (seenTitles.has(key)) continue;
+                seenTitles.add(key);
+                highlights.push({
+                  title: bi.title,
+                  note: bi.note,
+                  icon: bi.icon,
+                  type: bi.category?.toLowerCase() || "sight",
+                });
+              }
+              const dd = deepDiveCache[city];
+              const data = dd && typeof dd === "object" ? dd : null;
+              const destHighlights = (data?.moreSights || []).map((s) => ({
+                ...s,
+                type: "sight",
+              }));
+              const cardHighlights = isDestCard ? destHighlights : highlights;
+              return (
+                <Fragment key={`${keyPrefix}${city}`}>
+                  {ci > 0 && (
+                    <div style={{ height: 8, background: "#F3EDE4" }} />
+                  )}
+                  <CityCard
+                    city={city}
+                    writeup={isDestCard ? data?.writeup || "" : writeup}
+                    deepDive={deepDiveCache[city]}
+                    onVisible={() => loadCityDeepDive(city)}
+                    onDeepDive={() => {
+                      setDeepDiveCity(city);
+                      loadCityDeepDive(city);
+                    }}
+                  >
+                    {cardHighlights.length > 0 && (
+                      <>
+                        <div
+                          style={{
+                            fontSize: 10,
+                            color: T.mist,
+                            fontFamily: "Georgia,serif",
+                            textTransform: "uppercase",
+                            letterSpacing: 1.2,
+                            marginBottom: 10,
+                          }}
+                        >
+                          {isDestCard ? "Things to see" : "Highlights"}
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "1fr 1fr",
+                            gap: 10,
+                            marginBottom: 10,
+                          }}
+                        >
+                          {cardHighlights.map((act, i) => (
+                            <MagazineHighlightCard
+                              key={i}
+                              item={act}
+                              city={city}
+                              inItinerary={
+                                !isDestCard &&
+                                itineraryTitles.has(
+                                  (act.title || "").toLowerCase(),
+                                )
+                              }
+                              masonry={true}
+                              tall={i % 3 === 0}
+                              onAskTrippy={onAskTrippy}
+                            />
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </CityCard>
+                </Fragment>
+              );
+            };
+            let cardIndex = 0;
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-                {cityOrder.map((city, ci) => {
-                  const cityDays = cityGroups[city];
-                  const allActs = cityDays.flatMap((d) => d.activities || []);
-                  // Write-up: prefer top-level cities[].writeup from IG response; fall back to day descriptions
-                  const cityEntry = (trip?.ig_response?.cities || []).find(
-                    (c) => (c.name || "").toLowerCase() === city.toLowerCase(),
-                  );
-                  const writeup =
-                    cityEntry?.writeup ||
-                    cityDays
-                      .map((d) => (d.description || "").trim())
-                      .filter(Boolean)
-                      .join(" ");
-                  // Highlights: all non-transit/non-hotel activities + wishlist items, deduped by title
-                  const seenTitles = new Set();
-                  const highlights = [];
-                  // First: itinerary activities (sights, food, experiences, etc.)
-                  for (const a of allActs) {
-                    if (a.type === "transit" || a.type === "hotel") continue;
-                    if (!a.title?.trim()) continue;
-                    const key = (a.title || "").toLowerCase();
-                    if (seenTitles.has(key)) continue;
-                    seenTitles.add(key);
-                    highlights.push(a);
-                  }
-                  // Then: wishlist items from this city's days (hidden gems the user might explore)
-                  for (const d of cityDays) {
-                    for (const w of d.wishlist || []) {
-                      const key = (w.title || "").toLowerCase();
-                      if (seenTitles.has(key)) continue;
-                      seenTitles.add(key);
-                      highlights.push({ ...w, type: "wishlist" });
-                    }
-                  }
-                  // Then: brainstorm tier 2 items tagged to this city
-                  for (const bi of items || []) {
-                    if ((bi.tier || 2) !== 2) continue;
-                    if (
-                      !(bi.city || "")
-                        .toLowerCase()
-                        .includes(city.toLowerCase())
-                    )
-                      continue;
-                    const key = (bi.title || "").toLowerCase();
-                    if (seenTitles.has(key)) continue;
-                    seenTitles.add(key);
-                    highlights.push({
-                      title: bi.title,
-                      note: bi.note,
-                      icon: bi.icon,
-                      type: bi.category?.toLowerCase() || "sight",
-                    });
-                  }
-
-                  return (
-                    <Fragment key={city}>
-                      {ci > 0 && (
-                        <div style={{ height: 8, background: "#F3EDE4" }} />
-                      )}
-                      <CityCard
-                        city={city}
-                        cityDays={cityDays}
-                        writeup={writeup}
-                        deepDive={deepDiveCache[city]}
-                        onDeepDive={() => {
-                          setDeepDiveCity(city);
-                          loadCityDeepDive(city);
-                        }}
-                      >
-                        {/* City header is rendered inside CityCard */}
-
-                        {/* Highlights — masonry grid */}
-                        {highlights.length > 0 && (
-                          <>
-                            <div
-                              style={{
-                                fontSize: 10,
-                                color: T.mist,
-                                fontFamily: "Georgia,serif",
-                                textTransform: "uppercase",
-                                letterSpacing: 1.2,
-                                marginBottom: 10,
-                              }}
-                            >
-                              Highlights
-                            </div>
-                            <div
-                              style={{
-                                display: "grid",
-                                gridTemplateColumns: "1fr 1fr",
-                                gap: 10,
-                                marginBottom: 10,
-                              }}
-                            >
-                              {highlights.map((act, i) => (
-                                <MagazineHighlightCard
-                                  key={i}
-                                  item={act}
-                                  city={city}
-                                  inItinerary={itineraryTitles.has(
-                                    (act.title || "").toLowerCase(),
-                                  )}
-                                  masonry={true}
-                                  tall={i % 3 === 0}
-                                  onAskTrippy={onAskTrippy}
-                                />
-                              ))}
-                            </div>
-                          </>
-                        )}
-                      </CityCard>
-                    </Fragment>
-                  );
-                })}
+                {destLevel &&
+                  renderItineraryCityCard(destLevel, cardIndex++, "dest-")}
+                {neighborhoodCities.map((city) =>
+                  renderItineraryCityCard(city, cardIndex++, "city-"),
+                )}
               </div>
             );
           })()}
@@ -6415,7 +6402,7 @@ export default function App({
   const isDraft = initialTrip && !initialTrip.ig_response;
   const [screen, setScreen] = useState(isDraft ? "brainstorm" : initialScreen);
   // Trip-view shell (desktop 2-column layout). Must be defined before any hook
-  // or derived state that references it (e.g. magazineGridVisible, pretripMagView).
+  // or derived state that references it (e.g. pretripMagView).
   const isTripView = screen === "brainstorm" || screen === "itinerary";
   const useDesktopShell = isDesktop && isTripView;
 
@@ -6876,12 +6863,36 @@ export default function App({
   });
   const [pretripRoutes, setPretripRoutes] = useState([]); // tier 1 routes for pre-trip map
   const [pretripSelectedRouteId, setPretripSelectedRouteId] = useState(null);
-  const [deepDiveCacheApp, setDeepDiveCacheApp] = useState({}); // App-level city deep-dive cache
+  const [deepDiveCacheApp, setDeepDiveCacheApp] = useState(() => {
+    const saved = initialTrip?.magazine_digest;
+    return saved && typeof saved === "object" ? saved : {};
+  }); // App-level city deep-dive cache (hydrated from trips.magazine_digest)
+  const deepDiveCacheRef = useRef(deepDiveCacheApp);
+  const deepDiveInflightRef = useRef(new Set());
+  useEffect(() => {
+    deepDiveCacheRef.current = deepDiveCacheApp;
+  }, [deepDiveCacheApp]);
+
+  const persistMagazineDigest = (nextDigest) => {
+    const persistTripId = trip?.id || editingTrip?.id;
+    if (!persistTripId) return;
+    // Fire-and-forget — never block Magazine UI on DB write.
+    supabase
+      .from("trips")
+      .update({ magazine_digest: nextDigest })
+      .eq("id", persistTripId)
+      .then(
+        () => {},
+        () => {},
+      );
+  };
 
   const loadCityDeepDiveApp = async (city) => {
     if (!city) return;
-    const existing = deepDiveCacheApp[city];
+    const existing = deepDiveCacheRef.current[city];
     if (existing && existing !== "error") return;
+    if (deepDiveInflightRef.current.has(city)) return;
+    deepDiveInflightRef.current.add(city);
     setDeepDiveCacheApp((prev) => ({ ...prev, [city]: "loading" }));
     try {
       const travelMonth =
@@ -6892,7 +6903,6 @@ export default function App({
             )
           : null;
       const igReq = trip?.ig_request || pendingForm || {};
-      // D16: city-deep-dive now requires user authentication.
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/city-deep-dive`,
         {
@@ -6917,17 +6927,27 @@ export default function App({
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setDeepDiveCacheApp((prev) => ({ ...prev, [city]: data }));
-      // Pre-fetch photos for moreSights so they're ready when Magazine opens
-      if (data?.moreSights?.length) {
-        for (const s of data.moreSights) {
-          const key = s.geocode || s.title;
-          if (key) _fetchPhoto(key, city, "sight");
-        }
-      }
+      // Show text content immediately — don't block on Wikipedia photo fetches.
+      setDeepDiveCacheApp((prev) => {
+        const next = { ...prev, [city]: data };
+        persistMagazineDigest(next);
+        return next;
+      });
+      // Photos load in background; cards pick up photo_url when ready.
+      attachPhotosToMoreSights(data, city)
+        .then((withPhotos) => {
+          setDeepDiveCacheApp((prev) => {
+            const next = { ...prev, [city]: withPhotos };
+            persistMagazineDigest(next);
+            return next;
+          });
+        })
+        .catch(() => {});
     } catch (e) {
       console.warn("city-deep-dive failed:", e.message);
       setDeepDiveCacheApp((prev) => ({ ...prev, [city]: "error" }));
+    } finally {
+      deepDiveInflightRef.current.delete(city);
     }
   };
   // F1 Inspirations state. Shape: { digest, loading, errored, hasLoaded }.
@@ -7067,29 +7087,38 @@ export default function App({
   const hasEagerLoadedRef = useRef(false);
 
   // Eager pre-load: as soon as the first batch of routes arrives from RG,
-  // kick off both Inspirations and the destination deep-dive in the background
-  // so they're ready by the time the user navigates to those tabs.
-  // Uses a ref so the effect is truly one-shot per session — routes briefly
-  // cycle to [] and back when BrainstormView reloads saved items on "Explore
-  // more plans" navigation, which would otherwise re-trigger the load.
+  // kick off Inspirations and the first Magazine city deep-dive in the background.
   useEffect(() => {
     if (pretripRoutes.length === 0) return;
     if (hasEagerLoadedRef.current) return;
     hasEagerLoadedRef.current = true;
-    // Inspirations
     if (!destResearch.hasLoaded && !destResearch.loading) {
       loadDestinationResearch();
     }
-    // Destination deep-dive (first fold of Magazine)
-    const rawDests = (pendingForm?.destinations || []).filter(
-      (d) => !d.toLowerCase().includes("help me decide"),
-    );
-    const destination =
-      editingTrip?.destination ||
-      trip?.destination ||
-      (rawDests.length ? rawDests.join(", ") : null);
-    if (destination && !deepDiveCacheApp[destination]) {
-      loadCityDeepDiveApp(destination);
+    // Destination-level first fold, then first route city as fallback.
+    const destLevel = resolveMagazineDestination({
+      pendingForm,
+      editingTrip,
+      pretripRoutes,
+    });
+    if (destLevel) {
+      loadCityDeepDiveApp(destLevel);
+    } else {
+      const seen = new Set();
+      for (const route of pretripRoutes) {
+        if (route.dismissed) continue;
+        for (const c of (route.city || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)) {
+          if (!seen.has(c.toLowerCase())) {
+            seen.add(c.toLowerCase());
+            loadCityDeepDiveApp(c);
+            break;
+          }
+        }
+        if (seen.size > 0) break;
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pretripRoutes.length]);
@@ -7120,61 +7149,6 @@ export default function App({
     destResearch.hasLoaded,
     destResearch.loading,
   ]);
-
-  // Magazine view visibility — used to gate city-deep-dive prefetches so they
-  // don't race the Inspirations LLM call for Anthropic capacity. The user lands
-  // on Inspirations first; Magazine content only prefetches once they actually
-  // navigate to the Magazine view.
-  //   - Desktop pre-trip: separate top tab (pretripTab === "magazine")
-  //   - Mobile pre-trip: magazine bottom button + magazineSubTab === "magazine"
-  //   - Post-trip (mobile + desktop): magazine area + magazineSubTab === "magazine"
-  const magazineGridVisible =
-    (screen === "brainstorm" &&
-      pretripTab === "magazine" &&
-      (useDesktopShell || magazineSubTab === "magazine")) ||
-    (screen === "itinerary" &&
-      activeBottomTab === "brainstorm" &&
-      magazineSubTab === "magazine");
-
-  // Fallback deep-dive load: if the user navigates to the Magazine view before
-  // routes were available (or the eager pre-load above missed for some reason).
-  useEffect(() => {
-    if (!magazineGridVisible) return;
-    if (pretripRoutes.length === 0) return;
-    const rawDests = (pendingForm?.destinations || []).filter(
-      (d) => !d.toLowerCase().includes("help me decide"),
-    );
-    const destination =
-      editingTrip?.destination ||
-      trip?.destination ||
-      (rawDests.length ? rawDests.join(", ") : null);
-    if (destination && !deepDiveCacheApp[destination])
-      loadCityDeepDiveApp(destination);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [magazineGridVisible, pretripRoutes.length]);
-
-  // Lazy-load remaining city deep dives when Magazine grid view becomes
-  // visible — staggered 500ms apart to avoid a burst.
-  useEffect(() => {
-    if (!magazineGridVisible) return;
-    if (pretripRoutes.length === 0) return;
-    const allCities = new Set();
-    for (const route of pretripRoutes) {
-      for (const c of (route.city || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)) {
-        allCities.add(c);
-      }
-    }
-    const uncached = [...allCities].filter((c) => !deepDiveCacheApp[c]);
-    if (uncached.length === 0) return;
-    const timers = uncached.map((city, i) =>
-      setTimeout(() => loadCityDeepDiveApp(city), i * 500),
-    );
-    return () => timers.forEach(clearTimeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [magazineGridVisible, pretripRoutes.length]);
 
   const [chatUnread, setChatUnread] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
@@ -7705,11 +7679,12 @@ export default function App({
         errored: false,
         hasLoaded: false,
       });
-      // Clear persisted digest in DB — destinations changed so old content is stale.
+      setDeepDiveCacheApp({});
+      // Clear persisted digests in DB — destinations changed so old content is stale.
       if (editingTrip?.id) {
         supabase
           .from("trips")
-          .update({ inspirations_digest: null })
+          .update({ inspirations_digest: null, magazine_digest: null })
           .eq("id", editingTrip.id)
           .then(
             () => {},
@@ -9659,7 +9634,7 @@ export default function App({
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "2fr 3fr",
+                    gridTemplateColumns: "1fr 2fr",
                     height: "100dvh",
                     overflow: "hidden",
                     background: T.bgPage,
@@ -9710,14 +9685,15 @@ export default function App({
                         ← All trips
                       </button>
                     )}
-                    {/* Contextual hero title */}
+                    {/* Contextual hero title — word-break prevents overflow on narrow panels */}
                     <div
                       style={{
                         fontFamily: "'DM Serif Display',serif",
-                        fontSize: 36,
+                        fontSize: 32,
                         lineHeight: 1.2,
                         marginBottom: heroSubline ? 12 : 24,
                         position: "relative",
+                        wordBreak: "break-word",
                       }}
                     >
                       {heroTitle}
@@ -9734,8 +9710,9 @@ export default function App({
                         {heroSubline}
                       </div>
                     )}
-                    {/* Persistent trip summary pill (appears once dates/travelers are set) */}
-                    {hasSummary && (
+                    {/* Persistent trip summary pill — only on steps 1+ (step 0 = still
+                        picking destination, default travelers=2 would show spuriously) */}
+                    {setupStep > 0 && hasSummary && (
                       <div
                         style={{
                           display: "inline-flex",
@@ -9844,7 +9821,7 @@ export default function App({
                       display: "flex",
                       alignItems: "flex-start",
                       justifyContent: "center",
-                      padding: "48px 40px",
+                      padding: "40px 32px",
                       background: T.bgPage,
                     }}
                   >
@@ -9856,7 +9833,7 @@ export default function App({
                         border: `1px solid ${T.border}`,
                         padding: "36px 40px",
                         width: "100%",
-                        maxWidth: 520,
+                        maxWidth: 560,
                       }}
                     >
                       {generateError && (
@@ -10457,9 +10434,9 @@ export default function App({
                   externalSelectedId={pretripSelectedRouteId}
                   externalRoutes={pretripRoutes}
                   onTellMore={(cities, routeId) => {
-                    // Switch to Magazine tab, filtered for this route's cities
                     setMagazineFilterCities(cities);
                     setMagazineFilterRouteId(routeId);
+                    setMagazineSubTab("magazine");
                     setPretripTab("magazine");
                   }}
                   onShowMap={(routeId) => {
@@ -11011,92 +10988,6 @@ export default function App({
                           onChange={setMagazineSubTab}
                         />
                       )}
-                      {/* Destination-level intro — Magazine view only */}
-                      {pretripMagView === "magazine" &&
-                        (() => {
-                          // Derive destination: from trip, form, or route title (for "Help me decide" flows)
-                          const rawDest = (
-                            pendingForm?.destinations || []
-                          ).filter(
-                            (d) => !d.toLowerCase().includes("help me decide"),
-                          );
-                          let dest =
-                            editingTrip?.destination ||
-                            (rawDest.length ? rawDest.join(", ") : null);
-                          // If filtered by a route, use country from route title
-                          if (!dest && magazineFilterRouteId) {
-                            const route = (pretripRoutes || []).find(
-                              (r) => r.id === magazineFilterRouteId,
-                            );
-                            if (route?.title)
-                              dest = route.title.split(/\s*[–—-]\s*/)[0].trim();
-                          }
-                          if (!dest) return null;
-                          // Load deep dive if not cached
-                          if (!deepDiveCacheApp[dest])
-                            loadCityDeepDiveApp(dest);
-                          const dd = deepDiveCacheApp[dest] || null;
-                          const data = dd && typeof dd === "object" ? dd : null;
-                          const isLoading = dd === "loading";
-                          if (!dest) return null;
-                          return (
-                            <DestinationHero
-                              dest={dest}
-                              isLoading={isLoading}
-                              data={data}
-                            >
-                              <div
-                                style={{
-                                  fontSize: 13,
-                                  color: T.ink,
-                                  fontFamily: "Georgia,serif",
-                                  lineHeight: 1.6,
-                                }}
-                              >
-                                {data?.writeup}
-                              </div>
-                              {data?.didYouKnow && (
-                                <div
-                                  style={{
-                                    marginTop: 10,
-                                    padding: "12px 16px",
-                                    borderLeft: `3px solid ${T.ocean}`,
-                                    background: `linear-gradient(135deg, ${T.ocean}06, ${T.dusk}04)`,
-                                    borderRadius: "0 12px 12px 0",
-                                    fontSize: 13,
-                                    lineHeight: 1.55,
-                                    color: T.ocean,
-                                    fontFamily: "Georgia,serif",
-                                    fontStyle: "italic",
-                                  }}
-                                >
-                                  💡 {data.didYouKnow}
-                                </div>
-                              )}
-                              <a
-                                href={`https://www.google.com/search?q=${encodeURIComponent("site:tripadvisor.com Tourism " + dest)}&btnI`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: 5,
-                                  marginTop: 12,
-                                  padding: "8px 14px",
-                                  borderRadius: RADIUS.md,
-                                  border: `1px solid ${T.moss}33`,
-                                  color: T.moss,
-                                  fontFamily: "Georgia,serif",
-                                  fontSize: 12,
-                                  fontWeight: 600,
-                                  textDecoration: "none",
-                                }}
-                              >
-                                🗺 Explore {dest} on TripAdvisor
-                              </a>
-                            </DestinationHero>
-                          );
-                        })()}
                       {/* F1 Inspirations — web-search-backed reading list. Auto-loads
                         when the Inspirations view becomes visible. Cached server-side
                         for 30 days. */}
@@ -11118,7 +11009,13 @@ export default function App({
                       )}
                       {pretripMagView === "magazine" &&
                         (() => {
-                          // Collect all unique cities — optionally filtered by route
+                          const destLevel = resolveMagazineDestination({
+                            pendingForm,
+                            editingTrip,
+                            magazineFilterRouteId,
+                            pretripRoutes,
+                          });
+                          // Collect route cities — optionally filtered by route
                           const filterSet = magazineFilterCities
                             ? new Set(
                                 magazineFilterCities.map((c) =>
@@ -11126,68 +11023,26 @@ export default function App({
                                 ),
                               )
                             : null;
-                          // Exclude cities that match the destination (already shown as DestinationHero)
-                          const rawDests = (
-                            pendingForm?.destinations || []
-                          ).filter(
-                            (d) => !d.toLowerCase().includes("help me decide"),
-                          );
-                          const destName =
-                            editingTrip?.destination ||
-                            (rawDests.length ? rawDests.join(", ") : "");
-                          const destWords = destName
-                            .toLowerCase()
-                            .split(/[\s,]+/)
-                            .filter(Boolean);
-                          const isDestMatch = (city) => {
-                            const cl = city.toLowerCase();
-                            return (
-                              cl === destName.toLowerCase() ||
-                              destWords.some(
-                                (w) => w.length > 3 && cl.includes(w),
-                              ) ||
-                              cl.includes(destName.toLowerCase())
-                            );
-                          };
                           const allCities = [];
                           const seen = new Set();
                           for (const route of pretripRoutes) {
-                            if (route.dismissed) continue; // skip dismissed routes
+                            if (route.dismissed) continue;
                             for (const c of (route.city || "")
                               .split(",")
                               .map((s) => s.trim())
                               .filter(Boolean)) {
                               if (filterSet && !filterSet.has(c.toLowerCase()))
                                 continue;
-                              if (isDestMatch(c)) continue; // already shown as destination hero
+                              if (cityMatchesDestination(c, destLevel))
+                                continue;
                               if (!seen.has(c.toLowerCase())) {
                                 seen.add(c.toLowerCase());
-                                allCities.push({
-                                  city: c,
-                                  fromRoute: route.title,
-                                });
+                                allCities.push({ city: c });
                               }
                             }
                           }
-                          if (allCities.length === 0) {
-                            return (
-                              <div
-                                style={{
-                                  textAlign: "center",
-                                  padding: "40px 0",
-                                  color: T.mist,
-                                  fontFamily: "Georgia,serif",
-                                  fontSize: 13,
-                                }}
-                              >
-                                Routes are still loading — cities will appear
-                                here shortly
-                              </div>
-                            );
-                          }
-                          return allCities.map(({ city, fromRoute }, ci) => {
+                          const renderCityCard = (city, ci, keyPrefix) => {
                             const dd = deepDiveCacheApp[city];
-                            // Build highlights from moreSights
                             const data =
                               dd && typeof dd === "object" ? dd : null;
                             const highlights = (data?.moreSights || []).map(
@@ -11197,7 +11052,7 @@ export default function App({
                               }),
                             );
                             return (
-                              <Fragment key={city}>
+                              <Fragment key={`${keyPrefix}${city}`}>
                                 {ci > 0 && (
                                   <div
                                     style={{
@@ -11209,9 +11064,9 @@ export default function App({
                                 )}
                                 <CityCard
                                   city={city}
-                                  cityDays={[{ label: fromRoute }]}
                                   writeup={data?.writeup || ""}
                                   deepDive={dd}
+                                  onVisible={() => loadCityDeepDiveApp(city)}
                                   onDeepDive={() => {
                                     loadCityDeepDiveApp(city);
                                     setPretripDeepDiveCity(city);
@@ -11266,7 +11121,33 @@ export default function App({
                                 </CityCard>
                               </Fragment>
                             );
-                          });
+                          };
+                          if (!destLevel && allCities.length === 0) {
+                            return (
+                              <div
+                                style={{
+                                  textAlign: "center",
+                                  padding: "40px 0",
+                                  color: T.mist,
+                                  fontFamily: "Georgia,serif",
+                                  fontSize: 13,
+                                }}
+                              >
+                                Routes are still loading — cities will appear
+                                here shortly
+                              </div>
+                            );
+                          }
+                          let cardIndex = 0;
+                          return (
+                            <>
+                              {destLevel &&
+                                renderCityCard(destLevel, cardIndex++, "dest-")}
+                              {allCities.map(({ city }) =>
+                                renderCityCard(city, cardIndex++, "city-"),
+                              )}
+                            </>
+                          );
                         })()}
                     </div>
                   </div>

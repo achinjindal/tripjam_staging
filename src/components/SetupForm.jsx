@@ -1026,10 +1026,10 @@ function SetupForm({
         <>
           <div
             style={{
-              display: "flex",
+              display: "grid",
+              gridTemplateColumns: isDesktop ? "1fr 1fr" : "1fr 1fr",
               gap: 8,
               marginTop: 14,
-              flexWrap: "wrap",
             }}
           >
             {[
@@ -1057,7 +1057,7 @@ function SetupForm({
                     color: T.ink,
                     border: "none",
                     borderRadius: RADIUS.full,
-                    padding: "6px 14px",
+                    padding: "8px 14px",
                     fontSize: 13,
                     cursor: "pointer",
                     fontFamily: "Georgia,serif",
