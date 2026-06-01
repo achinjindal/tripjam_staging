@@ -378,12 +378,14 @@ function SetupForm({
     window.visualViewport.addEventListener("resize", onResize);
     return () => window.visualViewport.removeEventListener("resize", onResize);
   }, []);
-  const set = (k, v) =>
-    setForm((f) => {
-      const next = { ...f, [k]: v };
-      onFormChange?.(next);
-      return next;
-    });
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Notify parent after form state settles — calling onFormChange inside the
+  // setForm updater triggered "setState during render" warnings in React.
+  useEffect(() => {
+    onFormChange?.(form);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form]);
 
   // Notify parent whenever destinations change so the page hero can become contextual.
   useEffect(() => {

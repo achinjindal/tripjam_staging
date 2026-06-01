@@ -182,14 +182,49 @@ function countWebSearches(content: any[], usage: any): number {
 }
 
 function tryParseJson(text: string): any | null {
+  if (!text) return null;
+  // Strategy 1: try the whole text (fastest, works when model outputs pure JSON)
+  try {
+    return JSON.parse(text.trim());
+  } catch {
+    // fall through
+  }
+  // Strategy 2: strip markdown code fences then parse
+  const stripped = text
+    .replace(/^```(?:json)?\s*/im, "")
+    .replace(/\s*```$/im, "")
+    .trim();
+  try {
+    return JSON.parse(stripped);
+  } catch {
+    // fall through
+  }
+  // Strategy 3: find the outermost { } pair — handles leading/trailing prose
+  // Use lastIndexOf for the closing brace so we grab the whole JSON blob
+  // even when there are nested objects.
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return null;
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {
+      // fall through
+    }
   }
+  // Strategy 4: look for the "inspirations" key specifically — sometimes
+  // the model wraps output in extra commentary before the JSON.
+  const jsonStart = text.indexOf('{"inspirations"');
+  if (jsonStart >= 0) {
+    const end2 = text.lastIndexOf("}");
+    if (end2 > jsonStart) {
+      try {
+        return JSON.parse(text.slice(jsonStart, end2 + 1));
+      } catch {
+        // fall through
+      }
+    }
+  }
+  return null;
 }
 
 async function extractTags(
@@ -422,7 +457,21 @@ serve(async (req) => {
     const webSearchCount = countWebSearches(llm?.content || [], llm?.usage);
     const parsed = tryParseJson(text);
     if (!parsed || !Array.isArray(parsed.inspirations)) {
-      throw new Error("model returned unparseable digest");
+      // Log raw text for debugging — truncated to 500 chars to avoid log bloat
+      console.error(
+        "unparseable digest. raw text (first 500):",
+        text?.slice(0, 500),
+      );
+      // Graceful fallback: if parsing totally failed return an empty digest
+      // rather than a 500. The frontend shows "No recent stories" with a
+      // retry button, which is better than an error state.
+      if (!parsed) {
+        throw new Error("model returned unparseable digest");
+      }
+      // parsed exists but has no inspirations array — treat as empty
+      parsed.inspirations = [];
+      parsed.place_insights = parsed.place_insights || [];
+      parsed.sources = parsed.sources || [];
     }
 
     const digest = {
