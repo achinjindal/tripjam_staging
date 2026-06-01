@@ -499,17 +499,273 @@ function SetupForm({
     onGenerate(form);
   };
 
+  // ── Full-page destination search sheet (mobile only) ──
+  // Renders as a fixed overlay to escape the overflow:hidden parent. Desktop
+  // uses an inline dropdown instead (plenty of screen real estate, no clip).
+  const [showDestSheet, setShowDestSheet] = useState(false);
+
+  const openDestSheet = () => {
+    setDestInput("");
+    setSuggestions([]);
+    setShowSugg(false);
+    setShowDestSheet(true);
+  };
+
+  const closeDestSheet = () => {
+    setShowDestSheet(false);
+    setDestInput("");
+    setSuggestions([]);
+    setShowSugg(false);
+    setDestLoading(false);
+    destAbortRef.current?.abort();
+    clearTimeout(destTimer.current);
+  };
+
+  const pickSuggestionAndClose = (s) => {
+    pickSuggestion(s);
+    closeDestSheet();
+  };
+
+  const destSearchSheet = !isDesktop && showDestSheet && (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 2000,
+        background: T.chalk,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      {/* Sheet header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "14px 16px",
+          borderBottom: `1px solid ${T.sand}`,
+          background: T.chalk,
+          flexShrink: 0,
+        }}
+      >
+        <button
+          onClick={closeDestSheet}
+          style={{
+            background: "none",
+            border: "none",
+            fontSize: 22,
+            color: T.mist,
+            cursor: "pointer",
+            lineHeight: 1,
+            padding: 0,
+          }}
+        >
+          ←
+        </button>
+        <input
+          autoFocus
+          value={destInput}
+          onChange={(e) => handleDestChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && destInput.trim()) {
+              addDestination(destInput.trim());
+              closeDestSheet();
+            }
+          }}
+          placeholder="Search destinations…"
+          style={{
+            flex: 1,
+            padding: "10px 14px",
+            borderRadius: RADIUS.lg,
+            border: `1.5px solid ${T.sand}`,
+            fontFamily: "Georgia,serif",
+            fontSize: 15,
+            color: T.ink,
+            background: T.bgPage,
+            outline: "none",
+          }}
+        />
+        {destInput && (
+          <button
+            onClick={() => {
+              setDestInput("");
+              setSuggestions([]);
+              setShowSugg(false);
+            }}
+            style={{
+              background: "none",
+              border: "none",
+              fontSize: 18,
+              color: T.mist,
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            ×
+          </button>
+        )}
+      </div>
+
+      {/* Results — fill remaining height, fully scrollable */}
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {destLoading && suggestions.length === 0 && (
+          <div
+            style={{
+              padding: "20px 16px",
+              fontFamily: "Georgia,serif",
+              fontSize: 14,
+              color: T.mist,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}
+          >
+            <span
+              style={{
+                display: "inline-block",
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
+                border: `2px solid ${T.sand}`,
+                borderTopColor: T.ocean,
+                animation: "spin 0.7s linear infinite",
+              }}
+            />
+            Searching…
+          </div>
+        )}
+        {!destLoading && destInput.length >= 2 && suggestions.length === 0 && (
+          <div
+            style={{
+              padding: "20px 16px",
+              fontFamily: "Georgia,serif",
+              fontSize: 14,
+              color: T.mist,
+            }}
+          >
+            No results for &ldquo;{destInput}&rdquo;
+          </div>
+        )}
+        {suggestions.map((s, i) => {
+          const main =
+            s.placePrediction?.structuredFormat?.mainText?.text ||
+            s.placePrediction?.text?.text ||
+            "";
+          const secondary =
+            s.placePrediction?.structuredFormat?.secondaryText?.text || "";
+          return (
+            <button
+              key={i}
+              onMouseDown={() => pickSuggestionAndClose(s)}
+              onClick={() => pickSuggestionAndClose(s)}
+              style={{
+                display: "block",
+                width: "100%",
+                padding: "14px 16px",
+                background: "none",
+                border: "none",
+                borderBottom: `1px solid ${T.sand}`,
+                textAlign: "left",
+                cursor: "pointer",
+              }}
+            >
+              <div
+                style={{
+                  fontFamily: "Georgia,serif",
+                  fontSize: 15,
+                  color: T.ink,
+                  fontWeight: 600,
+                }}
+              >
+                {main}
+              </div>
+              {secondary && (
+                <div
+                  style={{
+                    fontFamily: "Georgia,serif",
+                    fontSize: 12,
+                    color: T.mist,
+                    marginTop: 2,
+                  }}
+                >
+                  {secondary}
+                </div>
+              )}
+            </button>
+          );
+        })}
+
+        {/* Popular destinations in the sheet too — shown when no query */}
+        {!destInput && (
+          <div style={{ padding: "16px" }}>
+            <div
+              style={{
+                fontFamily: "Georgia,serif",
+                fontSize: 11,
+                color: T.mist,
+                letterSpacing: 0.8,
+                textTransform: "uppercase",
+                marginBottom: 12,
+              }}
+            >
+              Popular destinations
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {[
+                "Rajasthan 🏰",
+                "Japan 🌸",
+                "Amalfi 🌊",
+                "Patagonia 🏔️",
+                "Morocco 🕌",
+                "Koh Samui 🏝️",
+                "Bali 🌴",
+                "Santorini ☀️",
+              ].map((d) => {
+                const name = d
+                  .replace(
+                    /\s*[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE00}-\u{FEFF}]+$/u,
+                    "",
+                  )
+                  .trim();
+                return (
+                  <button
+                    key={d}
+                    onClick={() => {
+                      addDestination(name);
+                      closeDestSheet();
+                    }}
+                    style={{
+                      background: T.sand,
+                      color: T.ink,
+                      border: "none",
+                      borderRadius: RADIUS.full,
+                      padding: "8px 16px",
+                      fontSize: 14,
+                      cursor: "pointer",
+                      fontFamily: "Georgia,serif",
+                    }}
+                  >
+                    {d}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   const stepViews = [
     /* 0 – destination */
-    // No flex:1 here — let content height be natural so Continue sits right below,
-    // not at the very bottom of a tall screen with empty space in between.
     <div
       key={0}
       style={{
         animation: "fadeUp 0.3s ease",
       }}
     >
-      {/* On desktop only: show the icon + heading (mobile banner already shows contextual hero) */}
+      {/* Desktop only: icon + heading (mobile banner carries this context) */}
       {isDesktop && (
         <>
           <div style={{ textAlign: "center", fontSize: 40, marginBottom: 8 }}>
@@ -540,7 +796,7 @@ function SetupForm({
         </>
       )}
 
-      {/* Added destination chips */}
+      {/* Selected destination chips */}
       {form.destinations.length > 0 && (
         <div
           style={{
@@ -587,207 +843,253 @@ function SetupForm({
         </div>
       )}
 
-      <div style={{ position: "relative" }}>
-        <input
-          ref={inputRef}
-          value={destInput}
-          onChange={(e) => handleDestChange(e.target.value)}
-          onBlur={() => setTimeout(() => setShowSugg(false), 150)}
-          onFocus={() => destInput && suggestions.length && setShowSugg(true)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && destInput.trim())
-              addDestination(destInput.trim());
-          }}
-          placeholder={
-            form.destinations.length === 0
-              ? "e.g. Bangkok, Kyoto, Rajasthan…"
-              : "Add another destination…"
-          }
-          style={{
-            width: "100%",
-            padding: "14px 16px",
-            borderRadius: RADIUS.lg,
-            border: `2px solid ${destError ? T.error : destInput ? T.ocean : T.sand}`,
-            fontFamily: "Georgia,serif",
-            fontSize: 15,
-            color: T.ink,
-            background: T.chalk,
-            outline: "none",
-            transition: `border ${MOTION.normal}`,
-          }}
-        />
-        {showSugg && (destLoading || suggestions.length > 0) && (
-          <div
+      {/* On mobile: tap target that opens the full-page sheet.
+          On desktop: inline input with dropdown (overflow is not clipped). */}
+      {!isDesktop ? (
+        form.destinations.length === 0 ? (
+          /* No destination yet — tappable search prompt */
+          <button
+            onClick={openDestSheet}
             style={{
-              position: "absolute",
-              // On mobile: always open suggestions UPWARD — when typing, the
-              // software keyboard is almost certainly open, which would cover
-              // a downward dropdown. Desktop opens downward as normal.
-              ...(!isDesktop
-                ? { bottom: "calc(100% + 6px)", top: "auto" }
-                : { top: "calc(100% + 6px)", bottom: "auto" }),
-              left: 0,
-              right: 0,
-              background: T.chalk,
-              border: `1.5px solid ${T.sand}`,
+              width: "100%",
+              padding: "14px 16px",
               borderRadius: RADIUS.lg,
-              overflow: "hidden",
-              zIndex: 100,
-              boxShadow: "0 4px 18px rgba(0,0,0,0.10)",
-              maxHeight: isDesktop ? 300 : 220,
-              overflowY: "auto",
+              border: `2px solid ${T.sand}`,
+              fontFamily: "Georgia,serif",
+              fontSize: 15,
+              color: T.mist,
+              background: T.chalk,
+              textAlign: "left",
+              cursor: "pointer",
             }}
           >
-            {destLoading && suggestions.length === 0 && (
-              <div
-                style={{
-                  padding: "12px 16px",
-                  fontFamily: "Georgia,serif",
-                  fontSize: 13,
-                  color: T.mist,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                }}
-              >
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: 12,
-                    height: 12,
-                    borderRadius: "50%",
-                    border: `2px solid ${T.sand}`,
-                    borderTopColor: T.ocean,
-                    animation: "spin 0.7s linear infinite",
-                  }}
-                />
-                Searching destinations…
-              </div>
-            )}
-            {suggestions.map((s, i) => {
-              const main =
-                s.placePrediction?.structuredFormat?.mainText?.text ||
-                s.placePrediction?.text?.text ||
-                "";
-              const secondary =
-                s.placePrediction?.structuredFormat?.secondaryText?.text || "";
-              return (
+            e.g. Bangkok, Kyoto, Rajasthan…
+          </button>
+        ) : (
+          /* Destination(s) chosen — explicit "Add another?" prompt */
+          <button
+            onClick={openDestSheet}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              background: "none",
+              border: `1.5px dashed ${T.ocean}66`,
+              borderRadius: RADIUS.lg,
+              padding: "11px 16px",
+              color: T.ocean,
+              fontFamily: "Georgia,serif",
+              fontSize: 14,
+              cursor: "pointer",
+              width: "100%",
+            }}
+          >
+            <span style={{ fontSize: 18 }}>+</span> Add another destination
+          </button>
+        )
+      ) : (
+        /* Desktop inline input + dropdown */
+        <div style={{ position: "relative" }}>
+          <input
+            ref={inputRef}
+            value={destInput}
+            onChange={(e) => handleDestChange(e.target.value)}
+            onBlur={() => setTimeout(() => setShowSugg(false), 150)}
+            onFocus={() => destInput && suggestions.length && setShowSugg(true)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && destInput.trim())
+                addDestination(destInput.trim());
+            }}
+            placeholder={
+              form.destinations.length === 0
+                ? "e.g. Bangkok, Kyoto, Rajasthan…"
+                : "Add another destination…"
+            }
+            style={{
+              width: "100%",
+              padding: "14px 16px",
+              borderRadius: RADIUS.lg,
+              border: `2px solid ${destError ? T.error : destInput ? T.ocean : T.sand}`,
+              fontFamily: "Georgia,serif",
+              fontSize: 15,
+              color: T.ink,
+              background: T.chalk,
+              outline: "none",
+              transition: `border ${MOTION.normal}`,
+            }}
+          />
+          {showSugg && (destLoading || suggestions.length > 0) && (
+            <div
+              style={{
+                position: "absolute",
+                top: "calc(100% + 6px)",
+                left: 0,
+                right: 0,
+                background: T.chalk,
+                border: `1.5px solid ${T.sand}`,
+                borderRadius: RADIUS.lg,
+                overflow: "hidden",
+                zIndex: 100,
+                boxShadow: "0 4px 18px rgba(0,0,0,0.10)",
+                maxHeight: 300,
+                overflowY: "auto",
+              }}
+            >
+              {destLoading && suggestions.length === 0 && (
                 <div
-                  key={i}
-                  onMouseDown={() => pickSuggestion(s)}
                   style={{
-                    padding: "10px 16px",
-                    cursor: "pointer",
-                    borderBottom: `1px solid ${T.sand}`,
+                    padding: "12px 16px",
+                    fontFamily: "Georgia,serif",
+                    fontSize: 13,
+                    color: T.mist,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
                   }}
-                  onMouseEnter={(e) =>
-                    (e.currentTarget.style.background = T.sand)
-                  }
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.background = T.chalk)
-                  }
                 >
-                  <div
+                  <span
                     style={{
-                      fontFamily: "Georgia,serif",
-                      fontSize: 14,
-                      color: T.ink,
-                      fontWeight: 600,
+                      display: "inline-block",
+                      width: 12,
+                      height: 12,
+                      borderRadius: "50%",
+                      border: `2px solid ${T.sand}`,
+                      borderTopColor: T.ocean,
+                      animation: "spin 0.7s linear infinite",
                     }}
+                  />
+                  Searching destinations…
+                </div>
+              )}
+              {suggestions.map((s, i) => {
+                const main =
+                  s.placePrediction?.structuredFormat?.mainText?.text ||
+                  s.placePrediction?.text?.text ||
+                  "";
+                const secondary =
+                  s.placePrediction?.structuredFormat?.secondaryText?.text ||
+                  "";
+                return (
+                  <div
+                    key={i}
+                    onMouseDown={() => pickSuggestion(s)}
+                    style={{
+                      padding: "10px 16px",
+                      cursor: "pointer",
+                      borderBottom: `1px solid ${T.sand}`,
+                    }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background = T.sand)
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = T.chalk)
+                    }
                   >
-                    🌍 {main}
-                  </div>
-                  {secondary && (
                     <div
                       style={{
                         fontFamily: "Georgia,serif",
-                        fontSize: 11,
-                        color: T.mist,
-                        marginTop: 2,
+                        fontSize: 14,
+                        color: T.ink,
+                        fontWeight: 600,
                       }}
                     >
-                      {secondary}
+                      🌍 {main}
                     </div>
-                  )}
-                </div>
+                    {secondary && (
+                      <div
+                        style={{
+                          fontFamily: "Georgia,serif",
+                          fontSize: 11,
+                          color: T.mist,
+                          marginTop: 2,
+                        }}
+                      >
+                        {secondary}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Pre-populated popular destinations — only shown when none selected yet.
+          Once the user picks one, this is replaced by the "+ Add another" prompt. */}
+      {/* Pills + Help me decide — hidden once user has picked a destination */}
+      {form.destinations.length === 0 && (
+        <>
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              marginTop: 14,
+              flexWrap: "wrap",
+            }}
+          >
+            {[
+              "Rajasthan 🏰",
+              "Japan 🌸",
+              "Amalfi 🌊",
+              "Patagonia 🏔️",
+              "Morocco 🕌",
+              "Koh Samui 🏝️",
+              "Bali 🌴",
+              "Santorini ☀️",
+            ].map((d) => {
+              const name = d
+                .replace(
+                  /\s*[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE00}-\u{FEFF}]+$/u,
+                  "",
+                )
+                .trim();
+              return (
+                <button
+                  key={d}
+                  onClick={() => addDestination(name)}
+                  style={{
+                    background: T.sand,
+                    color: T.ink,
+                    border: "none",
+                    borderRadius: RADIUS.full,
+                    padding: "6px 14px",
+                    fontSize: 13,
+                    cursor: "pointer",
+                    fontFamily: "Georgia,serif",
+                  }}
+                >
+                  {d}
+                </button>
               );
             })}
           </div>
-        )}
-      </div>
-
-      {/* Popular destinations — always wrap so all 8 options are visible */}
-      <div
-        style={{
-          display: "flex",
-          gap: 8,
-          marginTop: 14,
-          flexWrap: "wrap",
-        }}
-      >
-        {[
-          "Rajasthan 🏰",
-          "Japan 🌸",
-          "Amalfi 🌊",
-          "Patagonia 🏔️",
-          "Morocco 🕌",
-          "Koh Samui 🏝️",
-          "Bali 🌴",
-          "Santorini ☀️",
-        ].map((d) => {
-          const name = d
-            .replace(
-              /\s*[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE00}-\u{FEFF}]+$/u,
-              "",
-            )
-            .trim();
-          const sel = form.destinations.includes(name);
-          return (
-            <button
-              key={d}
-              onClick={() => addDestination(name)}
-              style={{
-                background: sel ? T.ocean : T.sand,
-                color: sel ? "white" : T.ink,
-                border: "none",
-                borderRadius: RADIUS.full,
-                padding: "6px 14px",
-                fontSize: 13,
-                cursor: "pointer",
-                fontFamily: "Georgia,serif",
-              }}
-            >
-              {d}
-            </button>
-          );
-        })}
-      </div>
-      {form.destinations.length === 0 && (
-        <button
-          onClick={() => {
-            addDestination("Help me decide");
-            setStep(1);
-          }}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-            width: "100%",
-            marginTop: 12,
-            padding: "13px 0",
-            borderRadius: RADIUS.lg,
-            border: `2px solid ${T.ocean}44`,
-            background: `linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,
-            color: T.ocean,
-            fontFamily: "Georgia,serif",
-            fontSize: 14,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          🌐 Help me decide
-        </button>
+          <button
+            onClick={() => {
+              addDestination("Help me decide");
+              setStep(1);
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              width: "100%",
+              marginTop: 12,
+              padding: "13px 0",
+              borderRadius: RADIUS.lg,
+              border: `2px solid ${T.ocean}44`,
+              background: `linear-gradient(135deg, ${T.ocean}08, ${T.dusk}06)`,
+              color: T.ocean,
+              fontFamily: "Georgia,serif",
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            🌐 Help me decide
+          </button>
+        </>
       )}
     </div>,
 
@@ -1098,149 +1400,154 @@ function SetupForm({
   })();
 
   return (
-    <div
-      style={{
-        padding: isDesktop ? 0 : "0 16px",
-        paddingBottom: isDesktop ? 0 : 0,
-        flex: isDesktop ? undefined : 1,
-        display: "flex",
-        flexDirection: "column",
-        minHeight: 0,
-      }}
-    >
-      {/* Back button + Progress dots — hidden on desktop (left panel owns step progress) */}
-      {!isDesktop && (
-        <div
-          style={{ display: "flex", alignItems: "center", marginBottom: 16 }}
-        >
-          {step > 0 ? (
-            <button
-              onClick={() => setStep((s) => s - 1)}
-              style={{
-                background: T.sand,
-                border: "none",
-                cursor: "pointer",
-                fontSize: 18,
-                color: T.ink,
-                padding: "6px 10px",
-                lineHeight: 1,
-                borderRadius: RADIUS.md,
-                minWidth: 36,
-                minHeight: 36,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              ←
-            </button>
-          ) : (
-            <div style={{ width: 28 }} />
-          )}
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              justifyContent: "center",
-              gap: 8,
-            }}
-          >
-            {stepViews.map((_, i) => (
-              <div
-                key={i}
-                style={{
-                  width: i === step ? 26 : 8,
-                  height: 8,
-                  borderRadius: RADIUS.sm,
-                  background: i <= step ? T.ocean : T.sand,
-                  transition: `all ${MOTION.slow}`,
-                }}
-              />
-            ))}
-          </div>
-          <div style={{ width: 28 }} />
-        </div>
-      )}
-
-      {/* Trip summary is shown in the mobile banner (App.jsx), not duplicated here */}
-
+    <>
+      {/* Full-page destination search sheet — rendered outside the clipping
+          flex container so it can cover the full screen without being cut off */}
+      {destSearchSheet}
       <div
         style={{
-          flex: 1,
+          padding: isDesktop ? 0 : "0 16px",
+          paddingBottom: isDesktop ? 0 : 0,
+          flex: isDesktop ? undefined : 1,
           display: "flex",
           flexDirection: "column",
           minHeight: 0,
-          overflowY: isDesktop ? "visible" : "hidden",
         }}
       >
-        {stepViews[step]}
-      </div>
-      {destError && (
+        {/* Back button + Progress dots — hidden on desktop (left panel owns step progress) */}
+        {!isDesktop && (
+          <div
+            style={{ display: "flex", alignItems: "center", marginBottom: 16 }}
+          >
+            {step > 0 ? (
+              <button
+                onClick={() => setStep((s) => s - 1)}
+                style={{
+                  background: T.sand,
+                  border: "none",
+                  cursor: "pointer",
+                  fontSize: 18,
+                  color: T.ink,
+                  padding: "6px 10px",
+                  lineHeight: 1,
+                  borderRadius: RADIUS.md,
+                  minWidth: 36,
+                  minHeight: 36,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                ←
+              </button>
+            ) : (
+              <div style={{ width: 28 }} />
+            )}
+            <div
+              style={{
+                flex: 1,
+                display: "flex",
+                justifyContent: "center",
+                gap: 8,
+              }}
+            >
+              {stepViews.map((_, i) => (
+                <div
+                  key={i}
+                  style={{
+                    width: i === step ? 26 : 8,
+                    height: 8,
+                    borderRadius: RADIUS.sm,
+                    background: i <= step ? T.ocean : T.sand,
+                    transition: `all ${MOTION.slow}`,
+                  }}
+                />
+              ))}
+            </div>
+            <div style={{ width: 28 }} />
+          </div>
+        )}
+
+        {/* Trip summary is shown in the mobile banner (App.jsx), not duplicated here */}
+
         <div
           style={{
-            color: T.error,
-            fontSize: 13,
-            fontFamily: "Georgia,serif",
-            marginTop: 4,
-            textAlign: "center",
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+            overflowY: isDesktop ? "visible" : "hidden",
+          }}
+        >
+          {stepViews[step]}
+        </div>
+        {destError && (
+          <div
+            style={{
+              color: T.error,
+              fontSize: 13,
+              fontFamily: "Georgia,serif",
+              marginTop: 4,
+              textAlign: "center",
+              flexShrink: 0,
+            }}
+          >
+            {destError}
+          </div>
+        )}
+
+        {/* Navigation footer — always at the bottom of the flex column */}
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            marginTop: isDesktop ? 28 : 12,
+            paddingBottom: isDesktop ? 0 : 16,
+            alignItems: "center",
             flexShrink: 0,
           }}
         >
-          {destError}
+          {/* Back button in footer — desktop only; on mobile it's in the dots row */}
+          {isDesktop && step > 0 && (
+            <button
+              onClick={() => setStep((s) => s - 1)}
+              style={{
+                padding: "12px 20px",
+                borderRadius: RADIUS.lg,
+                border: `1.5px solid ${T.border}`,
+                background: T.chalk,
+                color: T.ink,
+                fontFamily: "Georgia,serif",
+                fontSize: 14,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              ← Back
+            </button>
+          )}
+          {step < stepViews.length - 1 && (
+            <button
+              onClick={handleContinue}
+              style={{
+                flex: 1,
+                padding: 14,
+                borderRadius: RADIUS.lg,
+                border: "none",
+                cursor: "pointer",
+                background: T.ocean,
+                color: "white",
+                fontFamily: "'DM Serif Display',serif",
+                fontSize: 16,
+                boxShadow: "0 4px 14px rgba(37,99,168,0.3)",
+              }}
+            >
+              Continue →
+            </button>
+          )}
         </div>
-      )}
-
-      {/* Navigation footer — always at the bottom of the flex column */}
-      <div
-        style={{
-          display: "flex",
-          gap: 10,
-          marginTop: isDesktop ? 28 : 12,
-          paddingBottom: isDesktop ? 0 : 16,
-          alignItems: "center",
-          flexShrink: 0,
-        }}
-      >
-        {/* Back button in footer — desktop only; on mobile it's in the dots row */}
-        {isDesktop && step > 0 && (
-          <button
-            onClick={() => setStep((s) => s - 1)}
-            style={{
-              padding: "12px 20px",
-              borderRadius: RADIUS.lg,
-              border: `1.5px solid ${T.border}`,
-              background: T.chalk,
-              color: T.ink,
-              fontFamily: "Georgia,serif",
-              fontSize: 14,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
-          >
-            ← Back
-          </button>
-        )}
-        {step < stepViews.length - 1 && (
-          <button
-            onClick={handleContinue}
-            style={{
-              flex: 1,
-              padding: 14,
-              borderRadius: RADIUS.lg,
-              border: "none",
-              cursor: "pointer",
-              background: T.ocean,
-              color: "white",
-              fontFamily: "'DM Serif Display',serif",
-              fontSize: 16,
-              boxShadow: "0 4px 14px rgba(37,99,168,0.3)",
-            }}
-          >
-            Continue →
-          </button>
-        )}
       </div>
-    </div>
+    </>
   );
 }
 
