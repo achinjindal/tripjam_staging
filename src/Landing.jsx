@@ -406,7 +406,7 @@ function Pricing() {
             textAlign: "center",
           }}
         >
-          Pay only when you use AI
+          First trips free. Top up when you need more.
         </h2>
         <p
           style={{
@@ -419,9 +419,7 @@ function Pricing() {
             marginRight: "auto",
           }}
         >
-          One credit ≈ $0.01 of AI cost. Most actions use 1-3 credits.
-          Generating a full itinerary uses 20-30. Free signup covers your first
-          trips.
+          Sign up free and start planning. Buy a credit pack when you run out — no subscription, no surprise charges.
         </p>
         <div
           style={{
