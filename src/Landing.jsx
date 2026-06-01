@@ -245,8 +245,8 @@ const STEPS = [
   {
     n: "2",
     icon: "🛣️",
-    title: "Get 4 route options",
-    body: "AI proposes 4 different day-by-day routes (efficient · scenic · cultural · off-beat). Vote on the one you like, or remix.",
+    title: "Get 4+ route options",
+    body: "AI proposes 4+ different day-by-day routes (efficient · scenic · cultural · off-beat). Want more? Generate up to 12. Vote on the one you like, or remix.",
   },
   {
     n: "3",
