@@ -2193,24 +2193,9 @@ function BrainstormView({
                   }}
                 >
                   {isPretripMode
-                    ? (() => {
-                        if (destinations.length <= 2)
-                          return destinations.join(" → ");
-                        const parts = destinations.map((d) => d.split(/,\s*/));
-                        if (parts.every((p) => p.length >= 2)) {
-                          const suffix = parts[0].slice(1).join(", ");
-                          if (
-                            parts.every(
-                              (p) =>
-                                p.slice(1).join(", ").toLowerCase() ===
-                                suffix.toLowerCase(),
-                            )
-                          ) {
-                            return `${parts.map((p) => p[0]).join(" → ")}`;
-                          }
-                        }
-                        return destinations.join(" → ");
-                      })()
+                    ? destinations
+                        .map((d) => d.split(",")[0].trim())
+                        .join(" → ")
                     : "Magazine"}
                 </div>
                 {isPretripMode && (

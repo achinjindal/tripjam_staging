@@ -477,9 +477,11 @@ function SetupForm({
     );
 
   const pickSuggestion = (suggestion) => {
+    // Prefer mainText (just the city/region name e.g. "Ahmedabad") over the
+    // full text string ("Ahmedabad, Gujarat, India") for cleaner display.
     const text =
-      suggestion.placePrediction?.text?.text ||
       suggestion.placePrediction?.structuredFormat?.mainText?.text ||
+      suggestion.placePrediction?.text?.text ||
       "";
     if (text) addDestination(text);
     inputRef.current?.focus();
