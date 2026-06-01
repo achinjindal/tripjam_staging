@@ -9365,18 +9365,31 @@ export default function App({
                 overflow: "hidden",
                 paddingTop: "env(safe-area-inset-top, 0px)",
               }
-            : {
-                fontFamily: "Georgia,serif",
-                background: T.warm,
-                maxWidth: 430,
-                margin: "0 auto",
-                position: "relative",
-                display: "flex",
-                flexDirection: "column",
-                height: "100dvh",
-                overflow: "hidden",
-                paddingTop: "env(safe-area-inset-top, 0px)",
-              }
+            : screen === "setup" && isDesktop
+              ? {
+                  // Desktop setup: full-width two-column layout — no 430px cap.
+                  // isTripView excludes setup from useDesktopShell, so we need
+                  // to override the mobile shell here specifically.
+                  fontFamily: "Georgia,serif",
+                  position: "relative",
+                  display: "flex",
+                  flexDirection: "column",
+                  height: "100dvh",
+                  overflow: "hidden",
+                  paddingTop: "env(safe-area-inset-top, 0px)",
+                }
+              : {
+                  fontFamily: "Georgia,serif",
+                  background: T.warm,
+                  maxWidth: 430,
+                  margin: "0 auto",
+                  position: "relative",
+                  display: "flex",
+                  flexDirection: "column",
+                  height: "100dvh",
+                  overflow: "hidden",
+                  paddingTop: "env(safe-area-inset-top, 0px)",
+                }
         }
       >
         <style>{`
