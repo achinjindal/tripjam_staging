@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { T, RADIUS, SHADOW, MOTION } from "../theme";
 
 // Open a URL in the Capacitor in-app browser on Android (Chrome Custom Tab)
@@ -306,12 +306,13 @@ export function FoodSpotlightCard({ item, city }) {
 
 export function CityCard({
   city,
-  cityDays,
   writeup,
   onDeepDive,
   deepDive,
   children,
+  onVisible = null,
 }) {
+  const rootRef = useRef(null);
   const [photoUrl, setPhotoUrl] = useState(null);
   const [photoLoaded, setPhotoLoaded] = useState(false);
   useEffect(() => {
@@ -348,10 +349,27 @@ export function CityCard({
     })();
   }, [city]);
 
+  // Lazy-load deep dive when this card scrolls into view (first city is eager-loaded).
+  useEffect(() => {
+    if (!onVisible || !rootRef.current) return;
+    const el = rootRef.current;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          onVisible();
+          obs.disconnect();
+        }
+      },
+      { rootMargin: "240px 0px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [onVisible]);
+
   const dd = deepDive && typeof deepDive === "object" ? deepDive : null;
 
   return (
-    <div style={{ background: T.chalk, overflow: "hidden" }}>
+    <div ref={rootRef} style={{ background: T.chalk, overflow: "hidden" }}>
       {/* City hero photo with overlay */}
       <div
         style={{
@@ -437,19 +455,8 @@ export function CityCard({
       </div>
 
       {/* Writeup */}
-      <div style={{ padding: "14px 18px 10px" }}>
-        <div
-          style={{
-            fontSize: 11,
-            color: T.mist,
-            fontFamily: "Georgia,serif",
-            marginBottom: 6,
-          }}
-        >
-          {cityDays.length} day{cityDays.length > 1 ? "s" : ""} ·{" "}
-          {cityDays.map((d) => d.label).join(", ")}
-        </div>
-        {writeup && (
+      {(writeup || dd?.writeup) && (
+        <div style={{ padding: "14px 18px 10px" }}>
           <div
             style={{
               fontSize: 13,
@@ -458,10 +465,10 @@ export function CityCard({
               lineHeight: 1.65,
             }}
           >
-            {writeup}
+            {writeup || dd?.writeup}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Pull quote — didYouKnow */}
       {dd?.didYouKnow && (
@@ -1438,18 +1445,27 @@ export function InspirationsSection({
   hasLoaded,
   onLoadMore,
 }) {
-  // Deduplicate by author — keep only the first item per creator.
-  // The prompt instructs "No duplicates by author" but Haiku occasionally
-  // returns multiple entries from the same person (e.g. two Brandon Shaw videos).
+  // Deduplicate by author then interleave articles and videos so video content
+  // is distributed throughout rather than all appearing at the end.
   const items = (() => {
     const seen = new Set();
-    return (digest?.inspirations || []).filter((i) => {
+    const deduped = (digest?.inspirations || []).filter((i) => {
       if (!i?.url) return false;
       const key = (i.author || "").toLowerCase().trim();
       if (key && seen.has(key)) return false;
       if (key) seen.add(key);
       return true;
     });
+    // Separate into videos and articles, then zip them together so they alternate.
+    const videos = deduped.filter((i) => i.type === "video");
+    const articles = deduped.filter((i) => i.type !== "video");
+    const mixed = [];
+    const max = Math.max(videos.length, articles.length);
+    for (let i = 0; i < max; i++) {
+      if (i < videos.length) mixed.push(videos[i]);
+      if (i < articles.length) mixed.push(articles[i]);
+    }
+    return mixed;
   })();
   const [refinementInput, setRefinementInput] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
