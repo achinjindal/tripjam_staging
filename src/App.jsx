@@ -964,18 +964,46 @@ function resolveInspirationDestinations({
   trip,
   pretripRoutes,
 }) {
+  // 1. User explicitly named destinations (non-Help-me-decide)
   const rawDests = (pendingForm?.destinations || []).filter(
     (d) => !isHelpMeDecideDest(d),
   );
   if (rawDests.length) return rawDests;
+
+  // 2. Post-IG trip destination — split only on route separator "→", NOT on
+  //    "," because "Bali, Indonesia" is ONE destination, not two. Splitting on
+  //    "," previously sent ["Bali", "Indonesia"] to Haiku, causing it to search
+  //    for content covering Indonesia generically rather than Bali specifically.
   const fromTrip = (editingTrip?.destination || trip?.destination || "")
-    .split(/\s*→\s*|\s*,\s*/)
+    .split(/\s*→\s*/)
     .map((s) => s.trim())
     .filter(Boolean)
     .filter((d) => !isHelpMeDecideDest(d));
   if (fromTrip.length) return fromTrip;
-  // Help-me-decide flow: derive from generated route cities once RG completes.
-  return collectRouteCities(pretripRoutes).slice(0, 6);
+
+  // 3. Help-me-decide pre-IG: extract destination-level names from route titles
+  //    (e.g. "Bali, Indonesia Explorer" → "Bali, Indonesia") rather than
+  //    granular city stops (Fira, Oia, Kamari …) which are too specific.
+  //    Use the first segment of each route title, deduped, up to 4 destinations.
+  if ((pretripRoutes || []).length > 0) {
+    const seen = new Set();
+    const dests = [];
+    for (const route of pretripRoutes) {
+      if (route.dismissed) continue;
+      // Route titles are like "Bali, Indonesia Explorer" or "Sri Lanka Coast"
+      // Take everything before " – " or " - " (route label separator).
+      const base = (route.title || "").split(/\s*[–—-]\s+/)[0].trim();
+      if (!base || isHelpMeDecideDest(base)) continue;
+      const key = base.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        dests.push(base);
+      }
+      if (dests.length >= 4) break;
+    }
+    if (dests.length) return dests;
+  }
+  return [];
 }
 
 // Compact pill button shared by the desktop trip-context bar (Share +
