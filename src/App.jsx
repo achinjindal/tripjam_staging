@@ -9964,18 +9964,30 @@ export default function App({
                       <div />
                     )}
                   </div>
-                  {/* Hero title — large multi-line on step 0, single-line compact on steps 1+ */}
+                  {/* Hero title:
+                      Step 0 — always static "Plan your next adventure ✈️" so
+                      the banner doesn't jump around while the user is still
+                      selecting destinations. Contextual copy only kicks in
+                      from step 1 onwards, where it's stable.
+                      Steps 1+ — compact single-line contextual title. */}
                   <div
                     style={{
                       fontFamily: "'DM Serif Display',serif",
                       fontSize: setupStep === 0 ? 30 : 22,
                       lineHeight: setupStep === 0 ? 1.2 : 1.15,
-                      marginBottom: heroSubline && setupStep === 0 ? 8 : 0,
-                      whiteSpace: setupStep === 0 ? "normal" : "normal",
+                      marginBottom: 0,
                       transition: "font-size 0.25s ease",
                     }}
                   >
-                    {setupStep === 0 ? heroTitle : heroTitleCompact}
+                    {setupStep === 0 ? (
+                      <>
+                        Plan your next
+                        <br />
+                        adventure ✈️
+                      </>
+                    ) : (
+                      heroTitleCompact
+                    )}
                   </div>
                   {heroSubline && setupStep === 0 && (
                     <div
