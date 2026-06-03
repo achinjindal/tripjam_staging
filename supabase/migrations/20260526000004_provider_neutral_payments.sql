@@ -20,7 +20,8 @@ END $$;
 
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'credit_transactions_stripe_session_id_key') THEN
+  IF EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'credit_transactions_stripe_session_id_key')
+     AND NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'credit_transactions_provider_session_id_key') THEN
     ALTER INDEX credit_transactions_stripe_session_id_key RENAME TO credit_transactions_provider_session_id_key;
   END IF;
 END $$;

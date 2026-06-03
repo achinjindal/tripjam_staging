@@ -1,4 +1,6 @@
-# TripJam — CLAUDE.md
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What is this?
 
@@ -8,12 +10,14 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 
 - **Frontend:** React 18 (JSX) + Vite 8, single-page app, no router library (History API for URL routing)
 - **Backend:** Supabase (Postgres, Auth, Edge Functions, RLS, Realtime)
-- **AI:** Anthropic Claude API — Sonnet 4.6 for RG/IG/chat, Haiku 4.5 for todos/expenses/deep-dives/preferences
+- **AI:** Anthropic Claude API — Sonnet 4.6 for RG/IG/chat, Haiku 4.5 for todos/expenses/deep-dives/preferences/inspirations
 - **Maps:** Leaflet + react-leaflet, Photon/Nominatim geocoding (with trip destination enrichment)
 - **Photos:** Wikipedia/Wikimedia Commons (free, serialized queue 3 concurrent / 300ms)
 - **Places:** Google Places API (autocomplete, hotel search with lodging type)
-- **Analytics:** PostHog (tagged with app_env for staging/production filtering)
+- **Analytics:** PostHog (tagged with `app_env` for staging/production filtering)
+- **Error tracking:** Sentry (`VITE_SENTRY_DSN` env var; no-op when unset)
 - **Mobile:** Capacitor (Android APK), vite-plugin-pwa (auto-update, 5-min check interval)
+- **Payments:** Lemon Squeezy (Merchant of Record; credits via `create-checkout` + `payment-webhook` edge functions)
 - **Testing:** Playwright E2E (sequential, workers: 1)
 - **Hosting:** Vercel (frontend auto-deploy), Supabase (backend/DB/functions)
 
@@ -21,15 +25,25 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 
 ```
 src/
-  App.jsx            — Main UI (~5000 lines, core state + views)
-  main.jsx           — Entry point, Supabase init, PostHog init, URL routing
+  App.jsx            — Main UI (~14,500 lines, core state + views)
+  main.jsx           — Entry point, Supabase init, PostHog/Sentry init, URL routing
   Auth.jsx           — Login/signup (serif fonts, design system tokens)
   Home.jsx           — Trip list (card hover, warm palette)
+  Landing.jsx        — Public marketing/landing page (unauthenticated)
   Admin.jsx          — Admin console (/admin, is_admin gated)
   TripPublicView.jsx — Read-only shared trip view
-  (invite-link join flow handled inline in TripPublicView.jsx — no separate JoinView.jsx file)
+  credits.js         — Module-level credit store: CREDITS_UI_ENABLED, useCredits,
+                       openPaywall, handleGatedResponse, refreshCredits
+  CreditsOverlay.jsx — Paywall bottom sheet (Lemon Squeezy checkout trigger)
+  LowCreditsBanner.jsx — Dismissible banner when credits run low
+  Avatar.jsx         — User avatar component
+  AddRealEmailPrompt.jsx — Prompt to add a real email (legacy username-only accounts)
+  ForgotPassword.jsx / ResetPassword.jsx — Password recovery flow
+  airports.js        — Airport search helpers
+  airports-data.json — Bundled IATA airport data
   supabase.js        — Supabase client
   theme.js           — Design system: T colors, TYPE, SPACE, RADIUS, SHADOW, MOTION
+                       Also exports PLACES_PROXY + PLACES_HEADERS constants
   photos.js          — Photo fetch, caching, dedup, geocoding, haversine
   context.js         — DebugContext
 
@@ -39,18 +53,31 @@ src/
     Magazine.jsx     — DestinationHero, CityCard, MagazineHighlightCard, FoodSpotlightCard
     MapView.jsx      — FitBounds, MapView (itinerary), RouteMapView (brainstorm)
 
+  hooks/
+    useViewport.js   — Viewport size hook
+
 supabase/
   functions/         — Edge Functions (Deno, TypeScript)
-    generate-brainstorm/  — Route Generation (RG): 4 route options with **bold** day text
-    generate-itinerary/   — Itinerary Generation (IG): day-by-day plan with transit tips + transitions
-    chat/                 — Unified chat endpoint (action-based, 6 message history cap)
-    city-deep-dive/       — Magazine deep dive content (anti-hallucination prompt)
-    places-proxy/         — Geocoding proxy (Photon + Nominatim)
-    generate-todos/       — AI todo suggestions with due dates
-    estimate-expenses/    — AI budget estimation
-    extract-preferences/  — Pre-IG preference extraction (Haiku)
-    generate-wishlist/    — Wishlist generation
+    _shared/
+      credits.ts     — Shared auth + credit-deduction helpers for all gated functions
+                       (authenticateUser, deductCredits, costToCredits, rateLimit, etc.)
+      sentry.ts      — Sentry integration for edge functions
+    generate-brainstorm/       — Route Generation (RG): 4 route options with **bold** day text
+    generate-itinerary/        — Itinerary Generation (IG): day-by-day plan with transit tips + transitions
+    generate-destination-research/ — Inspirations tab: web-search-backed articles/vlogs via Haiku + web_search
+    chat/                      — Unified chat endpoint (action-based, 6 message history cap)
+    city-deep-dive/            — Magazine deep dive content (anti-hallucination prompt)
+    places-proxy/              — Geocoding proxy (Photon + Nominatim)
+    generate-todos/            — AI todo suggestions with due dates
+    estimate-expenses/         — AI budget estimation
+    extract-preferences/       — Pre-IG preference extraction (Haiku)
+    generate-wishlist/         — Wishlist generation
+    create-checkout/           — Lemon Squeezy checkout session creation
+    payment-webhook/           — Lemon Squeezy webhook handler (grants credits on order_created)
   migrations/        — Postgres migrations (chronological)
+
+scripts/
+  backfill-activity-geocodes.cjs — Backfill missing lat/lng on activities
 
 e2e/                 — Playwright E2E tests
   helpers.ts         — Login, snap utilities
@@ -67,51 +94,72 @@ npm run dev                    # Vite on localhost:5173
 npm run build                  # Production build
 npm run build:android          # Build + Capacitor sync
 
-# Review gate
-npm run format                 # Format code with Prettier
+# Review gate (run before code review; fix formatting first if it fails)
+npm run format                 # Fix formatting with Prettier
 npm run format:check           # Verify formatting
 npm run lint                   # ESLint
 npm run typecheck              # Web TS + Supabase Edge Function Deno checks
-npm run check                  # format:check + lint + typecheck + build
+npm run typecheck:web          # Web-only TS check (faster)
+npm run typecheck:functions    # Deno-only check for edge functions
+npm run check                  # format:check + lint + typecheck + build (full gate)
 
 # E2E tests
-npx playwright test            # Run all tests (sequential, workers: 1)
-npx playwright test e2e/smoke.spec.ts   # Run specific file
+npm run test:e2e               # Run all Playwright tests (sequential, workers: 1)
+npx playwright test e2e/smoke.spec.ts   # Run a specific file
 
 # Supabase
-npm run deploy:functions:staging    # Deploy edge functions to staging
-npm run deploy:functions:prod       # Deploy edge functions to production
+npm run deploy:functions:staging    # Deploy all edge functions to staging
+npm run deploy:functions:prod       # Deploy all edge functions to production
 npm run db:push:staging             # Apply migrations to staging
 npm run db:push:prod                # Apply migrations to production
+
+# payment-webhook must be deployed with JWT verification disabled:
+supabase functions deploy payment-webhook --no-verify-jwt --project-ref <ref>
 ```
 
 ## Internal Nomenclature
 
 - **RG** — Route Generation. Pre-IG step where 4 route options are generated.
 - **IG** — Itinerary Generation. Full day-by-day plan from selected route. Two phases: compact (fast) then detailed (streaming).
-- **Magazine** — Destination guide tab (highlights, deep dives, food, tips). Lazy-loaded: destination + top 2 cities on route load, rest on Magazine open.
+- **Magazine** — Destination guide tab (highlights, deep dives, food, tips). Lazy-loaded: destination + top 2 cities on route load, rest on Magazine open. Deep-dive content persisted in `trips.magazine_digest`.
+- **Inspirations** — Sub-tab of Magazine. Web-search-backed articles/vlogs from named individual creators. Cached per (destinations, tags, monthBucket) in `trips.inspirations_digest`.
 - **Board** — Tab with Notes, To-dos, Bookmarks, Expenses, Travel & Hotels widgets.
 - **Pre-IG sheet** — Bottom sheet shown after route selection, before IG (budget, pace, morning preference, transport).
 - **Transit tips** — Per-day actionable public transport advice (e.g. "Use Suica card · Day pass ¥600").
 
 ## Architecture Notes
 
-- App.jsx split into components: BoardView, SetupForm, Magazine, MapView + shared modules (theme, photos, context).
-- Design system in theme.js: T (colors + semantic states), TYPE (6-level typography), RADIUS (4 values), SHADOW (3 levels), MOTION (3 speeds).
+### Frontend
+- `main.jsx` does all URL routing via `parseUrl()` — pages: `home` (Landing), `signin`, `signup`, `trip`, `edit`, `create`, `share`, `admin`, `privacy`, `terms`, `forgot-password`, `reset-password`. No router library.
+- `App.jsx` (~14,500 lines) contains the entire trip view: state, data fetching, all panel/tab/modal logic. Split into sub-components (BoardView, SetupForm, Magazine, MapView) but most state lives in App.
+- Design system in `theme.js`: `T` (colors + semantic states), `TYPE` (6-level typography), `RADIUS` (4 values), `SHADOW` (3 levels), `MOTION` (3 speeds). Import from there, never hardcode values.
 - Auth uses username + password only (no email). Fake email = `username@tripjam.app`.
 - Trip ID generated client-side (`crypto.randomUUID()`) to avoid RLS issues.
+
+### Credits System (launched)
+- `credits.js` is a module-level store (not React context). Components read via `useCredits()` / `usePaywall()` hooks backed by `useSyncExternalStore`.
+- `CREDITS_UI_ENABLED = true` — credits UI and paywall are live. Backend deduction runs regardless of this flag.
+- Edge functions return HTTP 402 when credits are exhausted. Frontend calls `handleGatedResponse(res, userId, reason)` which opens the paywall and returns `true` to abort.
+- Each function calls `deductCredits` from `_shared/credits.ts` which charges `ceil((llm_cost_usd / 0.007) * 100) / 100` credits. New users get 300 credits on signup.
+- Payments via Lemon Squeezy (MoR). `create-checkout` creates a checkout session; `payment-webhook` (deployed with `--no-verify-jwt`, uses HMAC verification instead) grants credits on `order_created`.
+
+### AI / Edge Functions
 - Unified chat uses action-based responses: LLM returns `actions[]` array with support for bulk dismiss (routeIds array).
 - Route labels (P1, P2...) computed at render time from display index, never stored.
+- All functions log token usage to `llm_usage` table (fire-and-forget).
+- `generate-destination-research` uses Haiku 4.5 + `web_search` tool (max 4 uses). Results cached in DB; cache key = (destinations, tags, monthBucket).
+
+### Maps & Photos
 - Geocoding enriched with trip destination context (e.g. "Kuta" → "Kuta, Bali") to avoid wrong-continent results.
 - Photos: 4-tier Wikipedia lookup with person-page filtering, serialized Magazine fallback to prevent duplicates.
 - TransitionRow: haversine walk/drive pill + optional transit icon (🚇/🚌/⛴️) linking to Google Maps transit. No LLM time estimates.
 - Inter-city transit cards: rich cards with service name, stations, duration, cost, Rome2Rio link.
-- Edit Details flow: smart change detection with confirmation sheet. Destinations/duration force regenerate, other changes user chooses.
-- Itinerary replace confirmation: shows parameter diff before overwriting existing itinerary.
-- Per-day collapse/expand in detailed view (no Compact/Detailed toggle).
+
+### Data / State
 - Pre-loading: Day 1 geocoded/photos cached when streamingDays >= 1. Expanding Day N triggers Day N+1 pre-load.
 - Offline: trip list + days cached in localStorage.
-- LLM usage logged to llm_usage table (all edge functions, fire-and-forget).
+- Edit Details flow: smart change detection with confirmation sheet. Destinations/duration force regenerate, other changes user chooses.
+- Itinerary replace confirmation: shows parameter diff before overwriting existing itinerary.
 
 ## Admin Console
 
@@ -140,6 +188,8 @@ Two Supabase projects — local dev and staging share one, production is isolate
 
 ## Deployment
 
+**Standard prod push order:** DB migrations first → edge functions → frontend (git push, Vercel auto-deploys).
+
 - Vercel auto-deploys on push. Preview deploys use staging Supabase, production deploys use production Supabase.
 - **Do not push to any remote without explicit user approval.** Every remote auto-deploys.
 - **Do not make code changes without user approval.** Discuss first, implement after approval. Exception: clear bug fixes can be applied directly.
@@ -153,5 +203,7 @@ Two Supabase projects — local dev and staging share one, production is isolate
 - All use Anthropic API via direct fetch or `npm:@anthropic-ai/sdk`
 - CORS headers required on every response
 - Environment vars: `ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
+- Gated functions import `authenticateUser`, `deductCredits`, `rateLimit` from `../_shared/credits.ts`
 - All functions log token usage to `llm_usage` table (fire-and-forget)
 - Deploy to each environment separately — changes to staging don't affect production
+- `payment-webhook` must be deployed with `--no-verify-jwt`; it uses HMAC signature verification instead
