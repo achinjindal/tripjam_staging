@@ -18,6 +18,7 @@ import AddRealEmailPrompt from "./AddRealEmailPrompt.jsx";
 import Avatar from "./Avatar.jsx";
 import LowCreditsBanner from "./LowCreditsBanner.jsx";
 import { refreshCredits, CREDITS_UI_ENABLED } from "./credits";
+import { initRevenueCat } from "./billing";
 
 // ── Sentry (no-op when VITE_SENTRY_DSN is not set) ──
 if (import.meta.env.VITE_SENTRY_DSN) {
@@ -142,6 +143,7 @@ function Root() {
           Sentry.setUser({ id: s.user.id, email: s.user.email });
         }
         if (CREDITS_UI_ENABLED) refreshCredits(s.user.id);
+        initRevenueCat(s.user.id);
       } else {
         posthog.reset();
         if (import.meta.env.VITE_SENTRY_DSN) Sentry.setUser(null);

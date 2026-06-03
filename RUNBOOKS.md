@@ -5,6 +5,82 @@ Use these from the Supabase SQL editor or via `psql`.
 
 ---
 
+## RevenueCat (Google Play Billing for Android)
+
+### One-time account + product setup
+
+1. **Create RevenueCat account** at https://app.revenuecat.com → New project → add Android app → enter `com.tripjam.app`
+2. **Note the Public SDK key** (Settings → API Keys → Public app-specific key, starts with `goog_`)
+3. **In Google Play Console** → Monetize → In-app products → Create two consumable products:
+   - Product ID: `tripjam_credits_300` — Price: $4.99
+   - Product ID: `tripjam_credits_1000` — Price: $9.99
+4. **In RevenueCat** → Products → Import from Play Store; link both product IDs
+5. **Webhook setup** (RevenueCat → Integrations → Webhooks → Add webhook):
+   - Staging URL: `https://wlrzvwjdrjpfqcwgmzch.supabase.co/functions/v1/revenuecat-webhook`
+   - Prod URL: `https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/revenuecat-webhook`
+   - Authorization: pick a strong random secret (30+ chars)
+   - Events: select `NON_SUBSCRIPTION_PURCHASE`
+6. **Note the Secret API key** (Settings → API Keys → Secret API key, starts with `sk_`) — needed for `REVENUECAT_SECRET_KEY`
+
+### Set Supabase secrets
+
+```bash
+# Staging
+supabase secrets set \
+  REVENUECAT_WEBHOOK_SECRET='<authorization secret from step 5>' \
+  REVENUECAT_SECRET_KEY='sk_...' \
+  --project-ref wlrzvwjdrjpfqcwgmzch
+
+# Production
+supabase secrets set \
+  REVENUECAT_WEBHOOK_SECRET='<same or different secret>' \
+  REVENUECAT_SECRET_KEY='sk_...' \
+  --project-ref viyvdqwwnbbqjuwiuzbh
+```
+
+### Deploy the two new edge functions
+
+```bash
+# Deploy to staging first, then production
+supabase functions deploy revenuecat-verify --project-ref wlrzvwjdrjpfqcwgmzch
+supabase functions deploy revenuecat-verify --project-ref viyvdqwwnbbqjuwiuzbh
+
+# Webhook must run without JWT verification
+supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref wlrzvwjdrjpfqcwgmzch
+supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref viyvdqwwnbbqjuwiuzbh
+```
+
+### Set Vercel env var
+
+In Vercel Dashboard → Settings → Environment Variables → add for all environments:
+- `VITE_REVENUECAT_ANDROID_KEY` = `goog_...` (Public SDK key from step 2)
+
+Trigger a redeploy.
+
+### End-to-end test (Android, sandbox)
+
+1. In Google Play Console, add your Google account as a licence tester (Setup → Licence testing).
+2. Install the APK on a physical device signed in with that account.
+3. Trigger the paywall → choose a pack → Google Play sheet appears → complete sandbox purchase.
+4. Verify credits granted:
+   ```sql
+   SELECT amount, balance_after, reason, provider_session_id, created_at
+   FROM credit_transactions
+   WHERE user_id = '<your-user-id>'
+   ORDER BY created_at DESC LIMIT 5;
+   ```
+5. **Idempotency test**: replay the RevenueCat webhook from the RC dashboard → balance does not change a second time.
+
+### Webhook replay / debugging
+
+1. RevenueCat dashboard → Integrations → Webhooks → click your webhook → Delivery history
+2. Find the failed delivery → "Retry" button replays with same payload
+3. Or manually verify via `revenuecat-verify` edge function (requires auth token + transactionId + productId)
+
+---
+
+---
+
 ## Connecting via psql
 
 ```bash

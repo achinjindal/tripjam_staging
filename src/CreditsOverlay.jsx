@@ -8,6 +8,7 @@ import {
   displayCredits,
 } from "./credits";
 import { supabase } from "./supabase";
+import { isAndroidApp, purchaseCredits } from "./billing";
 
 // D19: no persistent CreditPill anywhere — avatar dropdown (Day 3) is the
 // single entry point for balance + top-up. We keep PaywallSheet + a pack
@@ -50,16 +51,35 @@ async function startCheckout(packId, session) {
 export function PackSelectorModal({ open, onClose, session }) {
   const [submitting, setSubmitting] = useState(null);
   const [error, setError] = useState("");
+  const onAndroid = isAndroidApp();
 
   if (!open) return null;
 
   async function pick(packId) {
     setError("");
     setSubmitting(packId);
-    const { error: e } = await startCheckout(packId, session);
-    if (e) {
+
+    if (onAndroid) {
+      const result = await purchaseCredits(packId);
+      if (result.cancelled) {
+        setSubmitting(null);
+        return;
+      }
+      if (result.error) {
+        setSubmitting(null);
+        setError(result.error);
+        return;
+      }
+      // Credits granted via revenuecat-verify — refresh balance
+      if (session?.user?.id) await refreshCredits(session.user.id);
       setSubmitting(null);
-      setError(e);
+      onClose();
+    } else {
+      const { error: e } = await startCheckout(packId, session);
+      if (e) {
+        setSubmitting(null);
+        setError(e);
+      }
     }
   }
 
@@ -137,15 +157,17 @@ export function PackSelectorModal({ open, onClose, session }) {
                   </div>
                   <div style={{ fontSize: 13, color: T.muted || "#8BA5BB", marginTop: 2 }}>{p.subtitle}</div>
                 </div>
-                <div
-                  style={{
-                    fontFamily: "'DM Serif Display', Georgia, serif",
-                    fontSize: 24,
-                    color: T.ink || "#0F1923",
-                  }}
-                >
-                  ${p.price}
-                </div>
+                {!onAndroid && (
+                  <div
+                    style={{
+                      fontFamily: "'DM Serif Display', Georgia, serif",
+                      fontSize: 24,
+                      color: T.ink || "#0F1923",
+                    }}
+                  >
+                    ${p.price}
+                  </div>
+                )}
               </div>
               {p.badge && (
                 <div style={{ marginTop: 8, fontSize: 11, color: T.ocean || "#2563A8", fontWeight: 600 }}>

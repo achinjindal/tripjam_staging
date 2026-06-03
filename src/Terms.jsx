@@ -90,6 +90,25 @@ export default function Terms() {
         </LI>
       </UL>
 
+      <H2>4a. Android in-app purchases</H2>
+      <P>
+        On Android, credit packs are purchased through Google Play Billing.
+        These purchases are subject to{" "}
+        <a
+          href="https://play.google.com/about/play-terms/"
+          style={{ color: "#2563A8" }}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Google Play&rsquo;s payment terms
+        </a>{" "}
+        and refund policies in addition to ours. Google may issue or deny
+        refunds at their discretion; credits granted by a refunded purchase
+        may be deducted from your account balance. For billing issues on
+        Android, contact Google Play support directly. Our 30-day refund
+        policy in section 5 applies to purchases made on the web only.
+      </P>
+
       <H2>5. Refunds</H2>
       <P>
         We offer a 30-day no-questions-asked refund window from your purchase date
