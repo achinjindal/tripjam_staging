@@ -8,7 +8,7 @@ import {
   CREDITS_UI_ENABLED,
   getCredits,
 } from "./credits";
-import { PackSelectorModal } from "./CreditsOverlay";
+import { CouponModal } from "./CreditsOverlay";
 
 // Modest fixed palette for username-hashed avatar circles. Each username
 // deterministically maps to one of these so the avatar is stable across
@@ -323,7 +323,7 @@ export default function Avatar({ session }) {
 
         <style>{`@keyframes dropdown { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: translateY(0) } }`}</style>
       </div>
-      <PackSelectorModal
+      <CouponModal
         open={showPicker}
         onClose={() => setShowPicker(false)}
         session={session}

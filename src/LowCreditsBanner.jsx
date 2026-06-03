@@ -7,7 +7,7 @@ import {
   CREDITS_UI_ENABLED,
   getCredits,
 } from "./credits";
-import { PackSelectorModal } from "./CreditsOverlay";
+import { CouponModal } from "./CreditsOverlay";
 
 // D4 (updated): show banner when displayCredits(balance) ≤ 10, dismissible per session.
 // Top-of-page banner that nudges the user to top up before they hit the hard 0-credit wall.
@@ -128,7 +128,7 @@ export default function LowCreditsBanner({ session }) {
         </div>
         <style>{`@keyframes slideDownBanner { from { transform: translateY(-100%); opacity: 0 } to { transform: translateY(0); opacity: 1 } }`}</style>
       </div>
-      <PackSelectorModal
+      <CouponModal
         open={showPicker}
         onClose={() => setShowPicker(false)}
         session={session}

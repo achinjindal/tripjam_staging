@@ -7,79 +7,53 @@ import {
   refreshCredits,
   displayCredits,
 } from "./credits";
-import { supabase } from "./supabase";
-import { isAndroidApp, purchaseCredits } from "./billing";
 
-// D19: no persistent CreditPill anywhere — avatar dropdown (Day 3) is the
-// single entry point for balance + top-up. We keep PaywallSheet + a pack
-// selector modal here for the gated 402 flow.
-
-const PACKS = [
-  { id: "small", credits: 300, price: 5, label: "Small", subtitle: "300 credits · $5" },
-  { id: "large", credits: 1000, price: 10, label: "Large", subtitle: "1000 credits · $10", badge: "Best value · 3.3× more per dollar" },
-];
-
-const PAYMENTS_ENABLED = import.meta.env.VITE_PAYMENTS_ENABLED === "true";
-
-async function startCheckout(packId, session) {
-  if (!session?.access_token) {
-    return { error: "Please sign in to top up." };
-  }
-  if (!PAYMENTS_ENABLED) {
-    return { error: "Top-up is launching soon. Hang tight!" };
-  }
+async function redeemCoupon(code, session) {
+  if (!session?.access_token) return { error: "Please sign in first." };
   try {
-    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-checkout?pack=${packId}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        "Content-Type": "application/json",
+    const res = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/redeem-coupon`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ code }),
       },
-    });
+    );
     const data = await res.json();
-    if (!res.ok || !data.url) {
-      return { error: data.error || "Checkout failed. Try again." };
-    }
-    window.location.href = data.url;
-    return {};
+    if (!res.ok) return { error: data.error || "Redemption failed." };
+    return { granted: data.granted, balance: data.balance };
   } catch (e) {
     return { error: e.message || "Network error. Try again." };
   }
 }
 
-export function PackSelectorModal({ open, onClose, session }) {
-  const [submitting, setSubmitting] = useState(null);
+export function CouponModal({ open, onClose, session }) {
+  const [code, setCode] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const onAndroid = isAndroidApp();
+  const [success, setSuccess] = useState(null);
 
   if (!open) return null;
 
-  async function pick(packId) {
+  async function handleRedeem() {
+    if (!code.trim()) return;
     setError("");
-    setSubmitting(packId);
-
-    if (onAndroid) {
-      const result = await purchaseCredits(packId);
-      if (result.cancelled) {
-        setSubmitting(null);
-        return;
-      }
-      if (result.error) {
-        setSubmitting(null);
-        setError(result.error);
-        return;
-      }
-      // Credits granted via revenuecat-verify — refresh balance
-      if (session?.user?.id) await refreshCredits(session.user.id);
-      setSubmitting(null);
-      onClose();
+    setSubmitting(true);
+    const result = await redeemCoupon(code.trim(), session);
+    setSubmitting(false);
+    if (result.error) {
+      setError(result.error);
     } else {
-      const { error: e } = await startCheckout(packId, session);
-      if (e) {
-        setSubmitting(null);
-        setError(e);
-      }
+      setSuccess(result.granted);
+      if (session?.user?.id) refreshCredits(session.user.id);
+      setTimeout(() => {
+        setSuccess(null);
+        setCode("");
+        onClose();
+      }, 1800);
     }
   }
 
@@ -98,108 +72,120 @@ export function PackSelectorModal({ open, onClose, session }) {
     >
       <div
         style={{
-          background: T.warm || "#FAF6F0",
+          background: T.warm,
           borderRadius: "20px 20px 0 0",
-          padding: "24px 22px 28px",
+          padding: "24px 22px 32px",
           width: "100%",
           maxWidth: 480,
-          maxHeight: "92vh",
-          overflowY: "auto",
-          boxShadow: SHADOW?.lg || "0 -8px 32px rgba(0,0,0,0.2)",
-          animation: `slideUp ${MOTION?.medium || "240ms"} ease-out`,
-          WebkitOverflowScrolling: "touch",
+          boxShadow: SHADOW.lg,
+          animation: `slideUp ${MOTION.normal} ease-out`,
         }}
       >
         <div
           style={{
             fontFamily: "'DM Serif Display', Georgia, serif",
             fontSize: 22,
-            color: T.ink || "#0F1923",
+            color: T.ink,
             marginBottom: 6,
           }}
         >
-          Top up credits
+          Redeem a coupon
         </div>
-        <div
-          style={{
-            fontSize: 12,
-            color: T.muted || "#8BA5BB",
-            marginBottom: 18,
-          }}
-        >
-          Choose a pack. Both work the same way — larger packs cost less per credit.
+        <div style={{ fontSize: 12, color: T.mist, marginBottom: 20 }}>
+          Enter your coupon code to add credits to your account.
         </div>
-        {PACKS.map((p) => {
-          const isHighlight = !!p.badge;
-          return (
-            <button
-              key={p.id}
-              onClick={() => pick(p.id)}
-              disabled={submitting !== null}
+
+        {success ? (
+          <div
+            style={{
+              textAlign: "center",
+              padding: "20px 0",
+              color: T.moss,
+              fontFamily: "Georgia, serif",
+              fontSize: 16,
+            }}
+          >
+            ✓ {success} credits added!
+          </div>
+        ) : (
+          <>
+            <input
+              type="text"
+              value={code}
+              onChange={(e) => { setCode(e.target.value.toUpperCase()); setError(""); }}
+              onKeyDown={(e) => e.key === "Enter" && handleRedeem()}
+              placeholder="COUPON CODE"
+              autoFocus
               style={{
                 width: "100%",
-                textAlign: "left",
-                padding: "16px 18px",
-                marginBottom: 10,
-                borderRadius: RADIUS?.md || 12,
-                border: isHighlight ? `2px solid ${T.ocean || "#2563A8"}` : `1px solid ${T.line || "#E2DDD5"}`,
-                background: isHighlight ? "rgba(37,99,168,0.06)" : "white",
-                cursor: submitting !== null ? "not-allowed" : "pointer",
+                boxSizing: "border-box",
+                padding: "13px 14px",
+                borderRadius: RADIUS.md,
+                border: `1px solid ${error ? T.errorBorder : T.border}`,
+                background: "white",
                 fontFamily: "Georgia, serif",
-                opacity: submitting && submitting !== p.id ? 0.5 : 1,
-                transition: `all ${MOTION?.normal || "180ms"}`,
+                fontSize: 15,
+                letterSpacing: 2,
+                color: T.ink,
+                marginBottom: 10,
+                outline: "none",
+              }}
+            />
+            {error && (
+              <div
+                style={{
+                  fontSize: 12,
+                  color: T.error,
+                  marginBottom: 10,
+                  textAlign: "center",
+                }}
+              >
+                {error}
+              </div>
+            )}
+            <button
+              onClick={handleRedeem}
+              disabled={submitting || !code.trim()}
+              style={{
+                width: "100%",
+                padding: 14,
+                borderRadius: RADIUS.md,
+                border: "none",
+                fontFamily: "Georgia, serif",
+                fontSize: 15,
+                fontWeight: 600,
+                background:
+                  submitting || !code.trim()
+                    ? T.disabled
+                    : `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
+                color: "white",
+                cursor: submitting || !code.trim() ? "not-allowed" : "pointer",
+                marginBottom: 8,
+                transition: `background ${MOTION.fast}`,
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: T.ink || "#0F1923" }}>
-                    {p.label} {submitting === p.id && <span style={{ fontSize: 12, color: T.muted, fontWeight: 400 }}>· loading…</span>}
-                  </div>
-                  <div style={{ fontSize: 13, color: T.muted || "#8BA5BB", marginTop: 2 }}>{p.subtitle}</div>
-                </div>
-                {!onAndroid && (
-                  <div
-                    style={{
-                      fontFamily: "'DM Serif Display', Georgia, serif",
-                      fontSize: 24,
-                      color: T.ink || "#0F1923",
-                    }}
-                  >
-                    ${p.price}
-                  </div>
-                )}
-              </div>
-              {p.badge && (
-                <div style={{ marginTop: 8, fontSize: 11, color: T.ocean || "#2563A8", fontWeight: 600 }}>
-                  ★ {p.badge}
-                </div>
-              )}
+              {submitting ? "Redeeming…" : "Redeem"}
             </button>
-          );
-        })}
-        {error && (
-          <div style={{ marginTop: 6, fontSize: 12, color: T.error || "#DC2626", textAlign: "center" }}>
-            {error}
-          </div>
+            <button
+              onClick={onClose}
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: RADIUS.md,
+                border: `1px solid ${T.border}`,
+                background: "white",
+                color: T.mist,
+                fontFamily: "Georgia, serif",
+                fontSize: 14,
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+          </>
         )}
-        <button
-          onClick={onClose}
-          style={{
-            width: "100%",
-            marginTop: 8,
-            padding: 12,
-            borderRadius: RADIUS?.md || 12,
-            border: `1px solid ${T.line || "#E2DDD5"}`,
-            background: "white",
-            color: T.muted || "#8BA5BB",
-            fontFamily: "Georgia, serif",
-            fontSize: 14,
-            cursor: "pointer",
-          }}
-        >
-          Cancel
-        </button>
       </div>
+      <style>{`@keyframes slideUp { from { transform: translateY(20%); opacity: 0 } to { transform: translateY(0); opacity: 1 } }`}</style>
     </div>
   );
 }
@@ -207,7 +193,8 @@ export function PackSelectorModal({ open, onClose, session }) {
 export function PaywallSheet({ session }) {
   const reason = usePaywall();
   const credits = useCredits();
-  const [showPicker, setShowPicker] = useState(false);
+  const [showCoupon, setShowCoupon] = useState(false);
+
   useEffect(() => {
     if (reason && session?.user?.id) refreshCredits(session.user.id);
   }, [reason, session?.user?.id]);
@@ -217,9 +204,7 @@ export function PaywallSheet({ session }) {
   return (
     <>
       <div
-        onClick={(e) => {
-          if (e.target === e.currentTarget) closePaywall();
-        }}
+        onClick={(e) => { if (e.target === e.currentTarget) closePaywall(); }}
         style={{
           position: "fixed",
           inset: 0,
@@ -232,13 +217,13 @@ export function PaywallSheet({ session }) {
       >
         <div
           style={{
-            background: T.warm || "#FAF6F0",
+            background: T.warm,
             borderRadius: "20px 20px 0 0",
             padding: "28px 22px 28px",
             width: "100%",
             maxWidth: 480,
-            boxShadow: SHADOW?.lg || "0 -8px 32px rgba(0,0,0,0.2)",
-            animation: `slideUp ${MOTION?.medium || "240ms"} ease-out`,
+            boxShadow: SHADOW.lg,
+            animation: `slideUp ${MOTION.normal} ease-out`,
           }}
         >
           <div style={{ textAlign: "center", fontSize: 38, marginBottom: 10 }}>🔒</div>
@@ -247,7 +232,7 @@ export function PaywallSheet({ session }) {
               fontFamily: "'DM Serif Display', Georgia, serif",
               fontSize: 22,
               textAlign: "center",
-              color: T.ink || "#0F1923",
+              color: T.ink,
               marginBottom: 8,
             }}
           >
@@ -256,7 +241,7 @@ export function PaywallSheet({ session }) {
           <div
             style={{
               fontSize: 13,
-              color: T.muted || "#8BA5BB",
+              color: T.mist,
               textAlign: "center",
               marginBottom: 18,
               lineHeight: 1.5,
@@ -267,9 +252,9 @@ export function PaywallSheet({ session }) {
           <div
             style={{
               background: "white",
-              borderRadius: RADIUS?.md || 12,
+              borderRadius: RADIUS.md,
               padding: "14px 16px",
-              border: `1px solid ${T.line || "#E2DDD5"}`,
+              border: `1px solid ${T.border}`,
               textAlign: "center",
               marginBottom: 18,
             }}
@@ -278,7 +263,7 @@ export function PaywallSheet({ session }) {
               style={{
                 fontFamily: "'DM Serif Display', Georgia, serif",
                 fontSize: 26,
-                color: T.ink || "#0F1923",
+                color: T.ink,
               }}
             >
               {displayCredits(credits)}
@@ -286,7 +271,7 @@ export function PaywallSheet({ session }) {
             <div
               style={{
                 fontSize: 10,
-                color: T.muted || "#8BA5BB",
+                color: T.mist,
                 textTransform: "uppercase",
                 letterSpacing: 0.6,
                 marginTop: 2,
@@ -296,32 +281,32 @@ export function PaywallSheet({ session }) {
             </div>
           </div>
           <button
-            onClick={() => setShowPicker(true)}
+            onClick={() => setShowCoupon(true)}
             style={{
               width: "100%",
               padding: 14,
-              borderRadius: RADIUS?.md || 12,
+              borderRadius: RADIUS.md,
               border: "none",
               fontFamily: "Georgia, serif",
               fontSize: 15,
               fontWeight: 600,
-              background: `linear-gradient(135deg, ${T.ocean || "#2563A8"}, ${T.dusk || "#1E2D3D"})`,
+              background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
               color: "white",
               cursor: "pointer",
               marginBottom: 8,
             }}
           >
-            Top up
+            Redeem a coupon
           </button>
           <button
             onClick={closePaywall}
             style={{
               width: "100%",
               padding: 12,
-              borderRadius: RADIUS?.md || 12,
-              border: `1px solid ${T.line || "#E2DDD5"}`,
+              borderRadius: RADIUS.md,
+              border: `1px solid ${T.border}`,
               background: "white",
-              color: T.muted || "#8BA5BB",
+              color: T.mist,
               fontFamily: "Georgia, serif",
               fontSize: 14,
               cursor: "pointer",
@@ -332,24 +317,26 @@ export function PaywallSheet({ session }) {
         </div>
         <style>{`@keyframes slideUp { from { transform: translateY(20%); opacity: 0 } to { transform: translateY(0); opacity: 1 } }`}</style>
       </div>
-      <PackSelectorModal open={showPicker} onClose={() => setShowPicker(false)} session={session} />
+      <CouponModal
+        open={showCoupon}
+        onClose={() => { setShowCoupon(false); closePaywall(); }}
+        session={session}
+      />
     </>
   );
 }
 
-// D19: no persistent floating pill. The overlay now only mounts the paywall
-// + post-purchase success toast. Avatar dropdown (Day 3) provides the persistent
-// balance view + top-up entry point.
 export default function CreditsOverlay({ session }) {
-  // Detect post-checkout success redirect: ?credits_success=300|1000
   const [toast, setToast] = useState(null);
+
+  // Detect post-checkout success redirect (kept for backwards compat with any
+  // existing LS redirect URLs in the wild, harmless otherwise)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const granted = params.get("credits_success");
     if (granted && session?.user?.id) {
       setToast(`${granted} credits added!`);
       refreshCredits(session.user.id);
-      // Clean the URL
       params.delete("credits_success");
       const q = params.toString();
       window.history.replaceState({}, "", window.location.pathname + (q ? `?${q}` : ""));
@@ -368,14 +355,14 @@ export default function CreditsOverlay({ session }) {
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 10001,
-            background: T.ocean || "#2563A8",
+            background: T.ocean,
             color: "white",
             padding: "10px 16px",
             borderRadius: 999,
             fontSize: 13,
             fontWeight: 600,
             fontFamily: "Georgia, serif",
-            boxShadow: SHADOW?.md || "0 4px 12px rgba(0,0,0,0.15)",
+            boxShadow: SHADOW.md,
           }}
         >
           ✓ {toast}
