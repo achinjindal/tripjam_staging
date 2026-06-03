@@ -551,7 +551,7 @@ function TodoView({ trip, onBack }) {
         <div
           style={{
             borderTop: `2px solid ${T.sand}`,
-            background: "#F8F5EF",
+            background: T.warm,
             flexShrink: 0,
             maxHeight: "45%",
             overflowY: "auto",
@@ -676,8 +676,8 @@ function TodoView({ trip, onBack }) {
                           display: "flex",
                           alignItems: "center",
                           gap: 8,
-                          background: "#F0F7FF",
-                          border: `1px solid #C8DFFE`,
+                          background: T.skyLight,
+                          border: `1px solid ${T.skyBorder}`,
                           borderRadius: RADIUS.md,
                           padding: "10px 12px",
                           marginBottom: 6,

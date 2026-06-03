@@ -1,16 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
-
-const T = {
-  ink: "#1A1A2E",
-  warm: "#FDFAF6",
-  chalk: "#FFFFFF",
-  sand: "#E8E0D5",
-  mist: "#9A8F8F",
-  ocean: "#2563A8",
-  moss: "#3D7A5C",
-  dusk: "#4A5568",
-};
+import { T } from "./theme";
 
 function ActivityRow({ activity }) {
   return (

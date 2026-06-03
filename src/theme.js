@@ -26,6 +26,9 @@ export const T = {
   border: "#E2DDD5",
   bgPage: "#F5F0E8",
   disabled: "#C4BDB3",
+  // AI / info surfaces
+  skyLight: "#F0F7FF",
+  skyBorder: "#C8DFFE",
 };
 
 // ── Typography ──

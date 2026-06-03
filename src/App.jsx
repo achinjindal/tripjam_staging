@@ -6830,7 +6830,7 @@ export default function App({
     (async () => {
       const { resolveAirportForCity, findAirportByIata } =
         await import("./airports.js");
-      const { haversineMeters } = await import("./photos");
+      // haversineMeters is statically imported at the top of this file
       const baseAp = await resolveAirportForCity(trip.base_location);
       if (cancelled) return;
       setBaseAirportIata(baseAp?.iata || null);
@@ -7129,7 +7129,6 @@ export default function App({
         }
         if (res.status === 402) {
           // Out of credits — surface the standard paywall (CreditsOverlay).
-          const { openPaywall } = await import("./credits");
           openPaywall("Inspirations couldn't load");
         }
         throw new Error(`HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
@@ -7795,25 +7794,24 @@ export default function App({
       }
       setPretripRoutes([]);
       setPretripSelectedRouteId(null);
-      // If regenerating routes and trip had an itinerary, reset it
-      if (editingTrip?.ig_response) {
-        setDays([]);
-        setTrip((t) => ({ ...t, ig_response: null }));
-        if (editingTrip.id) {
-          supabase
-            .from("trips")
-            .update({ ig_response: null })
-            .eq("id", editingTrip.id);
-          // Delete existing days + activities
-          const { data: existingDays } = await supabase
-            .from("days")
-            .select("id")
-            .eq("trip_id", editingTrip.id);
-          const dayIds = (existingDays || []).map((d) => d.id);
-          if (dayIds.length)
-            await supabase.from("activities").delete().in("day_id", dayIds);
-          await supabase.from("days").delete().eq("trip_id", editingTrip.id);
-        }
+      // Always reset itinerary state when regenerating routes — days can exist
+      // in the DB even if ig_response is null (e.g. partial save).
+      setDays([]);
+      setTrip((t) => ({ ...t, ig_response: null }));
+      if (editingTrip?.id) {
+        supabase
+          .from("trips")
+          .update({ ig_response: null })
+          .eq("id", editingTrip.id);
+        // Delete existing days + activities
+        const { data: existingDays } = await supabase
+          .from("days")
+          .select("id")
+          .eq("trip_id", editingTrip.id);
+        const dayIds = (existingDays || []).map((d) => d.id);
+        if (dayIds.length)
+          await supabase.from("activities").delete().in("day_id", dayIds);
+        await supabase.from("days").delete().eq("trip_id", editingTrip.id);
       }
     }
 
@@ -9783,7 +9781,10 @@ export default function App({
                     {/* All trips link */}
                     {onHome && (
                       <button
-                        onClick={onHome}
+                        onClick={() => {
+                          if (igAbortRef.current) { igAbortRef.current.abort(); igAbortRef.current = null; _igInFlight = false; }
+                          onHome();
+                        }}
                         style={{
                           alignSelf: "flex-start",
                           background: "rgba(255,255,255,0.15)",
@@ -10023,7 +10024,10 @@ export default function App({
                   >
                     {onHome ? (
                       <button
-                        onClick={onHome}
+                        onClick={() => {
+                          if (igAbortRef.current) { igAbortRef.current.abort(); igAbortRef.current = null; _igInFlight = false; }
+                          onHome();
+                        }}
                         style={{
                           background: "rgba(255,255,255,0.15)",
                           border: "none",
@@ -10142,6 +10146,7 @@ export default function App({
           >
             <button
               onClick={() => {
+                if (igAbortRef.current) { igAbortRef.current.abort(); igAbortRef.current = null; _igInFlight = false; }
                 if (onHome) onHome();
               }}
               style={{
@@ -11425,7 +11430,10 @@ export default function App({
                       <div style={{ display: "flex", gap: 8 }}>
                         {onHome && (
                           <button
-                            onClick={onHome}
+                            onClick={() => {
+                              if (igAbortRef.current) { igAbortRef.current.abort(); igAbortRef.current = null; _igInFlight = false; }
+                              onHome();
+                            }}
                             style={{
                               background: "rgba(255,255,255,0.15)",
                               border: "none",

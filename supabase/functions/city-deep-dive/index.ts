@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { authenticateUser, unauthorized, rateLimit, llmKillSwitch } from "../_shared/credits.ts";
+import { authenticateUser, unauthorized, rateLimit, llmKillSwitch, requireMinCredits, deductCredits } from "../_shared/credits.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -37,14 +37,14 @@ serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
-  // D16: Magazine deep-dive requires authentication.
-  // Credit charging is still wired through the existing deductCredits flow
-  // (will activate once Day 2 NUMERIC migration lands; until then it's a no-op).
   const killed = llmKillSwitch(corsHeaders);
   if (killed) return killed;
 
   const user = await authenticateUser(req);
   if (!user) return unauthorized(corsHeaders);
+
+  const creditCheck = requireMinCredits(user, corsHeaders);
+  if (creditCheck) return creditCheck;
 
   const rateLimited = await rateLimit(user.id, corsHeaders);
   if (rateLimited) return rateLimited;
@@ -90,7 +90,16 @@ ${notes ? `Traveler notes: ${notes}` : ""}`;
     const result = await response.json();
     const accumulated = result.content[0].text;
 
-    // Log LLM usage (fire-and-forget, actual tokens)
+    // Deduct credits and log usage (both fire-and-forget)
+    deductCredits({
+      userId: user.id,
+      model: "claude-haiku-4-5-20251001",
+      inputTokens: result.usage?.input_tokens || 0,
+      outputTokens: result.usage?.output_tokens || 0,
+      functionName: "city-deep-dive",
+      tripId: tripId || null,
+    }).catch(() => {});
+
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
