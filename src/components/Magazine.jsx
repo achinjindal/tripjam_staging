@@ -402,23 +402,6 @@ export function CityCard({
             }}
           />
         )}
-        {/* City name badge */}
-        <div
-          style={{
-            position: "absolute",
-            top: 12,
-            left: 12,
-            background: "rgba(0,0,0,0.5)",
-            backdropFilter: "blur(8px)",
-            color: "white",
-            fontFamily: "'DM Serif Display',serif",
-            fontSize: 18,
-            padding: "4px 14px",
-            borderRadius: RADIUS.md,
-          }}
-        >
-          {city}
-        </div>
         {/* Weather badge */}
         {dd?.weather && (
           <div

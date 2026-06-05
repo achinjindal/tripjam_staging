@@ -892,43 +892,61 @@ function magazinePlaceShort(name) {
   return (name || "").split(",")[0].trim();
 }
 
+// Extracts the country (last comma-segment) from a destination string.
+// "Tokyo, Japan" → "Japan", "Bali, Indonesia" → "Indonesia", "Tokyo" → "Tokyo"
+function extractCountry(destStr) {
+  const parts = (destStr || "").split(",").map((s) => s.trim()).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 1] : parts[0] || null;
+}
+
 function isHelpMeDecideDest(name) {
   return (name || "").toLowerCase().includes("help me decide");
 }
 
-/** Destination-level Magazine title — e.g. "New York" before Manhattan / West Village cards. */
-function resolveMagazineDestination({
-  pendingForm,
-  editingTrip,
-  trip,
-  magazineFilterRouteId,
-  pretripRoutes,
-}) {
-  if (magazineFilterRouteId) {
-    const route = (pretripRoutes || []).find(
-      (r) => r.id === magazineFilterRouteId,
-    );
-    if (route?.title) {
-      const part = route.title.split(/\s*[–—-]\s*/)[0].trim();
-      if (!isHelpMeDecideDest(part)) return part;
-    }
-  }
+// Returns unique country names for Magazine cards.
+// For "Tokyo, Japan" → ["Japan"]; for "Tokyo, Japan → Seoul, South Korea" → ["Japan", "South Korea"].
+function resolveCountriesForMagazine({ pendingForm, editingTrip, trip }) {
   const rawDests = (pendingForm?.destinations || []).filter(
     (d) => !isHelpMeDecideDest(d),
   );
-  if (rawDests.length === 1) {
-    const short = magazinePlaceShort(rawDests[0]);
-    if (!isHelpMeDecideDest(short)) return short;
+  if (rawDests.length > 0) {
+    const seen = new Set();
+    const countries = [];
+    for (const d of rawDests) {
+      const country = extractCountry(d);
+      if (!country || isHelpMeDecideDest(country)) continue;
+      const key = country.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        countries.push(country);
+      }
+    }
+    if (countries.length > 0) return countries;
   }
-  const fromTrip =
-    editingTrip?.destination ||
-    trip?.destination ||
-    (rawDests.length ? rawDests.join(", ") : null);
+  const fromTrip = editingTrip?.destination || trip?.destination;
   if (fromTrip && !isHelpMeDecideDest(fromTrip)) {
-    const short = magazinePlaceShort(fromTrip.split(/\s*→\s*/)[0]);
-    if (!isHelpMeDecideDest(short)) return short;
+    const dests = fromTrip.split(/\s*→\s*/).filter(Boolean);
+    const seen = new Set();
+    const countries = [];
+    for (const d of dests) {
+      if (isHelpMeDecideDest(d)) continue;
+      const country = extractCountry(d);
+      if (!country || isHelpMeDecideDest(country)) continue;
+      const key = country.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        countries.push(country);
+      }
+    }
+    if (countries.length > 0) return countries;
   }
-  return null;
+  return [];
+}
+
+/** Destination-level Magazine title — the first country for the trip. */
+function resolveMagazineDestination({ pendingForm, editingTrip, trip }) {
+  const countries = resolveCountriesForMagazine({ pendingForm, editingTrip, trip });
+  return countries[0] || null;
 }
 
 function cityMatchesDestination(city, dest) {
@@ -3313,9 +3331,9 @@ function BrainstormView({
               }
               cityGroups[city].push(d);
             }
-            const destLevel = resolveMagazineDestination({ trip });
+            const countries = resolveCountriesForMagazine({ trip });
             const neighborhoodCities = cityOrder.filter(
-              (c) => !cityMatchesDestination(c, destLevel),
+              (c) => !countries.some((country) => cityMatchesDestination(c, country)),
             );
             const renderItineraryCityCard = (city, ci, keyPrefix) => {
               const isDestCard = keyPrefix === "dest-";
@@ -3432,8 +3450,9 @@ function BrainstormView({
             let cardIndex = 0;
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-                {destLevel &&
-                  renderItineraryCityCard(destLevel, cardIndex++, "dest-")}
+                {countries.map((country) =>
+                  renderItineraryCityCard(country, cardIndex++, "dest-"),
+                )}
                 {neighborhoodCities.map((city) =>
                   renderItineraryCityCard(city, cardIndex++, "city-"),
                 )}
@@ -7196,29 +7215,22 @@ export default function App({
     if (!destResearch.hasLoaded && !destResearch.loading) {
       loadDestinationResearch();
     }
-    // Destination-level first fold, then first route city as fallback.
-    const destLevel = resolveMagazineDestination({
-      pendingForm,
-      editingTrip,
-      pretripRoutes,
-    });
-    if (destLevel) {
-      loadCityDeepDiveApp(destLevel);
+    // Pre-load country-level deep dives (up to 2) as soon as RG completes.
+    const countries = resolveCountriesForMagazine({ pendingForm, editingTrip });
+    if (countries.length > 0) {
+      countries.slice(0, 2).forEach((c) => loadCityDeepDiveApp(c));
     } else {
-      const seen = new Set();
+      // Fallback for Help-me-decide: load first city from first undismissed route.
       for (const route of pretripRoutes) {
         if (route.dismissed) continue;
-        for (const c of (route.city || "")
+        const cities = (route.city || "")
           .split(",")
           .map((s) => s.trim())
-          .filter(Boolean)) {
-          if (!seen.has(c.toLowerCase())) {
-            seen.add(c.toLowerCase());
-            loadCityDeepDiveApp(c);
-            break;
-          }
+          .filter(Boolean);
+        if (cities.length > 0) {
+          loadCityDeepDiveApp(cities[0]);
+          break;
         }
-        if (seen.size > 0) break;
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -11043,30 +11055,24 @@ export default function App({
                               color: T.ink,
                             }}
                           >
-                            {magazineFilterCities
-                              ? (() => {
-                                  // Show country/region from route title (e.g. "Georgia – Caucasus Explorer" → "Georgia")
-                                  const route = magazineFilterRouteId
-                                    ? (pretripRoutes || []).find(
-                                        (r) => r.id === magazineFilterRouteId,
-                                      )
-                                    : null;
-                                  if (route?.title)
-                                    return route.title
-                                      .split(/\s*[–—-]\s*/)[0]
-                                      .trim();
+                            {(() => {
+                                const countries = resolveCountriesForMagazine({
+                                  pendingForm,
+                                  editingTrip,
+                                });
+                                if (countries.length > 0)
+                                  return countries.join(" · ");
+                                if (magazineFilterCities)
                                   return magazineFilterCities.join(", ");
-                                })()
-                              : (() => {
-                                  const d =
-                                    editingTrip?.destination ||
-                                    (pendingForm?.destinations || [])
-                                      .filter((x) => !isHelpMeDecideDest(x))
-                                      .join(", ");
-                                  return d && !isHelpMeDecideDest(d)
-                                    ? d
-                                    : "Magazine";
-                                })()}
+                                const d =
+                                  editingTrip?.destination ||
+                                  (pendingForm?.destinations || [])
+                                    .filter((x) => !isHelpMeDecideDest(x))
+                                    .join(", ");
+                                return d && !isHelpMeDecideDest(d)
+                                  ? d
+                                  : "Magazine";
+                              })()}
                           </div>
                           <div
                             style={{
@@ -11137,12 +11143,13 @@ export default function App({
                       )}
                       {pretripMagView === "magazine" &&
                         (() => {
-                          const destLevel = resolveMagazineDestination({
+                          const countries = resolveCountriesForMagazine({
                             pendingForm,
                             editingTrip,
-                            magazineFilterRouteId,
-                            pretripRoutes,
                           });
+                          const countrySet = new Set(
+                            countries.map((c) => c.toLowerCase()),
+                          );
                           // Collect route cities — optionally filtered by route
                           const filterSet = magazineFilterCities
                             ? new Set(
@@ -11162,8 +11169,7 @@ export default function App({
                               if (filterSet && !filterSet.has(c.toLowerCase()))
                                 continue;
                               if (isHelpMeDecideDest(c)) continue;
-                              if (cityMatchesDestination(c, destLevel))
-                                continue;
+                              if (countrySet.has(c.toLowerCase())) continue;
                               if (!seen.has(c.toLowerCase())) {
                                 seen.add(c.toLowerCase());
                                 allCities.push({ city: c });
@@ -11251,7 +11257,7 @@ export default function App({
                               </Fragment>
                             );
                           };
-                          if (!destLevel && allCities.length === 0) {
+                          if (countries.length === 0 && allCities.length === 0) {
                             return (
                               <div
                                 style={{
@@ -11270,8 +11276,9 @@ export default function App({
                           let cardIndex = 0;
                           return (
                             <>
-                              {destLevel &&
-                                renderCityCard(destLevel, cardIndex++, "dest-")}
+                              {countries.map((country) =>
+                                renderCityCard(country, cardIndex++, "dest-"),
+                              )}
                               {allCities.map(({ city }) =>
                                 renderCityCard(city, cardIndex++, "city-"),
                               )}

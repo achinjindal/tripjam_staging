@@ -31,6 +31,19 @@ function makeDayIcon(color) {
 }
 
 /* ─── MAP VIEW ───────────────────────────────────────────────────────── */
+
+// Cancels in-flight Leaflet animations on unmount so _getMapPanePos never
+// reads _leaflet_pos on a detached DOM element (onZoomTransitionEnd crash).
+function MapCleanup() {
+  const map = useMap();
+  useEffect(() => {
+    return () => {
+      map.stop();
+    };
+  }, [map]);
+  return null;
+}
+
 function FitBounds({ pins, fallback }) {
   const map = useMap();
   useEffect(() => {
@@ -368,6 +381,7 @@ export function MapView({ days, session = null, tripId = null }) {
 
       {hasPins && (
         <MapContainer center={center} zoom={13} style={{ flex: 1 }}>
+          <MapCleanup />
           <TileLayer
             url={
               import.meta.env.VITE_MAPBOX_TOKEN
@@ -659,6 +673,7 @@ export function RouteMapView({
 
       {!resolving && (
         <MapContainer center={center} zoom={6} style={{ flex: 1 }}>
+          <MapCleanup />
           <TileLayer
             url={
               import.meta.env.VITE_MAPBOX_TOKEN
