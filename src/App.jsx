@@ -895,7 +895,10 @@ function magazinePlaceShort(name) {
 // Extracts the country (last comma-segment) from a destination string.
 // "Tokyo, Japan" → "Japan", "Bali, Indonesia" → "Indonesia", "Tokyo" → "Tokyo"
 function extractCountry(destStr) {
-  const parts = (destStr || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const parts = (destStr || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
   return parts.length > 1 ? parts[parts.length - 1] : parts[0] || null;
 }
 
@@ -945,7 +948,11 @@ function resolveCountriesForMagazine({ pendingForm, editingTrip, trip }) {
 
 /** Destination-level Magazine title — the first country for the trip. */
 function resolveMagazineDestination({ pendingForm, editingTrip, trip }) {
-  const countries = resolveCountriesForMagazine({ pendingForm, editingTrip, trip });
+  const countries = resolveCountriesForMagazine({
+    pendingForm,
+    editingTrip,
+    trip,
+  });
   return countries[0] || null;
 }
 
@@ -1690,7 +1697,6 @@ function BrainstormView({
   }, [generating]);
   const [activeCategory, setActiveCategory] = useState("All");
   const [genError, setGenError] = useState(null);
-  const [ideaCount, setIdeaCount] = useState(12);
   const [deepDiveCity, setDeepDiveCity] = useState(null); // city name when deep dive is open
   const [_localDeepDiveCache, _setLocalDeepDiveCache] = useState({}); // fallback when no external cache
   const deepDiveCache = externalDeepDiveCache || _localDeepDiveCache;
@@ -1725,16 +1731,6 @@ function BrainstormView({
       };
     }
   });
-  useEffect(() => {
-    if (!generating || routesReady) {
-      setIdeaCount(12);
-      return;
-    }
-    const id = setInterval(() => {
-      setIdeaCount((prev) => Math.round(prev * (1.08 + Math.random() * 0.1)));
-    }, 600);
-    return () => clearInterval(id);
-  }, [generating, routesReady]);
 
   const isPretripMode = !trip?.id;
   const igReq = pendingForm || trip?.ig_request || {};
@@ -2357,11 +2353,9 @@ function BrainstormView({
                       marginTop: 2,
                     }}
                   >
-                    {generating
-                      ? `Shortlisting from ${ideaCount.toLocaleString("en-US")} ideas…${ideaCount >= 10000 ? " :O" : ""}`
-                      : items?.length
-                        ? "Pick your route, then build your itinerary"
-                        : "Generating ideas…"}
+                    {generating || !items?.length
+                      ? "Generating your routes…"
+                      : "Pick a route, then build your itinerary"}
                   </div>
                 )}
               </div>
@@ -2502,29 +2496,88 @@ function BrainstormView({
                   </button>
                 </div>
               )}
-            {/* Full spinner only before first route arrives — centered vertically */}
+            {/* Skeleton route cards — shown before first route arrives */}
             {(generating || loadingItems || items === null) &&
               tier1Items.length === 0 && (
                 <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flex: 1,
-                    minHeight: "50vh",
-                  }}
+                  style={{ display: "flex", flexDirection: "column", gap: 10 }}
                 >
-                  <div
-                    style={{
-                      width: 36,
-                      height: 36,
-                      border: `3px solid ${T.sand}`,
-                      borderTopColor: T.ocean,
-                      borderRadius: "50%",
-                      animation: "spin 0.8s linear infinite",
-                    }}
-                  />
+                  {[0, 1, 2, 3].map((i) => (
+                    <div
+                      key={i}
+                      style={{
+                        background: T.chalk,
+                        borderRadius: RADIUS.lg,
+                        padding: "14px 16px",
+                        border: `2px solid ${T.sand}`,
+                        animation: `shimmer 1.5s ease-in-out ${i * 0.18}s infinite`,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 10,
+                          marginBottom: 10,
+                          alignItems: "flex-start",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 26,
+                            height: 26,
+                            borderRadius: "50%",
+                            background: T.sand,
+                            flexShrink: 0,
+                          }}
+                        />
+                        <div style={{ flex: 1 }}>
+                          <div
+                            style={{
+                              height: 14,
+                              width: "55%",
+                              background: T.sand,
+                              borderRadius: 4,
+                              marginBottom: 7,
+                            }}
+                          />
+                          <div
+                            style={{
+                              height: 10,
+                              width: "35%",
+                              background: T.sand,
+                              borderRadius: 4,
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          height: 10,
+                          width: "100%",
+                          background: T.sand,
+                          borderRadius: 4,
+                          marginBottom: 5,
+                        }}
+                      />
+                      <div
+                        style={{
+                          height: 10,
+                          width: "80%",
+                          background: T.sand,
+                          borderRadius: 4,
+                          marginBottom: 5,
+                        }}
+                      />
+                      <div
+                        style={{
+                          height: 10,
+                          width: "60%",
+                          background: T.sand,
+                          borderRadius: 4,
+                        }}
+                      />
+                    </div>
+                  ))}
                 </div>
               )}
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -3333,7 +3386,10 @@ function BrainstormView({
             }
             const countries = resolveCountriesForMagazine({ trip });
             const neighborhoodCities = cityOrder.filter(
-              (c) => !countries.some((country) => cityMatchesDestination(c, country)),
+              (c) =>
+                !countries.some((country) =>
+                  cityMatchesDestination(c, country),
+                ),
             );
             const renderItineraryCityCard = (city, ci, keyPrefix) => {
               const isDestCard = keyPrefix === "dest-";
@@ -9794,7 +9850,11 @@ export default function App({
                     {onHome && (
                       <button
                         onClick={() => {
-                          if (igAbortRef.current) { igAbortRef.current.abort(); igAbortRef.current = null; _igInFlight = false; }
+                          if (igAbortRef.current) {
+                            igAbortRef.current.abort();
+                            igAbortRef.current = null;
+                            _igInFlight = false;
+                          }
                           onHome();
                         }}
                         style={{
@@ -10037,7 +10097,11 @@ export default function App({
                     {onHome ? (
                       <button
                         onClick={() => {
-                          if (igAbortRef.current) { igAbortRef.current.abort(); igAbortRef.current = null; _igInFlight = false; }
+                          if (igAbortRef.current) {
+                            igAbortRef.current.abort();
+                            igAbortRef.current = null;
+                            _igInFlight = false;
+                          }
                           onHome();
                         }}
                         style={{
@@ -10158,7 +10222,11 @@ export default function App({
           >
             <button
               onClick={() => {
-                if (igAbortRef.current) { igAbortRef.current.abort(); igAbortRef.current = null; _igInFlight = false; }
+                if (igAbortRef.current) {
+                  igAbortRef.current.abort();
+                  igAbortRef.current = null;
+                  _igInFlight = false;
+                }
                 if (onHome) onHome();
               }}
               style={{
@@ -11056,23 +11124,23 @@ export default function App({
                             }}
                           >
                             {(() => {
-                                const countries = resolveCountriesForMagazine({
-                                  pendingForm,
-                                  editingTrip,
-                                });
-                                if (countries.length > 0)
-                                  return countries.join(" · ");
-                                if (magazineFilterCities)
-                                  return magazineFilterCities.join(", ");
-                                const d =
-                                  editingTrip?.destination ||
-                                  (pendingForm?.destinations || [])
-                                    .filter((x) => !isHelpMeDecideDest(x))
-                                    .join(", ");
-                                return d && !isHelpMeDecideDest(d)
-                                  ? d
-                                  : "Magazine";
-                              })()}
+                              const countries = resolveCountriesForMagazine({
+                                pendingForm,
+                                editingTrip,
+                              });
+                              if (countries.length > 0)
+                                return countries.join(" · ");
+                              if (magazineFilterCities)
+                                return magazineFilterCities.join(", ");
+                              const d =
+                                editingTrip?.destination ||
+                                (pendingForm?.destinations || [])
+                                  .filter((x) => !isHelpMeDecideDest(x))
+                                  .join(", ");
+                              return d && !isHelpMeDecideDest(d)
+                                ? d
+                                : "Magazine";
+                            })()}
                           </div>
                           <div
                             style={{
@@ -11257,7 +11325,10 @@ export default function App({
                               </Fragment>
                             );
                           };
-                          if (countries.length === 0 && allCities.length === 0) {
+                          if (
+                            countries.length === 0 &&
+                            allCities.length === 0
+                          ) {
                             return (
                               <div
                                 style={{
@@ -11438,7 +11509,11 @@ export default function App({
                         {onHome && (
                           <button
                             onClick={() => {
-                              if (igAbortRef.current) { igAbortRef.current.abort(); igAbortRef.current = null; _igInFlight = false; }
+                              if (igAbortRef.current) {
+                                igAbortRef.current.abort();
+                                igAbortRef.current = null;
+                                _igInFlight = false;
+                              }
                               onHome();
                             }}
                             style={{

@@ -29,7 +29,8 @@ export default function LowCreditsBanner({ session }) {
 
   useEffect(() => {
     if (!CREDITS_UI_ENABLED) return;
-    if (session?.user?.id && getCredits() === null) refreshCredits(session.user.id);
+    if (session?.user?.id && getCredits() === null)
+      refreshCredits(session.user.id);
   }, [session?.user?.id]);
 
   if (!CREDITS_UI_ENABLED) return null;
@@ -85,7 +86,9 @@ export default function LowCreditsBanner({ session }) {
               lineHeight: 1.4,
             }}
           >
-            <strong>{visible} credit{visible === 1 ? "" : "s"} left</strong>
+            <strong>
+              {visible} credit{visible === 1 ? "" : "s"} left
+            </strong>
             <span style={{ color: T.muted || "#8BA5BB", marginLeft: 8 }}>
               — top up to keep planning
             </span>

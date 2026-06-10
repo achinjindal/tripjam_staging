@@ -25,7 +25,9 @@
  */
 
 const args = process.argv.slice(2);
-const env = (args.find((a) => a.startsWith("--env=")) || "--env=staging").split("=")[1];
+const env = (args.find((a) => a.startsWith("--env=")) || "--env=staging").split(
+  "=",
+)[1];
 const dryRun = args.includes("--dry-run");
 const limitArg = args.find((a) => a.startsWith("--limit="));
 const limit = limitArg ? parseInt(limitArg.split("=")[1], 10) : null;
@@ -34,15 +36,17 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
-  console.error("ERROR: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY env vars required");
+  console.error(
+    "ERROR: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY env vars required",
+  );
   process.exit(1);
 }
 
 const PROXY_URL = `${SUPABASE_URL}/functions/v1/places-proxy?action=geocode`;
 const REST_URL = `${SUPABASE_URL}/rest/v1`;
 const HEADERS = {
-  "apikey": SUPABASE_KEY,
-  "Authorization": `Bearer ${SUPABASE_KEY}`,
+  apikey: SUPABASE_KEY,
+  Authorization: `Bearer ${SUPABASE_KEY}`,
   "Content-Type": "application/json",
 };
 
@@ -57,7 +61,10 @@ async function fetchActivitiesNeedingGeocode() {
   let url = `${REST_URL}/activities?lat=is.null&lng=is.null&select=id,title,geocode,type,day_id,days(city)&order=id`;
   if (limit) url += `&limit=${limit}`;
   const res = await fetch(url, { headers: HEADERS });
-  if (!res.ok) throw new Error(`Failed to fetch activities: ${res.status} ${await res.text()}`);
+  if (!res.ok)
+    throw new Error(
+      `Failed to fetch activities: ${res.status} ${await res.text()}`,
+    );
   return await res.json();
 }
 
@@ -93,9 +100,10 @@ async function geocodeOne(activity) {
 async function updateActivity(id, lat, lng) {
   const res = await fetch(`${REST_URL}/activities?id=eq.${id}`, {
     method: "PATCH",
-    headers: { ...HEADERS, "Prefer": "return=minimal" },
+    headers: { ...HEADERS, Prefer: "return=minimal" },
     body: JSON.stringify({
-      lat, lng,
+      lat,
+      lng,
       geocode_source: "photon",
       geocode_confidence: "medium",
     }),
@@ -110,20 +118,29 @@ async function updateActivity(id, lat, lng) {
 }
 
 async function processBatch(batch, batchNum, totalBatches) {
-  console.log(`\n[batch ${batchNum}/${totalBatches}] processing ${batch.length} activities...`);
+  console.log(
+    `\n[batch ${batchNum}/${totalBatches}] processing ${batch.length} activities...`,
+  );
   for (const activity of batch) {
     stats.processed++;
     const result = await geocodeOne(activity);
     if (result.ok) {
       if (dryRun) {
-        console.log(`  ✓ ${activity.id} "${(activity.title || "").slice(0, 40)}" → ${result.lat.toFixed(4)},${result.lng.toFixed(4)} [DRY-RUN]`);
+        console.log(
+          `  ✓ ${activity.id} "${(activity.title || "").slice(0, 40)}" → ${result.lat.toFixed(4)},${result.lng.toFixed(4)} [DRY-RUN]`,
+        );
         stats.resolved++; // count it as resolved-would-have-been
       } else {
         const ok = await updateActivity(activity.id, result.lat, result.lng);
-        if (ok) console.log(`  ✓ ${activity.id} "${(activity.title || "").slice(0, 40)}" → ${result.lat.toFixed(4)},${result.lng.toFixed(4)}`);
+        if (ok)
+          console.log(
+            `  ✓ ${activity.id} "${(activity.title || "").slice(0, 40)}" → ${result.lat.toFixed(4)},${result.lng.toFixed(4)}`,
+          );
       }
     } else {
-      console.log(`  - ${activity.id} "${(activity.title || "").slice(0, 40)}" skipped: ${result.reason}`);
+      console.log(
+        `  - ${activity.id} "${(activity.title || "").slice(0, 40)}" skipped: ${result.reason}`,
+      );
     }
     if (STAGGER_MS > 0) await new Promise((r) => setTimeout(r, STAGGER_MS));
   }
@@ -135,7 +152,9 @@ async function main() {
   console.log(`Supabase: ${SUPABASE_URL}`);
   console.log(`Mode: ${dryRun ? "DRY RUN" : "WRITE"}`);
   console.log(`Limit: ${limit ?? "none"}`);
-  console.log(`Batch size: ${BATCH_SIZE}, stagger: ${STAGGER_MS}ms, batch pause: ${BATCH_PAUSE_MS}ms`);
+  console.log(
+    `Batch size: ${BATCH_SIZE}, stagger: ${STAGGER_MS}ms, batch pause: ${BATCH_PAUSE_MS}ms`,
+  );
   console.log("");
 
   console.log("Fetching activities needing geocoding...");
@@ -162,8 +181,12 @@ async function main() {
   console.log(`Resolved (would-be):  ${stats.resolved}`);
   console.log(`Skipped (no result):  ${stats.skipped}`);
   console.log(`Failed:               ${stats.failed}`);
-  console.log(`\nResolution rate: ${((stats.resolved / stats.processed) * 100).toFixed(1)}%`);
-  console.log(`Remaining un-geocoded after run: ${stats.processed - stats.resolved}`);
+  console.log(
+    `\nResolution rate: ${((stats.resolved / stats.processed) * 100).toFixed(1)}%`,
+  );
+  console.log(
+    `Remaining un-geocoded after run: ${stats.processed - stats.resolved}`,
+  );
 }
 
 main().catch((e) => {

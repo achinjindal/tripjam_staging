@@ -171,11 +171,14 @@ export async function rateLimit(
 // Day 7: global kill switch. Set LLM_KILL_SWITCH=true on Supabase edge
 // function secrets to block all LLM-touching endpoints within ~1 minute
 // (next cold start picks up the env). Returns 503 when active.
-export function llmKillSwitch(corsHeaders: Record<string, string>): Response | null {
+export function llmKillSwitch(
+  corsHeaders: Record<string, string>,
+): Response | null {
   if (Deno.env.get("LLM_KILL_SWITCH") === "true") {
     return new Response(
       JSON.stringify({
-        error: "Service temporarily unavailable. Please retry in a few minutes.",
+        error:
+          "Service temporarily unavailable. Please retry in a few minutes.",
         code: "kill_switch",
       }),
       {

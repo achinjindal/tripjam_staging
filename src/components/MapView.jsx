@@ -34,13 +34,29 @@ function makeDayIcon(color) {
 
 // Cancels in-flight Leaflet animations on unmount so _getMapPanePos never
 // reads _leaflet_pos on a detached DOM element (onZoomTransitionEnd crash).
+// Guard: react-leaflet's own cleanup calls map.remove() which sets _mapPane=undefined
+// (Leaflet 1.9.x); if that runs first, stop() would itself crash reading _mapPane.
 function MapCleanup() {
   const map = useMap();
   useEffect(() => {
     return () => {
-      map.stop();
+      if (map._mapPane) map.stop();
     };
   }, [map]);
+  return null;
+}
+
+// Fits the map to the destination bbox when it arrives (before any route pins exist).
+// Falls back to setView+zoom if no bbox (e.g. Photon returned a point-only result).
+function DestCenter({ bounds, coords }) {
+  const map = useMap();
+  useEffect(() => {
+    if (bounds) {
+      map.fitBounds(bounds, { padding: [20, 20], maxZoom: 12 });
+    } else if (coords) {
+      map.setView(coords, 8);
+    }
+  }, [bounds, coords?.[0], coords?.[1]]);
   return null;
 }
 
@@ -443,6 +459,37 @@ export function RouteMapView({
 }) {
   const [pinsByRoute, setPinsByRoute] = useState({}); // { routeId: [{ lat, lng, city }, ...] }
   const [resolving, setResolving] = useState(true);
+  const [destCoords, setDestCoords] = useState(null); // fallback center while routes load
+  const [destBounds, setDestBounds] = useState(null); // [[s,w],[n,e]] for fitBounds
+
+  // Fetch destination coords + bbox from Photon so the map shows the right region
+  // while RG is still running and no route pins exist yet.
+  // Photon's extent: [west, south, east, north] → Leaflet bounds [[s,w],[n,e]]
+  useEffect(() => {
+    if (!destination) return;
+    let cancelled = false;
+    fetch(
+      `https://photon.komoot.io/api/?q=${encodeURIComponent(destination)}&limit=1`,
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const f = data?.features?.[0];
+        if (!f) return;
+        const [lon, lat] = f.geometry.coordinates;
+        setDestCoords([lat, lon]);
+        const ext = f.properties?.extent; // [west, south, east, north]
+        if (ext)
+          setDestBounds([
+            [ext[1], ext[0]],
+            [ext[3], ext[2]],
+          ]);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [destination]);
 
   useEffect(() => {
     let cancelled = false;
@@ -485,7 +532,7 @@ export function RouteMapView({
   const allVisiblePins = visibleRoutes.flatMap((r) => pinsByRoute[r.id] || []);
   const center = allVisiblePins.length
     ? [allVisiblePins[0].lat, allVisiblePins[0].lng]
-    : [20, 0];
+    : (destCoords ?? [20, 0]);
 
   return (
     <div
@@ -518,8 +565,8 @@ export function RouteMapView({
           <div
             style={{ fontSize: 11, color: T.mist, fontFamily: "Georgia,serif" }}
           >
-            {resolving
-              ? "Plotting your trip plans…"
+            {resolving || (routes || []).length === 0
+              ? "Plans are generating…"
               : selectedId
                 ? (routes || []).find((r) => r.id === selectedId)?.title
                 : "Tap a plan to focus"}
@@ -651,25 +698,28 @@ export function RouteMapView({
         </div>
       )}
 
-      {!resolving && allVisiblePins.length === 0 && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            top: 80,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: T.mist,
-            fontFamily: "Georgia,serif",
-            fontSize: 14,
-            zIndex: 500,
-            pointerEvents: "none",
-          }}
-        >
-          No locations found
-        </div>
-      )}
+      {!resolving &&
+        allVisiblePins.length === 0 &&
+        !destCoords &&
+        !destBounds && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              top: 80,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: T.mist,
+              fontFamily: "Georgia,serif",
+              fontSize: 14,
+              zIndex: 500,
+              pointerEvents: "none",
+            }}
+          >
+            No locations found
+          </div>
+        )}
 
       {!resolving && (
         <MapContainer center={center} zoom={6} style={{ flex: 1 }}>
@@ -682,6 +732,9 @@ export function RouteMapView({
             }
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           />
+          {(destBounds || destCoords) && allVisiblePins.length === 0 && (
+            <DestCenter bounds={destBounds} coords={destCoords} />
+          )}
           <FitBounds pins={allVisiblePins} fallback={center} />
           {visibleRoutes.map((route, i) => {
             const pins = pinsByRoute[route.id] || [];

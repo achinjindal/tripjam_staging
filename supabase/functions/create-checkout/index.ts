@@ -19,7 +19,8 @@ import { captureException } from "../_shared/sentry.ts";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
 };
 
 const PACKS = {
@@ -28,7 +29,8 @@ const PACKS = {
 };
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS")
+    return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
@@ -44,26 +46,37 @@ Deno.serve(async (req) => {
     const packParam = (url.searchParams.get("pack") || "small").toLowerCase();
     const pack = PACKS[packParam as keyof typeof PACKS];
     if (!pack) {
-      return new Response(JSON.stringify({ error: "Invalid pack. Use 'small' or 'large'." }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ error: "Invalid pack. Use 'small' or 'large'." }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
     }
 
     const apiKey = Deno.env.get("LEMONSQUEEZY_API_KEY");
     const storeId = Deno.env.get("LEMONSQUEEZY_STORE_ID");
     const variantId = Deno.env.get(pack.variantEnv);
-    const appUrl = Deno.env.get("APP_PUBLIC_URL") || "https://tripjam.vercel.app";
+    const appUrl =
+      Deno.env.get("APP_PUBLIC_URL") || "https://tripjam.vercel.app";
 
     if (!apiKey || !storeId || !variantId) {
       const missing = [
         !apiKey && "LEMONSQUEEZY_API_KEY",
         !storeId && "LEMONSQUEEZY_STORE_ID",
         !variantId && pack.variantEnv,
-      ].filter(Boolean).join(", ");
+      ]
+        .filter(Boolean)
+        .join(", ");
       return new Response(
-        JSON.stringify({ error: `Payments not configured. Missing: ${missing}` }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        JSON.stringify({
+          error: `Payments not configured. Missing: ${missing}`,
+        }),
+        {
+          status: 503,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
       );
     }
 
@@ -74,7 +87,10 @@ Deno.serve(async (req) => {
     let userEmail: string | null = null;
     try {
       const r = await fetch(`${sbUrl}/auth/v1/admin/users/${user.id}`, {
-        headers: { Authorization: `Bearer ${sbServiceKey}`, apikey: sbServiceKey },
+        headers: {
+          Authorization: `Bearer ${sbServiceKey}`,
+          apikey: sbServiceKey,
+        },
       });
       if (r.ok) {
         const u = await r.json();
@@ -106,7 +122,8 @@ Deno.serve(async (req) => {
           product_options: {
             redirect_url: `${appUrl}/?credits_success=${pack.credits}`,
             receipt_button_text: "Return to TripJam",
-            receipt_thank_you_note: "Your credits are now active. Happy planning!",
+            receipt_thank_you_note:
+              "Your credits are now active. Happy planning!",
           },
         },
         relationships: {
@@ -128,7 +145,10 @@ Deno.serve(async (req) => {
 
     const payload = await res.json();
     if (!res.ok) {
-      const msg = payload?.errors?.[0]?.detail || payload?.message || "Lemon Squeezy API error";
+      const msg =
+        payload?.errors?.[0]?.detail ||
+        payload?.message ||
+        "Lemon Squeezy API error";
       await captureException(new Error(msg), {
         functionName: "create-checkout",
         userId: user.id,
@@ -144,14 +164,20 @@ Deno.serve(async (req) => {
     const checkoutUrl = payload?.data?.attributes?.url;
     const checkoutId = payload?.data?.id;
     if (!checkoutUrl) {
-      await captureException(new Error("Lemon Squeezy returned no checkout URL"), {
-        functionName: "create-checkout",
-        userId: user.id,
-      });
-      return new Response(JSON.stringify({ error: "No checkout URL returned" }), {
-        status: 502,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      await captureException(
+        new Error("Lemon Squeezy returned no checkout URL"),
+        {
+          functionName: "create-checkout",
+          userId: user.id,
+        },
+      );
+      return new Response(
+        JSON.stringify({ error: "No checkout URL returned" }),
+        {
+          status: 502,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
     }
 
     return new Response(JSON.stringify({ url: checkoutUrl, id: checkoutId }), {

@@ -33,7 +33,9 @@ export async function initRevenueCat(userId) {
   if (!isAndroidApp()) return;
   const apiKey = import.meta.env.VITE_REVENUECAT_ANDROID_KEY;
   if (!apiKey) {
-    console.warn("VITE_REVENUECAT_ANDROID_KEY not set — RevenueCat not initialised");
+    console.warn(
+      "VITE_REVENUECAT_ANDROID_KEY not set — RevenueCat not initialised",
+    );
     return;
   }
   try {
@@ -74,7 +76,8 @@ export async function purchaseCredits(packId) {
     if (transactionId) {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const session = (await import("./supabase")).supabase.auth.getSession
-        ? (await (await import("./supabase")).supabase.auth.getSession()).data.session
+        ? (await (await import("./supabase")).supabase.auth.getSession()).data
+            .session
         : null;
       if (session?.access_token && supabaseUrl) {
         try {

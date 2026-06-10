@@ -44,7 +44,9 @@ export default function AddRealEmailPrompt({ session }) {
     // Per Supabase default, the email field on auth.users only changes after
     // the user clicks the confirm link. The DB trigger we added then syncs
     // profiles.email automatically.
-    const { error: updateError } = await supabase.auth.updateUser({ email: clean });
+    const { error: updateError } = await supabase.auth.updateUser({
+      email: clean,
+    });
     setSubmitting(false);
     if (updateError) {
       setError(updateError.message);

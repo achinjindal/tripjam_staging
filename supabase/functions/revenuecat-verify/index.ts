@@ -98,12 +98,14 @@ serve(async (req) => {
 
     // Check the transactionId exists in the subscriber's non-subscription transactions
     const productTransactions = nonSubs[productId] ?? [];
-    const verified = productTransactions.some(
-      (t) => t.id === transactionId,
-    );
+    const verified = productTransactions.some((t) => t.id === transactionId);
 
     if (!verified) {
-      console.warn("Transaction not found in RC subscriber:", { userId: user.id, transactionId, productId });
+      console.warn("Transaction not found in RC subscriber:", {
+        userId: user.id,
+        transactionId,
+        productId,
+      });
       return new Response(
         JSON.stringify({ error: "Purchase could not be verified." }),
         {

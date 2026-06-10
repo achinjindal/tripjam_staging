@@ -419,7 +419,8 @@ function Pricing() {
             marginRight: "auto",
           }}
         >
-          Sign up free and start planning. Buy a credit pack when you run out — no subscription, no surprise charges.
+          Sign up free and start planning. Buy a credit pack when you run out —
+          no subscription, no surprise charges.
         </p>
         <div
           style={{

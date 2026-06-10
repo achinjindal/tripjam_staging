@@ -154,10 +154,7 @@ export default function LegalPage({ title, lastUpdated, children }) {
             flexWrap: "wrap",
           }}
         >
-          <button
-            onClick={() => navTo("/")}
-            style={navLinkStyle}
-          >
+          <button onClick={() => navTo("/")} style={navLinkStyle}>
             ← Home
           </button>
           <button onClick={() => navTo("/privacy")} style={navLinkStyle}>
@@ -166,7 +163,10 @@ export default function LegalPage({ title, lastUpdated, children }) {
           <button onClick={() => navTo("/terms")} style={navLinkStyle}>
             Terms of Service
           </button>
-          <a href="mailto:achinj.work@gmail.com" style={{ ...navLinkStyle, textDecoration: "none" }}>
+          <a
+            href="mailto:achinj.work@gmail.com"
+            style={{ ...navLinkStyle, textDecoration: "none" }}
+          >
             Support
           </a>
         </div>
@@ -208,9 +208,7 @@ export function P({ children }) {
 }
 
 export function UL({ children }) {
-  return (
-    <ul style={{ margin: "0 0 14px", paddingLeft: 22 }}>{children}</ul>
-  );
+  return <ul style={{ margin: "0 0 14px", paddingLeft: 22 }}>{children}</ul>;
 }
 
 export function LI({ children }) {

@@ -54,22 +54,34 @@ async function verifyLemonSqueezySignature(
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS")
+    return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") {
-    return new Response("Method not allowed", { status: 405, headers: corsHeaders });
-  }
-
-  if (!WEBHOOK_SECRET) {
-    return new Response(JSON.stringify({ error: "Webhook secret not configured" }), {
-      status: 503,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    return new Response("Method not allowed", {
+      status: 405,
+      headers: corsHeaders,
     });
   }
 
-  const rawBody = await req.text();
-  const sigHeader = req.headers.get("x-signature") || req.headers.get("X-Signature") || "";
+  if (!WEBHOOK_SECRET) {
+    return new Response(
+      JSON.stringify({ error: "Webhook secret not configured" }),
+      {
+        status: 503,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
+  }
 
-  const valid = await verifyLemonSqueezySignature(rawBody, sigHeader, WEBHOOK_SECRET);
+  const rawBody = await req.text();
+  const sigHeader =
+    req.headers.get("x-signature") || req.headers.get("X-Signature") || "";
+
+  const valid = await verifyLemonSqueezySignature(
+    rawBody,
+    sigHeader,
+    WEBHOOK_SECRET,
+  );
   if (!valid) {
     return new Response(JSON.stringify({ error: "Invalid signature" }), {
       status: 400,
@@ -101,16 +113,22 @@ Deno.serve(async (req) => {
       const pack = custom.pack || "unknown";
 
       if (!userId || !Number.isFinite(credits) || credits <= 0) {
-        await captureException(new Error("order_created missing user_id or credits"), {
-          functionName: "payment-webhook",
-          orderId,
-          custom,
-        });
+        await captureException(
+          new Error("order_created missing user_id or credits"),
+          {
+            functionName: "payment-webhook",
+            orderId,
+            custom,
+          },
+        );
         // Return 200 so LS doesn't retry indefinitely; Sentry will alert.
-        return new Response(JSON.stringify({ received: true, warning: "missing_custom_data" }), {
-          status: 200,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ received: true, warning: "missing_custom_data" }),
+          {
+            status: 200,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
       }
 
       const newBalance = await grantCredits({
@@ -132,19 +150,33 @@ Deno.serve(async (req) => {
       });
 
       return new Response(
-        JSON.stringify({ received: true, granted: credits, balance: newBalance }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        JSON.stringify({
+          received: true,
+          granted: credits,
+          balance: newBalance,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
       );
     }
 
     // Other event types (subscription_*, order_refunded, etc) — ack + ignore for now.
     // TODO: handle order_refunded to claw back credits if needed.
-    return new Response(JSON.stringify({ received: true, ignored: eventName }), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ received: true, ignored: eventName }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
   } catch (e) {
-    await captureException(e, { functionName: "payment-webhook", event_name: eventName, orderId });
+    await captureException(e, {
+      functionName: "payment-webhook",
+      event_name: eventName,
+      orderId,
+    });
     return new Response(JSON.stringify({ error: (e as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -11,7 +11,10 @@
 //   try { ... } catch (e) { await captureException(e, { functionName: "...", userId: "..." }); throw e; }
 
 const DSN = Deno.env.get("SENTRY_DSN") || "";
-const ENVIRONMENT = Deno.env.get("APP_ENV") || Deno.env.get("SUPABASE_URL")?.includes("viyvd") ? "production" : "staging";
+const ENVIRONMENT =
+  Deno.env.get("APP_ENV") || Deno.env.get("SUPABASE_URL")?.includes("viyvd")
+    ? "production"
+    : "staging";
 
 interface SentryContext {
   functionName?: string;
@@ -20,7 +23,9 @@ interface SentryContext {
   [k: string]: unknown;
 }
 
-function parseDsn(dsn: string): { envelopeUrl: string; publicKey: string; projectId: string } | null {
+function parseDsn(
+  dsn: string,
+): { envelopeUrl: string; publicKey: string; projectId: string } | null {
   try {
     const url = new URL(dsn);
     const publicKey = url.username;
@@ -35,7 +40,10 @@ function parseDsn(dsn: string): { envelopeUrl: string; publicKey: string; projec
 
 const PARSED = DSN ? parseDsn(DSN) : null;
 
-export async function captureException(error: unknown, context?: SentryContext): Promise<void> {
+export async function captureException(
+  error: unknown,
+  context?: SentryContext,
+): Promise<void> {
   if (!PARSED) return;
 
   try {
@@ -53,11 +61,13 @@ export async function captureException(error: unknown, context?: SentryContext):
       environment: ENVIRONMENT,
       message: { formatted: message },
       exception: {
-        values: [{
-          type,
-          value: message,
-          stacktrace: stack ? { frames: parseStack(stack) } : undefined,
-        }],
+        values: [
+          {
+            type,
+            value: message,
+            stacktrace: stack ? { frames: parseStack(stack) } : undefined,
+          },
+        ],
       },
       tags: {
         function_name: context?.functionName || "unknown",
@@ -83,17 +93,27 @@ export async function captureException(error: unknown, context?: SentryContext):
   }
 }
 
-function parseStack(stack: string): Array<{ filename: string; function: string; lineno: number; colno: number }> {
+function parseStack(stack: string): Array<{
+  filename: string;
+  function: string;
+  lineno: number;
+  colno: number;
+}> {
   // Lightweight Deno/V8 stack parser. Good enough for grouping.
-  return stack.split("\n").slice(1, 20).map((line) => {
-    const m = line.match(/at (?:(.+?) \()?(.+?):(\d+):(\d+)\)?/);
-    return m ? {
-      function: m[1] || "?",
-      filename: m[2] || "?",
-      lineno: parseInt(m[3], 10) || 0,
-      colno: parseInt(m[4], 10) || 0,
-    } : { function: line.trim(), filename: "?", lineno: 0, colno: 0 };
-  });
+  return stack
+    .split("\n")
+    .slice(1, 20)
+    .map((line) => {
+      const m = line.match(/at (?:(.+?) \()?(.+?):(\d+):(\d+)\)?/);
+      return m
+        ? {
+            function: m[1] || "?",
+            filename: m[2] || "?",
+            lineno: parseInt(m[3], 10) || 0,
+            colno: parseInt(m[4], 10) || 0,
+          }
+        : { function: line.trim(), filename: "?", lineno: 0, colno: 0 };
+    });
 }
 
 // Convenience: wraps a handler so any thrown error is captured and re-thrown.

@@ -25,6 +25,7 @@ TripJam tries to do three things really well:
 It's at https://tripjam.vercel.app — you get 300 credits free, no card needed.
 
 I'd really value your honest take. Specifically:
+
 - Does the landing page make it obvious what this is?
 - Does the first trip you plan actually feel useful?
 - Anything broken or confusing?
@@ -106,17 +107,17 @@ Reply with anything — even a "this is bad" is gold right now.
 > A few things that make TripJam different:
 >
 > 🏛 **Per-destination magazine**: every city you plan in gets a writeup
->    (food, transit, etiquette, "did you know"), not a generic Lonely
->    Planet copy-paste.
+> (food, transit, etiquette, "did you know"), not a generic Lonely
+> Planet copy-paste.
 >
 > 🗳 **Built-in voting**: invite collaborators with one link, vote on
->    routes and activities, see who voted what.
+> routes and activities, see who voted what.
 >
 > ⚡ **Sub-30-second plans**: claude-sonnet-4-6 streams a 5-day itinerary
->    in compact form first, then fills in details progressively.
+> in compact form first, then fills in details progressively.
 >
 > 💸 **Pay-as-you-go credits**: 300 free, then $5 → 300 / $10 → 1000.
->    No subscription.
+> No subscription.
 >
 > Honest feedback hugely welcome — especially on the first-trip experience.
 
@@ -133,6 +134,7 @@ Reply with anything — even a "this is bad" is gold right now.
 > 200-message group chat and three half-baked Google Docs.
 >
 > Stack:
+>
 > - React 18 + Vite (no framework router; History API for routes)
 > - Supabase (Postgres + Auth + Edge Functions + RLS)
 > - Anthropic claude-sonnet-4-6 for itinerary/route generation; haiku-4-5
@@ -146,11 +148,9 @@ Reply with anything — even a "this is bad" is gold right now.
 >
 > 1. **No router library.** History API + a useEffect-based URL listener.
 >    Saved ~20 KB but made deep-linking trickier than I'd hoped.
->
 > 2. **Photos from Wikipedia/Wikimedia.** Free and surprisingly good for
 >    well-known places, terrible for obscure ones. May need to bite the
 >    Google Photos cost bullet eventually.
->
 > 3. **Two-phase IG streaming**: a compact 1-line-per-day view appears in
 >    ~3s while the detailed itinerary streams in over 20-30s. Users get
 >    perceived speed; tradeoff is some prompt complexity.
@@ -158,16 +158,16 @@ Reply with anything — even a "this is bad" is gold right now.
 > Things I'm proud of:
 >
 > 🏛 **Per-trip magazine**: each city gets a curated writeup (food,
->    transit, etiquette) generated for THAT specific trip.
+> transit, etiquette) generated for THAT specific trip.
 >
 > 🗳 **Real collaboration**: invite link, vote on routes/activities,
->    see who voted what. Per-trip RLS in Postgres.
+> see who voted what. Per-trip RLS in Postgres.
 >
 > 💸 **Decimal credits**: each API call deducts cents, displayed as
->    integers. NUMERIC(10,2) end-to-end.
+> integers. NUMERIC(10,2) end-to-end.
 >
 > 🛡 **Pre-flight rate limit + kill switch**: 20 calls/min/user via a
->    Postgres counter + an env var that disables all LLM calls in ~1min.
+> Postgres counter + an env var that disables all LLM calls in ~1min.
 >
 > Free to start (300 credits on signup, no card). Top-up packs are $5/300
 > credits or $10/1000.

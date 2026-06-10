@@ -53,6 +53,7 @@ supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref viyvd
 ### Set Vercel env var
 
 In Vercel Dashboard → Settings → Environment Variables → add for all environments:
+
 - `VITE_REVENUECAT_ANDROID_KEY` = `goog_...` (Public SDK key from step 2)
 
 Trigger a redeploy.
@@ -174,6 +175,7 @@ WHERE email IN ('<real-email>', '<legacy-email>');
 ## Prod credits launch (current state + steps to go live)
 
 **Current state on prod (as of last migration):**
+
 - ✅ Schema migrated: `profiles.credits` is `NUMERIC(10,2)`, `stripe_customer_id` added, `credit_transactions` has `provider_session_id` UNIQUE
 - ✅ RPCs updated: `deduct_credits` + `grant_credits` accept NUMERIC, idempotent on `provider_session_id`
 - ✅ User balances preserved (~999999 each — intentionally inflated, effectively unlimited)
@@ -185,6 +187,7 @@ WHERE email IN ('<real-email>', '<legacy-email>');
 **To go live (full launch checklist):**
 
 1. **Choose launch starting balance** (replace `300` with chosen value):
+
    ```sql
    -- On prod DB
    UPDATE profiles SET credits = 300 WHERE credits >= 999000;  -- reset only the inflated test balances
@@ -192,6 +195,7 @@ WHERE email IN ('<real-email>', '<legacy-email>');
    ```
 
 2. **Deploy Day 2/3 edge functions to prod:**
+
    ```bash
    npm run deploy:functions:prod
    # then separately for the webhook with --no-verify-jwt:
@@ -199,6 +203,7 @@ WHERE email IN ('<real-email>', '<legacy-email>');
    ```
 
 3. **Set Lemon Squeezy secrets on prod Supabase:**
+
    ```bash
    supabase secrets set \
      LEMONSQUEEZY_API_KEY='<same key>' \
@@ -217,9 +222,11 @@ WHERE email IN ('<real-email>', '<legacy-email>');
 
 5. **Flip frontend flag to enable UI on prod:**
    Edit `src/credits.js` — replace the conditional:
+
    ```js
-   export const CREDITS_UI_ENABLED = true;  // launched
+   export const CREDITS_UI_ENABLED = true; // launched
    ```
+
    Also set `VITE_PAYMENTS_ENABLED=true` in Vercel env vars for production.
 
 6. **Switch Lemon Squeezy from TEST to LIVE mode** (real money):
@@ -253,9 +260,9 @@ They handle VAT/sales tax, refunds, and chargebacks; we just plug in.
 
 Dashboard → Products → New product. Do this twice:
 
-| Pack  | Name                | Price       | Credits | Tax category                       |
-|-------|---------------------|-------------|---------|------------------------------------|
-| Small | TripJam 300 Credits | $5.00 USD   | 300     | Software as a service (SaaS) - personal use |
+| Pack  | Name                 | Price      | Credits | Tax category                                |
+| ----- | -------------------- | ---------- | ------- | ------------------------------------------- |
+| Small | TripJam 300 Credits  | $5.00 USD  | 300     | Software as a service (SaaS) - personal use |
 | Large | TripJam 1000 Credits | $10.00 USD | 1000    | Software as a service (SaaS) - personal use |
 
 - **Pricing model:** Standard pricing (one-time)
@@ -268,13 +275,13 @@ After publishing each product, grab the **Variant ID** (the URL contains
 
 ### Grab IDs and keys
 
-| Where | Value | Env name |
-|---|---|---|
-| Settings → API → New API token | API key starting `eyJ...` | `LEMONSQUEEZY_API_KEY` |
-| Settings → Stores → click your store | Numeric store ID (URL path) | `LEMONSQUEEZY_STORE_ID` |
-| Small product page → Variants | Numeric variant ID | `LEMONSQUEEZY_VARIANT_SMALL` |
-| Large product page → Variants | Numeric variant ID | `LEMONSQUEEZY_VARIANT_LARGE` |
-| Set when creating webhook (below) | Any string ≥6 chars (use 32+ random) | `LEMONSQUEEZY_WEBHOOK_SECRET` |
+| Where                                | Value                                | Env name                      |
+| ------------------------------------ | ------------------------------------ | ----------------------------- |
+| Settings → API → New API token       | API key starting `eyJ...`            | `LEMONSQUEEZY_API_KEY`        |
+| Settings → Stores → click your store | Numeric store ID (URL path)          | `LEMONSQUEEZY_STORE_ID`       |
+| Small product page → Variants        | Numeric variant ID                   | `LEMONSQUEEZY_VARIANT_SMALL`  |
+| Large product page → Variants        | Numeric variant ID                   | `LEMONSQUEEZY_VARIANT_LARGE`  |
+| Set when creating webhook (below)    | Any string ≥6 chars (use 32+ random) | `LEMONSQUEEZY_WEBHOOK_SECRET` |
 
 ### Edge Function secrets (run once per env)
 

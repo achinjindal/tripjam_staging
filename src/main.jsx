@@ -129,9 +129,19 @@ function Root() {
   const [, setUrlVersion] = useState(0);
 
   useEffect(() => {
+    // Fall back to Landing after 8 s if Supabase is unreachable (e.g. paused
+    // project, offline). onAuthStateChange re-authenticates once it comes back.
+    const fallback = setTimeout(() => setSession(null), 8000);
     supabase.auth
       .getSession()
-      .then(({ data: { session } }) => setSession(session));
+      .then(({ data: { session } }) => {
+        clearTimeout(fallback);
+        setSession(session);
+      })
+      .catch(() => {
+        clearTimeout(fallback);
+        setSession(null);
+      });
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_e, s) => {

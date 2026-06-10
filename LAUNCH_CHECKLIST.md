@@ -74,17 +74,20 @@ OK) · **🟢 Nice-to-have**.
 Run on **staging** before each prod push. Re-run on **production** post-deploy.
 
 ### Pre-flight
+
 - [ ] Open an incognito window
 - [ ] Set `qa-tester` credits to a clean state: `UPDATE profiles SET credits = 300 WHERE username='qa-tester'`
 - [ ] Clear LS test orders if needed (Lemon Squeezy dashboard → Orders → archive)
 
 ### A1. Logged-out experience
+
 - [ ] `/` shows Landing (hero, How it works, Pricing, FAQ, Footer)
 - [ ] Landing header "Sign in" + "Sign up free" buttons work
 - [ ] Footer links `/privacy` and `/terms` render
 - [ ] OG tag check: paste prod URL into Slack/iMessage — preview shows TripJam title + mascot image (no 404)
 
 ### A2. Signup flow
+
 - [ ] `/signup` → fill email + username + password + tick Terms checkbox + Create Account
 - [ ] Without Terms checkbox → submit blocked with red error
 - [ ] Invalid email format → submit blocked with red error
@@ -93,6 +96,7 @@ Run on **staging** before each prod push. Re-run on **production** post-deploy.
 - [ ] Profile row exists in DB with email + username + face_icon
 
 ### A3. Sign-in flow
+
 - [ ] `/signin` accepts email (`qa-tester@tripjam.app`) → signs in
 - [ ] `/signin` also accepts legacy username (`qa-tester`) → signs in
 - [ ] Invalid creds → generic "Invalid email/username or password"
@@ -100,6 +104,7 @@ Run on **staging** before each prod push. Re-run on **production** post-deploy.
 - [ ] ✕ dismisses banner; survives page nav within session
 
 ### A4. Avatar + dropdown (top-right)
+
 - [ ] Avatar shows face emoji (matches profile)
 - [ ] Click avatar → dropdown opens with username + Credits + Top up + Sign out
 - [ ] Click outside → dropdown closes
@@ -107,6 +112,7 @@ Run on **staging** before each prod push. Re-run on **production** post-deploy.
 - [ ] Sign out → returns to Landing
 
 ### A5. Setup wizard → Route Generation → Itinerary
+
 - [ ] Click "New trip" → setup at `/new/0`
 - [ ] Add destination (e.g. "Tokyo") → Continue → step 1 → step 2 → Generate routes
 - [ ] 4 route options appear (`/trip/:id/plans`)
@@ -116,6 +122,7 @@ Run on **staging** before each prod push. Re-run on **production** post-deploy.
 - [ ] Each day's photos + maps render within ~3s of text
 
 ### A6. Credits flow (staging only — UI is currently auto-hidden on prod)
+
 - [ ] Avatar dropdown shows balance (300.00 for qa-tester)
 - [ ] `UPDATE profiles SET credits = 5 WHERE username='qa-tester'` → LowCreditsBanner appears
 - [ ] Click "Top up" in banner OR avatar → PackSelectorModal opens with Small (300/$5) + Large (1000/$10)
@@ -126,27 +133,32 @@ Run on **staging** before each prod push. Re-run on **production** post-deploy.
 - [ ] Resend webhook from LS dashboard → balance unchanged (idempotent)
 
 ### A7. Hard paywall
+
 - [ ] `UPDATE profiles SET credits = 0 WHERE username='qa-tester'`
 - [ ] Try to send a chat message → 402 returns → PaywallSheet appears
 - [ ] Click "Top up" → PackSelectorModal opens
 - [ ] Click "Maybe later" → modal closes
 
 ### A8. Rate limit
+
 - [ ] Hit any LLM endpoint 22× in 60s → 21st and 22nd return 429
 - [ ] Wait 60s → next request goes through
 
 ### A9. Kill switch (optional, ops drill)
+
 - [ ] `supabase secrets set LLM_KILL_SWITCH=true --project-ref ...`
 - [ ] Wait ~1 min for next cold start
 - [ ] Any LLM endpoint returns 503 with `code: kill_switch`
 - [ ] `supabase secrets set LLM_KILL_SWITCH=false ...` → recovers
 
 ### A10. Trip sharing
+
 - [ ] Open trip → share link → opens in incognito window
 - [ ] Public view renders without requiring auth
 - [ ] Trip data shows (days, activities, maps)
 
 ### A11. Multi-collaborator
+
 - [ ] Sign in as different account
 - [ ] Use invite link from trip A → join → see trip A in your list
 - [ ] Both users see each other's votes on routes
@@ -194,6 +206,7 @@ For each post: pin to top of your X/personal channels.
 ## E. Hotfix discipline
 
 During soft + public launch, only single-commit fixes that meet ALL:
+
 - [ ] Blocks signup, login, or payment
 - [ ] Has a clear, narrow fix (<30 lines)
 - [ ] Tested locally before push

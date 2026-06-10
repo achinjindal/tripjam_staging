@@ -17,7 +17,7 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 - **Analytics:** PostHog (tagged with `app_env` for staging/production filtering)
 - **Error tracking:** Sentry (`VITE_SENTRY_DSN` env var; no-op when unset)
 - **Mobile:** Capacitor (Android APK), vite-plugin-pwa (auto-update, 5-min check interval)
-- **Payments:** Lemon Squeezy (Merchant of Record; credits via `create-checkout` + `payment-webhook` edge functions)
+- **Payments:** Lemon Squeezy (web MoR; credits via `create-checkout` + `payment-webhook` edge functions) + RevenueCat (Android Google Play Billing via `@revenuecat/purchases-capacitor`)
 - **Testing:** Playwright E2E (sequential, workers: 1)
 - **Hosting:** Vercel (frontend auto-deploy), Supabase (backend/DB/functions)
 
@@ -34,11 +34,15 @@ src/
   TripPublicView.jsx — Read-only shared trip view
   credits.js         — Module-level credit store: CREDITS_UI_ENABLED, useCredits,
                        openPaywall, handleGatedResponse, refreshCredits
-  CreditsOverlay.jsx — Paywall bottom sheet (Lemon Squeezy checkout trigger)
+  billing.js         — Platform-aware billing: RevenueCat on Android, Lemon Squeezy on web.
+                       Exports isAndroidApp(), initRevenueCat(userId), purchaseCredits(packId)
+  CreditsOverlay.jsx — Paywall bottom sheet (routes to RC or LS based on platform)
   LowCreditsBanner.jsx — Dismissible banner when credits run low
   Avatar.jsx         — User avatar component
   AddRealEmailPrompt.jsx — Prompt to add a real email (legacy username-only accounts)
   ForgotPassword.jsx / ResetPassword.jsx — Password recovery flow
+  LegalPage.jsx      — Shared scrollable layout for Privacy + Terms (no auth required)
+  Privacy.jsx / Terms.jsx — Legal pages rendered by LegalPage
   airports.js        — Airport search helpers
   airports-data.json — Bundled IATA airport data
   supabase.js        — Supabase client
@@ -74,6 +78,9 @@ supabase/
     generate-wishlist/         — Wishlist generation
     create-checkout/           — Lemon Squeezy checkout session creation
     payment-webhook/           — Lemon Squeezy webhook handler (grants credits on order_created)
+    redeem-coupon/             — Coupon code redemption (grants free credits; single-use per user)
+    revenuecat-verify/         — Server-side RC purchase verification (called immediately after Android purchase)
+    revenuecat-webhook/        — RevenueCat webhook handler for Android IAP (deployed with --no-verify-jwt)
   migrations/        — Postgres migrations (chronological)
 
 scripts/
@@ -130,32 +137,40 @@ supabase functions deploy payment-webhook --no-verify-jwt --project-ref <ref>
 ## Architecture Notes
 
 ### Frontend
-- `main.jsx` does all URL routing via `parseUrl()` — pages: `home` (Landing), `signin`, `signup`, `trip`, `edit`, `create`, `share`, `admin`, `privacy`, `terms`, `forgot-password`, `reset-password`. No router library.
+
+- `main.jsx` does all URL routing via `parseUrl()` — pages: `home` (Landing), `signin`, `signup`, `trip`, `edit`, `create`, `public` (`/share/:token`), `admin`, `privacy`, `terms`, `forgot-password`, `reset-password`. No router library.
+- The URL `/trip/:id/magazine` maps to the internal tab key `brainstorm` (legacy name). This translation happens in `parseUrl()` — the public URL and the internal state key deliberately differ.
 - `App.jsx` (~14,500 lines) contains the entire trip view: state, data fetching, all panel/tab/modal logic. Split into sub-components (BoardView, SetupForm, Magazine, MapView) but most state lives in App.
 - Design system in `theme.js`: `T` (colors + semantic states), `TYPE` (6-level typography), `RADIUS` (4 values), `SHADOW` (3 levels), `MOTION` (3 speeds). Import from there, never hardcode values.
 - Auth uses username + password only (no email). Fake email = `username@tripjam.app`.
 - Trip ID generated client-side (`crypto.randomUUID()`) to avoid RLS issues.
 
 ### Credits System (launched)
+
 - `credits.js` is a module-level store (not React context). Components read via `useCredits()` / `usePaywall()` hooks backed by `useSyncExternalStore`.
 - `CREDITS_UI_ENABLED = true` — credits UI and paywall are live. Backend deduction runs regardless of this flag.
 - Edge functions return HTTP 402 when credits are exhausted. Frontend calls `handleGatedResponse(res, userId, reason)` which opens the paywall and returns `true` to abort.
-- Each function calls `deductCredits` from `_shared/credits.ts` which charges `ceil((llm_cost_usd / 0.007) * 100) / 100` credits. New users get 300 credits on signup.
-- Payments via Lemon Squeezy (MoR). `create-checkout` creates a checkout session; `payment-webhook` (deployed with `--no-verify-jwt`, uses HMAC verification instead) grants credits on `order_created`.
+- Each function calls `deductCredits` from `_shared/credits.ts` which charges `ceil((llm_cost_usd / 0.007) * 100) / 100` credits. New users get 100 credits on signup (DB default).
+- **Web payments:** Lemon Squeezy (MoR). `create-checkout` creates a checkout session; `payment-webhook` (deployed with `--no-verify-jwt`, uses HMAC verification instead) grants credits on `order_created`.
+- **Android payments:** RevenueCat via Google Play Billing. `billing.js` detects platform and calls RC SDK. On purchase: immediately calls `revenuecat-verify` for instant credit grant; `revenuecat-webhook` (also `--no-verify-jwt`) is the idempotent fallback. Both use `"rc_<transactionId>"` as `provider_session_id`.
+- **Coupons:** `redeem-coupon` edge function. Single-use per user enforced via `provider_session_id` UNIQUE constraint. Current codes in the function source.
 
 ### AI / Edge Functions
+
 - Unified chat uses action-based responses: LLM returns `actions[]` array with support for bulk dismiss (routeIds array).
 - Route labels (P1, P2...) computed at render time from display index, never stored.
 - All functions log token usage to `llm_usage` table (fire-and-forget).
 - `generate-destination-research` uses Haiku 4.5 + `web_search` tool (max 4 uses). Results cached in DB; cache key = (destinations, tags, monthBucket).
 
 ### Maps & Photos
+
 - Geocoding enriched with trip destination context (e.g. "Kuta" → "Kuta, Bali") to avoid wrong-continent results.
 - Photos: 4-tier Wikipedia lookup with person-page filtering, serialized Magazine fallback to prevent duplicates.
 - TransitionRow: haversine walk/drive pill + optional transit icon (🚇/🚌/⛴️) linking to Google Maps transit. No LLM time estimates.
 - Inter-city transit cards: rich cards with service name, stations, duration, cost, Rome2Rio link.
 
 ### Data / State
+
 - Pre-loading: Day 1 geocoded/photos cached when streamingDays >= 1. Expanding Day N triggers Day N+1 pre-load.
 - Offline: trip list + days cached in localStorage.
 - Edit Details flow: smart change detection with confirmation sheet. Destinations/duration force regenerate, other changes user chooses.
@@ -206,4 +221,4 @@ Two Supabase projects — local dev and staging share one, production is isolate
 - Gated functions import `authenticateUser`, `deductCredits`, `rateLimit` from `../_shared/credits.ts`
 - All functions log token usage to `llm_usage` table (fire-and-forget)
 - Deploy to each environment separately — changes to staging don't affect production
-- `payment-webhook` must be deployed with `--no-verify-jwt`; it uses HMAC signature verification instead
+- `payment-webhook` and `revenuecat-webhook` must be deployed with `--no-verify-jwt`; both use their own secret-based verification instead of Supabase JWT

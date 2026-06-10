@@ -36,7 +36,10 @@ serve(async (req) => {
     if (!code || typeof code !== "string") {
       return new Response(
         JSON.stringify({ error: "Coupon code is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
       );
     }
 
@@ -44,10 +47,10 @@ serve(async (req) => {
     const credits = VALID_COUPONS[normalised];
 
     if (!credits) {
-      return new Response(
-        JSON.stringify({ error: "Invalid coupon code" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+      return new Response(JSON.stringify({ error: "Invalid coupon code" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // provider_session_id is UNIQUE — second redemption will throw and be caught below
@@ -63,7 +66,10 @@ serve(async (req) => {
       // grantCredits returns null if the RPC threw — most likely a duplicate
       return new Response(
         JSON.stringify({ error: "Coupon already redeemed" }),
-        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        {
+          status: 409,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
       );
     }
 
@@ -73,9 +79,9 @@ serve(async (req) => {
     );
   } catch (err) {
     console.error("redeem-coupon error:", (err as Error).message);
-    return new Response(
-      JSON.stringify({ error: (err as Error).message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ error: (err as Error).message }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });

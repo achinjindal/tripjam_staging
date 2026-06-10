@@ -7,6 +7,7 @@ import {
   refreshCredits,
   displayCredits,
 } from "./credits";
+import { isAndroidApp, purchaseCredits } from "./billing";
 
 async function redeemCoupon(code, session) {
   if (!session?.access_token) return { error: "Please sign in first." };
@@ -112,7 +113,10 @@ export function CouponModal({ open, onClose, session }) {
             <input
               type="text"
               value={code}
-              onChange={(e) => { setCode(e.target.value.toUpperCase()); setError(""); }}
+              onChange={(e) => {
+                setCode(e.target.value.toUpperCase());
+                setError("");
+              }}
               onKeyDown={(e) => e.key === "Enter" && handleRedeem()}
               placeholder="COUPON CODE"
               autoFocus
@@ -190,10 +194,17 @@ export function CouponModal({ open, onClose, session }) {
   );
 }
 
+const PACKS = [
+  { id: "small", label: "300 credits", price: "$4.99" },
+  { id: "large", label: "1000 credits", price: "$9.99" },
+];
+
 export function PaywallSheet({ session }) {
   const reason = usePaywall();
   const credits = useCredits();
   const [showCoupon, setShowCoupon] = useState(false);
+  const [purchasing, setPurchasing] = useState(null); // packId or null
+  const [purchaseError, setPurchaseError] = useState("");
 
   useEffect(() => {
     if (reason && session?.user?.id) refreshCredits(session.user.id);
@@ -201,10 +212,28 @@ export function PaywallSheet({ session }) {
 
   if (!reason) return null;
 
+  async function handleBuy(packId) {
+    setPurchaseError("");
+    setPurchasing(packId);
+    const result = await purchaseCredits(packId);
+    setPurchasing(null);
+    if (result.cancelled) return;
+    if (result.error) {
+      setPurchaseError(result.error);
+      return;
+    }
+    if (session?.user?.id) await refreshCredits(session.user.id);
+    closePaywall();
+  }
+
+  const onAndroid = isAndroidApp();
+
   return (
     <>
       <div
-        onClick={(e) => { if (e.target === e.currentTarget) closePaywall(); }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) closePaywall();
+        }}
         style={{
           position: "fixed",
           inset: 0,
@@ -226,7 +255,9 @@ export function PaywallSheet({ session }) {
             animation: `slideUp ${MOTION.normal} ease-out`,
           }}
         >
-          <div style={{ textAlign: "center", fontSize: 38, marginBottom: 10 }}>🔒</div>
+          <div style={{ textAlign: "center", fontSize: 38, marginBottom: 10 }}>
+            🔒
+          </div>
           <div
             style={{
               fontFamily: "'DM Serif Display', Georgia, serif",
@@ -280,18 +311,78 @@ export function PaywallSheet({ session }) {
               credits remaining
             </div>
           </div>
+
+          {onAndroid && (
+            <>
+              {PACKS.map((pack) => (
+                <button
+                  key={pack.id}
+                  onClick={() => handleBuy(pack.id)}
+                  disabled={!!purchasing}
+                  style={{
+                    width: "100%",
+                    padding: 14,
+                    borderRadius: RADIUS.md,
+                    border: "none",
+                    fontFamily: "Georgia, serif",
+                    fontSize: 15,
+                    fontWeight: 600,
+                    background: purchasing
+                      ? T.disabled
+                      : `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
+                    color: "white",
+                    cursor: purchasing ? "not-allowed" : "pointer",
+                    marginBottom: 8,
+                    transition: `background ${MOTION.fast}`,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <span>
+                    {purchasing === pack.id
+                      ? "Opening Google Play…"
+                      : pack.label}
+                  </span>
+                  {purchasing !== pack.id && (
+                    <span style={{ opacity: 0.85, fontSize: 14 }}>
+                      {pack.price}
+                    </span>
+                  )}
+                </button>
+              ))}
+              {purchaseError && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: T.error,
+                    textAlign: "center",
+                    marginBottom: 8,
+                  }}
+                >
+                  {purchaseError}
+                </div>
+              )}
+            </>
+          )}
+
           <button
-            onClick={() => setShowCoupon(true)}
+            onClick={() => {
+              setPurchaseError("");
+              setShowCoupon(true);
+            }}
             style={{
               width: "100%",
-              padding: 14,
+              padding: onAndroid ? 12 : 14,
               borderRadius: RADIUS.md,
-              border: "none",
+              border: onAndroid ? `1px solid ${T.border}` : "none",
               fontFamily: "Georgia, serif",
-              fontSize: 15,
+              fontSize: onAndroid ? 14 : 15,
               fontWeight: 600,
-              background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
-              color: "white",
+              background: onAndroid
+                ? "white"
+                : `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
+              color: onAndroid ? T.mist : "white",
               cursor: "pointer",
               marginBottom: 8,
             }}
@@ -319,7 +410,10 @@ export function PaywallSheet({ session }) {
       </div>
       <CouponModal
         open={showCoupon}
-        onClose={() => { setShowCoupon(false); closePaywall(); }}
+        onClose={() => {
+          setShowCoupon(false);
+          closePaywall();
+        }}
         session={session}
       />
     </>
@@ -339,7 +433,11 @@ export default function CreditsOverlay({ session }) {
       refreshCredits(session.user.id);
       params.delete("credits_success");
       const q = params.toString();
-      window.history.replaceState({}, "", window.location.pathname + (q ? `?${q}` : ""));
+      window.history.replaceState(
+        {},
+        "",
+        window.location.pathname + (q ? `?${q}` : ""),
+      );
       const t = setTimeout(() => setToast(null), 4000);
       return () => clearTimeout(t);
     }

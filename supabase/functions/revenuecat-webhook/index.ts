@@ -45,9 +45,12 @@ serve(async (req) => {
     const event = body?.event;
 
     if (!event) {
-      return new Response(JSON.stringify({ received: true, skipped: "no event" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ received: true, skipped: "no event" }),
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
     }
 
     const eventType: string = event.type;
@@ -65,7 +68,11 @@ serve(async (req) => {
     const transactionId: string = event.id;
 
     if (!userId || !productId || !transactionId) {
-      console.error("Missing required fields:", { userId, productId, transactionId });
+      console.error("Missing required fields:", {
+        userId,
+        productId,
+        transactionId,
+      });
       return new Response(JSON.stringify({ error: "Missing fields" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -76,7 +83,10 @@ serve(async (req) => {
     if (!credits) {
       console.warn("Unknown product:", productId);
       return new Response(
-        JSON.stringify({ received: true, skipped: `unknown product ${productId}` }),
+        JSON.stringify({
+          received: true,
+          skipped: `unknown product ${productId}`,
+        }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }

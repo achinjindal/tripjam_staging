@@ -1,5 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { authenticateUser, unauthorized, rateLimit, llmKillSwitch, requireMinCredits, deductCredits } from "../_shared/credits.ts";
+import {
+  authenticateUser,
+  unauthorized,
+  rateLimit,
+  llmKillSwitch,
+  requireMinCredits,
+  deductCredits,
+} from "../_shared/credits.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
