@@ -23,9 +23,7 @@ async function openUrl(url) {
 import {
   _fetchPhoto,
   _photoCache,
-  _usedPhotoUrls,
-  _isPortrait,
-  _enqueueMagazineFallback,
+  _PHOTO_IN_FLIGHT,
   wikiQueuedFetch,
 } from "../photos";
 
@@ -316,37 +314,15 @@ export function CityCard({
   const [photoUrl, setPhotoUrl] = useState(null);
   const [photoLoaded, setPhotoLoaded] = useState(false);
   useEffect(() => {
-    (async () => {
-      try {
-        // Queued so we share the global Wikimedia rate-limit cooldown — direct fetches were 429ing.
-        const data = await wikiQueuedFetch(
-          `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(city)}&prop=pageimages&format=json&pithumbsize=800&redirects=1&origin=*`,
-        );
-        const page = Object.values(data?.query?.pages || {})[0];
-        const src = page?.thumbnail?.source;
-        const BAD =
-          /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|panorama|blank|in_Indonesia|location/i;
-        if (src && !BAD.test(src)) {
-          setPhotoUrl(src);
-          setPhotoLoaded(true);
-          return;
-        }
-        const data2 = await wikiQueuedFetch(
-          `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(city)}&gsrlimit=3&prop=pageimages&pithumbsize=800&format=json&origin=*`,
-        );
-        for (const p of Object.values(data2?.query?.pages || {})) {
-          const s = p?.thumbnail?.source;
-          if (s && !BAD.test(s)) {
-            setPhotoUrl(s);
-            setPhotoLoaded(true);
-            return;
-          }
-        }
-      } catch {
-        /* ignore */
-      }
+    let cancelled = false;
+    _fetchPhoto(city, null, "sight").then((url) => {
+      if (cancelled) return;
+      if (url) setPhotoUrl(url);
       setPhotoLoaded(true);
-    })();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [city]);
 
   // Lazy-load deep dive when this card scrolls into view (first city is eager-loaded).
@@ -651,6 +627,23 @@ export function MagazineHighlightCard({
   const photoCacheKey = `${searchKey}||${city || ""}`;
   const [photoUrl, setPhotoUrl] = useState(item.photo_url || null);
   const [loaded, setLoaded] = useState(!!item.photo_url);
+  const cardRef = useRef(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisible(true);
+          obs.disconnect();
+        }
+      },
+      { rootMargin: "400px 0px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
   // Parent may attach photo_url after deep-dive + sequential photo fetch completes.
   useEffect(() => {
     if (item.photo_url) {
@@ -659,116 +652,53 @@ export function MagazineHighlightCard({
     }
   }, [item.photo_url]);
   useEffect(() => {
-    if (photoUrl || item.photo_url) {
-      setLoaded(true);
+    if (!visible || photoUrl || item.photo_url) {
+      if (photoUrl || item.photo_url) setLoaded(true);
       return;
     }
     let cancelled = false;
-    // Fetch photo — for Magazine cards, also try a direct Wikipedia lookup
-    // since _fetchPhoto may reject due to dedup (_usedPhotoUrls)
+    let retryTimer = null;
+
     _fetchPhoto(searchKey, city, item.type || "sight").then((url) => {
       if (cancelled) return;
-      const resolved = url || _photoCache[photoCacheKey];
-      if (resolved) {
-        setPhotoUrl(resolved);
+      if (url) {
+        setPhotoUrl(url);
         setLoaded(true);
         return;
       }
-      // Fallback: direct Wikipedia thumbnail (serialized to prevent duplicate photos)
-      _enqueueMagazineFallback(async () => {
-        try {
-          const q = searchKey;
-          // Route through wikiQueuedFetch so this respects the global Wikimedia rate-limit
-          // cooldown — direct fetches here were a major contributor to the 429 storms.
-          const data = await wikiQueuedFetch(
-            `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(q + (city ? " " + city : ""))}&gsrlimit=5&prop=pageimages|description&pithumbsize=700&format=json&origin=*`,
+      // If another fetch (e.g. attachPhotosToMoreSights) is in-flight for this
+      // key, stay in skeleton and retry once after 4s — by then the parent will
+      // have updated item.photo_url or the in-flight fetch will have resolved.
+      if (_photoCache[photoCacheKey] === _PHOTO_IN_FLIGHT) {
+        retryTimer = setTimeout(async () => {
+          if (cancelled) return;
+          const retryUrl = await _fetchPhoto(
+            searchKey,
+            city,
+            item.type || "sight",
           );
-          if (!data) {
-            if (!cancelled) setLoaded(true);
-            return;
+          if (!cancelled) {
+            if (retryUrl) setPhotoUrl(retryUrl);
+            setLoaded(true);
           }
-          const BAD =
-            /\.(svg|pdf)(\.|$)|map|marker|flag|logo|icon|coat.of.arms|skyline|panorama|regulation|nintendo|game.boy|console/i;
-          const PERSON =
-            /\b(born|politician|actor|actress|singer|player|wrestler|athlete|writer|emperor|empress|manga|anime|artist|novelist|musician|composer|director|comedian|model|journalist|general|admiral|voice actor)\b/i;
-          // Relevance: page title or description must relate to the search term
-          const STOPWORDS = new Set([
-            "the",
-            "a",
-            "an",
-            "of",
-            "in",
-            "at",
-            "on",
-            "and",
-            "by",
-            "for",
-            "to",
-            "de",
-            "el",
-            "la",
-          ]);
-          const searchWords = q
-            .toLowerCase()
-            .split(/\s+/)
-            .filter((w) => w.length > 3 && !STOPWORDS.has(w));
-          const isRelevant = (page) => {
-            const t = (page.title || "").toLowerCase();
-            const d = (page.description || "").toLowerCase();
-            const combined = t + " " + d;
-            return searchWords.some((w) => combined.includes(w));
-          };
-          const isFilenameRelevant = (url) => {
-            const filename = decodeURIComponent(
-              (url || "").split("/").pop() || "",
-            )
-              .replace(/\.\w+$/, "")
-              .toLowerCase();
-            const fileWords = filename
-              .split(/[\s_\-()]+/)
-              .filter(
-                (w) => w.length > 3 && !STOPWORDS.has(w) && !/^\d+$/.test(w),
-              );
-            if (fileWords.length <= 2) return true;
-            return searchWords.some((sw) =>
-              fileWords.some((fw) => fw.includes(sw) || sw.includes(fw)),
-            );
-          };
-          for (const p of Object.values(data?.query?.pages || {})) {
-            if (p.description && PERSON.test(p.description)) continue;
-            if (!isRelevant(p)) continue;
-            const src = p?.thumbnail?.source;
-            if (
-              src &&
-              !BAD.test(src) &&
-              !_isPortrait(src) &&
-              isFilenameRelevant(src) &&
-              (!_usedPhotoUrls.has(src) || _photoCache[photoCacheKey] === src)
-            ) {
-              _usedPhotoUrls.add(src);
-              if (!cancelled) {
-                setPhotoUrl(src);
-                setLoaded(true);
-              }
-              return;
-            }
-          }
-        } catch {
-          /* ignore */
-        }
-        if (!cancelled) setLoaded(true);
-      });
+        }, 4000);
+        return;
+      }
+      setLoaded(true);
     });
+
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [searchKey, city, photoCacheKey]);
+  }, [visible, searchKey, city, photoCacheKey, item.photo_url]);
   const mapsQuery = encodeURIComponent(
     (item.geocode || item.title) + (city ? `, ${city}` : ""),
   );
   const photoHeight = masonry ? (tall ? 160 : 120) : 90;
   return (
     <div
+      ref={cardRef}
       style={{
         flexShrink: masonry ? undefined : 0,
         width: masonry ? "100%" : 160,

@@ -6,6 +6,10 @@ import {
   deductCredits,
   rateLimit,
   llmKillSwitch,
+  newStreamUsage,
+  accumulateStreamUsage,
+  hasStreamUsage,
+  runInBackground,
 } from "../_shared/credits.ts";
 
 const corsHeaders = {
@@ -107,13 +111,15 @@ TRAVELLER PREFERENCES:
 - Notes: ${form.notes || "none"}`
       : "";
 
-    const systemPrompt = `You are Trippy, a friendly travel planning assistant. Refer to yourself as Trippy if asked.
+    // ── System prompt split for prompt caching ──
+    // The static instructions (identity, action vocabulary, response rules,
+    // examples) depend only on the current screen, so they form a stable
+    // cacheable prefix that is reused across every turn of a conversation.
+    // The per-call trip/plan context lives in a separate, uncached block
+    // appended after it.
+    const staticInstructions = `You are Trippy, a friendly travel planning assistant. Refer to yourself as Trippy if asked.
 
 CURRENT SCREEN: ${isBrainstorm ? "ROUTE PLANNING (pre-trip)" : isItinerary ? "ITINERARY (trip built)" : "GENERAL"}
-${trip ? `Trip: ${trip.name} (${trip.destination})${logisticsNote}` : ""}
-${formInfo}
-${isBrainstorm && routeSummary ? `\nCURRENT PLAN OPTIONS:\n${routeSummary}` : ""}
-${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}
 
 ═══════════════════════════════════════════════
 ACTIONS — You can perform these actions by including an "actions" array in your response.
@@ -137,7 +143,7 @@ ${
 2. dismiss_route — Remove plan(s) from view (user can undo)
    Single: {"type":"dismiss_route","routeId":"..."}
    Bulk: {"type":"dismiss_route","routeIds":["id1","id2","id3"]}
-   Use routeIds (array) when dismissing multiple plans at once. Use the actual id values from the plan data above.
+   Use routeIds (array) when dismissing multiple plans at once. Use the actual id values from the plan data in the TRIP CONTEXT provided.
    Use when user says "remove P3", "dismiss P2", "clear all plans", "dismiss P1 to P6", etc.
 
 3. generate_more_plans — Trigger generation of additional plan options
@@ -210,6 +216,13 @@ Example (no change):
 Example (multi-action):
 {"message":"Added your hotel booking to bookmarks and a reminder to your to-do list.","actions":[{"type":"add_bookmark","title":"Taj Hotel","url":"https://booking.com/taj"},{"type":"add_todo","text":"Confirm Taj Hotel reservation","category":"Bookings","due_date":"1 week before"}]}`;
 
+    // Per-call context — NOT cached (changes every request).
+    const dynamicContext = `TRIP CONTEXT (specific to this request)
+${trip ? `Trip: ${trip.name} (${trip.destination})${logisticsNote}` : ""}
+${formInfo}
+${isBrainstorm && routeSummary ? `\nCURRENT PLAN OPTIONS:\n${routeSummary}` : ""}
+${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}`;
+
     // Clean history
     const cleanHistory = (history || [])
       .filter((m: any) => m.content && m.content.trim() && !m.streaming)
@@ -235,20 +248,31 @@ Example (multi-action):
     const recent = trimmed.slice(-6); // Keep last 6 messages to cap input token cost
     const messages = [...recent, { role: "user", content: message }];
 
+    const requestBody = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8192,
+      stream: true,
+      // Static instructions are cached; per-call context is not.
+      system: [
+        {
+          type: "text",
+          text: staticInstructions,
+          cache_control: { type: "ephemeral" },
+        },
+        { type: "text", text: dynamicContext },
+      ],
+      messages,
+    });
+
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": "prompt-caching-2024-07-31",
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 8192,
-        stream: true,
-        system: systemPrompt,
-        messages,
-      }),
+      body: requestBody,
     });
 
     if (!response.ok) {
@@ -256,7 +280,8 @@ Example (multi-action):
       throw new Error(`Anthropic error: ${err}`);
     }
 
-    // Stream-accumulate
+    // Stream-accumulate text + real token usage (message_start / message_delta).
+    const usage = newStreamUsage();
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let accumulated = "";
@@ -273,6 +298,7 @@ Example (multi-action):
         if (raw === "[DONE]") continue;
         try {
           const event = JSON.parse(raw);
+          accumulateStreamUsage(usage, event);
           if (
             event.type === "content_block_delta" &&
             event.delta?.type === "text_delta"
@@ -285,42 +311,52 @@ Example (multi-action):
       }
     }
 
-    // Log LLM usage (fire-and-forget, approximate tokens)
-    const requestBodyStr = JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 8192,
-      stream: true,
-      system: systemPrompt,
-      messages,
-    });
-    const inputTokens = Math.round(requestBodyStr.length / 4);
-    const outputTokens = Math.round(accumulated.length / 4);
+    // Prefer the API's real token counts; fall back to a length estimate only
+    // if the usage events never arrived (so billing never silently zeroes out).
+    const inputTokens = hasStreamUsage(usage)
+      ? usage.inputTokens
+      : Math.round(requestBody.length / 4);
+    const outputTokens =
+      usage.outputTokens || Math.round(accumulated.length / 4);
+    const cacheCreationTokens = usage.cacheCreationTokens;
+    const cacheReadTokens = usage.cacheReadTokens;
+
+    // Log LLM usage + deduct credits. Wrapped in runInBackground so the
+    // isolate stays alive until both complete (see runInBackground docs).
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`,
-      },
-      body: JSON.stringify({
-        trip_id: trip?.id || null,
-        function_name: "chat",
-        model: "claude-sonnet-4-6",
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-      }),
-    }).catch(() => {});
+    runInBackground(
+      (async () => {
+        await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+          },
+          body: JSON.stringify({
+            trip_id: trip?.id || null,
+            function_name: "chat",
+            model: "claude-sonnet-4-6",
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            cache_creation_tokens: cacheCreationTokens,
+            cache_read_tokens: cacheReadTokens,
+          }),
+        }).catch(() => {});
 
-    deductCredits({
-      userId: user.id,
-      model: "claude-sonnet-4-6",
-      inputTokens,
-      outputTokens,
-      functionName: "chat",
-      tripId: trip?.id || null,
-    });
+        await deductCredits({
+          userId: user.id,
+          model: "claude-sonnet-4-6",
+          inputTokens,
+          outputTokens,
+          cacheCreationTokens,
+          cacheReadTokens,
+          functionName: "chat",
+          tripId: trip?.id || null,
+        });
+      })(),
+    );
 
     const start = accumulated.indexOf("{");
     const end = accumulated.lastIndexOf("}");

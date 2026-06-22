@@ -6,6 +6,10 @@ import {
   deductCredits,
   rateLimit,
   llmKillSwitch,
+  newStreamUsage,
+  accumulateStreamUsage,
+  hasStreamUsage,
+  runInBackground,
 } from "../_shared/credits.ts";
 
 const corsHeaders = {
@@ -375,6 +379,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
 
     (async () => {
       let outputLength = 0;
+      const usage = newStreamUsage();
       try {
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();
@@ -391,6 +396,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
             if (raw === "[DONE]") continue;
             try {
               const event = JSON.parse(raw);
+              accumulateStreamUsage(usage, event);
               if (
                 event.type === "content_block_delta" &&
                 event.delta?.type === "text_delta"
@@ -418,34 +424,52 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
         await writer.write(encoder.encode("data: [DONE]\n\n"));
         await writer.close();
 
-        // Log LLM usage (fire-and-forget)
-        const outputTokens = Math.round(outputLength / 4);
+        // Prefer the API's real token counts (incl. cache read/write); fall
+        // back to length estimates only when usage events never arrived.
+        const inputTokens = hasStreamUsage(usage)
+          ? usage.inputTokens
+          : estimatedInputTokens;
+        const outputTokens = usage.outputTokens || Math.round(outputLength / 4);
+        const cacheCreationTokens = usage.cacheCreationTokens;
+        const cacheReadTokens = usage.cacheReadTokens;
+
+        // Log LLM usage + deduct credits. Wrapped in runInBackground so the
+        // isolate is NOT reclaimed before these run — the bug that dropped
+        // every generate-itinerary usage log + credit deduction.
         const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
         const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-        fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-          },
-          body: JSON.stringify({
-            trip_id: tripId || null,
-            function_name: "generate-itinerary",
-            model: "claude-sonnet-4-6",
-            input_tokens: estimatedInputTokens,
-            output_tokens: outputTokens,
-          }),
-        }).catch(() => {});
+        runInBackground(
+          (async () => {
+            await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                apikey: supabaseKey,
+                Authorization: `Bearer ${supabaseKey}`,
+              },
+              body: JSON.stringify({
+                trip_id: tripId || null,
+                function_name: "generate-itinerary",
+                model: "claude-sonnet-4-6",
+                input_tokens: inputTokens,
+                output_tokens: outputTokens,
+                cache_creation_tokens: cacheCreationTokens,
+                cache_read_tokens: cacheReadTokens,
+              }),
+            }).catch(() => {});
 
-        deductCredits({
-          userId: user.id,
-          model: "claude-sonnet-4-6",
-          inputTokens: estimatedInputTokens,
-          outputTokens,
-          functionName: "generate-itinerary",
-          tripId: tripId || null,
-        });
+            await deductCredits({
+              userId: user.id,
+              model: "claude-sonnet-4-6",
+              inputTokens,
+              outputTokens,
+              cacheCreationTokens,
+              cacheReadTokens,
+              functionName: "generate-itinerary",
+              tripId: tripId || null,
+            });
+          })(),
+        );
       }
     })();
 

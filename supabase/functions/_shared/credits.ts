@@ -9,6 +9,28 @@
 //
 // Stored as NUMERIC(10,2) in profiles.credits; displayed as Math.floor() to user.
 
+// Supabase Edge reclaims the isolate once the response (or streamed body)
+// completes, which silently kills un-awaited "fire-and-forget" work started
+// just before/after the response ends. That dropped EVERY generate-itinerary
+// usage log + credit deduction (long stream → immediate teardown). Register
+// background work with EdgeRuntime.waitUntil so the runtime keeps the isolate
+// alive until it finishes. Falls back to a fire-and-forget call when the
+// global is absent (local dev / tests).
+declare const EdgeRuntime:
+  | { waitUntil(promise: Promise<unknown>): void }
+  | undefined;
+
+export function runInBackground(work: Promise<unknown>): void {
+  const safe = work.catch(() => {}); // never let background work reject loudly
+  try {
+    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
+      EdgeRuntime.waitUntil(safe);
+    }
+  } catch {
+    /* EdgeRuntime unavailable — `safe` still runs, just unguarded by waitUntil */
+  }
+}
+
 const RATES: Record<string, { input: number; output: number }> = {
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
   "claude-haiku-4-5": { input: 0.8, output: 4.0 },
@@ -20,13 +42,26 @@ export const CREDIT_LLM_BUDGET_USD = 0.007;
 // D24: External APIs (Google Places, Photos) pass through at full $0.01/credit
 export const EXTERNAL_API_USER_VALUE = 0.01;
 
+// Anthropic prompt-caching multipliers (relative to the base input rate):
+//   cache write (5-min ephemeral) = 1.25× input, cache read = 0.10× input.
+// `inputTokens`, `cacheCreationTokens` and `cacheReadTokens` are disjoint
+// (they sum to the total input) — mirror exactly what the API `usage` reports.
+export const CACHE_WRITE_MULTIPLIER = 1.25;
+export const CACHE_READ_MULTIPLIER = 0.1;
+
 export function computeLLMCost(
   model: string,
   inputTokens: number,
   outputTokens: number,
+  cacheCreationTokens = 0,
+  cacheReadTokens = 0,
 ): number {
   const r = RATES[model] || RATES["claude-sonnet-4-6"];
-  return (inputTokens * r.input + outputTokens * r.output) / 1_000_000;
+  const inputUsd =
+    inputTokens * r.input +
+    cacheCreationTokens * r.input * CACHE_WRITE_MULTIPLIER +
+    cacheReadTokens * r.input * CACHE_READ_MULTIPLIER;
+  return (inputUsd + outputTokens * r.output) / 1_000_000;
 }
 
 // Round up to nearest 0.01 (whole cent of LLM spend). No `Math.max(1, ...)`
@@ -197,10 +232,20 @@ export async function deductCredits(args: {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
   functionName: string;
   tripId?: string | null;
 }): Promise<void> {
-  const usd = computeLLMCost(args.model, args.inputTokens, args.outputTokens);
+  const cacheCreationTokens = args.cacheCreationTokens ?? 0;
+  const cacheReadTokens = args.cacheReadTokens ?? 0;
+  const usd = computeLLMCost(
+    args.model,
+    args.inputTokens,
+    args.outputTokens,
+    cacheCreationTokens,
+    cacheReadTokens,
+  );
   const credits = costToCredits(usd);
   if (credits <= 0) return;
   const supa = adminClient();
@@ -216,11 +261,65 @@ export async function deductCredits(args: {
         model: args.model,
         input_tokens: args.inputTokens,
         output_tokens: args.outputTokens,
+        // Only surface cache fields when caching actually happened, keeping
+        // metadata for non-cached calls byte-identical to before.
+        ...(cacheCreationTokens
+          ? { cache_creation_tokens: cacheCreationTokens }
+          : {}),
+        ...(cacheReadTokens ? { cache_read_tokens: cacheReadTokens } : {}),
       },
     });
   } catch (e) {
     console.error("deductCredits failed:", (e as Error).message);
   }
+}
+
+// ── Streaming usage capture ──────────────────────────────────────────────
+// Anthropic streams report real token counts across two event types:
+//   • message_start  → message.usage with input_tokens + cache_* breakdown
+//   • message_delta  → usage.output_tokens (cumulative; last event wins)
+// Call `accumulateStreamUsage(u, event)` for every parsed SSE event, then read
+// the totals once the stream closes. Counts stay 0 if the events never arrive,
+// letting callers fall back to a length-based estimate.
+export type StreamUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+};
+
+export function newStreamUsage(): StreamUsage {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+  };
+}
+
+export function accumulateStreamUsage(
+  u: StreamUsage,
+  // deno-lint-ignore no-explicit-any
+  event: any,
+): void {
+  if (event?.type === "message_start" && event.message?.usage) {
+    const mu = event.message.usage;
+    u.inputTokens = mu.input_tokens ?? 0;
+    u.cacheCreationTokens = mu.cache_creation_input_tokens ?? 0;
+    u.cacheReadTokens = mu.cache_read_input_tokens ?? 0;
+    if (typeof mu.output_tokens === "number") u.outputTokens = mu.output_tokens;
+  } else if (event?.type === "message_delta" && event.usage) {
+    if (typeof event.usage.output_tokens === "number") {
+      u.outputTokens = event.usage.output_tokens;
+    }
+  }
+}
+
+// True when message_start was seen and real input counts were captured.
+export function hasStreamUsage(u: StreamUsage): boolean {
+  return (
+    u.inputTokens > 0 || u.cacheCreationTokens > 0 || u.cacheReadTokens > 0
+  );
 }
 
 // Pass-through external API charge (Google Places, Photos, etc). The caller

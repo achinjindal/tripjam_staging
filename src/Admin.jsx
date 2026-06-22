@@ -10,9 +10,26 @@ const COST_RATES = {
   },
 };
 
-function calcCost(model, inputTokens, outputTokens) {
+// Anthropic prompt-caching multipliers relative to the base input rate:
+// cache write = 1.25× input, cache read = 0.10× input. The three input buckets
+// (input_tokens, cache_creation_tokens, cache_read_tokens) are disjoint.
+const CACHE_WRITE_MULTIPLIER = 1.25;
+const CACHE_READ_MULTIPLIER = 0.1;
+
+function calcCost(
+  model,
+  inputTokens,
+  outputTokens,
+  cacheCreationTokens = 0,
+  cacheReadTokens = 0,
+) {
   const rate = COST_RATES[model] || COST_RATES["claude-sonnet-4-6"];
-  return inputTokens * rate.input + outputTokens * rate.output;
+  return (
+    inputTokens * rate.input +
+    cacheCreationTokens * rate.input * CACHE_WRITE_MULTIPLIER +
+    cacheReadTokens * rate.input * CACHE_READ_MULTIPLIER +
+    outputTokens * rate.output
+  );
 }
 
 function fmtCost(cost) {
@@ -125,6 +142,8 @@ export default function AdminConsole({ session, onHome }) {
           row.model,
           row.input_tokens,
           row.output_tokens,
+          row.cache_creation_tokens || 0,
+          row.cache_read_tokens || 0,
         );
       });
       setDailyUsage(
@@ -194,7 +213,15 @@ export default function AdminConsole({ session, onHome }) {
 
     const tripUsage = llmUsage.filter((u) => u.trip_id === tripId);
     const totalCost = tripUsage.reduce(
-      (s, u) => s + calcCost(u.model, u.input_tokens, u.output_tokens),
+      (s, u) =>
+        s +
+        calcCost(
+          u.model,
+          u.input_tokens,
+          u.output_tokens,
+          u.cache_creation_tokens || 0,
+          u.cache_read_tokens || 0,
+        ),
       0,
     );
 
@@ -262,7 +289,15 @@ export default function AdminConsole({ session, onHome }) {
 
   // Global stats
   const totalCost = llmUsage.reduce(
-    (s, u) => s + calcCost(u.model, u.input_tokens, u.output_tokens),
+    (s, u) =>
+      s +
+      calcCost(
+        u.model,
+        u.input_tokens,
+        u.output_tokens,
+        u.cache_creation_tokens || 0,
+        u.cache_read_tokens || 0,
+      ),
     0,
   );
   const totalInput = llmUsage.reduce((s, u) => s + u.input_tokens, 0);
@@ -619,6 +654,8 @@ export default function AdminConsole({ session, onHome }) {
                                   u.model,
                                   u.input_tokens,
                                   u.output_tokens,
+                                  u.cache_creation_tokens || 0,
+                                  u.cache_read_tokens || 0,
                                 ),
                               )}
                             </td>
@@ -656,7 +693,13 @@ export default function AdminConsole({ session, onHome }) {
                       .reduce(
                         (s, r) =>
                           s +
-                          calcCost(r.model, r.input_tokens, r.output_tokens),
+                          calcCost(
+                            r.model,
+                            r.input_tokens,
+                            r.output_tokens,
+                            r.cache_creation_tokens || 0,
+                            r.cache_read_tokens || 0,
+                          ),
                         0,
                       );
                     const bal = u.credits ?? 0;
@@ -795,6 +838,8 @@ export default function AdminConsole({ session, onHome }) {
                         u.model,
                         u.input_tokens,
                         u.output_tokens,
+                        u.cache_creation_tokens || 0,
+                        u.cache_read_tokens || 0,
                       );
                     });
                     return Object.values(grouped)

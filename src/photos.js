@@ -7,24 +7,7 @@ export { PLACES_PROXY, PLACES_HEADERS };
 
 export const _photoCache = {};
 export const _usedPhotoUrls = new Set();
-export const _magazineFallbackQueue = []; // serialize fallback fetches to prevent duplicate photos
-export let _magazineFallbackRunning = false;
-export function _enqueueMagazineFallback(fn) {
-  return new Promise((resolve) => {
-    _magazineFallbackQueue.push(async () => {
-      resolve(await fn());
-    });
-    if (!_magazineFallbackRunning) {
-      _magazineFallbackRunning = true;
-      (async () => {
-        while (_magazineFallbackQueue.length) {
-          await _magazineFallbackQueue.shift()();
-        }
-        _magazineFallbackRunning = false;
-      })();
-    }
-  });
-}
+export const _PHOTO_IN_FLIGHT = Symbol("photo-in-flight");
 
 let _activeTripId = null; // set when a trip is opened, used for hotel photo rate limits
 export function setActiveTripId(id) {
@@ -148,10 +131,11 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
   const cacheKey = `${geocode}||${city || ""}`;
   if (_photoCache[cacheKey] !== undefined) {
     const cached = _photoCache[cacheKey];
+    if (cached === _PHOTO_IN_FLIGHT) return null;
     return cached && _usedPhotoUrls.has(cached) ? null : cached;
   }
   // Mark in-flight to prevent concurrent duplicate fetches
-  _photoCache[cacheKey] = null;
+  _photoCache[cacheKey] = _PHOTO_IN_FLIGHT;
   // Strip leading/trailing city from geocode to avoid doubled query (e.g. "Hanoi La Siesta Classic Ma May" + city "Hanoi")
   const geocodeQ = city
     ? (() => {

@@ -6,6 +6,10 @@ import {
   deductCredits,
   rateLimit,
   llmKillSwitch,
+  newStreamUsage,
+  accumulateStreamUsage,
+  hasStreamUsage,
+  runInBackground,
 } from "../_shared/credits.ts";
 
 const corsHeaders = {
@@ -149,21 +153,31 @@ serve(async (req) => {
           : "") +
         `\n\nIf this is a country/region-level destination, generate exactly ${numPlans} realistic route options (tier 1). Do NOT generate tier 2 experiences — only routes.`;
 
+    const requestBody = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 4000,
+      temperature: 0.7,
+      stream: true,
+      // The system prompt is fully static, so cache it as a stable prefix.
+      system: [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [{ role: "user", content: userMessage }],
+    });
+
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": "prompt-caching-2024-07-31",
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4000,
-        temperature: 0.7,
-        stream: true,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      }),
+      body: requestBody,
     });
 
     if (!response.ok) {
@@ -176,16 +190,8 @@ serve(async (req) => {
       throw new Error("Anthropic error: " + err);
     }
 
-    // Estimate input tokens from request body size
-    const requestBodyStr = JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 4000,
-      temperature: 0.7,
-      stream: true,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userMessage }],
-    });
-    const estimatedInputTokens = Math.round(requestBodyStr.length / 4);
+    // Fallback estimate, used only if the stream never reports real usage.
+    const estimatedInputTokens = Math.round(requestBody.length / 4);
 
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
@@ -193,6 +199,7 @@ serve(async (req) => {
 
     (async () => {
       let outputLength = 0;
+      const usage = newStreamUsage();
       try {
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();
@@ -209,6 +216,7 @@ serve(async (req) => {
             if (raw === "[DONE]") continue;
             try {
               const event = JSON.parse(raw);
+              accumulateStreamUsage(usage, event);
               if (
                 event.type === "content_block_delta" &&
                 event.delta?.type === "text_delta"
@@ -229,35 +237,52 @@ serve(async (req) => {
         await writer.write(encoder.encode("data: [DONE]\n\n"));
         await writer.close();
 
-        // Log LLM usage (fire-and-forget)
-        const outputTokens = Math.round(outputLength / 4);
+        // Prefer the API's real token counts; fall back to length estimates
+        // only when the usage events never arrived.
+        const inputTokens = hasStreamUsage(usage)
+          ? usage.inputTokens
+          : estimatedInputTokens;
+        const outputTokens = usage.outputTokens || Math.round(outputLength / 4);
+        const cacheCreationTokens = usage.cacheCreationTokens;
+        const cacheReadTokens = usage.cacheReadTokens;
+
+        // Log LLM usage + deduct credits. Wrapped in runInBackground so the
+        // isolate survives until both complete after the stream closes.
         const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
         const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-        fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-          },
-          body: JSON.stringify({
-            trip_id: tripId || null,
-            function_name: "generate-brainstorm",
-            model: "claude-sonnet-4-6",
-            input_tokens: estimatedInputTokens,
-            output_tokens: outputTokens,
-          }),
-        }).catch(() => {});
+        runInBackground(
+          (async () => {
+            await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                apikey: supabaseKey,
+                Authorization: `Bearer ${supabaseKey}`,
+              },
+              body: JSON.stringify({
+                trip_id: tripId || null,
+                function_name: "generate-brainstorm",
+                model: "claude-sonnet-4-6",
+                input_tokens: inputTokens,
+                output_tokens: outputTokens,
+                cache_creation_tokens: cacheCreationTokens,
+                cache_read_tokens: cacheReadTokens,
+              }),
+            }).catch(() => {});
 
-        // Deduct credits based on actual consumption.
-        deductCredits({
-          userId: user.id,
-          model: "claude-sonnet-4-6",
-          inputTokens: estimatedInputTokens,
-          outputTokens,
-          functionName: "generate-brainstorm",
-          tripId: tripId || null,
-        });
+            // Deduct credits based on actual consumption.
+            await deductCredits({
+              userId: user.id,
+              model: "claude-sonnet-4-6",
+              inputTokens,
+              outputTokens,
+              cacheCreationTokens,
+              cacheReadTokens,
+              functionName: "generate-brainstorm",
+              tripId: tripId || null,
+            });
+          })(),
+        );
       }
     })();
 

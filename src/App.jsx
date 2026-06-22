@@ -7103,7 +7103,7 @@ export default function App({
             styles: igReq.styles,
             budget: igReq.budget,
             notes: igReq.notes || trip?.notes || null,
-            tripId: trip?.id || null,
+            tripId: trip?.id || editingTrip?.id || null,
           }),
         },
       );
