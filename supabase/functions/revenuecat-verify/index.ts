@@ -70,12 +70,15 @@ serve(async (req) => {
       });
     }
 
+    // NOTE: Do NOT send the X-Platform header here. It marks the request as an
+    // app/SDK call, for which RevenueCat forbids secret keys (error 7243
+    // "Secret API keys should not be used in your app"). The server-side
+    // Get-Subscriber endpoint authenticates with the secret key alone.
     const rcRes = await fetch(
       `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(user.id)}`,
       {
         headers: {
           Authorization: `Bearer ${rcKey}`,
-          "X-Platform": "android",
         },
       },
     );
