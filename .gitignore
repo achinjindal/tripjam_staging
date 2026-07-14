@@ -49,3 +49,8 @@ npm-debug.log*
 /transit-design-v4.html
 /transit-validation.html
 /transit-validation-v2.html
+
+# Untracked scratch copies of the repo + pitch assets — not app code
+ad-hoc/
+inspiration/
+pitch/

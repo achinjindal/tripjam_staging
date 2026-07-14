@@ -176,48 +176,19 @@ export default function TripPublicView({ token }) {
 
   useEffect(() => {
     async function load() {
-      // Fetch trip by share token (anon, no auth)
-      const { data: tripData } = await supabase
-        .from("trips")
-        .select("*")
-        .eq("share_token", token)
-        .single();
+      // Token-scoped RPC (anon, no auth): returns only the shared trip's
+      // public fields, or null for an unknown/revoked token. Direct table
+      // reads are blocked by RLS for anonymous visitors.
+      const { data } = await supabase.rpc("get_shared_trip", {
+        p_token: token,
+      });
 
-      if (!tripData) {
+      if (!data?.trip) {
         setStatus("notfound");
         return;
       }
-      setTrip(tripData);
-
-      // Fetch days
-      const { data: daysData } = await supabase
-        .from("days")
-        .select("*")
-        .eq("trip_id", tripData.id)
-        .order("position");
-
-      if (!daysData?.length) {
-        setDays([]);
-        setStatus("found");
-        return;
-      }
-
-      // Fetch activities for all days
-      const dayIds = daysData.map((d) => d.id);
-      const { data: actsData } = await supabase
-        .from("activities")
-        .select("*")
-        .in("day_id", dayIds)
-        .order("position");
-
-      const actsByDay = (actsData || []).reduce((acc, a) => {
-        (acc[a.day_id] = acc[a.day_id] || []).push(a);
-        return acc;
-      }, {});
-
-      setDays(
-        daysData.map((d) => ({ ...d, activities: actsByDay[d.id] || [] })),
-      );
+      setTrip(data.trip);
+      setDays(data.days || []);
       setStatus("found");
     }
     load();

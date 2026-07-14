@@ -20,7 +20,7 @@ import {
   PLACES_PROXY,
   PLACES_HEADERS,
 } from "./theme";
-import { refreshCredits, openPaywall } from "./credits";
+import { refreshCredits, openPaywall, handleGatedResponse } from "./credits";
 import {
   _photoCache,
   _usedPhotoUrls,
@@ -956,6 +956,46 @@ function resolveMagazineDestination({ pendingForm, editingTrip, trip }) {
   return countries[0] || null;
 }
 
+// Returns destination names (first comma-segment) for Magazine dest-level cards.
+// "Rajasthan, India" → "Rajasthan"; "Tokyo, Japan" → "Tokyo"; "Tokyo" → "Tokyo".
+function resolveDestinationsForMagazine({ pendingForm, editingTrip, trip }) {
+  const rawDests = (pendingForm?.destinations || []).filter(
+    (d) => !isHelpMeDecideDest(d),
+  );
+  if (rawDests.length > 0) {
+    const seen = new Set();
+    const dests = [];
+    for (const d of rawDests) {
+      const name = magazinePlaceShort(d);
+      if (!name || isHelpMeDecideDest(name)) continue;
+      const key = name.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        dests.push(name);
+      }
+    }
+    if (dests.length > 0) return dests;
+  }
+  const fromTrip = editingTrip?.destination || trip?.destination;
+  if (fromTrip && !isHelpMeDecideDest(fromTrip)) {
+    const parts = fromTrip.split(/\s*→\s*/).filter(Boolean);
+    const seen = new Set();
+    const dests = [];
+    for (const d of parts) {
+      if (isHelpMeDecideDest(d)) continue;
+      const name = magazinePlaceShort(d);
+      if (!name || isHelpMeDecideDest(name)) continue;
+      const key = name.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        dests.push(name);
+      }
+    }
+    if (dests.length > 0) return dests;
+  }
+  return [];
+}
+
 function cityMatchesDestination(city, dest) {
   if (!city || !dest) return false;
   return city.toLowerCase() === dest.toLowerCase();
@@ -1801,6 +1841,16 @@ function BrainstormView({
             }),
           },
         );
+        if (
+          await handleGatedResponse(
+            res,
+            ddSession?.user?.id,
+            "Magazine deep dives need credits.",
+          )
+        ) {
+          _setLocalDeepDiveCache((prev) => ({ ...prev, [city]: "error" }));
+          return;
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         _setLocalDeepDiveCache((prev) => ({ ...prev, [city]: data }));
@@ -3384,12 +3434,10 @@ function BrainstormView({
               }
               cityGroups[city].push(d);
             }
-            const countries = resolveCountriesForMagazine({ trip });
+            const destinations = resolveDestinationsForMagazine({ trip });
             const neighborhoodCities = cityOrder.filter(
               (c) =>
-                !countries.some((country) =>
-                  cityMatchesDestination(c, country),
-                ),
+                !destinations.some((dest) => cityMatchesDestination(c, dest)),
             );
             const renderItineraryCityCard = (city, ci, keyPrefix) => {
               const isDestCard = keyPrefix === "dest-";
@@ -3442,7 +3490,19 @@ function BrainstormView({
                 ...s,
                 type: "sight",
               }));
-              const cardHighlights = isDestCard ? destHighlights : highlights;
+              const rawCardHighlights = isDestCard
+                ? destHighlights
+                : highlights;
+              // In-itinerary items surface first
+              const cardHighlights = [...rawCardHighlights].sort((a, b) => {
+                const aIn = itineraryTitles.has((a.title || "").toLowerCase())
+                  ? 0
+                  : 1;
+                const bIn = itineraryTitles.has((b.title || "").toLowerCase())
+                  ? 0
+                  : 1;
+                return aIn - bIn;
+              });
               return (
                 <Fragment key={`${keyPrefix}${city}`}>
                   {ci > 0 && (
@@ -3506,8 +3566,8 @@ function BrainstormView({
             let cardIndex = 0;
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-                {countries.map((country) =>
-                  renderItineraryCityCard(country, cardIndex++, "dest-"),
+                {destinations.map((dest) =>
+                  renderItineraryCityCard(dest, cardIndex++, "dest-"),
                 )}
                 {neighborhoodCities.map((city) =>
                   renderItineraryCityCard(city, cardIndex++, "city-"),
@@ -3977,9 +4037,6 @@ function ActivityCard({
   onChangeHotel,
   transitMapsUrl,
   onAskTrippy,
-  verifyAlternatives = null,
-  onPickVerifyAlternative,
-  onDismissVerifyAlternatives,
 }) {
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -4559,13 +4616,6 @@ function ActivityCard({
             >
               {activity.title}
             </div>
-            {activity.geocode_corrected_from && (
-              <CorrectedFromHint
-                original={activity.geocode_corrected_from}
-                currentTitle={activity.title}
-                city={city}
-              />
-            )}
             {activity.note && (
               <div
                 style={{
@@ -4813,207 +4863,7 @@ function ActivityCard({
         {activity.type !== "transit" && (
           <PhotoStrip activity={activity} city={city} />
         )}
-        {verifyAlternatives?.alternatives?.length > 0 && (
-          <VerifyAlternativesCard
-            originalName={activity.title}
-            alternatives={verifyAlternatives.alternatives}
-            reason={verifyAlternatives.reason}
-            onPick={onPickVerifyAlternative}
-            onDismiss={onDismissVerifyAlternatives}
-          />
-        )}
       </div>
-    </div>
-  );
-}
-
-/* ─── CORRECTED-FROM HINT ────────────────────────────────────────────── */
-// Renders "updated from 'Original Name'" with a [why?] toggle that lazy-loads
-// Haiku's repair reason from the verify-place cache row. Cache lookup is
-// fire-and-forget; if it misses, we just hide the [why?] affordance.
-function CorrectedFromHint({ original, currentTitle, city }) {
-  const [open, setOpen] = useState(false);
-  const [reason, setReason] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const fetchReason = async () => {
-    if (reason || loading) return;
-    setLoading(true);
-    // Verify-place cache key matches normName|city|type — we don't know
-    // type from here, so query with a startswith filter and pick the first.
-    const norm = (original || "").trim().toLowerCase();
-    const c = (city || "").toLowerCase();
-    const prefix = `verify-place:${norm}|${c}|`;
-    try {
-      const { data } = await supabase
-        .from("place_cache")
-        .select("result")
-        .like("key", `${prefix}%`)
-        .limit(1);
-      const row = data?.[0]?.result;
-      if (row?.repair_reason) setReason(row.repair_reason);
-      else setReason(""); // mark as fetched-but-empty
-    } catch {
-      setReason("");
-    } finally {
-      setLoading(false);
-    }
-  };
-  return (
-    <div
-      style={{
-        fontSize: 11,
-        color: T.mist,
-        marginTop: 3,
-        fontFamily: "Georgia,serif",
-        fontStyle: "italic",
-      }}
-    >
-      updated from &ldquo;{original}&rdquo;{" "}
-      <button
-        onClick={() => {
-          setOpen((p) => !p);
-          if (!open) fetchReason();
-        }}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          color: T.ocean,
-          fontFamily: "Georgia,serif",
-          fontSize: 11,
-          cursor: "pointer",
-          textDecoration: "underline",
-        }}
-      >
-        {open ? "hide" : "why?"}
-      </button>
-      {open && (
-        <div
-          style={{
-            marginTop: 4,
-            padding: "6px 8px",
-            background: "#F7F4EC",
-            borderRadius: 4,
-            fontSize: 11,
-            color: T.dusk,
-            fontStyle: "normal",
-          }}
-        >
-          {loading
-            ? "Loading…"
-            : reason
-              ? reason
-              : `We couldn't verify "${original}" — replaced with "${currentTitle}".`}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─── VERIFY ALTERNATIVES PICKER ─────────────────────────────────────── */
-// Rendered inline on an activity card when verify-place falls through to
-// Tier 5 (Haiku alternatives). User picks one of 2-3 suggested real places
-// or dismisses to fall back to "Get directions".
-function VerifyAlternativesCard({
-  originalName,
-  alternatives,
-  reason,
-  onPick,
-  onDismiss,
-}) {
-  return (
-    <div
-      style={{
-        margin: "8px 16px 12px 16px",
-        padding: "12px 14px",
-        background: "#FFF8EC",
-        border: `1px solid ${T.amber || "#E6C77A"}`,
-        borderRadius: RADIUS.md || 8,
-        fontFamily: "Georgia,serif",
-      }}
-    >
-      <div
-        style={{
-          fontSize: 12,
-          color: T.dusk,
-          fontWeight: 600,
-          marginBottom: 4,
-        }}
-      >
-        Couldn't verify &ldquo;{originalName}&rdquo;
-      </div>
-      {reason && (
-        <div
-          style={{
-            fontSize: 11,
-            color: T.mist,
-            fontStyle: "italic",
-            marginBottom: 8,
-          }}
-        >
-          {reason}
-        </div>
-      )}
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 6,
-        }}
-      >
-        {alternatives.map((alt, i) => (
-          <button
-            key={i}
-            onClick={() => onPick?.(alt)}
-            style={{
-              textAlign: "left",
-              padding: "8px 10px",
-              border: `1px solid ${T.sand}`,
-              borderRadius: RADIUS.sm || 6,
-              background: "#FFFFFF",
-              cursor: "pointer",
-              fontFamily: "Georgia,serif",
-            }}
-          >
-            <div
-              style={{
-                fontSize: 13,
-                color: T.dusk,
-                fontWeight: 600,
-              }}
-            >
-              {alt.name}
-            </div>
-            {alt.reason && (
-              <div
-                style={{
-                  fontSize: 11,
-                  color: T.mist,
-                  marginTop: 2,
-                }}
-              >
-                {alt.reason}
-              </div>
-            )}
-          </button>
-        ))}
-      </div>
-      <button
-        onClick={() => onDismiss?.()}
-        style={{
-          marginTop: 10,
-          fontSize: 11,
-          color: T.ocean,
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          fontFamily: "Georgia,serif",
-          textDecoration: "underline",
-        }}
-      >
-        Use &ldquo;Get directions&rdquo; instead
-      </button>
     </div>
   );
 }
@@ -5850,9 +5700,6 @@ function DaySection({
   destArrivalHHMM = null,
   onAddGemToItinerary,
   onDismissGem,
-  verifyAlternativesById = null,
-  onPickVerifyAlternative,
-  onDismissVerifyAlternatives,
 }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
@@ -6120,13 +5967,6 @@ function DaySection({
                 onChangeHotel={(mode) => onChangeHotel?.(day.id, act, mode)}
                 transitMapsUrl={transitMapsUrl}
                 onAskTrippy={onAskTrippy}
-                verifyAlternatives={verifyAlternativesById?.get(act.id) || null}
-                onPickVerifyAlternative={(alt) =>
-                  onPickVerifyAlternative?.(day.id, act, alt)
-                }
-                onDismissVerifyAlternatives={() =>
-                  onDismissVerifyAlternatives?.(act.id)
-                }
               />
               {!lastAct && !samePackageAsNext && (
                 <TransitionRow
@@ -6678,6 +6518,7 @@ export default function App({
   const [streamingTotal, setStreamingTotal] = useState(0);
   const [allDaysPlanned, setAllDaysPlanned] = useState(false);
   const [generatingRoute, setGeneratingRoute] = useState(null); // selected route shown during IG generation
+  const [igGenerating, setIgGenerating] = useState(false); // true while IG is in flight (Magazine shown instead of generating screen)
 
   useEffect(() => {
     if (initialScreen === "itinerary" && initialTrip?.id) {
@@ -6787,22 +6628,6 @@ export default function App({
   ); // true if opening existing trip
   const preloadedDaysRef = useRef(new Set()); // track which day indices have been pre-loaded
 
-  // Verify-place picker state — maps activity id to Haiku-suggested alternatives
-  // when verify-place falls through to Tier 5. Lives at App scope so it survives
-  // re-renders of individual day sections. The picker UI inline-renders inside
-  // ActivityCard when this map has an entry for the activity.
-  const [verifyAlternativesById, setVerifyAlternativesById] = useState(
-    () => new Map(),
-  );
-  const setVerifyAlternativesFor = useCallback((actId, payload) => {
-    setVerifyAlternativesById((prev) => {
-      const next = new Map(prev);
-      if (payload) next.set(actId, payload);
-      else next.delete(actId);
-      return next;
-    });
-  }, []);
-
   // Pre-load a day's geocoding + photos (warms caches for TransitionRow + PhotoStrip)
   // Also kicks off lazy verify-place for activities that have not yet been
   // verified, persisting coords + metadata back to the DB and re-rendering
@@ -6858,22 +6683,13 @@ export default function App({
                 })),
               );
             }
-            // Surface picker UI for any activity that fell through to alternatives
-            results.forEach((r, idx) => {
-              if (r?.status === "alternatives" && r.alternatives?.length) {
-                setVerifyAlternativesFor(toVerify[idx].id, {
-                  alternatives: r.alternatives,
-                  reason: r.reason || null,
-                });
-              }
-            });
           } catch (e) {
             console.warn("lazy verifyActivity batch failed:", e?.message);
           }
         })();
       }
     },
-    [session, trip?.id, setVerifyAlternativesFor],
+    [session, trip?.id],
   );
 
   // Day 6 Part A: parallelize per-day photo + geocode prefetch as days stream
@@ -7107,6 +6923,16 @@ export default function App({
           }),
         },
       );
+      if (
+        await handleGatedResponse(
+          res,
+          session?.user?.id,
+          "Magazine deep dives need credits.",
+        )
+      ) {
+        setDeepDiveCacheApp((prev) => ({ ...prev, [city]: "error" }));
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       // Show text content immediately — don't block on Wikipedia photo fetches.
@@ -7347,7 +7173,8 @@ export default function App({
     });
   }, [chatMessages, chatLoading, chatOpen]);
 
-  // Load persisted messages and subscribe to real-time updates
+  // Load persisted chat messages once per trip (no realtime subscription —
+  // remote changes appear on next load)
   useEffect(() => {
     if (!trip?.id) return;
     supabase
@@ -7423,6 +7250,26 @@ export default function App({
           : d,
       ),
     );
+    // Persist the user-editable fields so edits survive reloads and other
+    // devices. Skip tmp-* in-flight IDs — those rows don't exist in the DB yet.
+    if (updated.id && !String(updated.id).startsWith("tmp-")) {
+      supabase
+        .from("activities")
+        .update({
+          time: updated.time ?? null,
+          title: updated.title,
+          type: updated.type ?? null,
+          duration: updated.duration ?? null,
+          note: updated.note ?? null,
+          geocode: updated.geocode ?? null,
+          geocode_end: updated.geocode_end ?? null,
+        })
+        .eq("id", updated.id)
+        .then(({ error }) => {
+          if (error)
+            console.error("Failed to save activity edit:", error.message);
+        });
+    }
   };
 
   const selectHotel = async (dayId, hotel) => {
@@ -7532,87 +7379,6 @@ export default function App({
         };
       }),
     );
-  };
-
-  // Verify-place alternatives picker: when verify-place falls through to Tier 5
-  // (Haiku alternatives), the user picks one of the suggestions. We update the
-  // row's title + geocode, then re-trigger verifyActivity to get coords from
-  // Photon/Nominatim (now that the name is real, it usually hits Tier 1 or 2).
-  const pickVerifyAlternative = async (dayId, activity, alt) => {
-    if (!alt?.name) return;
-    const originalTitle = activity.title;
-    const isHotel = activity.type === "hotel";
-    const newTitle = isHotel ? `Check in at ${alt.name}` : alt.name;
-    const updateRow = {
-      title: newTitle,
-      geocode: alt.hint || alt.name,
-      geocode_corrected_from: activity.geocode_corrected_from || originalTitle,
-      lat: null,
-      lng: null,
-      geocode_source: "user_picked_alternative",
-      geocode_confidence: null,
-      geocode_verified_at: null,
-      place_id: null,
-      business_status: null,
-    };
-    // Persist immediately so the UI shows the picked name
-    supabase
-      .from("activities")
-      .update(updateRow)
-      .eq("id", activity.id)
-      .then(
-        () => {},
-        () => {},
-      );
-    setDays((prev) =>
-      prev.map((d) =>
-        d.id === dayId
-          ? {
-              ...d,
-              activities: d.activities.map((a) =>
-                a.id === activity.id ? { ...a, ...updateRow } : a,
-              ),
-            }
-          : d,
-      ),
-    );
-    setVerifyAlternativesFor(activity.id, null);
-    // Re-verify against the picked real name (should hit Tier 1/2 cheaply)
-    try {
-      const day = days.find((d) => d.id === dayId);
-      const r = await verifyActivity(
-        { ...activity, ...updateRow },
-        day?.city,
-        session,
-        trip?.id,
-      );
-      if (r?.status === "verified" && r.updateFields) {
-        setDays((prev) =>
-          prev.map((d) =>
-            d.id === dayId
-              ? {
-                  ...d,
-                  activities: d.activities.map((a) =>
-                    a.id === activity.id ? { ...a, ...r.updateFields } : a,
-                  ),
-                }
-              : d,
-          ),
-        );
-      } else if (r?.status === "alternatives" && r.alternatives?.length) {
-        // Should be rare — but re-surface if the picked alt is also unverifiable
-        setVerifyAlternativesFor(activity.id, {
-          alternatives: r.alternatives,
-          reason: r.reason || null,
-        });
-      }
-    } catch (e) {
-      console.warn("re-verify after pick failed:", e?.message);
-    }
-  };
-
-  const dismissVerifyAlternatives = (activityId) => {
-    setVerifyAlternativesFor(activityId, null);
   };
 
   const removeActivity = async (dayId, activityId) => {
@@ -8142,7 +7908,10 @@ export default function App({
     const chosenRoute =
       (votedItems || []).find((it) => it.tier === 1 && it.vote === 1) || null;
     setGeneratingRoute(chosenRoute);
-    setScreen("generating");
+    // Navigate to Magazine so user has content to read while itinerary generates.
+    // setScreen("generating") is kept below for legacy reference but no longer invoked.
+    setIgGenerating(true);
+    setPretripTab("magazine");
 
     const numDays = Math.max(
       1,
@@ -8389,8 +8158,10 @@ export default function App({
                       }
                       setDays(compactDays);
                       setActiveDay(0);
-                      setScreen("itinerary");
-                      setCompactView(true);
+                      // Magazine-first: stay on pre-trip Magazine; compact arrives silently
+                      // so itineraryTitles populate and ✓ marks appear on Magazine cards.
+                      // setScreen("itinerary"); // disabled — navigated on full IG complete
+                      // setCompactView(true);   // disabled — compact not shown to user
                       setDetailedLoading(true);
                     }
                   }
@@ -8504,6 +8275,7 @@ export default function App({
       }
       // Out of credits — paywall is already open; return to setup silently
       if (e.message === "Out of credits") {
+        setIgGenerating(false);
         setScreen("setup");
         _igInFlight = false;
         return;
@@ -8514,11 +8286,15 @@ export default function App({
       if (compactShown) {
         setDetailedLoading(false);
         setDetailedReady(true);
+        setIgGenerating(false);
+        setActiveBottomTab("brainstorm"); // land on Magazine with compact fallback
+        setScreen("itinerary");
         _igInFlight = false;
         console.warn("Detailed IG failed, using compact itinerary as fallback");
         return;
       }
       setGenerateError(`Generation failed: ${e.message}. Please try again.`);
+      setIgGenerating(false);
       setScreen("setup");
       _igInFlight = false;
       return;
@@ -8530,6 +8306,7 @@ export default function App({
     const abort = (msg, err) => {
       console.error(msg, err);
       setGenerateError(`${msg}${err?.message ? `: ${err.message}` : ""}`);
+      setIgGenerating(false);
       setScreen("setup");
     };
 
@@ -8765,6 +8542,7 @@ export default function App({
     setPendingForm(null);
     setDetailedLoading(false);
     setDetailedReady(true);
+    setIgGenerating(false);
     playDoneChime();
     // Pulse the chat mascot to draw attention
     setChatAttention(true);
@@ -8797,6 +8575,8 @@ export default function App({
         ig_count: tripPayload.ig_count,
       });
     }
+    // Land on Magazine tab so user continues reading while photos load in background.
+    setActiveBottomTab("brainstorm");
     setScreen("itinerary");
 
     // Fetch and persist photos in background — staggered to avoid Wikimedia rate limits
@@ -8867,15 +8647,6 @@ export default function App({
             })),
           );
         }
-        // Surface picker UI for any activity that fell through to alternatives
-        results.forEach((r, idx) => {
-          if (r?.status === "alternatives" && r.alternatives?.length) {
-            setVerifyAlternativesFor(toVerify[idx].id, {
-              alternatives: r.alternatives,
-              reason: r.reason || null,
-            });
-          }
-        });
       } catch (e) {
         console.warn("eager verifyActivity batch failed:", e?.message);
       }
@@ -11082,6 +10853,108 @@ export default function App({
                       paddingBottom: 80, // clears Trippy chat bar at bottom
                     }}
                   >
+                    {/* IG progress banner — sticky at top while itinerary generates */}
+                    {igGenerating &&
+                      (() => {
+                        const isDone = detailedReady;
+                        const hasProgress =
+                          streamingDays > 0 && streamingTotal > 0;
+                        const pct = hasProgress
+                          ? Math.min(
+                              99,
+                              Math.round(
+                                (streamingDays / streamingTotal) * 100,
+                              ),
+                            )
+                          : 0;
+                        return (
+                          <div
+                            style={{
+                              position: "sticky",
+                              top: 0,
+                              zIndex: 10,
+                              background: isDone ? `${T.ocean}12` : T.chalk,
+                              borderBottom: `1px solid ${isDone ? T.ocean + "40" : T.sand}`,
+                              padding: "10px 16px 12px",
+                            }}
+                          >
+                            {/* Progress bar track */}
+                            <div
+                              style={{
+                                height: 3,
+                                background: T.sand,
+                                borderRadius: 99,
+                                marginBottom: 8,
+                                overflow: "hidden",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  height: "100%",
+                                  borderRadius: 99,
+                                  background: isDone ? T.ocean : T.dusk,
+                                  width: isDone
+                                    ? "100%"
+                                    : hasProgress
+                                      ? `${pct}%`
+                                      : "0%",
+                                  transition: "width 0.8s ease",
+                                  ...(hasProgress || isDone
+                                    ? {}
+                                    : {
+                                        animation:
+                                          "shimmer 1.5s ease-in-out infinite",
+                                      }),
+                                }}
+                              />
+                            </div>
+                            {/* Status row */}
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: 8,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  fontFamily: "Georgia,serif",
+                                  color: isDone ? T.ocean : T.mist,
+                                }}
+                              >
+                                {isDone
+                                  ? "✓ Itinerary ready!"
+                                  : hasProgress
+                                    ? `✈ Planning Day ${streamingDays} of ${streamingTotal}`
+                                    : "✈ Crafting your itinerary…"}
+                              </div>
+                              {isDone && (
+                                <button
+                                  onClick={() =>
+                                    setActiveBottomTab("itinerary")
+                                  }
+                                  style={{
+                                    background: T.ocean,
+                                    color: "white",
+                                    border: "none",
+                                    borderRadius: RADIUS.full,
+                                    padding: "5px 12px",
+                                    fontSize: 11,
+                                    fontFamily: "Georgia,serif",
+                                    fontWeight: 600,
+                                    cursor: "pointer",
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  View days →
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     {/* Header only on Magazine view — Inspirations has its own
                         section heading inside InspirationsSection. */}
                     {pretripMagView !== "inspirations" && (
@@ -11124,12 +10997,11 @@ export default function App({
                             }}
                           >
                             {(() => {
-                              const countries = resolveCountriesForMagazine({
+                              const dests = resolveDestinationsForMagazine({
                                 pendingForm,
                                 editingTrip,
                               });
-                              if (countries.length > 0)
-                                return countries.join(" · ");
+                              if (dests.length > 0) return dests.join(" · ");
                               if (magazineFilterCities)
                                 return magazineFilterCities.join(", ");
                               const d =
@@ -11138,7 +11010,7 @@ export default function App({
                                   .filter((x) => !isHelpMeDecideDest(x))
                                   .join(", ");
                               return d && !isHelpMeDecideDest(d)
-                                ? d
+                                ? magazinePlaceShort(d)
                                 : "Magazine";
                             })()}
                           </div>
@@ -11211,12 +11083,12 @@ export default function App({
                       )}
                       {pretripMagView === "magazine" &&
                         (() => {
-                          const countries = resolveCountriesForMagazine({
+                          const destinations = resolveDestinationsForMagazine({
                             pendingForm,
                             editingTrip,
                           });
                           const countrySet = new Set(
-                            countries.map((c) => c.toLowerCase()),
+                            destinations.map((c) => c.toLowerCase()),
                           );
                           // Collect route cities — optionally filtered by route
                           const filterSet = magazineFilterCities
@@ -11244,15 +11116,40 @@ export default function App({
                               }
                             }
                           }
+                          // Compact days arrive silently during IG — derive titles
+                          // so ✓ marks appear on Magazine cards as planning progresses.
+                          const igItineraryTitles = new Set(
+                            (days || []).flatMap((d) =>
+                              (d.activities || []).map((a) =>
+                                (a.title || "").toLowerCase(),
+                              ),
+                            ),
+                          );
                           const renderCityCard = (city, ci, keyPrefix) => {
                             const dd = deepDiveCacheApp[city];
                             const data =
                               dd && typeof dd === "object" ? dd : null;
-                            const highlights = (data?.moreSights || []).map(
+                            const rawHighlights = (data?.moreSights || []).map(
                               (s) => ({
                                 ...s,
                                 type: "sight",
                               }),
+                            );
+                            // In-itinerary items surface first
+                            const highlights = [...rawHighlights].sort(
+                              (a, b) => {
+                                const aIn = igItineraryTitles.has(
+                                  (a.title || "").toLowerCase(),
+                                )
+                                  ? 0
+                                  : 1;
+                                const bIn = igItineraryTitles.has(
+                                  (b.title || "").toLowerCase(),
+                                )
+                                  ? 0
+                                  : 1;
+                                return aIn - bIn;
+                              },
                             );
                             return (
                               <Fragment key={`${keyPrefix}${city}`}>
@@ -11302,6 +11199,9 @@ export default function App({
                                             key={i}
                                             item={act}
                                             city={city}
+                                            inItinerary={igItineraryTitles.has(
+                                              (act.title || "").toLowerCase(),
+                                            )}
                                             masonry={true}
                                             tall={i % 3 === 0}
                                             onAskTrippy={(title) => {
@@ -11326,7 +11226,7 @@ export default function App({
                             );
                           };
                           if (
-                            countries.length === 0 &&
+                            destinations.length === 0 &&
                             allCities.length === 0
                           ) {
                             return (
@@ -11347,8 +11247,8 @@ export default function App({
                           let cardIndex = 0;
                           return (
                             <>
-                              {countries.map((country) =>
-                                renderCityCard(country, cardIndex++, "dest-"),
+                              {destinations.map((dest) =>
+                                renderCityCard(dest, cardIndex++, "dest-"),
                               )}
                               {allCities.map(({ city }) =>
                                 renderCityCard(city, cardIndex++, "city-"),
@@ -12067,11 +11967,6 @@ export default function App({
                                   50,
                                 );
                               }}
-                              verifyAlternativesById={verifyAlternativesById}
-                              onPickVerifyAlternative={pickVerifyAlternative}
-                              onDismissVerifyAlternatives={
-                                dismissVerifyAlternatives
-                              }
                             />
                           )}
                         </div>
@@ -12630,6 +12525,52 @@ export default function App({
                             </div>
                           </div>
                         </button>
+                        {trip.share_token && (
+                          <button
+                            onClick={async () => {
+                              const ok = window.confirm(
+                                "Revoke the share link? Anyone holding the old link will lose access. Sharing again creates a fresh link.",
+                              );
+                              if (!ok) return;
+                              const { error } = await supabase
+                                .from("trips")
+                                .update({ share_token: null })
+                                .eq("id", trip.id);
+                              if (!error) {
+                                setTrip((t) => ({ ...t, share_token: null }));
+                                setShowShare(false);
+                              }
+                            }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 14,
+                              padding: "14px 16px",
+                              borderRadius: RADIUS.lg,
+                              border: `1.5px solid ${T.sand}`,
+                              background: "white",
+                              cursor: "pointer",
+                              fontFamily: "Georgia,serif",
+                              fontSize: 14,
+                              color: T.error,
+                              fontWeight: 600,
+                            }}
+                          >
+                            <span style={{ fontSize: 24 }}>🚫</span>
+                            <div style={{ textAlign: "left" }}>
+                              <div>Revoke share link</div>
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: T.mist,
+                                  fontWeight: 400,
+                                }}
+                              >
+                                Existing link stops working immediately
+                              </div>
+                            </div>
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -12805,7 +12746,7 @@ export default function App({
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              justifyContent: "flex-end",
+              justifyContent: isDesktop ? "center" : "flex-end",
             }}
           >
             {/* Scrim */}
@@ -12814,7 +12755,9 @@ export default function App({
               style={{
                 position: "absolute",
                 inset: 0,
-                background: "rgba(15,25,35,0.45)",
+                background: isDesktop
+                  ? "rgba(10,20,30,0.65)"
+                  : "rgba(15,25,35,0.45)",
                 animation: "fadeUp 0.2s ease",
               }}
             />
@@ -12823,32 +12766,36 @@ export default function App({
               style={{
                 position: "relative",
                 width: "100%",
-                maxWidth: 430,
+                maxWidth: isDesktop ? 580 : 430,
                 background: T.warm,
-                borderRadius: "20px 20px 0 0",
+                borderRadius: isDesktop ? 20 : "20px 20px 0 0",
                 boxShadow: SHADOW.lg,
-                padding: "20px 20px",
-                paddingBottom: "calc(20px + env(safe-area-inset-bottom, 0px))",
+                padding: isDesktop ? "32px 36px" : "20px 20px",
+                paddingBottom: isDesktop
+                  ? 32
+                  : "calc(20px + env(safe-area-inset-bottom, 0px))",
                 animation: "fadeUp 0.25s ease",
-                maxHeight: "85vh",
+                maxHeight: isDesktop ? "90vh" : "85vh",
                 overflowY: "auto",
               }}
             >
-              {/* Handle */}
-              <div
-                style={{
-                  width: 36,
-                  height: 4,
-                  borderRadius: 2,
-                  background: T.sand,
-                  margin: "0 auto 16px",
-                }}
-              />
+              {/* Handle — mobile only */}
+              {!isDesktop && (
+                <div
+                  style={{
+                    width: 36,
+                    height: 4,
+                    borderRadius: 2,
+                    background: T.sand,
+                    margin: "0 auto 16px",
+                  }}
+                />
+              )}
 
               <div
                 style={{
                   fontFamily: "'DM Serif Display',serif",
-                  fontSize: 20,
+                  fontSize: isDesktop ? 26 : 20,
                   color: T.ink,
                   textAlign: "center",
                   marginBottom: 4,
@@ -12858,11 +12805,11 @@ export default function App({
               </div>
               <div
                 style={{
-                  fontSize: 12,
+                  fontSize: 13,
                   color: T.mist,
                   fontFamily: "Georgia,serif",
                   textAlign: "center",
-                  marginBottom: 20,
+                  marginBottom: isDesktop ? 28 : 20,
                 }}
               >
                 These preferences shape your day-by-day plan
@@ -12880,7 +12827,7 @@ export default function App({
                 >
                   Budget range
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ display: "flex", gap: 10 }}>
                   {[
                     { key: "budget", label: "Budget", icon: "🏕️" },
                     { key: "mid", label: "Mid-range", icon: "🏨" },
@@ -12893,7 +12840,7 @@ export default function App({
                       }
                       style={{
                         flex: 1,
-                        padding: "10px 8px",
+                        padding: isDesktop ? "14px 8px" : "10px 8px",
                         borderRadius: RADIUS.lg,
                         cursor: "pointer",
                         textAlign: "center",

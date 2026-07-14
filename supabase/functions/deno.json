@@ -2,7 +2,8 @@
   "compilerOptions": {
     "lib": ["deno.window", "deno.ns", "esnext"],
     "strict": true,
-    "noImplicitAny": false
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false
   },
   "lint": {
     "rules": {

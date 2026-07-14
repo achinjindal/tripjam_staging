@@ -26,6 +26,12 @@ export default [
       "supabase/functions/**",
       "itinerary-builder.jsx",
       "public/**",
+      // Untracked scratch copies of the repo + agent worktrees — not real code
+      "ad-hoc/**",
+      "inspiration/**",
+      "pitch/**",
+      ".claude/**",
+      ".vercel/**",
     ],
   },
   js.configs.recommended,

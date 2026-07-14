@@ -8,6 +8,7 @@ import {
   PLACES_HEADERS,
 } from "../theme";
 import { supabase } from "../supabase";
+import { handleGatedResponse, refreshCredits } from "../credits";
 
 /* ─── BOARD VIEW ─────────────────────────────────────────────────────── */
 
@@ -206,6 +207,16 @@ function TodoView({ trip, onBack }) {
           body: JSON.stringify({ trip }),
         },
       );
+      if (
+        await handleGatedResponse(
+          res,
+          sess?.user?.id,
+          "AI to-do suggestions need credits.",
+        )
+      ) {
+        setGenerating(false);
+        return;
+      }
       const { items } = await res.json();
       const existingTexts = new Set(
         (existing || todos).map((t) => t.text.toLowerCase()),
@@ -213,6 +224,7 @@ function TodoView({ trip, onBack }) {
       setSuggestions(
         (items || []).filter((s) => !existingTexts.has(s.text.toLowerCase())),
       );
+      if (sess?.user?.id) refreshCredits(sess.user.id);
     } catch {
       /* silent */
     }
@@ -1347,97 +1359,72 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
   const generateEstimate = async () => {
     setGenerating(true);
     try {
-      const igReq = trip.ig_request || {};
-      const budgetLabel =
-        { budget: "budget", mid: "mid-range", luxury: "luxury" }[
-          igReq.budget
-        ] || "mid-range";
-      const numDays =
-        trip.start_date && trip.end_date
-          ? Math.max(
-              1,
-              Math.round(
-                (new Date(trip.end_date) - new Date(trip.start_date)) / 864e5,
-              ) + 1,
-            )
-          : 5;
-      const prompt = `Estimate trip costs for: ${trip.destination}, ${numDays} days, ${igReq.travelers || 2} travelers, ${budgetLabel} budget.
-Return ONLY a JSON array of estimated expenses. Each: {"title":"...","amount":number,"category":"Stay|Transport|Food|Activities|Shopping|Other"}
-Include: accommodation (total), flights/transport, daily food budget, key activities, misc. Use USD. Be realistic for the destination and budget level. 8-12 items.`;
-
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": "", // Client-side — use edge function instead
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 1024,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      // Actually, let's use an edge function approach
-      throw new Error("use-edge");
-    } catch {
-      // Fallback: use generate-todos-style edge function
-      try {
-        const {
-          data: { session: sess },
-        } = await supabase.auth.getSession();
-        const token =
-          sess?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY;
-        const res = await fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/estimate-expenses`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ trip }),
+      const {
+        data: { session: sess },
+      } = await supabase.auth.getSession();
+      const token =
+        sess?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY;
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/estimate-expenses`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
           },
+          body: JSON.stringify({ trip }),
+        },
+      );
+      if (
+        await handleGatedResponse(
+          res,
+          sess?.user?.id,
+          "AI budget estimates need credits.",
+        )
+      ) {
+        setGenerating(false);
+        return;
+      }
+      const { items } = await res.json();
+      if (items?.length) {
+        const existingTitles = new Set(
+          expenses.map((e) => e.title.toLowerCase()),
         );
-        const { items } = await res.json();
-        if (items?.length) {
-          const existingTitles = new Set(
-            expenses.map((e) => e.title.toLowerCase()),
-          );
-          const newItems = (items || []).filter(
-            (i) => !existingTitles.has(i.title.toLowerCase()),
-          );
-          const rows = newItems.map((item, i) => ({
-            trip_id: trip.id,
-            title: item.title,
-            amount: item.amount,
-            category: item.category || "Other",
-            is_planned: true,
-            position: expenses.length + i,
-          }));
-          if (rows.length) {
-            const { data } = await supabase
-              .from("trip_expenses")
-              .insert(rows)
-              .select();
-            setExpenses((prev) => [...prev, ...(data || [])]);
-            // Auto-set budget if not set
-            if (!budget) {
-              const total = [...expenses, ...(data || [])].reduce(
-                (s, e) => s + (e.is_planned ? Number(e.amount) : 0),
-                0,
-              );
-              setBudget(total);
-              setBudgetInput(total.toString());
-              await supabase
-                .from("trips")
-                .update({ budget_amount: total })
-                .eq("id", trip.id);
-            }
+        const newItems = (items || []).filter(
+          (i) => !existingTitles.has(i.title.toLowerCase()),
+        );
+        const rows = newItems.map((item, i) => ({
+          trip_id: trip.id,
+          title: item.title,
+          amount: item.amount,
+          category: item.category || "Other",
+          is_planned: true,
+          position: expenses.length + i,
+        }));
+        if (rows.length) {
+          const { data } = await supabase
+            .from("trip_expenses")
+            .insert(rows)
+            .select();
+          setExpenses((prev) => [...prev, ...(data || [])]);
+          // Auto-set budget if not set
+          if (!budget) {
+            const total = [...expenses, ...(data || [])].reduce(
+              (s, e) => s + (e.is_planned ? Number(e.amount) : 0),
+              0,
+            );
+            setBudget(total);
+            setBudgetInput(total.toString());
+            await supabase
+              .from("trips")
+              .update({ budget_amount: total })
+              .eq("id", trip.id);
           }
         }
-      } catch {
-        /* silent */
       }
+      if (sess?.user?.id) refreshCredits(sess.user.id);
+    } catch {
+      /* silent */
     }
     setGenerating(false);
   };

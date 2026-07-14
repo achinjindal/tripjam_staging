@@ -614,18 +614,32 @@ export default function AdminConsole({ session, onHome }) {
                       ),
                     )}
                   </div>
-                  {/* IG timing */}
-                  {tripDetail.genLog.length > 0 && (
-                    <div style={{ fontSize: 12, marginBottom: 8 }}>
-                      <span style={{ color: T.mist }}>Latest IG: </span>
-                      <span style={{ color: T.ink }}>
-                        Compact {tripDetail.genLog[0].compact_secs || "?"}s
-                        {tripDetail.genLog[0].detailed_secs
-                          ? ` · Detailed ${tripDetail.genLog[0].detailed_secs}s`
-                          : ""}
-                      </span>
-                    </div>
-                  )}
+                  {/* IG timing — generation_log stores timestamps, not durations */}
+                  {tripDetail.genLog.length > 0 &&
+                    (() => {
+                      const g = tripDetail.genLog[0];
+                      const secs = (from, to) =>
+                        from && to
+                          ? Math.round((new Date(to) - new Date(from)) / 1000)
+                          : null;
+                      const compact = secs(
+                        g.generation_started_at,
+                        g.compact_ready_at,
+                      );
+                      const detailed = secs(
+                        g.generation_started_at,
+                        g.detailed_ready_at,
+                      );
+                      return (
+                        <div style={{ fontSize: 12, marginBottom: 8 }}>
+                          <span style={{ color: T.mist }}>Latest IG: </span>
+                          <span style={{ color: T.ink }}>
+                            Compact {compact ?? "?"}s
+                            {detailed != null ? ` · Detailed ${detailed}s` : ""}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   {/* LLM usage for this trip */}
                   {tripDetail.usage.length > 0 && (
                     <table style={{ ...tableStyle, marginTop: 12 }}>

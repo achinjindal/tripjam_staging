@@ -12,7 +12,7 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 - **Backend:** Supabase (Postgres, Auth, Edge Functions, RLS, Realtime)
 - **AI:** Anthropic Claude API — Sonnet 4.6 for RG/IG/chat, Haiku 4.5 for todos/expenses/deep-dives/preferences/inspirations
 - **Maps:** Leaflet + react-leaflet, Photon/Nominatim geocoding (with trip destination enrichment)
-- **Photos:** Wikipedia/Wikimedia Commons (free, serialized queue 3 concurrent / 300ms)
+- **Photos:** Wikipedia/Wikimedia Commons (free, serialized queue 2 concurrent / 400ms)
 - **Places:** Google Places API (autocomplete, hotel search with lodging type)
 - **Analytics:** PostHog (tagged with `app_env` for staging/production filtering)
 - **Error tracking:** Sentry (`VITE_SENTRY_DSN` env var; no-op when unset)
@@ -85,11 +85,24 @@ supabase/
 
 scripts/
   backfill-activity-geocodes.cjs — Backfill missing lat/lng on activities
+  trip-cost.cjs      — Print actual per-function LLM cost for one trip from llm_usage
+                       (needs SUPABASE_SERVICE_ROLE_KEY; anon key returns nothing)
+
+docs/
+  user-journeys/     — Journey-by-journey documentation (00-overview.md is the index):
+                       UI flow + underlying logic per stage, with file:line references
 
 e2e/                 — Playwright E2E tests
   helpers.ts         — Login, snap utilities
   *.spec.ts          — Test suites (board, chat, interactions, magazine, geocoding, etc.)
 ```
+
+### Repo root gotchas
+
+- `ad-hoc/` and `inspiration/` are untracked full copies of the repo (scratch workspaces with their own `src/`, `supabase/`, etc.). When searching or editing, work only in the root `src/` and `supabase/` — a grep hit inside these copies is not the real code.
+- `pitch/` — untracked pitch-deck assets (Python deck builder + screenshots), not app code.
+- Root-level `*-design.html` files are gitignored design mockups, not production code.
+- `RUNBOOKS.md` — operational runbooks (RevenueCat/Play Billing setup, Supabase secrets, ops SQL snippets).
 
 ## Commands
 
@@ -120,8 +133,9 @@ npm run deploy:functions:prod       # Deploy all edge functions to production
 npm run db:push:staging             # Apply migrations to staging
 npm run db:push:prod                # Apply migrations to production
 
-# payment-webhook must be deployed with JWT verification disabled:
+# payment-webhook and revenuecat-webhook must be deployed with JWT verification disabled:
 supabase functions deploy payment-webhook --no-verify-jwt --project-ref <ref>
+supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
 ```
 
 ## Internal Nomenclature
@@ -142,7 +156,7 @@ supabase functions deploy payment-webhook --no-verify-jwt --project-ref <ref>
 - The URL `/trip/:id/magazine` maps to the internal tab key `brainstorm` (legacy name). This translation happens in `parseUrl()` — the public URL and the internal state key deliberately differ.
 - `App.jsx` (~14,500 lines) contains the entire trip view: state, data fetching, all panel/tab/modal logic. Split into sub-components (BoardView, SetupForm, Magazine, MapView) but most state lives in App.
 - Design system in `theme.js`: `T` (colors + semantic states), `TYPE` (6-level typography), `RADIUS` (4 values), `SHADOW` (3 levels), `MOTION` (3 speeds). Import from there, never hardcode values.
-- Auth uses username + password only (no email). Fake email = `username@tripjam.app`.
+- Auth is email + password (username auto-derived from the email local part) plus Google OAuth. Legacy accounts created in the username-only era sign in via the fake-email shim `username@tripjam.app`.
 - Trip ID generated client-side (`crypto.randomUUID()`) to avoid RLS issues.
 
 ### Credits System (launched)
@@ -160,7 +174,7 @@ supabase functions deploy payment-webhook --no-verify-jwt --project-ref <ref>
 - Unified chat uses action-based responses: LLM returns `actions[]` array with support for bulk dismiss (routeIds array).
 - Route labels (P1, P2...) computed at render time from display index, never stored.
 - All functions log token usage to `llm_usage` table (fire-and-forget).
-- `generate-destination-research` uses Haiku 4.5 + `web_search` tool (max 4 uses). Results cached in DB; cache key = (destinations, tags, monthBucket).
+- `generate-destination-research` uses Haiku 4.5 + `web_search` tool (max 6 uses). Results cached in DB; cache key = (destinations, tags, monthBucket).
 
 ### Maps & Photos
 

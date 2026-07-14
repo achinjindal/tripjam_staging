@@ -313,17 +313,56 @@ export function CityCard({
   const rootRef = useRef(null);
   const [photoUrl, setPhotoUrl] = useState(null);
   const [photoLoaded, setPhotoLoaded] = useState(false);
+  const [photoVisible, setPhotoVisible] = useState(false);
+
+  // Lazy photo trigger — start fetch only when card is near viewport so cities
+  // load one-by-one as the user scrolls rather than all at once.
   useEffect(() => {
+    if (!rootRef.current) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setPhotoVisible(true);
+          obs.disconnect();
+        }
+      },
+      { rootMargin: "200px 0px" },
+    );
+    obs.observe(rootRef.current);
+    return () => obs.disconnect();
+  }, []);
+
+  // Photo fetch — fires when card scrolls into view, with _PHOTO_IN_FLIGHT retry.
+  useEffect(() => {
+    if (!photoVisible) return;
     let cancelled = false;
+    let retryTimer = null;
+    const photoCacheKey = `${city}|null|sight`;
     _fetchPhoto(city, null, "sight").then((url) => {
       if (cancelled) return;
-      if (url) setPhotoUrl(url);
-      setPhotoLoaded(true);
+      if (url) {
+        setPhotoUrl(url);
+        setPhotoLoaded(true);
+        return;
+      }
+      if (_photoCache[photoCacheKey] === _PHOTO_IN_FLIGHT) {
+        retryTimer = setTimeout(async () => {
+          if (cancelled) return;
+          const retryUrl = await _fetchPhoto(city, null, "sight");
+          if (!cancelled) {
+            if (retryUrl) setPhotoUrl(retryUrl);
+            setPhotoLoaded(true);
+          }
+        }, 4000);
+        return;
+      }
+      setPhotoLoaded(true); // genuinely no photo found
     });
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [city]);
+  }, [photoVisible, city]);
 
   // Lazy-load deep dive when this card scrolls into view (first city is eager-loaded).
   useEffect(() => {
@@ -400,17 +439,28 @@ export function CityCard({
             ☀️ {dd.weather.split(".")[0]}
           </div>
         )}
-        {/* Gradient overlay at bottom */}
+        {/* City name with gradient */}
         <div
           style={{
             position: "absolute",
             bottom: 0,
             left: 0,
             right: 0,
-            height: 40,
-            background: "linear-gradient(transparent, rgba(0,0,0,0.2))",
+            background: "linear-gradient(transparent, rgba(0,0,0,0.6))",
+            padding: "28px 14px 10px",
           }}
-        />
+        >
+          <div
+            style={{
+              fontFamily: "'DM Serif Display',serif",
+              fontSize: 20,
+              color: "white",
+              textShadow: "0 1px 4px rgba(0,0,0,0.6)",
+            }}
+          >
+            {city}
+          </div>
+        </div>
       </div>
 
       {/* Writeup */}
@@ -1151,9 +1201,6 @@ function extractYouTubeId(url) {
 }
 
 function InspirationCard({ item }) {
-  const tag = authorTagStyle(
-    item.author_type || (item.type === "video" ? "youtuber" : "personal_blog"),
-  );
   const isVideo = item.type === "video";
   const youTubeId = isVideo ? extractYouTubeId(item.url) : null;
   const [playing, setPlaying] = useState(false);
@@ -1183,41 +1230,13 @@ function InspirationCard({ item }) {
     >
       <div
         style={{
-          fontFamily: "'DM Serif Display',serif",
-          fontSize: 16,
-          color: T.ink,
-          lineHeight: 1.3,
-          marginBottom: 2,
-        }}
-      >
-        {isVideo ? "▶ " : "by "}
-        {item.author || "Unknown"}
-        <span
-          style={{
-            fontSize: 11,
-            verticalAlign: "middle",
-            background: tag.bg,
-            color: tag.fg,
-            padding: "2px 7px",
-            borderRadius: 8,
-            marginLeft: 6,
-            fontFamily: "Georgia,serif",
-            fontWeight: 600,
-            letterSpacing: 0.3,
-          }}
-        >
-          {tag.label}
-        </span>
-      </div>
-      <div
-        style={{
           fontFamily: "Georgia,serif",
           fontSize: 12,
           color: T.mist,
           marginBottom: 8,
         }}
       >
-        {[item.outlet, dateLabel].filter(Boolean).join(" · ")}
+        {[item.outlet || item.author, dateLabel].filter(Boolean).join(" · ")}
       </div>
       {/* In-app YouTube playback (lite embed pattern). Thumbnail rendered as
           a single image by default → zero iframe / no YT JS until user clicks
