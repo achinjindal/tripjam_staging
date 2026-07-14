@@ -14,6 +14,7 @@ import App from "./App.jsx";
 import TripPublicView from "./TripPublicView.jsx";
 import AdminConsole from "./Admin.jsx";
 import CreditsOverlay from "./CreditsOverlay.jsx";
+import DialogHost from "./dialogs.jsx";
 import AddRealEmailPrompt from "./AddRealEmailPrompt.jsx";
 import Avatar from "./Avatar.jsx";
 import LowCreditsBanner from "./LowCreditsBanner.jsx";
@@ -326,5 +327,6 @@ function Root() {
 createRoot(document.getElementById("root")).render(
   <StrictMode>
     <Root />
+    <DialogHost />
   </StrictMode>,
 );

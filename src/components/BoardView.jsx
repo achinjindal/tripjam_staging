@@ -539,6 +539,7 @@ function TodoView({ trip, onBack }) {
                       </div>
                       <button
                         onClick={() => deleteTodo(todo)}
+                        aria-label="Delete to-do"
                         style={{
                           background: "none",
                           border: "none",
@@ -1093,6 +1094,7 @@ function BookmarksView({ trip, onBack }) {
                 </button>
                 <button
                   onClick={() => deleteBookmark(bm)}
+                  aria-label="Delete bookmark"
                   style={{
                     background: "none",
                     border: "none",
@@ -1887,6 +1889,7 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
                       </button>
                       <button
                         onClick={() => deleteExpense(exp)}
+                        aria-label="Delete expense"
                         style={{
                           background: "none",
                           border: `1px solid ${T.errorBorder}`,

@@ -21,6 +21,7 @@ import {
   PLACES_HEADERS,
 } from "./theme";
 import { refreshCredits, openPaywall, handleGatedResponse } from "./credits";
+import { showToast, confirmSheet } from "./dialogs.jsx";
 import {
   _photoCache,
   _usedPhotoUrls,
@@ -4186,6 +4187,7 @@ function ActivityCard({
               <div style={{ position: "relative" }}>
                 <button
                   onClick={() => setMenuOpen((m) => !m)}
+                  aria-label="More options"
                   style={{
                     background: "transparent",
                     border: "none",
@@ -4690,6 +4692,7 @@ function ActivityCard({
               <div style={{ position: "relative" }}>
                 <button
                   onClick={() => setMenuOpen((m) => !m)}
+                  aria-label="More options"
                   style={{
                     background: "transparent",
                     border: "none",
@@ -5291,6 +5294,7 @@ function GemCard({ gem, city, activities, onAdd, onDismiss, onAskTrippy }) {
           <div style={{ position: "relative", flexShrink: 0 }}>
             <button
               onClick={() => setMenuOpen((m) => !m)}
+              aria-label="More options"
               style={{
                 background: "transparent",
                 border: "none",
@@ -10087,7 +10091,7 @@ export default function App({
                   });
                 } else {
                   await navigator.clipboard.writeText(url);
-                  alert("Link copied!");
+                  showToast("Link copied");
                 }
               }}
               style={{
@@ -11405,7 +11409,14 @@ export default function App({
                         marginBottom: 12,
                       }}
                     >
-                      <div style={{ display: "flex", gap: 8 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 8,
+                          flex: 1,
+                          minWidth: 0,
+                        }}
+                      >
                         {onHome && (
                           <button
                             onClick={() => {
@@ -11425,6 +11436,8 @@ export default function App({
                               fontSize: 12,
                               cursor: "pointer",
                               fontFamily: "Georgia,serif",
+                              flexShrink: 0,
+                              whiteSpace: "nowrap",
                             }}
                           >
                             ← Trips
@@ -11475,6 +11488,10 @@ export default function App({
                             fontSize: 12,
                             cursor: "pointer",
                             fontFamily: "Georgia,serif",
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
                           }}
                         >
                           Explore Other Plans
@@ -11482,6 +11499,7 @@ export default function App({
                       </div>
                       <button
                         onClick={() => setShowShare(true)}
+                        aria-label="Share trip"
                         style={{
                           background: "rgba(255,255,255,0.15)",
                           border: "none",
@@ -11491,6 +11509,9 @@ export default function App({
                           fontSize: 12,
                           cursor: "pointer",
                           fontFamily: "Georgia,serif",
+                          flexShrink: 0,
+                          whiteSpace: "nowrap",
+                          marginLeft: 8,
                         }}
                       >
                         📤 Share
@@ -11504,7 +11525,12 @@ export default function App({
                         marginBottom: 4,
                       }}
                     >
-                      {trip.name}
+                      {/* Strip the " · Jun 10–Jun 17" suffix baked into stored
+                          names — the date pill below already shows the range */}
+                      {(trip.name || "").replace(
+                        /\s·\s\w{3}\s\d{1,2}\s?[–-]\s?\w{3}\s\d{1,2}$/,
+                        "",
+                      )}
                     </div>
                     <div
                       style={{
@@ -12311,7 +12337,8 @@ export default function App({
                       position: "fixed",
                       inset: 0,
                       background: "rgba(0,0,0,0.45)",
-                      zIndex: 200,
+                      // Above the collapsed chat bar (900) — sheet tier is 1500+
+                      zIndex: 1600,
                       display: "flex",
                       alignItems: "flex-end",
                       justifyContent: "center",
@@ -12492,7 +12519,7 @@ export default function App({
                               });
                             } else {
                               await navigator.clipboard.writeText(url);
-                              alert("Link copied!");
+                              showToast("Link copied");
                             }
                             setShowShare(false);
                           }}
@@ -12528,9 +12555,13 @@ export default function App({
                         {trip.share_token && (
                           <button
                             onClick={async () => {
-                              const ok = window.confirm(
-                                "Revoke the share link? Anyone holding the old link will lose access. Sharing again creates a fresh link.",
-                              );
+                              const ok = await confirmSheet({
+                                title: "Revoke share link?",
+                                message:
+                                  "Anyone holding the old link will lose access. Sharing again creates a fresh link.",
+                                confirmLabel: "Revoke link",
+                                danger: true,
+                              });
                               if (!ok) return;
                               const { error } = await supabase
                                 .from("trips")
@@ -12539,6 +12570,7 @@ export default function App({
                               if (!error) {
                                 setTrip((t) => ({ ...t, share_token: null }));
                                 setShowShare(false);
+                                showToast("Share link revoked");
                               }
                             }}
                             style={{
@@ -13711,6 +13743,7 @@ export default function App({
                 {!useDesktopShell && !isBrainstorm && (
                   <div
                     onClick={() => setChatOpen(false)}
+                    aria-label="Close chat"
                     style={{
                       position: "absolute",
                       inset: 0,
@@ -13823,6 +13856,7 @@ export default function App({
                     {!useDesktopShell && (
                       <button
                         onClick={() => setChatOpen(false)}
+                        aria-label="Close chat"
                         style={{
                           background: "rgba(255,255,255,0.15)",
                           border: "none",
@@ -14388,7 +14422,8 @@ export default function App({
               position: "fixed",
               inset: 0,
               background: "rgba(0,0,0,0.45)",
-              zIndex: 200,
+              // Above the collapsed chat bar (900) — sheet tier is 1500+
+              zIndex: 1600,
               display: "flex",
               alignItems: "flex-end",
               justifyContent: "center",

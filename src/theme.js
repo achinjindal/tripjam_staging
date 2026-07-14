@@ -10,7 +10,11 @@ export const T = {
   terra: "#C4622D",
   gold: "#D4A847",
   moss: "#3D7A5C",
-  mist: "#8BA5BB",
+  // Muted text. Darkened from #8BA5BB (2.4:1 on warm bg — WCAG fail) to pass
+  // 4.5:1 body-text contrast on warm/chalk backgrounds.
+  mist: "#587284",
+  // Muted text on dark surfaces (ink/dusk) — the original light mist.
+  mistOnDark: "#8BA5BB",
   chalk: "#FFFFFF",
   // Semantic states
   error: "#C53030",

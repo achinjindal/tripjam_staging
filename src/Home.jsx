@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
+import { confirmSheet } from "./dialogs.jsx";
 import { T, RADIUS, SHADOW, MOTION } from "./theme";
 
 function tripStatus(startDate, endDate, igResponse) {
@@ -53,7 +54,14 @@ export default function Home({
 
   async function deleteTrip(e, tripId) {
     e.stopPropagation();
-    if (!confirm("Delete this trip? This can't be undone.")) return;
+    const ok = await confirmSheet({
+      title: "Delete this trip?",
+      message:
+        "The itinerary, board, and chat history will be permanently deleted. This can't be undone.",
+      confirmLabel: "Delete trip",
+      danger: true,
+    });
+    if (!ok) return;
     setDeletingId(tripId);
     await supabase
       .from("activities")

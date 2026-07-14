@@ -714,7 +714,12 @@ function Footer() {
             </span>
           </div>
           <p
-            style={{ fontSize: 13, color: T.mist, margin: 0, lineHeight: 1.55 }}
+            style={{
+              fontSize: 13,
+              color: T.mistOnDark,
+              margin: 0,
+              lineHeight: 1.55,
+            }}
           >
             AI travel planning that feels personal. Made for travelers who want
             to spend less time planning and more time being there.
@@ -724,7 +729,7 @@ function Footer() {
           <div
             style={{
               fontSize: 11,
-              color: T.mist,
+              color: T.mistOnDark,
               letterSpacing: 1,
               textTransform: "uppercase",
               marginBottom: 12,
@@ -749,7 +754,7 @@ function Footer() {
           <div
             style={{
               fontSize: 11,
-              color: T.mist,
+              color: T.mistOnDark,
               letterSpacing: 1,
               textTransform: "uppercase",
               marginBottom: 12,
@@ -761,7 +766,7 @@ function Footer() {
           <FooterLink href={`mailto:${SUPPORT_EMAIL}`}>Email us</FooterLink>
           <FooterLink href="/privacy">Privacy policy</FooterLink>
           <FooterLink href="/terms">Terms of service</FooterLink>
-          <div style={{ fontSize: 11, color: T.mist, marginTop: 10 }}>
+          <div style={{ fontSize: 11, color: T.mistOnDark, marginTop: 10 }}>
             We reply within 24h on weekdays.
           </div>
         </div>
@@ -773,7 +778,7 @@ function Footer() {
           paddingTop: 22,
           borderTop: `1px solid rgba(255,255,255,0.08)`,
           fontSize: 11,
-          color: T.mist,
+          color: T.mistOnDark,
           textAlign: "center",
         }}
       >

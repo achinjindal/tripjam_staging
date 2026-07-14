@@ -57,6 +57,26 @@
       name="twitter:image"
       content="https://tripjam.vercel.app/mascot.png"
     />
+
+    <style>
+      /* Keyboard focus + motion preferences — applies to every page,
+         including Home/Auth/Landing which have no own style block */
+      :focus-visible {
+        outline: 2px solid #2563a8;
+        outline-offset: 2px;
+        border-radius: 4px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
+    </style>
   </head>
   <body
     style="
