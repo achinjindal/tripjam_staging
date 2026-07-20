@@ -1,0 +1,23 @@
+-- ============================================================================
+-- Phase 0a · 01 — Capture drifted tables into migration history
+-- STUB — DO NOT USE until filled from prod pg_dump.
+-- ============================================================================
+-- These 7 tables exist in live prod + staging but are ABSENT from
+-- supabase/migrations/. This migration captures their EXACT current shape as
+-- `CREATE TABLE IF NOT EXISTS` (+ constraints/indexes/FKs) so the repo can
+-- reproduce prod on a fresh environment. On prod/staging the IF NOT EXISTS makes
+-- it a harmless no-op; on a clean DB it rebuilds them faithfully.
+--
+-- HOW TO FILL:
+--   /opt/homebrew/opt/libpq/bin/pg_dump "$(cat supabase/.temp/pooler-url)" \
+--     --schema-only -n public --no-owner --no-privileges -f /tmp/prod_schema.sql
+--   Then extract the CREATE TABLE / ALTER TABLE ... ADD CONSTRAINT / CREATE INDEX
+--   blocks for exactly these tables and paste below, converting each
+--   `CREATE TABLE x` → `CREATE TABLE IF NOT EXISTS x` and guarding constraints
+--   with DO/IF NOT EXISTS blocks (constraints have no IF NOT EXISTS).
+--
+-- TABLES TO CAPTURE (verbatim from prod):
+--   trip_members, invite_links, activity_log, comments, reactions,
+--   forks, fork_members
+--
+-- >>> PASTE EXACT DDL FROM /tmp/prod_schema.sql BELOW <<<
