@@ -139,45 +139,16 @@ test.describe("Collaboration — invite & join (Phase 1)", () => {
       "requires VITE_INVITE_ENABLED=true + invite RPCs on the target DB",
     );
 
-    // ── Diagnostic (KNOWN-FAILING): is the members affordance rendered? ──
-    // APP BUG: the Phase-1 members button lives in App.jsx behind
-    // INVITE_ENABLED, but commit 3498b8c inserted it INSIDE the pre-existing
-    // `{false && (…)}` dead sidebar block (App.jsx ~line 10107, disabled by
-    // commit 6f948a6a). So `title="Trip members"` renders NOWHERE in the live
-    // UI even with VITE_INVITE_ENABLED=true and a trip open — the entire
-    // MembersSheet / invite / leave surface is unreachable from the app.
-    //
-    // Marked test.fail(): it asserts the CORRECT expectation (affordance
-    // visible) and is expected to fail until src/App.jsx is fixed. When the
-    // bug is fixed, Playwright will flag this as "unexpectedly passing" so the
-    // annotation gets removed. We must not touch src/, so it stays known-fail.
+    // The members affordance (title="Trip members") renders in the live trip
+    // header — the desktop slim header AND the mobile header — when
+    // INVITE_ENABLED is on and a trip is open. (Fixed 2026-07-21: it was
+    // previously dead code inside a `{false && …}` block in App.jsx.)
     test("members affordance is present in the trip header", async ({
       page,
     }) => {
-      test.fail(
-        true,
-        'APP BUG: title="Trip members" affordance is dead code (rendered ' +
-          "inside a `{false && …}` block in App.jsx). MembersSheet UI is " +
-          "unreachable. Fix requires a src/ edit, which is out of scope here.",
-      );
-
       const opened = await openTripByName(page);
       expect(opened, `could not open "${TRIP_NAME}"`).toBe(true);
-
-      const visible = await membersButton(page)
-        .isVisible({ timeout: 6000 })
-        .catch(() => false);
-
-      test.info().annotations.push({
-        type: "affordance-visible",
-        description: String(visible),
-      });
-
-      expect(
-        visible,
-        'title="Trip members" affordance should render when a trip is open ' +
-          "and VITE_INVITE_ENABLED=true",
-      ).toBe(true);
+      await expect(membersButton(page)).toBeVisible({ timeout: 6000 });
     });
 
     test("owner can open the members sheet", async ({ page }) => {

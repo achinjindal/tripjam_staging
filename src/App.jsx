@@ -10233,40 +10233,6 @@ export default function App({
             >
               📤 Share trip
             </button>
-            {INVITE_ENABLED && trip?.id && (
-              <button
-                onClick={() => setShowMembers(true)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  background: "none",
-                  border: `1px solid ${T.sand}`,
-                  borderRadius: RADIUS.md,
-                  color: T.ink,
-                  cursor: "pointer",
-                  fontFamily: "Georgia,serif",
-                  fontSize: 12,
-                  padding: "8px 12px",
-                }}
-                title="Trip members"
-              >
-                {members.length > 1 ? (
-                  <>
-                    <AvatarStack
-                      names={members.map((m) =>
-                        memberName(m, session?.user?.id),
-                      )}
-                      size={20}
-                      ring={T.chalk}
-                    />
-                    {members.length}
-                  </>
-                ) : (
-                  <>＋ Invite</>
-                )}
-              </button>
-            )}
             <div style={{ flex: 1 }} />
             <div
               style={{
@@ -10416,6 +10382,34 @@ export default function App({
               >
                 📤 Share
               </button>
+              {INVITE_ENABLED && (
+                <button
+                  onClick={() => setShowMembers(true)}
+                  style={tripContextBtnStyle}
+                  title="Trip members"
+                >
+                  {members.length > 1 ? (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                    >
+                      <AvatarStack
+                        names={members.map((m) =>
+                          memberName(m, session?.user?.id),
+                        )}
+                        size={18}
+                        ring={T.chalk}
+                      />
+                      {members.length}
+                    </span>
+                  ) : (
+                    "＋ Invite"
+                  )}
+                </button>
+              )}
             </div>
           )}
           {/* ── DESKTOP TOP-TAB ROW (D22) ──
@@ -11672,6 +11666,44 @@ export default function App({
                       >
                         📤 Share
                       </button>
+                      {INVITE_ENABLED && !useDesktopShell && (
+                        <button
+                          onClick={() => setShowMembers(true)}
+                          aria-label="Trip members"
+                          title="Trip members"
+                          style={{
+                            background: "rgba(255,255,255,0.15)",
+                            border: "none",
+                            borderRadius: RADIUS.full,
+                            padding: "4px 13px",
+                            color: "white",
+                            fontSize: 12,
+                            cursor: "pointer",
+                            fontFamily: "Georgia,serif",
+                            flexShrink: 0,
+                            whiteSpace: "nowrap",
+                            marginLeft: 8,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 6,
+                          }}
+                        >
+                          {members.length > 1 ? (
+                            <>
+                              <AvatarStack
+                                names={members.map((m) =>
+                                  memberName(m, session?.user?.id),
+                                )}
+                                size={18}
+                                ring={"#24384c"}
+                              />
+                              {members.length}
+                            </>
+                          ) : (
+                            "＋ Invite"
+                          )}
+                        </button>
+                      )}
                     </div>
                     <div
                       style={{
