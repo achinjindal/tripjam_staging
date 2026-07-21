@@ -22,6 +22,8 @@ import {
 } from "./theme";
 import { refreshCredits, openPaywall, handleGatedResponse } from "./credits";
 import { showToast, confirmSheet } from "./dialogs.jsx";
+import { logActivity } from "./activity";
+import { subscribeTrip } from "./realtime";
 import {
   _photoCache,
   _usedPhotoUrls,
@@ -6507,6 +6509,36 @@ export default function App({
       } catch {}
     }
   }, [days, trip?.id]);
+  // Phase 0b: per-trip realtime subscription (ships dark behind VITE_REALTIME_ENABLED).
+  // Handlers are placeholders until the phases that consume them; RLS scopes events
+  // to trips the user is a member of. Subscribe on trip open, unsubscribe on change.
+  useEffect(() => {
+    const tripId = trip?.id;
+    if (!tripId) return;
+    const unsubscribe = subscribeTrip(tripId, {
+      days: (payload) => {
+        // TODO(Phase 2): merge remote day change into local state (last-write-wins).
+        if (import.meta.env.DEV)
+          console.debug("[realtime] days", payload.eventType);
+      },
+      trip_messages: (payload) => {
+        // TODO(Phase 2): append to shared Trippy chat.
+        if (import.meta.env.DEV)
+          console.debug("[realtime] message", payload.eventType);
+      },
+      activity_log: (payload) => {
+        // TODO(Phase 3): push into the activity feed / "while you were away".
+        if (import.meta.env.DEV)
+          console.debug("[realtime] activity", payload.eventType);
+      },
+      polls: (payload) => {
+        // TODO(Phase 6): update Decisions hub / open-poll pin.
+        if (import.meta.env.DEV)
+          console.debug("[realtime] poll", payload.eventType);
+      },
+    });
+    return unsubscribe;
+  }, [trip?.id]);
   const [loading, setLoading] = useState(initialScreen === "itinerary");
   const [tab, setTab] = useState("plan");
   const [debugMode] = useState(() => {
@@ -7242,6 +7274,10 @@ export default function App({
   const igAbortRef = useRef(null); // abort controller for in-flight IG generation
 
   const editActivity = (dayId, updated) => {
+    // Capture prior state (for the Phase-3 undo payload) before we overwrite it.
+    const prior = daysRef.current
+      ?.find((d) => d.id === dayId)
+      ?.activities?.find((a) => a.id === updated.id);
     setDays((prev) =>
       prev.map((d) =>
         d.id === dayId
@@ -7270,8 +7306,19 @@ export default function App({
         })
         .eq("id", updated.id)
         .then(({ error }) => {
-          if (error)
+          if (error) {
             console.error("Failed to save activity edit:", error.message);
+            return;
+          }
+          logActivity({
+            tripId: trip?.id,
+            userId: session?.user?.id,
+            action: "update_activity",
+            entityType: "activity",
+            entityId: updated.id,
+            summary: `Edited "${updated.title}"`,
+            undoPayload: prior ? { activity: prior } : null,
+          });
         });
     }
   };
@@ -7390,6 +7437,15 @@ export default function App({
     const daySnap = days.find((d) => d.id === dayId);
     const actSnap = daySnap?.activities.find((a) => a.id === activityId);
     await supabase.from("activities").delete().eq("id", activityId);
+    logActivity({
+      tripId: trip?.id,
+      userId: session?.user?.id,
+      action: "remove_activity",
+      entityType: "activity",
+      entityId: activityId,
+      summary: actSnap ? `Removed "${actSnap.title}"` : "Removed an activity",
+      undoPayload: actSnap ? { dayId, activity: actSnap } : null,
+    });
     setDays((prev) =>
       prev.map((d) =>
         d.id === dayId
@@ -9049,6 +9105,19 @@ export default function App({
               },
             );
           }
+          logActivity({
+            tripId: trip?.id,
+            userId: session?.user?.id,
+            action: "update_day",
+            entityType: "day",
+            entityId: dayId,
+            summary: `Updated ${updatedDay.label}`,
+            undoPayload: {
+              dayId,
+              activities: existingDay.activities || [],
+              wishlist: existingDay.wishlist ?? null,
+            },
+          });
           break;
         }
         case "suggest": {
@@ -9087,6 +9156,14 @@ export default function App({
             position: 0,
           });
           if (todoErr) console.warn("add_todo failed:", todoErr);
+          else
+            logActivity({
+              tripId,
+              userId: session?.user?.id,
+              action: "add_todo",
+              entityType: "todo",
+              summary: `Added to-do: ${action.text}`,
+            });
           break;
         }
         case "add_expense": {
@@ -9104,6 +9181,14 @@ export default function App({
               position: 0,
             });
           if (expErr) console.warn("add_expense failed:", expErr);
+          else
+            logActivity({
+              tripId,
+              userId: session?.user?.id,
+              action: "add_expense",
+              entityType: "expense",
+              summary: `Added expense: ${action.title}`,
+            });
           break;
         }
         case "add_bookmark": {
@@ -9119,6 +9204,14 @@ export default function App({
               position: 0,
             });
           if (bmErr) console.warn("add_bookmark failed:", bmErr);
+          else
+            logActivity({
+              tripId,
+              userId: session?.user?.id,
+              action: "add_bookmark",
+              entityType: "bookmark",
+              summary: `Added bookmark: ${action.title}`,
+            });
           break;
         }
         case "set_budget": {
@@ -9129,6 +9222,15 @@ export default function App({
             .update({ budget_amount: action.amount })
             .eq("id", tripId);
           if (budgetErr) console.warn("set_budget failed:", budgetErr);
+          else
+            logActivity({
+              tripId,
+              userId: session?.user?.id,
+              action: "set_budget",
+              entityType: "trip",
+              entityId: tripId,
+              summary: `Set budget to ${action.amount}`,
+            });
           break;
         }
         case "navigate": {

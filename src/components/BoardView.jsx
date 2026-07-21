@@ -9,6 +9,7 @@ import {
 } from "../theme";
 import { supabase } from "../supabase";
 import { handleGatedResponse, refreshCredits } from "../credits";
+import { logActivity } from "../activity";
 
 /* ─── BOARD VIEW ─────────────────────────────────────────────────────── */
 
@@ -276,6 +277,14 @@ function TodoView({ trip, onBack }) {
   const deleteTodo = async (todo) => {
     setTodos((prev) => prev.filter((t) => t.id !== todo.id));
     await supabase.from("trip_todos").delete().eq("id", todo.id);
+    logActivity({
+      tripId: trip.id,
+      action: "remove_todo",
+      entityType: "todo",
+      entityId: todo.id,
+      summary: `Removed to-do: ${todo.text}`,
+      undoPayload: { todo },
+    });
   };
 
   const addManual = async () => {
@@ -291,7 +300,16 @@ function TodoView({ trip, onBack }) {
       console.error("trip_todos insert:", error);
       return;
     }
-    if (data) setTodos((prev) => [...prev, data]);
+    if (data) {
+      setTodos((prev) => [...prev, data]);
+      logActivity({
+        tripId: trip.id,
+        action: "add_todo",
+        entityType: "todo",
+        entityId: data.id,
+        summary: `Added to-do: ${text}`,
+      });
+    }
   };
 
   const doneCount = todos.filter((t) => t.done).length;
@@ -901,6 +919,14 @@ function BookmarksView({ trip, onBack }) {
   const deleteBookmark = async (bm) => {
     setBookmarks((prev) => prev.filter((b) => b.id !== bm.id));
     await supabase.from("trip_bookmarks").delete().eq("id", bm.id);
+    logActivity({
+      tripId: trip.id,
+      action: "remove_bookmark",
+      entityType: "bookmark",
+      entityId: bm.id,
+      summary: `Removed bookmark: ${bm.title}`,
+      undoPayload: { bookmark: bm },
+    });
   };
 
   const saveEdit = async () => {
@@ -1304,6 +1330,13 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
           category: addCategory,
         })
         .eq("id", editingExpense.id);
+      logActivity({
+        tripId: trip.id,
+        action: "update_expense",
+        entityType: "expense",
+        entityId: editingExpense.id,
+        summary: `Edited expense: ${t}`,
+      });
     } else {
       setAddTitle("");
       setAddAmount("");
@@ -1321,7 +1354,16 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
         })
         .select()
         .single();
-      if (data) setExpenses((prev) => [...prev, data]);
+      if (data) {
+        setExpenses((prev) => [...prev, data]);
+        logActivity({
+          tripId: trip.id,
+          action: "add_expense",
+          entityType: "expense",
+          entityId: data.id,
+          summary: `Added expense: ${t}`,
+        });
+      }
     }
   };
 
@@ -1344,6 +1386,14 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
   const deleteExpense = async (exp) => {
     setExpenses((prev) => prev.filter((e) => e.id !== exp.id));
     await supabase.from("trip_expenses").delete().eq("id", exp.id);
+    logActivity({
+      tripId: trip.id,
+      action: "remove_expense",
+      entityType: "expense",
+      entityId: exp.id,
+      summary: `Removed expense: ${exp.title}`,
+      undoPayload: { expense: exp },
+    });
   };
 
   const saveBudget = async () => {
@@ -1356,6 +1406,13 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
       .update({ budget_amount: amt })
       .eq("id", trip.id);
     if (onUpdateTrip) onUpdateTrip({ budget_amount: amt });
+    logActivity({
+      tripId: trip.id,
+      action: "set_budget",
+      entityType: "trip",
+      entityId: trip.id,
+      summary: `Set budget to ${amt}`,
+    });
   };
 
   const generateEstimate = async () => {
