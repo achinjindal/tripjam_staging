@@ -50,11 +50,13 @@ END $$;
 
 -- service_role ONLY: these SECURITY DEFINER money functions must never be
 -- callable by anon/authenticated (they take p_user_id and don't check auth.uid,
--- so a direct call could mint/deduct arbitrary credits). New functions default
--- EXECUTE to PUBLIC, so REVOKE first. (This also closes the pre-existing hole
+-- so a direct call could mint/deduct arbitrary credits). Supabase's default
+-- privileges grant EXECUTE to anon+authenticated on new public functions, so we
+-- REVOKE from them BY NAME (REVOKE FROM PUBLIC alone does NOT remove those
+-- explicit grants). (This also closes the pre-existing hole
 -- where the launch migration granted deduct_credits/grant_credits to
 -- `authenticated` — the edge functions only ever call these via service_role.)
-REVOKE ALL ON FUNCTION resolve_credit_source(uuid, uuid, boolean) FROM PUBLIC;
+REVOKE ALL ON FUNCTION resolve_credit_source(uuid, uuid, boolean) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION resolve_credit_source(uuid, uuid, boolean)
   TO service_role;
 
@@ -123,7 +125,7 @@ BEGIN
 END $$;
 
 REVOKE ALL ON FUNCTION
-  deduct_credits(uuid, numeric, text, text, uuid, numeric, jsonb, text) FROM PUBLIC;
+  deduct_credits(uuid, numeric, text, text, uuid, numeric, jsonb, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION
   deduct_credits(uuid, numeric, text, text, uuid, numeric, jsonb, text)
   TO service_role;
@@ -192,7 +194,7 @@ BEGIN
 END $$;
 
 REVOKE ALL ON FUNCTION
-  grant_credits(uuid, numeric, text, jsonb, text, uuid) FROM PUBLIC;
+  grant_credits(uuid, numeric, text, jsonb, text, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION
   grant_credits(uuid, numeric, text, jsonb, text, uuid)
   TO service_role;
