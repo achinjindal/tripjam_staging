@@ -32,18 +32,31 @@ test.describe("Plans (RG) flow", () => {
     }
     await page.waitForTimeout(500);
 
-    // Click the bottom-right Next/arrow button to advance through steps 0→1→2→3
-    for (let step = 0; step < 3; step++) {
-      // The "Next →" or step-advance button
-      const stepBtns = page.locator("button").filter({ hasText: /next|→/i });
-      const visibleBtn = stepBtns.first();
-      if (await visibleBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await visibleBtn.click();
-        await page.waitForTimeout(800);
-      }
-    }
+    // Step 0 → 1 (Dates)
+    await page
+      .locator("button", { hasText: /continue/i })
+      .first()
+      .click();
+    await page.waitForTimeout(500);
 
-    // Click Start Planning
+    // Step 1: pick a valid future date range (Continue validates both dates)
+    const dayCells = page.locator("div[style*='cursor: pointer']").filter({
+      hasText: /^\d{1,2}$/,
+    });
+    await dayCells.first().waitFor({ state: "visible", timeout: 5000 });
+    const dayCount = await dayCells.count();
+    const startIdx = Math.min(5, Math.max(0, dayCount - 6));
+    await dayCells.nth(startIdx).click();
+    await page.waitForTimeout(200);
+    await dayCells.nth(Math.min(startIdx + 5, dayCount - 1)).click();
+    await page.waitForTimeout(200);
+    await page
+      .locator("button", { hasText: /continue/i })
+      .first()
+      .click();
+    await page.waitForTimeout(500);
+
+    // Step 2: fire route generation via "Start Planning ✨"
     const startBtn = page
       .locator("button", { hasText: /start planning/i })
       .first();
@@ -70,14 +83,31 @@ test.describe("Plans (RG) flow", () => {
   test("select and dismiss work", async ({ page }) => {
     await login(page);
 
-    // Find a draft trip
-    const tripCard = page.locator("text=/Planning/i").first();
+    // Find a draft trip — prefer a Japan draft (shared-setup trips reliably
+    // carry 4 routes); fall back to any Planning card.
+    const jpCard = page
+      .locator("div", { hasText: /Japan ·/ })
+      .filter({ has: page.locator("text=/Planning/") })
+      .first();
+    const tripCard = (await jpCard
+      .isVisible({ timeout: 3000 })
+      .catch(() => false))
+      ? jpCard
+      : page.locator("text=/Planning/i").first();
     if (!(await tripCard.isVisible({ timeout: 3000 }).catch(() => false))) {
       test.skip();
       return;
     }
     await tripCard.click();
     await page.waitForTimeout(2000);
+
+    // Post design-pass: the brainstorm view opens on the Inspirations tab on
+    // desktop. Switch to the Route sub-tab so the Select cards render.
+    const routeTab = page.locator("button", { hasText: /Route/i }).first();
+    if (await routeTab.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await routeTab.click();
+      await page.waitForTimeout(1000);
+    }
 
     // Count initial Select buttons
     const initialCount = await page

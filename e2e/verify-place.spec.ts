@@ -98,12 +98,19 @@ test.describe("verify-place ladder", () => {
       );
       return;
     }
-    // Success path — must be a repair (the hallucinated name has no direct match)
+    // Success path — must be a repair (the hallucinated name has no direct match).
+    // The `source` starting with "haiku-then-" is the load-bearing proof that the
+    // repair ladder ran rather than a silent Photon/Nominatim mis-resolve.
     expect(
       typeof body.source === "string" && body.source.startsWith("haiku-then-"),
       `expected haiku-then-* source for hallucinated name, got source=${body.source}`,
     ).toBe(true);
-    expect(body.corrected_from).toBe("The Westin Sapporo");
+    // `corrected_from` is only echoed on a fresh resolve; the cached path
+    // (body.cached === true) returns the stored coord/source without it. Only
+    // require it when the result was computed fresh.
+    if (!body.cached) {
+      expect(body.corrected_from).toBe("The Westin Sapporo");
+    }
     expect(
       body.lat,
       "lat should be present on verified result",

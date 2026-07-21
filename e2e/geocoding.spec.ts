@@ -1,4 +1,35 @@
 import { test, expect } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
+// The Playwright test-runner's Node process does not auto-load `.env` (only the
+// Vite webServer does). Since these tests run outside the browser and read
+// VITE_SUPABASE_* from process.env, load the repo-root `.env` ourselves so the
+// spec is runnable via a bare `npx playwright test e2e/geocoding.spec.ts`.
+function loadEnvFile() {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    for (const name of [".env", ".env.production"]) {
+      let text = "";
+      try {
+        text = readFileSync(resolve(here, "..", name), "utf8");
+      } catch {
+        continue;
+      }
+      for (const line of text.split("\n")) {
+        const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+        if (!m) continue;
+        const key = m[1];
+        const val = m[2].replace(/^["']|["']$/g, "");
+        if (process.env[key] === undefined) process.env[key] = val;
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+loadEnvFile();
 
 // Geocoding tests hit the configured Supabase project (staging by default per .env;
 // pass PLAYWRIGHT_SUPABASE_URL + PLAYWRIGHT_SUPABASE_ANON_KEY to override).

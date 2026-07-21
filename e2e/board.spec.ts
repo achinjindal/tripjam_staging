@@ -83,37 +83,35 @@ test.describe.serial("Board tab", () => {
     await page.waitForTimeout(1000);
     await destInput.press("Enter");
     await page.waitForTimeout(500);
-    await page.locator("body").click({ position: { x: 10, y: 10 } });
-    await page.waitForTimeout(500);
-    await page.locator("body").click({ position: { x: 10, y: 10 } });
+
+    // Step 0 → 1 (Dates)
+    await page
+      .locator("button", { hasText: /continue/i })
+      .first()
+      .click();
     await page.waitForTimeout(500);
 
-    for (let step = 0; step < 2; step++) {
-      const nextBtn = page
-        .locator("button")
-        .filter({ hasText: /continue|→/i })
-        .first();
-      if (await nextBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await nextBtn.click({ force: true });
-        await page.waitForTimeout(1000);
-      }
-    }
+    // Step 1: pick a valid future date range, then continue to step 2
+    const dayCells = page.locator("div[style*='cursor: pointer']").filter({
+      hasText: /^\d{1,2}$/,
+    });
+    await dayCells.first().waitFor({ state: "visible", timeout: 5000 });
+    const dayCount = await dayCells.count();
+    const startIdx = Math.min(5, Math.max(0, dayCount - 6));
+    await dayCells.nth(startIdx).click();
+    await page.waitForTimeout(200);
+    await dayCells.nth(Math.min(startIdx + 5, dayCount - 1)).click();
+    await page.waitForTimeout(200);
+    await page
+      .locator("button", { hasText: /continue/i })
+      .first()
+      .click();
+    await page.waitForTimeout(500);
 
-    // May need one more Continue if stuck
+    // Step 2: fire route generation via "Start Planning ✨"
     const startBtn = page
       .locator("button", { hasText: /start planning/i })
       .first();
-    if (!(await startBtn.isVisible({ timeout: 3000 }).catch(() => false))) {
-      const retryBtn = page
-        .locator("button")
-        .filter({ hasText: /continue|→/i })
-        .first();
-      if (await retryBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await retryBtn.click({ force: true });
-        await page.waitForTimeout(1000);
-      }
-    }
-
     await expect(startBtn).toBeVisible({ timeout: 5000 });
     await startBtn.click();
 
@@ -196,7 +194,10 @@ test.describe.serial("Board tab", () => {
     });
     await snap(page, "07-notes-autosave");
 
-    await page.locator("button", { hasText: /←/ }).first().click();
+    // Sub-view back button is a bare "←". Match exactly so we don't grab the
+    // trip-header "← Trips" button (which is present but not visible in the
+    // desktop shell and would hang the click).
+    await page.getByRole("button", { name: "←", exact: true }).first().click();
     await page.waitForTimeout(500);
   });
 
@@ -227,7 +228,8 @@ test.describe.serial("Board tab", () => {
     }
 
     await snap(page, "08-todo");
-    await page.locator("button", { hasText: /←/ }).first().click();
+    // Bare "←" sub-view back button (not the header "← Trips").
+    await page.getByRole("button", { name: "←", exact: true }).first().click();
     await page.waitForTimeout(500);
   });
 
