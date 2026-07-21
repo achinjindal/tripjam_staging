@@ -128,6 +128,8 @@ serve(async (req) => {
       tripId || null,
       spend_personal === true,
       corsHeaders,
+      1.0, // personal min (solo, unchanged)
+      15, // pool floor — IG can cost 20-50; fork a near-empty shared pool early
     );
     if (gate) return gate;
 

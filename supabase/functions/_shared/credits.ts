@@ -189,6 +189,11 @@ export async function resolveAndGate(
   preferPersonal: boolean,
   corsHeaders: Record<string, string>,
   min = 1.0,
+  // Big-spend floor (R8): a POOL-only pre-flight minimum. On expensive calls
+  // (IG/RG) pass e.g. 15 so a near-empty pool forks to the paywall BEFORE the
+  // costly LLM call rather than overdrawing. Defaults to `min`, and NEVER
+  // applies to the personal path — so solo behavior stays byte-identical.
+  poolMin = min,
 ): Promise<{ gate: Response | null; source: CreditSource }> {
   if (!user) return { gate: unauthorized(corsHeaders), source: "personal" };
 
@@ -204,7 +209,10 @@ export async function resolveAndGate(
   if (error) {
     console.error("resolve_credit_source failed:", error.message);
     if (user.credits < min)
-      return { gate: outOfCredits(corsHeaders, user.credits), source: "personal" };
+      return {
+        gate: outOfCredits(corsHeaders, user.credits),
+        source: "personal",
+      };
     return { gate: null, source: "personal" };
   }
 
@@ -214,7 +222,8 @@ export async function resolveAndGate(
     row?.balance ?? (source === "personal" ? user.credits : 0),
   );
 
-  if (balance < min) {
+  const floor = source === "pool" ? poolMin : min;
+  if (balance < floor) {
     return {
       gate:
         source === "pool"

@@ -114,6 +114,8 @@ serve(async (req) => {
       tripId || null,
       spend_personal === true,
       corsHeaders,
+      1.0, // personal min (solo, unchanged)
+      6, // pool floor — RG can cost ~6; fork a near-empty shared pool early
     );
     if (gate) return gate;
     const numPlans = Math.max(1, Math.min(4, rawNumPlans || 4));
