@@ -24,6 +24,9 @@ import { refreshCredits, openPaywall, handleGatedResponse } from "./credits";
 import { showToast, confirmSheet } from "./dialogs.jsx";
 import { logActivity } from "./activity";
 import { subscribeTrip } from "./realtime";
+import MembersSheet from "./components/MembersSheet.jsx";
+import { AvatarStack } from "./MemberAvatar.jsx";
+import { fetchMembers, INVITE_ENABLED, memberName } from "./members.js";
 import {
   _photoCache,
   _usedPhotoUrls,
@@ -6539,6 +6542,23 @@ export default function App({
     });
     return unsubscribe;
   }, [trip?.id]);
+  // Phase 1: trip members (behind VITE_INVITE_ENABLED). Drives the header
+  // affordance (＋ Invite when solo → avatar stack when shared) + the sheet.
+  const [members, setMembers] = useState([]);
+  const [showMembers, setShowMembers] = useState(false);
+  useEffect(() => {
+    if (!INVITE_ENABLED) return;
+    const tripId = trip?.id;
+    if (!tripId) {
+      setMembers([]);
+      return;
+    }
+    let cancelled = false;
+    fetchMembers(tripId).then((list) => !cancelled && setMembers(list));
+    return () => {
+      cancelled = true;
+    };
+  }, [trip?.id]);
   const [loading, setLoading] = useState(initialScreen === "itinerary");
   const [tab, setTab] = useState("plan");
   const [debugMode] = useState(() => {
@@ -10213,6 +10233,40 @@ export default function App({
             >
               📤 Share trip
             </button>
+            {INVITE_ENABLED && trip?.id && (
+              <button
+                onClick={() => setShowMembers(true)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  background: "none",
+                  border: `1px solid ${T.sand}`,
+                  borderRadius: RADIUS.md,
+                  color: T.ink,
+                  cursor: "pointer",
+                  fontFamily: "Georgia,serif",
+                  fontSize: 12,
+                  padding: "8px 12px",
+                }}
+                title="Trip members"
+              >
+                {members.length > 1 ? (
+                  <>
+                    <AvatarStack
+                      names={members.map((m) =>
+                        memberName(m, session?.user?.id),
+                      )}
+                      size={20}
+                      ring={T.chalk}
+                    />
+                    {members.length}
+                  </>
+                ) : (
+                  <>＋ Invite</>
+                )}
+              </button>
+            )}
             <div style={{ flex: 1 }} />
             <div
               style={{
@@ -14652,6 +14706,18 @@ export default function App({
               )}
             </div>
           </div>
+        )}
+        {INVITE_ENABLED && showMembers && trip?.id && (
+          <MembersSheet
+            trip={trip}
+            session={session}
+            onClose={() => setShowMembers(false)}
+            onMembersChanged={(list) => setMembers(list)}
+            onLeftTrip={() => {
+              setShowMembers(false);
+              onHome?.();
+            }}
+          />
         )}
       </div>
     </ErrorBoundary>

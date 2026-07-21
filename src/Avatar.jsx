@@ -24,12 +24,13 @@ function hashStringToInt(s) {
   return Math.abs(h);
 }
 
-function avatarColorFor(name) {
+// Exported for reuse by member avatars (MemberAvatar.jsx).
+export function avatarColorFor(name) {
   if (!name) return T.ocean;
   return AVATAR_PALETTE[hashStringToInt(name) % AVATAR_PALETTE.length];
 }
 
-function avatarInitial(name) {
+export function avatarInitial(name) {
   if (!name) return "?";
   // First alphanumeric character, uppercased. Falls back to '?' so we never
   // render an empty circle.

@@ -12,6 +12,7 @@ import Terms from "./Terms.jsx";
 import Home from "./Home.jsx";
 import App from "./App.jsx";
 import TripPublicView from "./TripPublicView.jsx";
+import JoinTrip, { takePendingJoin } from "./JoinTrip.jsx";
 import AdminConsole from "./Admin.jsx";
 import CreditsOverlay from "./CreditsOverlay.jsx";
 import DialogHost from "./dialogs.jsx";
@@ -78,6 +79,9 @@ function parseUrl(path = window.location.pathname) {
   // Public share view — separate namespace from trip
   const publicMatch = path.match(/^\/share\/([a-f0-9-]{36})$/);
   if (publicMatch) return { page: "public", token: publicMatch[1] };
+  // Collaboration invite link — /join/:token (token is a uuid)
+  const joinMatch = path.match(/^\/join\/([a-f0-9-]{36})$/);
+  if (joinMatch) return { page: "join", token: joinMatch[1] };
   if (path === "/signin" || path === "/login") return { page: "signin" };
   if (path === "/signup") return { page: "signup" };
   if (path === "/forgot-password") return { page: "forgot-password" };
@@ -175,6 +179,13 @@ function Root() {
   // Resolve initial URL on session load
   useEffect(() => {
     if (!session) return;
+    // Resume a pending invite after the user signed in to accept it.
+    const pendingJoin = takePendingJoin();
+    if (pendingJoin) {
+      pushUrl(`/join/${pendingJoin}`);
+      setUrlVersion((v) => v + 1);
+      return;
+    }
     const route = parseUrl();
     if (route.page === "trip" || route.page === "edit") {
       loadTrip(route.tripId).then((trip) => {
@@ -249,6 +260,33 @@ function Root() {
   if (route.page === "reset-password") return <ResetPassword />;
 
   if (session === undefined) return null;
+
+  // Collaboration invite landing — renders whether or not the user is signed in
+  // (signed out → "Sign in to join" which stashes the token and resumes after auth).
+  if (route.page === "join") {
+    const joinNavigate = (p) => {
+      if (p === "/") {
+        goHome();
+        return;
+      }
+      pushUrl(p);
+      setUrlVersion((v) => v + 1);
+    };
+    const openTripById = async (tripId) => {
+      const trip = await loadTrip(tripId);
+      if (trip) openTrip(trip);
+      else goHome();
+    };
+    return (
+      <JoinTrip
+        token={route.token}
+        session={session}
+        onNavigate={joinNavigate}
+        onOpenTripById={openTripById}
+      />
+    );
+  }
+
   if (!session) {
     // Landing page for unauthenticated visitors at "/".
     // Explicit signin/signup paths jump straight to Auth.
