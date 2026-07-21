@@ -8955,40 +8955,42 @@ export default function App({
               else delete result._error;
               return result;
             });
-            // Persist to DB
+            // Persist ONLY the changed route (non-destructive). upd.id ===
+            // brainstorm_items.id (routes load as {...row, ...row.data}), so we
+            // update that single row in place. Concurrent edits to DIFFERENT
+            // routes touch different rows and can't clobber each other. (Was:
+            // delete().eq("trip_id") + insert-all, which lost co-editors' routes
+            // on any overlap — a data-loss bug even solo.)
             const tripId = editingTrip?.id;
-            if (tripId) {
-              (async () => {
-                try {
-                  await supabase
-                    .from("brainstorm_items")
-                    .delete()
-                    .eq("trip_id", tripId);
-                  const rows = merged.map((it, i) => ({
-                    trip_id: tripId,
-                    title: it.title,
-                    city: it.city || null,
-                    category: it.category || "Route",
-                    note: it.tagline || null,
-                    icon: it.icon || null,
-                    geocode: it.geocode || null,
-                    position: i,
-                    tier: it.tier || 2,
-                    selected: !!it.selected,
-                    data: {
-                      tagline: it.tagline,
-                      days: it.days,
-                      bestFor: it.bestFor,
-                      warning: it.warning,
-                      recommended: !!it.recommended,
-                      points: it.points,
-                    },
-                  }));
-                  await supabase.from("brainstorm_items").insert(rows);
-                } catch (e) {
-                  console.warn("Failed to persist route edits:", e);
-                }
-              })();
+            const changed = merged.find((r) => r.id === upd.id);
+            if (tripId && changed && !String(changed.id).startsWith("tmp-")) {
+              supabase
+                .from("brainstorm_items")
+                .update({
+                  title: changed.title,
+                  city: changed.city || null,
+                  note: changed.tagline || null,
+                  icon: changed.icon || null,
+                  geocode: changed.geocode || null,
+                  tier: changed.tier || 2,
+                  selected: !!changed.selected,
+                  data: {
+                    tagline: changed.tagline,
+                    days: changed.days,
+                    bestFor: changed.bestFor,
+                    warning: changed.warning,
+                    recommended: !!changed.recommended,
+                    points: changed.points,
+                  },
+                })
+                .eq("id", changed.id)
+                .then(({ error }) => {
+                  if (error)
+                    console.warn(
+                      "Failed to persist route edit:",
+                      error.message,
+                    );
+                });
             }
             return merged;
           });
