@@ -291,17 +291,22 @@ Two balances:
 - **Group context into the prompt:** the chat request (already sending trip + days + form + history) gains `members[]` (id, name) and `preferences[]` (from `trip_preferences`). System prompt: _"This is a group trip with N travelers: [names + preferences]. When members disagree, propose a compromise and name who wanted what."_
 - **New action `create_poll`** — Trippy can turn a disagreement into a poll. All other actions unchanged; client `dispatchActions` extends by one case.
 
-### Concurrency (decided: serialize Trippy turns per trip)
+### Concurrency (REVISED after Phase-2 EM review — the lock was infeasible AND guarded the wrong write)
 
-**Why it matters:** Trippy's `update_day`/`update_route` actions **delete + re-insert the whole entity**, so two overlapping AI turns don't merge — the later write silently clobbers the earlier one (whole-day loss, not a field conflict). Plain last-write-wins is therefore unsafe here.
+**Why it matters:** Trippy's `update_route` action *did* **delete + re-insert the whole entity** (`update_route` was `delete().eq("trip_id")` + insert-**all**), so two overlapping edits — or even a stale insert after a delete, solo — silently wiped routes. `update_day` was less bad (day-scoped delete + a guard that skips the insert when the delete is RLS-blocked).
 
-**Decision:**
+**What the original spec got wrong (both fatal):**
 
-- **Serialize Trippy-directed turns per trip** — one AI turn processes at a time. A queued prompt is accepted (not rejected) and runs when the current turn finishes, **on the post-change state** (so Trippy sees the prior edit — fresh context for free).
-- **Only AI turns take the lock.** Human `everyone`/`user` messages mutate nothing and **always send instantly** — the conversation never blocks; only state-changing AI turns queue.
-- **Mechanism:** a per-trip lock acquired at turn start, released at end. ⚠️ **Crash-safety (R4):** a `trips.chat_lock` row with **~60s** auto-expiry is unsafe — streaming IG can exceed 60s, the lock expires mid-turn, and a queued turn starts on half-written state (the exact clobber this prevents). Use **either** (a) a **Postgres advisory lock** held for the edge function's lifetime, auto-released on connection close (no timer to misfire — preferred), **or** (b) a row whose heartbeat is written *by the edge function itself* while streaming, with expiry ≥ worst-case IG (~5 min). Never rely on the client to heartbeat. The `>15`-credit confirm happens _before_ the lock is taken; pool deductions serialize naturally.
-- **UI — server-authoritative busy state (not client guesswork):** the busy signal must come from server state broadcast over realtime, since the client can't know another member's turn is running. Spec: the edge function, on acquiring the lock, writes a `trips.ai_busy` row/columns (`ai_busy_by uuid`, `ai_busy_since timestamptz`, cleared on release); `trips` is broadcast over realtime (or a dedicated `trip_ai_state` table added to the publication), so every client renders "🐧 Trippy is helping Ravi — you're next" from that row and the queued sender doesn't re-type. This row is written **only by the edge function** (service_role, bypasses RLS); clients read it via the co-member policy. Wire this into the Phase-2 migration, not as UI polish.
-- **Future scale path (not v1):** if AI concurrency ever becomes a real bottleneck, migrate Trippy actions from whole-object replacement to **granular ops** (`add/remove/edit_activity(id)`) for true row-level merge. Over-engineered for v1's 2–4-person groups.
+1. **A stream-spanning "AI-turn lock" is infeasible over Supabase's pooler.** Edge functions reach Postgres through PgBouncer in *transaction mode*: a session `pg_advisory_lock()` orphans across pooled statements (can't be reliably released, doesn't span the turn), and `pg_advisory_xact_lock()` only lives for one transaction — but the multi-minute Anthropic stream runs in the Deno runtime, *outside* any PG transaction. "Hold the lock for the streaming lifetime" cannot work here.
+2. **The lock guarded the wrong operation.** The destructive write is a **client** write in `dispatchActions`, which runs *after* the function returns. A lock taken inside the function is already released by then. It provided **zero** protection against the stated clobber.
+
+**Revised decision (implemented, Phase 2):**
+
+- **The real fix is a non-destructive write, not a lock.** `update_route` now updates **only the one changed row** (`.update().eq("id", route.id)` — `route.id === brainstorm_items.id`, since routes load as `{...row, ...row.data}`). Concurrent edits to *different* routes touch different rows and cannot clobber; same-route edits are last-write-wins on that single row (no loss of *other* routes). This alone removes the data-loss window — and it's a bug fix even solo. `update_day` keeps its day-scoped delete + RLS-blocked-delete guard.
+- **Only AI turns spend/mutate.** Human `everyone`/`user` messages mutate nothing and always send instantly — the conversation never blocks.
+- **No turn-serialization lock in v1.** With the write made atomic per-row, serializing whole AI turns is a *UX* nicety, not a data-safety requirement. Two people prompting Trippy at once each get their own reply and each spends pool credits; no corruption. Acceptable for a 2–4-person v1.
+- **`ai_busy` "Trippy is helping X" banner — DEFERRED (UX-only polish).** The spec (edge function writes `trips.ai_busy_by`/`ai_busy_since` on turn start, cleared on end, broadcast over realtime — or a dedicated `trip_ai_state` table in the publication — so clients render "🐧 Trippy is helping Ravi — you're next") still stands as the *future* implementation, but it is explicitly **not** a safety mechanism and was cut from the Phase-2 build. Re-introduce as a fast-follow if overlapping-turn confusion shows up in use.
+- **Future scale path (not v1):** if AI concurrency ever becomes a real bottleneck, migrate the remaining whole-object replacements (`update_day`) to **granular ops** (`add/remove/edit_activity(id)`) for true row-level merge. Over-engineered for v1.
 
 ### Message addressing (US-6b)
 

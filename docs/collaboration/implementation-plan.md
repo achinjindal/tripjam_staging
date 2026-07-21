@@ -122,30 +122,24 @@ Phase 0  Foundations  ── 0a schema-reconciliation (drift capture DEFERRED) �
 
 ---
 
-## Phase 2 — Shared Trippy chat + concurrency + group prompt
+## Phase 2 — Shared Trippy chat + group prompt ✅ BUILT (on `collab-dev`, dark behind flags)
 
 **Goal:** one shared Trippy conversation, multi-user, live, group-aware.
 
-**DB migration** (`_phase2_chat.sql`):
-- Confirm `trip_messages` multi-user RLS (member read + insert). Already has `user_id`; **add `audience` + `directed_user_id`** (confirmed missing on prod) for message addressing.
-- **AI-turn lock, crash-safe (R4):** the naive `trip_ai_locks` row with a 60s expiry is unsafe — streaming IG can exceed 60s, the lock expires mid-turn, and a queued turn starts on half-written state (the exact clobber the lock prevents). Either **(a)** heartbeat from the *edge function itself* (background timer updating `heartbeat_at` while streaming) with expiry ≥ worst-case IG (~5 min), or **(b)** preferred: a **Postgres advisory lock** (`pg_advisory_xact_lock` / session lock) held for the edge function's lifetime and auto-released on connection close — no timer to misfire. Do not trust the client to heartbeat.
+> **EM review reshaped this phase.** The planned crash-safe "AI-turn lock" was dropped — it was infeasible over the pooler (a stream-spanning advisory lock can't be held in transaction-mode PgBouncer) **and** guarded the wrong write (the clobber is a *client* write in `dispatchActions`, after the function returns). The real fix is a **non-destructive per-row write**; serialization was unnecessary. See `documentation.md` §Concurrency (revised).
 
-**Edge function (`chat/`):**
-- Accept `members[]` + per-member `preferences` (from `trip_preferences`, Phase 5 — until then empty) + author-tagged history.
-- System-prompt group framing: "group trip, N travelers, on disagreement propose compromise and attribute who wanted what."
-- **Message addressing** (`audience` + `directed_user_id`): only `trippy`-audience turns call the LLM/spend credits; `everyone`/directed are free group messages. Implement the `@mention` model from the updated chat mockup (who-answers vs. who's-pinged).
-- **Concurrency:** acquire the crash-safe AI-turn lock (advisory lock preferred, see migration) before an LLM turn; queued prompts run on fresh state; humans never block. Return a "Trippy is helping X — you're next" signal.
-- New action `create_poll` stubbed (wired in Phase 5).
+**Built:**
+- **Step 1 — data-loss fix (commit `91841da`):** `update_route` now updates only the one changed `brainstorm_items` row (`.update().eq("id")`) instead of `delete().eq("trip_id")` + insert-all. Concurrent edits to different routes can't clobber; a bug fix even solo.
+- **Step 2 — attribution (`058e857`):** Trippy rows persist with `user_id: null` (not the sender's); `getMemberName` reads the live `members` state. Migration `20260722000001_trip_messages_assistant_rls.sql` adds an INSERT policy letting a member write an `assistant`/null-user row for their trip (the existing `user_id = auth.uid()` policy would reject it). `audience` + `directed_user_id` already existed (migration `20260721000001`).
+- **Step 3 — realtime echo-safe (`058e857`):** every insert supplies a client `crypto.randomUUID()` id the optimistic bubble shares; the realtime handler appends an incoming row only when its id is unseen → own echoes dedup, co-travelers' messages append once. `VITE_REALTIME_ENABLED` on for staging.
+- **Step 4 — message addressing (`058e857`):** shared-trip composer gets a who-answers (Trippy/Everyone) + `@mention` selector; only `trippy`-audience calls the LLM/spends credits; `everyone`/`user` messages insert directly (free, no function round-trip) via `sendHumanMessage`. Composer capped at 2000 chars.
+- **Step 5 — group-aware Trippy (`28b2ad1`):** `callUnifiedChat` sends the member roster (usernames only) + per-message authorship + the sender's name on shared trips; `chat/index.ts` injects a GROUP TRIP block into the **dynamic (uncached)** context and prefixes human turns with the speaker's name. `create_poll` is an explicit `dispatchActions` no-op (Phase 6 seam), not yet in the action vocabulary.
 
-**Frontend:**
-- Author avatars/names on bubbles; audience selector (two-section who-answers / @mention per the corrected mockup); concurrency banner; live message sync via the Phase-0 realtime channel (flip `REALTIME_ENABLED` on).
-- Optional presence ("Ravi is typing").
+**Deferred (EM-sanctioned):** the `ai_busy` "Trippy is helping X" banner — UX-only, not a safety mechanism (see §Concurrency).
 
-**Depends on:** Phase 2.5 credits (shared spend) should land together — see below.
+**Verified on staging** (`scripts/phase2-shared-chat-test.mjs`): non-member & impersonation inserts blocked; shared chat with `members[]` returns a group-aware reply that attributes by name; free `everyone` messages allowed; solo chat byte-identical. **Pending:** apply migration `20260722000001` to staging/prod (assistant-row insert fails RLS until then), and a browser-level two-context clobber/realtime regression test (the clobber path is `dispatchActions` JS, unreachable from Node).
 
-**Tests:** two users chat live; only Trippy-directed spends credits; concurrent prompts serialize (second queues); addressing renders as public @mention, not a DM.
-
-**Ship gate:** two users hold one Trippy conversation, no state clobber under concurrent prompts.
+**Depends on:** Phase 2.5 credits (shared spend) — landed.
 
 ---
 
