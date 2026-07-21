@@ -6531,9 +6531,26 @@ export default function App({
           console.debug("[realtime] days", payload.eventType);
       },
       trip_messages: (payload) => {
-        // TODO(Phase 2): append to shared Trippy chat.
         if (import.meta.env.DEV)
           console.debug("[realtime] message", payload.eventType);
+        // Echo-safe append: co-travelers' messages (and our own INSERT echoes)
+        // arrive here. Dedup by the client-supplied id — our optimistic bubble
+        // already carries it, so our own echoes are skipped and remote members'
+        // rows are appended once. Observers see the finished assistant bubble as
+        // a single INSERT (no token streaming — that's expected).
+        if (payload.eventType !== "INSERT" || !payload.new) return;
+        const row = payload.new;
+        const mapped = {
+          id: row.id,
+          role: row.role,
+          content: row.content,
+          user_id: row.user_id,
+          audience: row.audience,
+          directed_user_id: row.directed_user_id,
+        };
+        setChatMessages((prev) =>
+          prev.some((m) => m.id === row.id) ? prev : [...prev, mapped],
+        );
       },
       activity_log: (payload) => {
         // TODO(Phase 3): push into the activity feed / "while you were away".
@@ -7224,6 +7241,14 @@ export default function App({
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatAttention, setChatAttention] = useState(false);
+  // Message addressing (US-6b), shared trips only. Two axes:
+  //  - who answers: "trippy" (calls the AI, spends) | "everyone" (free, human)
+  //  - who's pinged: an optional directed member (directed_user_id). Never a
+  //    private-DM list — every message stays visible to all members.
+  // Solo trips keep today's behavior: always "trippy", no selector.
+  const [chatAudience, setChatAudience] = useState("trippy");
+  const [chatDirectedUserId, setChatDirectedUserId] = useState(null);
+  const [showAudiencePicker, setShowAudiencePicker] = useState(false);
   const chatBottomRef = useRef(null);
   const chatInputRef = useRef(null);
   const getChatPlaceholder = () => {
@@ -7253,7 +7278,7 @@ export default function App({
     if (!trip?.id) return;
     supabase
       .from("trip_messages")
-      .select("id, role, content, user_id")
+      .select("id, role, content, user_id, audience, directed_user_id")
       .eq("trip_id", trip.id)
       .order("created_at")
       .then(({ data }) => {
@@ -7262,6 +7287,8 @@ export default function App({
           role: m.role,
           content: m.content,
           user_id: m.user_id,
+          audience: m.audience,
+          directed_user_id: m.directed_user_id,
         }));
         setChatMessages((prev) => {
           // If the user already sent messages while we were loading (e.g. right after IG),
@@ -8805,8 +8832,12 @@ export default function App({
   // callChatTrip removed — unified chat handles all screens
 
   const getMemberName = (userId) => {
-    const m = (trip?.trip_members || []).find((mem) => mem.user_id === userId);
-    return m?.profiles?.username || "Traveler";
+    if (!userId) return "Traveler";
+    // Read from the live `members` state (Phase 1 fetchMembers) rather than the
+    // stale trip?.trip_members snapshot. memberName() resolves "You" for self.
+    const m = members.find((mem) => mem.user_id === userId);
+    if (m) return memberName(m, session?.user?.id);
+    return "Traveler";
   };
 
   const renderMentions = (text) => {
@@ -8818,7 +8849,16 @@ export default function App({
         return <strong key={i}>{part.slice(2, -2)}</strong>;
       if (/^(_[^_]+_|\*[^*]+\*)$/.test(part))
         return <em key={i}>{part.slice(1, -1)}</em>;
-      if (/^@\w+/.test(part))
+      if (/^@\w+/.test(part)) {
+        // Resolve @Name against live members so a real member mention renders
+        // as a chip (and "@you" for self). Unknown handles still style as a chip
+        // — addressing is never privacy, so we never hide the text.
+        const handle = part.slice(1).toLowerCase();
+        const mentioned = members.find(
+          (mem) => (mem.profiles?.username || "").toLowerCase() === handle,
+        );
+        const label =
+          mentioned && mentioned.user_id === session?.user?.id ? "@you" : part;
         return (
           <span
             key={i}
@@ -8830,9 +8870,10 @@ export default function App({
               color: T.ocean,
             }}
           >
-            {part}
+            {label}
           </span>
         );
+      }
       return part;
     });
   };
@@ -8863,24 +8904,30 @@ export default function App({
 
   const sendChatDirect = async (message) => {
     if (!message.trim() || chatLoading) return;
+    const userId = crypto.randomUUID();
+    const assistantId = crypto.randomUUID();
     const userMsg = {
+      id: userId,
       role: "user",
       content: message.trim(),
       user_id: session.user.id,
+      audience: "trippy",
     };
     const history = chatMessages.filter((m) => m.role !== "system-undo");
     setChatMessages((prev) => [
       ...prev,
       userMsg,
-      { role: "assistant", content: "", streaming: true },
+      { id: assistantId, role: "assistant", content: "", streaming: true },
     ]);
     setChatLoading(true);
     if (trip?.id)
       supabase.from("trip_messages").insert({
+        id: userId,
         trip_id: trip.id,
         user_id: session.user.id,
         role: "user",
         content: userMsg.content,
+        audience: "trippy",
       });
     let finalContent = "Sorry, something went wrong. Try again.";
     let suggestions = null;
@@ -8908,6 +8955,7 @@ export default function App({
     setChatMessages((prev) => {
       const updated = [...prev];
       updated[updated.length - 1] = {
+        id: assistantId,
         role: "assistant",
         content: finalContent,
         suggestions,
@@ -8921,10 +8969,12 @@ export default function App({
     setChatUnread(true);
     if (trip?.id)
       supabase.from("trip_messages").insert({
+        id: assistantId,
         trip_id: trip.id,
-        user_id: session.user.id,
+        user_id: null,
         role: "assistant",
         content: finalContent,
+        audience: "trippy",
       });
   };
 
@@ -9354,7 +9404,12 @@ export default function App({
   // already exist in chatMessages. Returns true on success, false if aborted
   // by the empty-trip-pool fork (so the caller leaves the streaming bubble in
   // place for the retry to reuse).
-  const performChatSend = async ({ userMsg, history, spendPersonal }) => {
+  const performChatSend = async ({
+    userMsg,
+    history,
+    spendPersonal,
+    assistantId,
+  }) => {
     let finalContent = "Sorry, something went wrong. Try again.";
     let suggestions = null;
     let hasChanges = false;
@@ -9394,7 +9449,12 @@ export default function App({
           tripId: trip?.id || null,
           retry: () => {
             setChatLoading(true);
-            performChatSend({ userMsg, history, spendPersonal: true });
+            performChatSend({
+              userMsg,
+              history,
+              spendPersonal: true,
+              assistantId,
+            });
           },
         });
         return false;
@@ -9406,6 +9466,7 @@ export default function App({
     setChatMessages((prev) => {
       const updated = [...prev];
       updated[updated.length - 1] = {
+        id: assistantId,
         role: "assistant",
         content: finalContent,
         suggestions,
@@ -9415,33 +9476,88 @@ export default function App({
       return updated;
     });
     if (trip?.id) {
+      // Trippy rows persist with user_id: null (they're the AI, not the sender)
+      // and the client-supplied assistantId so the realtime echo dedupes.
       supabase.from("trip_messages").insert({
+        id: assistantId,
         trip_id: trip.id,
-        user_id: session.user.id,
+        user_id: null,
         role: "assistant",
         content: finalContent,
+        audience: "trippy",
       });
     }
     setChatLoading(false);
     return true;
   };
 
-  const sendChatMessage = async () => {
+  // Human-only message (audience 'everyone' or 'user'): free, no LLM, no credit
+  // spend. Just persists the row + optimistic append. Shared trips only —
+  // solo trips never reach this path (audience is always 'trippy'). Still
+  // visible to every member; addressing controls who ANSWERS / is PINGED, not
+  // who can read it.
+  const sendHumanMessage = async (audience, directedUserId) => {
     if (!chatInput.trim() || chatLoading) return;
     posthog.capture("chat_message_sent", {
       screen,
       message_length: chatInput.trim().length,
+      audience,
     });
+    const userId = crypto.randomUUID();
     const userMsg = {
+      id: userId,
       role: "user",
       content: chatInput.trim(),
       user_id: session.user.id,
+      audience,
+      directed_user_id: directedUserId || null,
+    };
+    setChatMessages((prev) => [...prev, userMsg]);
+    setChatInput("");
+    if (chatInputRef.current) chatInputRef.current.style.height = "auto";
+    if (trip?.id) {
+      supabase.from("trip_messages").insert({
+        id: userId,
+        trip_id: trip.id,
+        user_id: session.user.id,
+        role: "user",
+        content: userMsg.content,
+        audience,
+        directed_user_id: directedUserId || null,
+      });
+    }
+    setChatUnread(true);
+  };
+
+  const sendChatMessage = async () => {
+    if (!chatInput.trim() || chatLoading) return;
+    // Addressing (shared trips only): 'everyone'/'user' → human message, no AI.
+    // Solo trips keep chatAudience === 'trippy', so this branch never fires.
+    if (isSharedTrip && chatAudience !== "trippy") {
+      await sendHumanMessage(chatAudience, chatDirectedUserId);
+      return;
+    }
+    posthog.capture("chat_message_sent", {
+      screen,
+      message_length: chatInput.trim().length,
+    });
+    // Client-supplied ids so the realtime echo of our own INSERTs can be
+    // deduped (same id → skip append). The assistant bubble carries its id so
+    // performChatSend persists the reply row under that exact id.
+    const userId = crypto.randomUUID();
+    const assistantId = crypto.randomUUID();
+    const userMsg = {
+      id: userId,
+      role: "user",
+      content: chatInput.trim(),
+      user_id: session.user.id,
+      audience: "trippy",
     };
     const history = chatMessages.filter((m) => m.role !== "system-undo");
     setChatMessages((prev) => [
       ...prev,
       userMsg,
-      { role: "assistant", content: "", streaming: true },
+      { id: assistantId, role: "assistant", content: "", streaming: true },
     ]);
     setChatInput("");
     if (chatInputRef.current) {
@@ -9451,14 +9567,21 @@ export default function App({
 
     if (trip?.id) {
       supabase.from("trip_messages").insert({
+        id: userId,
         trip_id: trip.id,
         user_id: session.user.id,
         role: "user",
         content: userMsg.content,
+        audience: "trippy",
       });
     }
 
-    await performChatSend({ userMsg, history, spendPersonal: false });
+    await performChatSend({
+      userMsg,
+      history,
+      spendPersonal: false,
+      assistantId,
+    });
   };
 
   // Magazine-area view selection. The "magazine area" hosts two sub-views:
@@ -14372,9 +14495,22 @@ export default function App({
                       const isAI = m.role === "assistant";
                       const isOther =
                         m.role === "user" && m.user_id !== session.user.id;
+                      // Addressing label (shared trips): "→ Everyone" / "→ @Name".
+                      // Trippy-directed messages (the default, and every solo
+                      // message) show nothing — today's behavior is unchanged.
+                      const addressLabel =
+                        isSharedTrip && m.role === "user"
+                          ? m.directed_user_id
+                            ? `→ @${getMemberName(m.directed_user_id)}`
+                            : m.audience === "everyone"
+                              ? "→ Everyone"
+                              : m.audience === "user"
+                                ? "→ someone"
+                                : null
+                          : null;
                       return (
                         <div
-                          key={i}
+                          key={m.id || i}
                           style={{
                             display: "flex",
                             flexDirection: "column",
@@ -14395,7 +14531,7 @@ export default function App({
                               ✨ Trippy
                             </div>
                           )}
-                          {isOther && (
+                          {(isOther || addressLabel) && (
                             <div
                               style={{
                                 fontSize: 11,
@@ -14403,9 +14539,18 @@ export default function App({
                                 fontFamily: "Georgia,serif",
                                 marginBottom: 2,
                                 paddingLeft: 4,
+                                display: "flex",
+                                gap: 5,
                               }}
                             >
-                              {getMemberName(m.user_id)}
+                              {isOther && (
+                                <span>{getMemberName(m.user_id)}</span>
+                              )}
+                              {addressLabel && (
+                                <span style={{ color: T.ocean }}>
+                                  {addressLabel}
+                                </span>
+                              )}
                             </div>
                           )}
                           <div
@@ -14636,66 +14781,261 @@ export default function App({
                       background: T.chalk,
                       borderTop: `1px solid ${T.sand}`,
                       display: "flex",
-                      gap: 8,
-                      alignItems: "flex-end",
+                      flexDirection: "column",
+                      gap: 6,
                       flexShrink: 0,
                     }}
                   >
-                    <textarea
-                      ref={chatInputRef}
-                      value={chatInput}
-                      rows={1}
-                      onChange={(e) => {
-                        setChatInput(e.target.value);
-                        e.target.style.height = "auto";
-                        e.target.style.height =
-                          Math.min(e.target.scrollHeight, 200) + "px";
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          sendChatMessage();
-                        }
-                      }}
-                      placeholder={
-                        screen === "brainstorm"
-                          ? "Ask about plans…"
-                          : "Ask Trippy anything…"
-                      }
+                    {/* Audience selector — shared trips only. Two axes: who
+                        answers (Trippy/Everyone) + optional @mention. Solo
+                        trips render nothing here and always send to Trippy. */}
+                    {isSharedTrip && (
+                      <div style={{ position: "relative" }}>
+                        <button
+                          type="button"
+                          onClick={() => setShowAudiencePicker((v) => !v)}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 6,
+                            background:
+                              chatAudience === "trippy"
+                                ? T.sand
+                                : "rgba(37,99,168,0.06)",
+                            border: `1px solid ${chatAudience === "trippy" ? T.sand : "#C8DFFE"}`,
+                            borderRadius: 20,
+                            padding: "4px 11px",
+                            fontSize: 12,
+                            fontFamily: "Georgia,serif",
+                            color: T.ink,
+                            cursor: "pointer",
+                            alignSelf: "flex-start",
+                          }}
+                        >
+                          {chatAudience === "trippy"
+                            ? "To: ✨ Trippy"
+                            : "To: 👥 Everyone"}
+                          {chatDirectedUserId &&
+                            ` · @${getMemberName(chatDirectedUserId)}`}
+                          <span style={{ color: T.mist }}>
+                            {showAudiencePicker ? "▴" : "▾"}
+                          </span>
+                        </button>
+                        {showAudiencePicker && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              bottom: "calc(100% + 6px)",
+                              left: 0,
+                              minWidth: 220,
+                              background: T.chalk,
+                              border: `1px solid ${T.sand}`,
+                              borderRadius: RADIUS.md,
+                              boxShadow: SHADOW.md,
+                              padding: 6,
+                              zIndex: 10,
+                            }}
+                          >
+                            {/* Axis 1: who answers */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setChatAudience("trippy");
+                                setChatDirectedUserId(null);
+                                setShowAudiencePicker(false);
+                              }}
+                              style={{
+                                display: "flex",
+                                width: "100%",
+                                alignItems: "center",
+                                gap: 8,
+                                padding: "8px 10px",
+                                border: "none",
+                                background:
+                                  chatAudience === "trippy"
+                                    ? "rgba(37,99,168,0.08)"
+                                    : "transparent",
+                                borderRadius: RADIUS.sm,
+                                fontFamily: "Georgia,serif",
+                                fontSize: 13,
+                                color: T.ink,
+                                cursor: "pointer",
+                                textAlign: "left",
+                              }}
+                            >
+                              ✨ Trippy
+                              <span style={{ fontSize: 11, color: T.mist }}>
+                                AI replies · uses credits
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setChatAudience("everyone");
+                                setShowAudiencePicker(false);
+                              }}
+                              style={{
+                                display: "flex",
+                                width: "100%",
+                                alignItems: "center",
+                                gap: 8,
+                                padding: "8px 10px",
+                                border: "none",
+                                background:
+                                  chatAudience === "everyone"
+                                    ? "rgba(37,99,168,0.08)"
+                                    : "transparent",
+                                borderRadius: RADIUS.sm,
+                                fontFamily: "Georgia,serif",
+                                fontSize: 13,
+                                color: T.ink,
+                                cursor: "pointer",
+                                textAlign: "left",
+                              }}
+                            >
+                              👥 Everyone
+                              <span style={{ fontSize: 11, color: T.mist }}>
+                                open to the group · free
+                              </span>
+                            </button>
+                            {/* Axis 2: optional @mention of a specific member */}
+                            <div
+                              style={{
+                                height: 1,
+                                background: T.sand,
+                                margin: "4px 6px",
+                              }}
+                            />
+                            {members
+                              .filter(
+                                (mem) => mem.user_id !== session?.user?.id,
+                              )
+                              .map((mem) => {
+                                const on = chatDirectedUserId === mem.user_id;
+                                return (
+                                  <button
+                                    type="button"
+                                    key={mem.user_id}
+                                    onClick={() => {
+                                      // @mention pings a member. Directing a
+                                      // ping implies a human message → default
+                                      // the who-answers axis to Everyone unless
+                                      // Trippy was explicitly chosen.
+                                      setChatDirectedUserId(
+                                        on ? null : mem.user_id,
+                                      );
+                                      if (!on && chatAudience === "trippy")
+                                        setChatAudience("everyone");
+                                      setShowAudiencePicker(false);
+                                    }}
+                                    style={{
+                                      display: "flex",
+                                      width: "100%",
+                                      alignItems: "center",
+                                      gap: 6,
+                                      padding: "8px 10px",
+                                      border: "none",
+                                      background: on
+                                        ? "rgba(37,99,168,0.08)"
+                                        : "transparent",
+                                      borderRadius: RADIUS.sm,
+                                      fontFamily: "Georgia,serif",
+                                      fontSize: 13,
+                                      color: T.ink,
+                                      cursor: "pointer",
+                                      textAlign: "left",
+                                    }}
+                                  >
+                                    <span style={{ color: T.ocean }}>@</span>
+                                    {memberName(mem, session?.user?.id)}
+                                    {on && (
+                                      <span style={{ color: T.ocean }}>✓</span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: T.mist,
+                                fontFamily: "Georgia,serif",
+                                padding: "6px 10px 2px",
+                              }}
+                            >
+                              Everyone sees this — addressing isn't private.
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div
                       style={{
-                        flex: 1,
-                        padding: "11px 14px",
-                        borderRadius: 18,
-                        border: `1.5px solid ${T.sand}`,
-                        fontFamily: "Georgia,serif",
-                        fontSize: 14,
-                        color: T.ink,
-                        outline: "none",
-                        background: T.warm,
-                        resize: "none",
-                        lineHeight: 1.5,
-                        overflow: "hidden",
-                        display: "block",
-                        minHeight: 66,
-                      }}
-                    />
-                    <button
-                      onClick={sendChatMessage}
-                      disabled={chatLoading || !chatInput.trim()}
-                      style={{
-                        width: 44,
-                        height: 44,
-                        borderRadius: "50%",
-                        background: chatInput.trim() ? T.ocean : T.sand,
-                        color: "white",
-                        border: "none",
-                        fontSize: 18,
-                        cursor: chatInput.trim() ? "pointer" : "default",
-                        flexShrink: 0,
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "flex-end",
                       }}
                     >
-                      ↑
-                    </button>
+                      <textarea
+                        ref={chatInputRef}
+                        value={chatInput}
+                        rows={1}
+                        maxLength={2000}
+                        onChange={(e) => {
+                          setChatInput(e.target.value);
+                          e.target.style.height = "auto";
+                          e.target.style.height =
+                            Math.min(e.target.scrollHeight, 200) + "px";
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            sendChatMessage();
+                          }
+                        }}
+                        placeholder={
+                          isSharedTrip && chatAudience !== "trippy"
+                            ? chatDirectedUserId
+                              ? `Message @${getMemberName(chatDirectedUserId)}…`
+                              : "Message the group…"
+                            : screen === "brainstorm"
+                              ? "Ask about plans…"
+                              : "Ask Trippy anything…"
+                        }
+                        style={{
+                          flex: 1,
+                          padding: "11px 14px",
+                          borderRadius: 18,
+                          border: `1.5px solid ${T.sand}`,
+                          fontFamily: "Georgia,serif",
+                          fontSize: 14,
+                          color: T.ink,
+                          outline: "none",
+                          background: T.warm,
+                          resize: "none",
+                          lineHeight: 1.5,
+                          overflow: "hidden",
+                          display: "block",
+                          minHeight: 66,
+                        }}
+                      />
+                      <button
+                        onClick={sendChatMessage}
+                        disabled={chatLoading || !chatInput.trim()}
+                        style={{
+                          width: 44,
+                          height: 44,
+                          borderRadius: "50%",
+                          background: chatInput.trim() ? T.ocean : T.sand,
+                          color: "white",
+                          border: "none",
+                          fontSize: 18,
+                          cursor: chatInput.trim() ? "pointer" : "default",
+                          flexShrink: 0,
+                        }}
+                      >
+                        ↑
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
