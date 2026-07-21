@@ -4,7 +4,7 @@ import {
   unauthorized,
   rateLimit,
   llmKillSwitch,
-  requireMinCredits,
+  resolveAndGate,
   deductCredits,
 } from "../_shared/credits.ts";
 
@@ -50,9 +50,6 @@ serve(async (req) => {
   const user = await authenticateUser(req);
   if (!user) return unauthorized(corsHeaders);
 
-  const creditCheck = requireMinCredits(user, corsHeaders);
-  if (creditCheck) return creditCheck;
-
   const rateLimited = await rateLimit(user.id, corsHeaders);
   if (rateLimited) return rateLimited;
 
@@ -66,8 +63,18 @@ serve(async (req) => {
       notes,
       tripDays,
       tripId,
+      spend_personal,
     } = await req.json();
     if (!city) throw new Error("city is required");
+
+    // Pre-flight (Phase 2.5): personal for solo (unchanged), pool for shared.
+    const { gate, source } = await resolveAndGate(
+      user,
+      tripId || null,
+      spend_personal === true,
+      corsHeaders,
+    );
+    if (gate) return gate;
 
     const userMessage = `Deep dive on: ${city}${country ? `, ${country}` : ""}.
 Trip context: ${tripDays ? `${tripDays} day${tripDays > 1 ? "s" : ""} in this city` : "short visit"}, traveling in ${travelMonth || "unspecified month"}.
@@ -105,6 +112,7 @@ ${notes ? `Traveler notes: ${notes}` : ""}`;
       outputTokens: result.usage?.output_tokens || 0,
       functionName: "city-deep-dive",
       tripId: tripId || null,
+      source,
     }).catch(() => {});
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;

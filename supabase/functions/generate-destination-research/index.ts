@@ -23,7 +23,7 @@ import {
   unauthorized,
   rateLimit,
   llmKillSwitch,
-  requireMinCredits,
+  resolveAndGate,
   deductCredits,
 } from "../_shared/credits.ts";
 
@@ -309,19 +309,24 @@ serve(async (req) => {
   const rateLimited = await rateLimit(user.id, corsHeaders);
   if (rateLimited) return rateLimited;
 
-  // Pre-flight credit check. Cache hits below bypass this naturally because
-  // they short-circuit before any LLM call — but we still check here so a
-  // user with 0 credits never even attempts.
-  const noFunds = requireMinCredits(user, corsHeaders, MIN_CREDITS);
-  // (We don't return noFunds yet — cache hits should still work even at low
-  // balance. We capture it and apply only on cache miss.)
-
   try {
     const body = await req.json();
     const destinations = normaliseList(body.destinations);
     const notes: string = typeof body.notes === "string" ? body.notes : "";
     const monthBucket = monthBucketFor(body.startDate);
     const tripId: string | null = body.tripId || null;
+
+    // Pre-flight credit check (Phase 2.5): resolve which wallet pays — personal
+    // for a solo trip (unchanged), the trip pool for a shared trip. We DON'T
+    // return the gate yet: cache hits below should still work at low balance, so
+    // we capture it and apply only on cache miss.
+    const { gate: noFunds, source } = await resolveAndGate(
+      user,
+      tripId,
+      body.spend_personal === true,
+      corsHeaders,
+      MIN_CREDITS,
+    );
     // Refinement: free-text focus for "Load more" batches (e.g. "hiking blogs").
     // Empty string = default load with no specific focus.
     const refinement: string =
@@ -530,6 +535,7 @@ serve(async (req) => {
       outputTokens: mainOut + tagResult.outputTokens,
       functionName: "generate-destination-research",
       tripId,
+      source,
     }).catch(() => {});
 
     return new Response(

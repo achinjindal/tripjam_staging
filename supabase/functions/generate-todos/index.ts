@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   authenticateUser,
   unauthorized,
-  outOfCredits,
+  resolveAndGate,
   rateLimit,
   llmKillSwitch,
   deductCredits,
@@ -50,12 +50,20 @@ serve(async (req) => {
 
     const user = await authenticateUser(req);
     if (!user) return unauthorized(corsHeaders);
-    if (user.credits < 1.0) return outOfCredits(corsHeaders, user.credits);
 
     const rateLimited = await rateLimit(user.id, corsHeaders);
     if (rateLimited) return rateLimited;
 
-    const { trip } = await req.json();
+    const { trip, spend_personal } = await req.json();
+
+    // Pre-flight (Phase 2.5): personal for solo (unchanged), pool for shared.
+    const { gate, source } = await resolveAndGate(
+      user,
+      trip?.id || null,
+      spend_personal === true,
+      corsHeaders,
+    );
+    if (gate) return gate;
 
     const budgetLabel =
       { budget: "budget", mid: "mid-range", luxury: "luxury" }[trip.budget] ||
@@ -120,6 +128,7 @@ serve(async (req) => {
       outputTokens: data.usage?.output_tokens || 0,
       functionName: "generate-todos",
       tripId: trip?.id || null,
+      source,
     });
 
     let items = [];

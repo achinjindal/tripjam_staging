@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   authenticateUser,
   unauthorized,
-  outOfCredits,
+  resolveAndGate,
   deductCredits,
   rateLimit,
   llmKillSwitch,
@@ -93,9 +93,6 @@ serve(async (req) => {
 
     const user = await authenticateUser(req);
     if (!user) return unauthorized(corsHeaders);
-    // Pre-flight: require ≥1.0 credits so a partial decimal at the boundary
-    // can't overdraw mid-call (IG can cost 20-50 credits worst case).
-    if (user.credits < 1.0) return outOfCredits(corsHeaders, user.credits);
 
     const rateLimited = await rateLimit(user.id, corsHeaders);
     if (rateLimited) return rateLimited;
@@ -120,7 +117,19 @@ serve(async (req) => {
       departureMode,
       votedItems,
       tripId,
+      spend_personal,
     } = body;
+
+    // Pre-flight (Phase 2.5): resolve which wallet pays — personal for a solo
+    // trip (byte-identical to before), the trip pool for a shared trip; a short
+    // shared pool forks with 'empty_trip_pool'.
+    const { gate, source } = await resolveAndGate(
+      user,
+      tripId || null,
+      spend_personal === true,
+      corsHeaders,
+    );
+    if (gate) return gate;
 
     const budgetLabel =
       {
@@ -467,6 +476,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
               cacheReadTokens,
               functionName: "generate-itinerary",
               tripId: tripId || null,
+              source,
             });
           })(),
         );

@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   authenticateUser,
   unauthorized,
-  outOfCredits,
+  resolveAndGate,
   rateLimit,
   llmKillSwitch,
   deductCredits,
@@ -37,12 +37,20 @@ serve(async (req) => {
 
     const user = await authenticateUser(req);
     if (!user) return unauthorized(corsHeaders);
-    if (user.credits < 1.0) return outOfCredits(corsHeaders, user.credits);
 
     const rateLimited = await rateLimit(user.id, corsHeaders);
     if (rateLimited) return rateLimited;
 
-    const { days, tripId } = await req.json();
+    const { days, tripId, spend_personal } = await req.json();
+
+    // Pre-flight (Phase 2.5): personal for solo (unchanged), pool for shared.
+    const { gate, source } = await resolveAndGate(
+      user,
+      tripId || null,
+      spend_personal === true,
+      corsHeaders,
+    );
+    if (gate) return gate;
 
     // Build a compact summary of each day's area and existing activities
     const daysSummary = days
@@ -112,6 +120,7 @@ Already in the itinerary (exclude these): ${allActivities}`;
       outputTokens: data.usage?.output_tokens || 0,
       functionName: "generate-wishlist",
       tripId: tripId || null,
+      source,
     });
 
     const jsonMatch = text
