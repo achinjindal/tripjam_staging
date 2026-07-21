@@ -63,6 +63,16 @@ SELECT count(*) FROM trips t
 Expected: (a) zero rows; (b) tells you if enabling RLS is a cutover; (c) skip any already present;
 (d) >0 confirms the owner-fallback in `04` is needed (legacy trips).
 
+**Results (verified 2026-07-21) — all clear:**
+- (a) **0 duplicate memberships** → `06` `ON CONFLICT` safe.
+- (b) `activity_log` **RLS already enabled** + existing SELECT policy "Members can view activity log";
+  **no INSERT policy** exists. → `04` no longer adds a duplicate read policy; it only adds the
+  (missing, load-bearing) author-INSERT + service-role policy. `ENABLE` is a no-op.
+- (c) **0 tables in `supabase_realtime`** → `05` adds all 7; nothing to skip.
+- (d) **0 legacy trips** without a creator membership row → `04` owner-fallback kept as harmless insurance.
+- bonus: `trip_members` already has UNIQUE `trip_members_trip_id_user_id_key` on (trip_id,user_id)
+  → `06` defensive index removed as redundant.
+
 ## Applying (prod-direct)
 
 `02`–`04` are Phase-0/foundation; `06`–`07` are Phase-1 (invites + membership lifecycle). To apply

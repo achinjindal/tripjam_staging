@@ -6,12 +6,9 @@
 -- max-members cap (8).
 -- ============================================================================
 
--- Defensive: the ON CONFLICT below needs a unique key on (trip_id, user_id).
--- trip_members is untracked (no migration), so we can't assume it exists —
--- create it idempotently. Redundant if one already exists (harmless); will fail
--- only if duplicate memberships already exist (pathological — investigate).
-CREATE UNIQUE INDEX IF NOT EXISTS trip_members_trip_user_uidx
-  ON trip_members (trip_id, user_id);
+-- The ON CONFLICT below targets (trip_id, user_id). Pre-flight (2026-07-21)
+-- confirmed prod already has UNIQUE constraint `trip_members_trip_id_user_id_key`
+-- on those columns (and 0 duplicate rows), so no defensive index is needed.
 
 CREATE OR REPLACE FUNCTION accept_invite(p_token text)
   RETURNS uuid                                   -- returns trip_id

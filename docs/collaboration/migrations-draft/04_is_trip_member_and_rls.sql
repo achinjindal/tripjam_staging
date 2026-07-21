@@ -24,12 +24,13 @@ CREATE POLICY "members read co-members" ON trip_members
 -- (INSERT stays restricted — membership is added only via the accept_invite
 --  SECURITY DEFINER RPC. DELETE policy already exists from 2026-07-13.)
 
--- --- activity_log: members read; author inserts own rows ----------------------
-ALTER TABLE activity_log ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "members read activity" ON activity_log;
-CREATE POLICY "members read activity" ON activity_log
-  FOR SELECT TO authenticated
-  USING (is_trip_member(trip_id, auth.uid()));
+-- --- activity_log: author inserts own rows ------------------------------------
+-- Pre-flight (2026-07-21): RLS is ALREADY enabled on activity_log and a working
+-- SELECT policy exists ("Members can view activity log", role public). So the
+-- ENABLE below is a no-op and we do NOT add a duplicate read policy. What's
+-- MISSING is any INSERT policy — without it nothing can write activity_log — so
+-- adding the author-insert policy is the load-bearing change.
+ALTER TABLE activity_log ENABLE ROW LEVEL SECURITY;  -- no-op (already enabled)
 DROP POLICY IF EXISTS "author writes activity" ON activity_log;
 CREATE POLICY "author writes activity" ON activity_log
   FOR INSERT TO authenticated
