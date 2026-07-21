@@ -29,14 +29,21 @@
 
 ## Files
 
-| File | Status | Needs |
+**`02`–`07` were PROMOTED into `supabase/migrations/` on 2026-07-21** (timestamps
+`20260721000001`–`000006`) and are applied prod-direct via `npm run db:push:prod`. They no longer
+live here. Only the deferred capture stub remains.
+
+| Promoted migration (`supabase/migrations/`) | Was | Status |
 | --- | --- | --- |
-| `02_add_missing_columns.sql` | ✅ ready for prod | — |
-| `03_create_absent_in_prod_tables.sql` | ✅ ready for prod | — |
-| `04_is_trip_member_and_rls.sql` | ✅ ready for prod | — |
-| `05_realtime_publication.sql` | ✅ ready for prod | — |
-| `06_accept_invite.sql` | ✅ ready for prod | — |
-| `07_membership_lifecycle.sql` | ⚠️ ready except RLS repoint | prod `pg_dump` (to repoint owner-only policies `created_by`→`owner_id`) |
+| `20260721000001_add_missing_columns.sql` | 02 | ✅ |
+| `20260721000002_create_collab_tables.sql` | 03 | ✅ |
+| `20260721000003_is_trip_member_and_rls.sql` | 04 | ✅ |
+| `20260721000004_realtime_publication.sql` | 05 | ✅ |
+| `20260721000005_accept_invite.sql` | 06 | ✅ |
+| `20260721000006_membership_lifecycle.sql` | 07 | ✅ (owner-RLS repoint still deferred — RPCs work without it) |
+
+| Still here | Status | Needs |
+| --- | --- | --- |
 | `01_capture_drifted_tables.DRAFT.sql` | ⏸ deferred (pre-launch) | prod `pg_dump` |
 
 ## Pre-flight checks (run on prod BEFORE applying — one query each)
