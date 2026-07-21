@@ -154,6 +154,78 @@ export function requireMinCredits(
   return null;
 }
 
+export type CreditSource = "personal" | "pool";
+
+// 402 (Payment Required) when a SHARED trip's pool can't cover the call. Distinct
+// code from `insufficient_credits` so the client shows the fork paywall
+// ("Add to trip" vs "Use my personal credits") instead of the personal paywall,
+// and does NOT zero the user's personal balance.
+export function outOfPool(
+  corsHeaders: Record<string, string>,
+  poolBalance: number,
+) {
+  return new Response(
+    JSON.stringify({
+      error: "Trip pool is empty",
+      code: "empty_trip_pool",
+      pool_balance: poolBalance,
+    }),
+    {
+      status: 402,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    },
+  );
+}
+
+// Phase 2.5 — the SINGLE pre-flight gate for pooled credits. Resolves which
+// wallet pays (personal for solo/null trip or an explicit opt-in; pool for a
+// shared trip) via one SECURITY DEFINER RPC, checks THAT balance >= min, and
+// returns the resolved source so the caller can thread it into deductCredits.
+//   - Solo/null trip → source 'personal', gate identical to requireMinCredits.
+//   - Shared trip, pool short → 402 `empty_trip_pool` (fork); personal untouched.
+export async function resolveAndGate(
+  user: AuthedUser | null,
+  tripId: string | null | undefined,
+  preferPersonal: boolean,
+  corsHeaders: Record<string, string>,
+  min = 1.0,
+): Promise<{ gate: Response | null; source: CreditSource }> {
+  if (!user) return { gate: unauthorized(corsHeaders), source: "personal" };
+
+  const supa = adminClient();
+  const { data, error } = await supa.rpc("resolve_credit_source", {
+    p_user: user.id,
+    p_trip: tripId ?? null,
+    p_prefer_personal: preferPersonal,
+  });
+
+  // Fail safe: if resolution errors, fall back to the personal-wallet gate
+  // (today's behavior) rather than blocking or mischarging.
+  if (error) {
+    console.error("resolve_credit_source failed:", error.message);
+    if (user.credits < min)
+      return { gate: outOfCredits(corsHeaders, user.credits), source: "personal" };
+    return { gate: null, source: "personal" };
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  const source: CreditSource = row?.source === "pool" ? "pool" : "personal";
+  const balance = Number(
+    row?.balance ?? (source === "personal" ? user.credits : 0),
+  );
+
+  if (balance < min) {
+    return {
+      gate:
+        source === "pool"
+          ? outOfPool(corsHeaders, balance)
+          : outOfCredits(corsHeaders, balance),
+      source,
+    };
+  }
+  return { gate: null, source };
+}
+
 // Day 7: per-user per-minute rate limit. Returns 429 Response when over the
 // limit; null otherwise. Uses Postgres SECURITY DEFINER RPC for atomicity.
 // Limit defaults to 20 calls/min/user — comfortable for normal usage,
@@ -236,6 +308,9 @@ export async function deductCredits(args: {
   cacheReadTokens?: number;
   functionName: string;
   tripId?: string | null;
+  // Phase 2.5: which wallet pays, as resolved by resolveAndGate. Omit → 'auto'
+  // (resolves internally; solo/null trip = personal, byte-identical to before).
+  source?: CreditSource;
 }): Promise<void> {
   const cacheCreationTokens = args.cacheCreationTokens ?? 0;
   const cacheReadTokens = args.cacheReadTokens ?? 0;
@@ -256,6 +331,7 @@ export async function deductCredits(args: {
       p_reason: args.functionName,
       p_function_name: args.functionName,
       p_trip_id: args.tripId ?? null,
+      p_source: args.source ?? "auto",
       p_llm_cost_usd: usd,
       p_metadata: {
         model: args.model,
@@ -331,6 +407,7 @@ export async function deductExternalApiCredits(args: {
   reason: string; // e.g. "places-proxy:google-find-place"
   functionName: string;
   tripId?: string | null;
+  source?: CreditSource;
   metadata?: Record<string, unknown>;
 }): Promise<void> {
   const credits = costToCreditsPassthrough(args.costUsd);
@@ -343,6 +420,7 @@ export async function deductExternalApiCredits(args: {
       p_reason: args.reason,
       p_function_name: args.functionName,
       p_trip_id: args.tripId ?? null,
+      p_source: args.source ?? "auto",
       p_llm_cost_usd: args.costUsd, // re-using column for any external $ cost
       p_metadata: { ...(args.metadata ?? {}), pricing: "passthrough" },
     });
@@ -361,6 +439,9 @@ export async function grantCredits(args: {
   reason: string;
   providerSessionId?: string;
   metadata?: Record<string, unknown>;
+  // Phase 2.5: when set, fund the TRIP POOL (trips.credit_balance) instead of
+  // the buyer's personal wallet. Same provider_session_id idempotency applies.
+  tripId?: string | null;
 }): Promise<number | null> {
   if (!Number.isFinite(args.amount) || args.amount <= 0) return null;
   const supa = adminClient();
@@ -371,6 +452,7 @@ export async function grantCredits(args: {
       p_reason: args.reason,
       p_metadata: args.metadata ?? null,
       p_provider_session_id: args.providerSessionId ?? null,
+      p_trip_id: args.tripId ?? null,
     });
     if (error) throw error;
     return typeof data === "number" ? data : Number(data);
