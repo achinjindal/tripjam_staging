@@ -9339,6 +9339,13 @@ export default function App({
           setChatOpen(false);
           break;
         }
+        case "create_poll": {
+          // Phase 6 wires this to the polls table + Board→Decisions UI. Until
+          // then it's a deliberate no-op so an early/hallucinated create_poll is
+          // inert rather than a broken action. Not yet advertised in the chat
+          // function's action vocabulary.
+          break;
+        }
       }
     }
   };
@@ -9352,6 +9359,17 @@ export default function App({
     history = [],
     spendPersonal = false,
   ) => {
+    // Group context (shared trips only): send the roster + per-message authorship
+    // so Trippy can attribute who wanted what and propose compromises. Solo trips
+    // send neither, so the prompt is byte-identical to before.
+    const nameOf = (uid) =>
+      members.find((x) => x.user_id === uid)?.profiles?.username || null;
+    const memberList = isSharedTrip
+      ? members.map((m) => ({
+          id: m.user_id,
+          name: m.profiles?.username || "Traveler",
+        }))
+      : null;
     const res = await fetch(
       `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`,
       {
@@ -9368,9 +9386,15 @@ export default function App({
           form: pendingForm || {},
           message,
           ...(spendPersonal ? { spend_personal: true } : {}),
+          ...(memberList
+            ? { members: memberList, sender: nameOf(session.user.id) }
+            : {}),
           history: history.map((m) => ({
             role: m.role === "assistant" ? "assistant" : "user",
             content: m.content,
+            ...(memberList && m.role !== "assistant" && m.user_id
+              ? { author: nameOf(m.user_id) }
+              : {}),
           })),
         }),
       },

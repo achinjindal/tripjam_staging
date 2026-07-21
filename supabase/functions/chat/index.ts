@@ -42,6 +42,8 @@ serve(async (req) => {
       message,
       history,
       spend_personal,
+      members,
+      sender,
     } = await req.json();
 
     // Pre-flight (Phase 2.5): resolve which wallet pays — personal for a solo
@@ -233,19 +235,35 @@ Example (no change):
 Example (multi-action):
 {"message":"Added your hotel booking to bookmarks and a reminder to your to-do list.","actions":[{"type":"add_bookmark","title":"Taj Hotel","url":"https://booking.com/taj"},{"type":"add_todo","text":"Confirm Taj Hotel reservation","category":"Bookings","due_date":"1 week before"}]}`;
 
+    // Group context (shared trips) — NOT cached, so this never busts the cached
+    // static prefix. Only usernames are sent (no ids/emails). Empty for solo.
+    const groupContext =
+      Array.isArray(members) && members.length > 1
+        ? `\n\nGROUP TRIP: ${members.length} people are planning together — ${members
+            .map((m: any) => m?.name)
+            .filter(Boolean)
+            .join(
+              ", ",
+            )}. Messages below are prefixed with the speaker's name. When travelers want different things, don't just pick one — name the tension, propose a compromise that respects everyone, and attribute who wanted what. Address people by name.`
+        : "";
+
     // Per-call context — NOT cached (changes every request).
     const dynamicContext = `TRIP CONTEXT (specific to this request)
 ${trip ? `Trip: ${trip.name} (${trip.destination})${logisticsNote}` : ""}
 ${formInfo}
 ${isBrainstorm && routeSummary ? `\nCURRENT PLAN OPTIONS:\n${routeSummary}` : ""}
-${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}`;
+${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${groupContext}`;
 
-    // Clean history
+    // Clean history. On group trips, prefix each human turn with its author so
+    // Trippy can attribute across speakers; assistant turns are left bare.
     const cleanHistory = (history || [])
       .filter((m: any) => m.content && m.content.trim() && !m.streaming)
       .map((m: any) => ({
         role: m.role === "assistant" ? "assistant" : "user",
-        content: String(m.content),
+        content:
+          m.role !== "assistant" && m.author
+            ? `${m.author}: ${String(m.content)}`
+            : String(m.content),
       }))
       .reduce((acc: any[], m: any) => {
         if (acc.length > 0 && acc[acc.length - 1].role === m.role) {
@@ -263,7 +281,10 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}`;
         ? cleanHistory.slice(1)
         : cleanHistory;
     const recent = trimmed.slice(-6); // Keep last 6 messages to cap input token cost
-    const messages = [...recent, { role: "user", content: message }];
+    // Attribute the incoming turn too, so Trippy knows who's asking in a group.
+    const currentContent =
+      groupContext && sender ? `${sender}: ${message}` : message;
+    const messages = [...recent, { role: "user", content: currentContent }];
 
     const requestBody = JSON.stringify({
       model: "claude-sonnet-4-6",
