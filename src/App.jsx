@@ -20,11 +20,17 @@ import {
   PLACES_PROXY,
   PLACES_HEADERS,
 } from "./theme";
-import { refreshCredits, openPaywall, handleGatedResponse } from "./credits";
+import {
+  refreshCredits,
+  openPaywall,
+  handleGatedResponse,
+  openForkPaywall,
+} from "./credits";
 import { showToast, confirmSheet } from "./dialogs.jsx";
 import { logActivity } from "./activity";
 import { subscribeTrip } from "./realtime";
 import MembersSheet from "./components/MembersSheet.jsx";
+import { TripCreditsSheet } from "./CreditsOverlay.jsx";
 import { AvatarStack } from "./MemberAvatar.jsx";
 import { fetchMembers, INVITE_ENABLED, memberName } from "./members.js";
 import {
@@ -6546,6 +6552,9 @@ export default function App({
   // affordance (＋ Invite when solo → avatar stack when shared) + the sheet.
   const [members, setMembers] = useState([]);
   const [showMembers, setShowMembers] = useState(false);
+  // Phase 2.5 pooled credits: the Trip Credits sheet (pool balance + funding).
+  // Ships dark behind INVITE_ENABLED + shared-trip gating (see isSharedTrip).
+  const [showTripCredits, setShowTripCredits] = useState(false);
   useEffect(() => {
     if (!INVITE_ENABLED) return;
     const tripId = trip?.id;
@@ -6559,6 +6568,15 @@ export default function App({
       cancelled = true;
     };
   }, [trip?.id]);
+  // A trip is "shared" once it has more than one member. Only then do we show
+  // the pool pill / Trip Credits sheet — solo trips behave exactly as before.
+  const isSharedTrip = INVITE_ENABLED && members.length > 1;
+  // Pool balance lives on trips.credit_balance. Clamp to >= 0 for display —
+  // the pool can dip slightly negative server-side but users never see it.
+  const poolBalance = Math.max(
+    0,
+    Math.floor(Number(trip?.credit_balance) || 0),
+  );
   const [loading, setLoading] = useState(initialScreen === "itinerary");
   const [tab, setTab] = useState("plan");
   const [debugMode] = useState(() => {
@@ -9273,7 +9291,15 @@ export default function App({
     }
   };
 
-  const callUnifiedChat = async (message, history = []) => {
+  // callUnifiedChat re-issues the chat request. spendPersonal:true is set only
+  // by the fork-paywall retry on a shared trip whose pool is empty — it tells
+  // the server to resolve the spend to the caller's personal wallet for this
+  // one action (never remembered for the session).
+  const callUnifiedChat = async (
+    message,
+    history = [],
+    spendPersonal = false,
+  ) => {
     const res = await fetch(
       `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`,
       {
@@ -9289,6 +9315,7 @@ export default function App({
           days: daysRef.current || [],
           form: pendingForm || {},
           message,
+          ...(spendPersonal ? { spend_personal: true } : {}),
           history: history.map((m) => ({
             role: m.role === "assistant" ? "assistant" : "user",
             content: m.content,
@@ -9297,6 +9324,18 @@ export default function App({
       },
     );
     if (res.status === 402) {
+      // Shared-trip pool empty → surface the fork paywall rather than the
+      // personal paywall, unless the member already chose personal (in which
+      // case a 402 means their personal wallet is out too).
+      let body = null;
+      try {
+        body = await res.json();
+      } catch {}
+      if (body?.code === "empty_trip_pool" && !spendPersonal) {
+        const err = new Error("Trip pool empty");
+        err.emptyTripPool = true;
+        throw err;
+      }
       openPaywall("Chatting with Trippy needs credits.");
       throw new Error("Out of credits");
     }
@@ -9304,6 +9343,85 @@ export default function App({
     const data = await res.json();
     if (session?.user?.id) refreshCredits(session.user.id);
     return data;
+  };
+
+  // Performs the actual chat network call and renders the assistant reply.
+  // Split out of sendChatMessage so the fork paywall's "use my personal
+  // credits" retry can re-issue the same send with spendPersonal:true.
+  // Assumes the optimistic user bubble + a trailing streaming assistant bubble
+  // already exist in chatMessages. Returns true on success, false if aborted
+  // by the empty-trip-pool fork (so the caller leaves the streaming bubble in
+  // place for the retry to reuse).
+  const performChatSend = async ({ userMsg, history, spendPersonal }) => {
+    let finalContent = "Sorry, something went wrong. Try again.";
+    let suggestions = null;
+    let hasChanges = false;
+    let changedRouteIds = [];
+    try {
+      const data = await callUnifiedChat(
+        userMsg.content,
+        history,
+        spendPersonal,
+      );
+      finalContent = data.message || "Done.";
+
+      // Extract suggestions from actions
+      const suggestAction = (data.actions || []).find(
+        (a) => a.type === "suggest",
+      );
+      if (suggestAction) suggestions = suggestAction.suggestions;
+
+      // Check if there are mutation actions
+      const mutationActions = (data.actions || []).filter(
+        (a) => a.type !== "suggest",
+      );
+      hasChanges = mutationActions.length > 0;
+      changedRouteIds = mutationActions
+        .filter((a) => a.type === "update_route" && a.route?.id)
+        .map((a) => a.route.id);
+
+      // Dispatch all actions
+      if (data.actions?.length) {
+        await dispatchActions(data.actions, userMsg, history);
+      }
+    } catch (err) {
+      // Shared trip pool is empty — open the fork paywall and leave the
+      // streaming bubble so the personal-credits retry can complete it.
+      if (err?.emptyTripPool) {
+        openForkPaywall({
+          tripId: trip?.id || null,
+          retry: () => {
+            setChatLoading(true);
+            performChatSend({ userMsg, history, spendPersonal: true });
+          },
+        });
+        return false;
+      }
+      console.warn("Chat error:", err);
+      finalContent = `Sorry, something went wrong. (${err?.message || "unknown error"}) Try again.`;
+    }
+
+    setChatMessages((prev) => {
+      const updated = [...prev];
+      updated[updated.length - 1] = {
+        role: "assistant",
+        content: finalContent,
+        suggestions,
+        hasChanges,
+        changedRouteIds,
+      };
+      return updated;
+    });
+    if (trip?.id) {
+      supabase.from("trip_messages").insert({
+        trip_id: trip.id,
+        user_id: session.user.id,
+        role: "assistant",
+        content: finalContent,
+      });
+    }
+    setChatLoading(false);
+    return true;
   };
 
   const sendChatMessage = async () => {
@@ -9338,58 +9456,7 @@ export default function App({
       });
     }
 
-    let finalContent = "Sorry, something went wrong. Try again.";
-    let suggestions = null;
-    let hasChanges = false;
-    let changedRouteIds = [];
-    try {
-      const data = await callUnifiedChat(userMsg.content, history);
-      finalContent = data.message || "Done.";
-
-      // Extract suggestions from actions
-      const suggestAction = (data.actions || []).find(
-        (a) => a.type === "suggest",
-      );
-      if (suggestAction) suggestions = suggestAction.suggestions;
-
-      // Check if there are mutation actions
-      const mutationActions = (data.actions || []).filter(
-        (a) => a.type !== "suggest",
-      );
-      hasChanges = mutationActions.length > 0;
-      changedRouteIds = mutationActions
-        .filter((a) => a.type === "update_route" && a.route?.id)
-        .map((a) => a.route.id);
-
-      // Dispatch all actions
-      if (data.actions?.length) {
-        await dispatchActions(data.actions, userMsg, history);
-      }
-    } catch (err) {
-      console.warn("Chat error:", err);
-      finalContent = `Sorry, something went wrong. (${err?.message || "unknown error"}) Try again.`;
-    }
-
-    setChatMessages((prev) => {
-      const updated = [...prev];
-      updated[updated.length - 1] = {
-        role: "assistant",
-        content: finalContent,
-        suggestions,
-        hasChanges,
-        changedRouteIds,
-      };
-      return updated;
-    });
-    if (trip?.id) {
-      supabase.from("trip_messages").insert({
-        trip_id: trip.id,
-        user_id: session.user.id,
-        role: "assistant",
-        content: finalContent,
-      });
-    }
-    setChatLoading(false);
+    await performChatSend({ userMsg, history, spendPersonal: false });
   };
 
   // Magazine-area view selection. The "magazine area" hosts two sub-views:
@@ -10408,6 +10475,15 @@ export default function App({
                   ) : (
                     "＋ Invite"
                   )}
+                </button>
+              )}
+              {isSharedTrip && (
+                <button
+                  onClick={() => setShowTripCredits(true)}
+                  style={tripContextBtnStyle}
+                  title="Trip credits"
+                >
+                  👥 {poolBalance}
                 </button>
               )}
             </div>
@@ -11702,6 +11778,28 @@ export default function App({
                           ) : (
                             "＋ Invite"
                           )}
+                        </button>
+                      )}
+                      {isSharedTrip && !useDesktopShell && (
+                        <button
+                          onClick={() => setShowTripCredits(true)}
+                          aria-label="Trip credits"
+                          title="Trip credits"
+                          style={{
+                            background: "rgba(255,255,255,0.15)",
+                            border: "none",
+                            borderRadius: RADIUS.full,
+                            padding: "4px 13px",
+                            color: "white",
+                            fontSize: 12,
+                            cursor: "pointer",
+                            fontFamily: "Georgia,serif",
+                            flexShrink: 0,
+                            whiteSpace: "nowrap",
+                            marginLeft: 8,
+                          }}
+                        >
+                          👥 {poolBalance}
                         </button>
                       )}
                     </div>
@@ -14749,6 +14847,14 @@ export default function App({
               setShowMembers(false);
               onHome?.();
             }}
+          />
+        )}
+        {isSharedTrip && showTripCredits && trip?.id && (
+          <TripCreditsSheet
+            trip={trip}
+            members={members}
+            session={session}
+            onClose={() => setShowTripCredits(false)}
           />
         )}
       </div>

@@ -15,6 +15,7 @@
 
 import { authenticateUser, unauthorized } from "../_shared/credits.ts";
 import { captureException } from "../_shared/sentry.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -43,7 +44,24 @@ Deno.serve(async (req) => {
     if (!user) return unauthorized(corsHeaders);
 
     const url = new URL(req.url);
-    const packParam = (url.searchParams.get("pack") || "small").toLowerCase();
+    // pack + optional trip_id come from either the query string or a JSON body.
+    let bodyPack: string | undefined;
+    let bodyTripId: string | undefined;
+    try {
+      const parsed = await req.json();
+      if (parsed && typeof parsed === "object") {
+        if (typeof parsed.pack === "string") bodyPack = parsed.pack;
+        if (typeof parsed.trip_id === "string") bodyTripId = parsed.trip_id;
+      }
+    } catch {
+      // No/invalid JSON body — fall back to query params.
+    }
+
+    const packParam = (
+      url.searchParams.get("pack") ||
+      bodyPack ||
+      "small"
+    ).toLowerCase();
     const pack = PACKS[packParam as keyof typeof PACKS];
     if (!pack) {
       return new Response(
@@ -53,6 +71,27 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         },
       );
+    }
+
+    // Phase 2.5 — optional pool recharge. When trip_id is present the buyer must
+    // be a current member of that trip (guards funding a pool you can't see).
+    const tripId = url.searchParams.get("trip_id") || bodyTripId || null;
+    if (tripId) {
+      const admin = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        { auth: { persistSession: false, autoRefreshToken: false } },
+      );
+      const { data: isMember, error: memberErr } = await admin.rpc(
+        "is_trip_member",
+        { p_trip: tripId, p_uid: user.id },
+      );
+      if (memberErr || !isMember) {
+        return new Response(JSON.stringify({ error: "not_a_member" }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     const apiKey = Deno.env.get("LEMONSQUEEZY_API_KEY");
@@ -112,6 +151,9 @@ Deno.serve(async (req) => {
               user_id: String(user.id),
               credits: String(pack.credits),
               pack: String(packParam),
+              // Phase 2.5: only present for pool recharges. The webhook reads
+              // this back and funds trips.credit_balance instead of the wallet.
+              ...(tripId ? { trip_id: String(tripId) } : {}),
             },
           },
           checkout_options: {

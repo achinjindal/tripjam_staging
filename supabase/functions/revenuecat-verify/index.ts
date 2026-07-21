@@ -16,6 +16,7 @@ import {
   unauthorized,
   grantCredits,
 } from "../_shared/credits.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -37,7 +38,7 @@ serve(async (req) => {
   if (!user) return unauthorized(corsHeaders);
 
   try {
-    const { transactionId, productId } = await req.json();
+    const { transactionId, productId, trip_id } = await req.json();
 
     if (!transactionId || !productId) {
       return new Response(
@@ -47,6 +48,27 @@ serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         },
       );
+    }
+
+    // Phase 2.5 — optional pool recharge. When trip_id is present the buyer must
+    // be a current member of that trip (guards funding a pool you can't see).
+    const tripId = typeof trip_id === "string" && trip_id ? trip_id : null;
+    if (tripId) {
+      const admin = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        { auth: { persistSession: false, autoRefreshToken: false } },
+      );
+      const { data: isMember, error: memberErr } = await admin.rpc(
+        "is_trip_member",
+        { p_trip: tripId, p_uid: user.id },
+      );
+      if (memberErr || !isMember) {
+        return new Response(JSON.stringify({ error: "not_a_member" }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     const credits = PRODUCT_CREDITS[productId];
@@ -124,7 +146,12 @@ serve(async (req) => {
       amount: credits,
       reason: "revenuecat",
       providerSessionId: `rc_${transactionId}`,
-      metadata: { product_id: productId, source: "client-verify" },
+      tripId,
+      metadata: {
+        product_id: productId,
+        source: "client-verify",
+        ...(tripId ? { trip_id: tripId } : {}),
+      },
     });
 
     return new Response(

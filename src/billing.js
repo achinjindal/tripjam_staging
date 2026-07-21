@@ -46,10 +46,13 @@ export async function initRevenueCat(userId) {
 }
 
 // Trigger a Google Play purchase for the given pack.
+// opts.tripId (optional): when set, the server funds that trip's pool instead
+// of the buyer's personal wallet. A purchase with no opts is byte-identical to
+// a personal purchase.
 // Returns { transactionId, credits } on success.
 // Returns { cancelled: true } if the user dismissed the Play sheet.
 // Returns { error: string } on any other failure.
-export async function purchaseCredits(packId) {
+export async function purchaseCredits(packId, opts = {}) {
   if (!isAndroidApp()) return { error: "Not on Android" };
 
   const sku = SKUS[packId];
@@ -87,7 +90,11 @@ export async function purchaseCredits(packId) {
               Authorization: `Bearer ${session.access_token}`,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ transactionId, productId: sku }),
+            body: JSON.stringify({
+              transactionId,
+              productId: sku,
+              ...(opts.tripId ? { trip_id: opts.tripId } : {}),
+            }),
           });
         } catch {
           // Webhook will handle it as fallback

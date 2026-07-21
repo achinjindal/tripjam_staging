@@ -111,6 +111,12 @@ Deno.serve(async (req) => {
       const userId = custom.user_id;
       const credits = Number(custom.credits);
       const pack = custom.pack || "unknown";
+      // Phase 2.5: when create-checkout stamped a trip_id, fund that trip's pool
+      // instead of the buyer's personal wallet. Absent → personal grant (unchanged).
+      const tripId =
+        typeof custom.trip_id === "string" && custom.trip_id
+          ? custom.trip_id
+          : null;
 
       if (!userId || !Number.isFinite(credits) || credits <= 0) {
         await captureException(
@@ -136,9 +142,11 @@ Deno.serve(async (req) => {
         amount: credits,
         reason: "lemonsqueezy",
         providerSessionId: String(orderId),
+        tripId,
         metadata: {
           pack,
           event_id: eventId,
+          ...(tripId ? { trip_id: tripId } : {}),
           ls_order_attributes: {
             total: event?.data?.attributes?.total,
             total_usd: event?.data?.attributes?.total_usd,

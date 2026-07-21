@@ -117,13 +117,30 @@ export default [
 
   // Node scripts (one-off ops/backfill utilities). Allow standard Node globals.
   {
-    files: ["scripts/**/*.{js,cjs,mjs,ts}"],
+    files: ["scripts/**/*.{js,cjs,ts}"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "commonjs",
       globals: {
         ...globals.node,
       },
+    },
+  },
+  // ES-module Node scripts (.mjs) — import/export + top-level await. These are
+  // throwaway ops/test harnesses; relax the strictness the app code enforces.
+  {
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      "no-empty": "off",
+      "no-unused-vars": "off",
+      "no-useless-assignment": "off",
     },
   },
 ];

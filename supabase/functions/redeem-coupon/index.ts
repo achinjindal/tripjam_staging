@@ -8,6 +8,7 @@ import {
   rateLimit,
   grantCredits,
 } from "../_shared/credits.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -32,7 +33,7 @@ serve(async (req) => {
   if (rateLimited) return rateLimited;
 
   try {
-    const { code } = await req.json();
+    const { code, trip_id } = await req.json();
     if (!code || typeof code !== "string") {
       return new Response(
         JSON.stringify({ error: "Coupon code is required" }),
@@ -41,6 +42,27 @@ serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         },
       );
+    }
+
+    // Phase 2.5 — optional pool recharge. When trip_id is present the redeemer
+    // must be a current member of that trip (guards funding a pool you can't see).
+    const tripId = typeof trip_id === "string" && trip_id ? trip_id : null;
+    if (tripId) {
+      const admin = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        { auth: { persistSession: false, autoRefreshToken: false } },
+      );
+      const { data: isMember, error: memberErr } = await admin.rpc(
+        "is_trip_member",
+        { p_trip: tripId, p_uid: user.id },
+      );
+      if (memberErr || !isMember) {
+        return new Response(JSON.stringify({ error: "not_a_member" }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     const normalised = code.trim().toUpperCase();
@@ -59,7 +81,8 @@ serve(async (req) => {
       amount: credits,
       reason: "coupon",
       providerSessionId: `coupon_${normalised}_${user.id}`,
-      metadata: { code: normalised },
+      tripId,
+      metadata: { code: normalised, ...(tripId ? { trip_id: tripId } : {}) },
     });
 
     if (newBalance === null) {

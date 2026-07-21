@@ -25,7 +25,7 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 
 ```
 src/
-  App.jsx            — Main UI (~14,500 lines, core state + views)
+  App.jsx            — Main UI (~14,700 lines, core state + views)
   main.jsx           — Entry point, Supabase init, PostHog/Sentry init, URL routing
   Auth.jsx           — Login/signup (serif fonts, design system tokens)
   Home.jsx           — Trip list (card hover, warm palette)
@@ -39,6 +39,15 @@ src/
   CreditsOverlay.jsx — Paywall bottom sheet (routes to RC or LS based on platform)
   LowCreditsBanner.jsx — Dismissible banner when credits run low
   Avatar.jsx         — User avatar component
+  dialogs.jsx        — Module-level toast + confirm sheet (showToast/confirmSheet, replaces
+                       native alert/confirm; same store pattern as credits.js)
+  activity.js        — Fire-and-forget activity logger → activity_log table (collab Phase 0b)
+  realtime.js        — Per-trip Supabase realtime channel scaffold (behind VITE_REALTIME_ENABLED,
+                       ships dark until collab Phase 2)
+  members.js         — trip_members data layer + invite RPC wrappers; exports INVITE_ENABLED
+  JoinTrip.jsx       — /join/:token landing: invite preview + accept, stashes token
+                       across sign-in for unauthenticated users
+  MemberAvatar.jsx   — Member avatar circle (initials + username-hashed color)
   AddRealEmailPrompt.jsx — Prompt to add a real email (legacy username-only accounts)
   ForgotPassword.jsx / ResetPassword.jsx — Password recovery flow
   LegalPage.jsx      — Shared scrollable layout for Privacy + Terms (no auth required)
@@ -56,6 +65,7 @@ src/
     SetupForm.jsx    — 3-step wizard, DateRangePicker, CityInput, ModePills
     Magazine.jsx     — DestinationHero, CityCard, MagazineHighlightCard, FoodSpotlightCard
     MapView.jsx      — FitBounds, MapView (itinerary), RouteMapView (brainstorm)
+    MembersSheet.jsx — Members list, invite-link share/revoke, remove/leave/transfer-ownership
 
   hooks/
     useViewport.js   — Viewport size hook
@@ -91,10 +101,14 @@ scripts/
 docs/
   user-journeys/     — Journey-by-journey documentation (00-overview.md is the index):
                        UI flow + underlying logic per stage, with file:line references
+  collaboration/     — Collaboration feature spec: design.md, v1-scope.md,
+                       implementation-plan.md, documentation.md, migrations-draft/
 
 e2e/                 — Playwright E2E tests
   helpers.ts         — Login, snap utilities
-  *.spec.ts          — Test suites (board, chat, interactions, magazine, geocoding, etc.)
+  criteria/          — Per-journey acceptance criteria docs (numbered to match test areas)
+  *.spec.ts          — Test suites (board, chat, interactions, magazine, geocoding,
+                       collab-invite, url-routing, smoke, etc.)
 ```
 
 ### Repo root gotchas
@@ -152,12 +166,21 @@ supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
 
 ### Frontend
 
-- `main.jsx` does all URL routing via `parseUrl()` — pages: `home` (Landing), `signin`, `signup`, `trip`, `edit`, `create`, `public` (`/share/:token`), `admin`, `privacy`, `terms`, `forgot-password`, `reset-password`. No router library.
+- `main.jsx` does all URL routing via `parseUrl()` — pages: `home` (Landing), `signin`, `signup`, `trip`, `edit`, `create`, `public` (`/share/:token`), `join` (`/join/:token` invite links), `admin`, `privacy`, `terms`, `forgot-password`, `reset-password`. No router library.
 - The URL `/trip/:id/magazine` maps to the internal tab key `brainstorm` (legacy name). This translation happens in `parseUrl()` — the public URL and the internal state key deliberately differ.
-- `App.jsx` (~14,500 lines) contains the entire trip view: state, data fetching, all panel/tab/modal logic. Split into sub-components (BoardView, SetupForm, Magazine, MapView) but most state lives in App.
+- `App.jsx` (~14,700 lines) contains the entire trip view: state, data fetching, all panel/tab/modal logic. Split into sub-components (BoardView, SetupForm, Magazine, MapView) but most state lives in App.
 - Design system in `theme.js`: `T` (colors + semantic states), `TYPE` (6-level typography), `RADIUS` (4 values), `SHADOW` (3 levels), `MOTION` (3 speeds). Import from there, never hardcode values.
 - Auth is email + password (username auto-derived from the email local part) plus Google OAuth. Legacy accounts created in the username-only era sign in via the fake-email shim `username@tripjam.app`.
 - Trip ID generated client-side (`crypto.randomUUID()`) to avoid RLS issues.
+
+### Collaboration (Phases 0–1 built, ships dark)
+
+- Full spec lives in `docs/collaboration/` (design, v1 scope, phased implementation plan). Phases 0a/0b/1 are merged; Phase 2 (realtime sync) onward is not built.
+- **Feature flags:** `VITE_INVITE_ENABLED` gates all membership/invite UI (`INVITE_ENABLED` from `members.js`); `VITE_REALTIME_ENABLED` gates the realtime scaffold in `realtime.js`. Both default off, so prod behavior is unchanged until flipped.
+- **DB:** migrations `20260721000001`–`0007` — `trip_members`, `trip_invites`, `activity_log`, `is_trip_member()` RLS helper, realtime publication, and SECURITY DEFINER RPCs (`accept_invite`, `create_or_get_invite_link`, `revoke_invite_link`, `get_invite_preview`, `transfer_ownership`, `remove_member`, `leave_trip`).
+- **Activity log:** every mutating action calls `logActivity` (`activity.js`) — fire-and-forget, never blocks the mutation; failures are swallowed. Logs on solo trips too.
+- **Invite flow:** MembersSheet creates/shares a `/join/:token` link → JoinTrip previews via `get_invite_preview` (safe pre-membership) → accept via `accept_invite`. Signed-out users get the token stashed in localStorage and resume after auth.
+- The `/join/:token` route renders regardless of the invite flag; only the invite-creation UI is flag-gated.
 
 ### Credits System (launched)
 
@@ -202,6 +225,7 @@ supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
 - Playwright config: `workers: 1` (sequential) — API-dependent tests can't run in parallel.
 - Test user: `qa-tester` / `qaTest123!`
 - Tests use real Supabase (not mocked). Board tests create trips via serial setup fixture.
+- `collab-invite.spec.ts` members/invite tests skip unless `VITE_INVITE_ENABLED=true` and the invite RPC migrations are applied to staging; the invalid-token test always runs.
 - QA skills: `/code-review` (static analysis), `/qa-e2e` (browser tests with cost tracking).
 - Before sending code for review, run `npm run check`. If formatting fails, run `npm run format`, then rerun `npm run check`.
 
@@ -222,7 +246,7 @@ Two Supabase projects — local dev and staging share one, production is isolate
 - Vercel auto-deploys on push. Preview deploys use staging Supabase, production deploys use production Supabase.
 - **Do not push to any remote without explicit user approval.** Every remote auto-deploys.
 - **Do not make code changes without user approval.** Discuss first, implement after approval. Exception: clear bug fixes can be applied directly.
-- GitHub Actions APK build points to production (via GitHub Secrets).
+- GitHub Actions: `checks.yml` runs the review gate on pushes/PRs to main; `build-android.yml` builds the APK pointed at production (via GitHub Secrets).
 - Always deploy edge functions separately to each environment.
 - After any file extraction/split, verify no duplicate `const T =` definitions and no escaped unicode (`\\u` sequences).
 

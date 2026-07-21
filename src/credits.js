@@ -88,17 +88,69 @@ export function usePaywall() {
   );
 }
 
-// Inspect a fetch Response from a gated edge function. Returns true if the
-// caller should abort (paywall opened); false if the response is OK.
+// ── Fork paywall (Phase 2.5 pooled credits) ──
+// Shown ONLY when a SHARED trip's pool is empty (edge fn returns 402 with
+// code "empty_trip_pool"). The member chooses per-action: fund the trip pool
+// or spend their own personal credits just this once. The choice is never
+// remembered for the session (per EM). Personal wallet is untouched here —
+// setCredits is deliberately NOT called for this branch.
+//
+// Shape: { tripId, retry } where retry() re-issues the original request with
+// spend_personal: true. null when closed.
+let _forkPaywall = null;
+
+export function getForkPaywall() {
+  return _forkPaywall;
+}
+
+export function openForkPaywall({ tripId, retry } = {}) {
+  if (!CREDITS_UI_ENABLED) return;
+  _forkPaywall = { tripId: tripId || null, retry: retry || null };
+  emit();
+}
+
+export function closeForkPaywall() {
+  _forkPaywall = null;
+  emit();
+}
+
+export function useForkPaywall() {
+  return useSyncExternalStore(
+    (cb) => {
+      _listeners.add(cb);
+      return () => _listeners.delete(cb);
+    },
+    () => _forkPaywall,
+  );
+}
+
+// Inspect a fetch Response from a gated edge function. Returns a truthy value
+// if the caller should abort (a paywall opened); false if the response is OK.
+//
+// Two 402 shapes:
+//   - code === "empty_trip_pool" → SHARED trip pool is empty. Do NOT touch the
+//     personal wallet balance; open the fork paywall. Returns "empty_trip_pool"
+//     so the caller can wire a personal-retry (see openForkPaywall). Callers
+//     that don't support the fork still just treat the return as truthy/abort.
+//   - anything else (insufficient_credits / no code) → today's behavior:
+//     setCredits(0) + open the personal paywall. Returns true.
 export async function handleGatedResponse(res, userId, reason) {
   if (!CREDITS_UI_ENABLED) return false;
   if (res.status === 402) {
+    // Read the body FIRST so we can branch on the code. If parsing fails we
+    // fall through to the personal paywall (safe default).
+    let body = null;
+    try {
+      body = await res.json();
+    } catch {}
+    if (body?.code === "empty_trip_pool") {
+      // Shared-trip pool empty — personal wallet is fine, leave it alone.
+      // The caller (which knows the request) opens the fork paywall with a
+      // retry; here we only signal so it can do so.
+      return "empty_trip_pool";
+    }
     setCredits(0);
     openPaywall(reason || "You're out of credits");
-    // Drain body so the caller doesn't accidentally read it.
-    try {
-      await res.text();
-    } catch {}
     return true;
   }
   // Otherwise we still want to refresh credits after the call completes.
