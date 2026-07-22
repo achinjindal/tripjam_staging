@@ -8902,6 +8902,18 @@ export default function App({
     ]);
   };
 
+  // Persist a chat row. supabase-js v2 only sends a query when it's awaited or
+  // .then()'d — a bare `supabase.from().insert()` silently no-ops (this is why
+  // chat history never persisted before, and why co-travelers' realtime never
+  // fired: no row was ever written). Fire-and-forget but actually executed.
+  const persistMessage = (row) =>
+    supabase
+      .from("trip_messages")
+      .insert(row)
+      .then(({ error }) => {
+        if (error) console.warn("trip_messages insert failed:", error.message);
+      });
+
   const sendChatDirect = async (message) => {
     if (!message.trim() || chatLoading) return;
     const userId = crypto.randomUUID();
@@ -8921,7 +8933,7 @@ export default function App({
     ]);
     setChatLoading(true);
     if (trip?.id)
-      supabase.from("trip_messages").insert({
+      persistMessage({
         id: userId,
         trip_id: trip.id,
         user_id: session.user.id,
@@ -8968,7 +8980,7 @@ export default function App({
     setChatLoading(false);
     setChatUnread(true);
     if (trip?.id)
-      supabase.from("trip_messages").insert({
+      persistMessage({
         id: assistantId,
         trip_id: trip.id,
         user_id: null,
@@ -9502,7 +9514,7 @@ export default function App({
     if (trip?.id) {
       // Trippy rows persist with user_id: null (they're the AI, not the sender)
       // and the client-supplied assistantId so the realtime echo dedupes.
-      supabase.from("trip_messages").insert({
+      persistMessage({
         id: assistantId,
         trip_id: trip.id,
         user_id: null,
@@ -9539,8 +9551,8 @@ export default function App({
     setChatMessages((prev) => [...prev, userMsg]);
     setChatInput("");
     if (chatInputRef.current) chatInputRef.current.style.height = "auto";
-    if (trip?.id) {
-      supabase.from("trip_messages").insert({
+    if (trip?.id)
+      persistMessage({
         id: userId,
         trip_id: trip.id,
         user_id: session.user.id,
@@ -9549,7 +9561,6 @@ export default function App({
         audience,
         directed_user_id: directedUserId || null,
       });
-    }
     setChatUnread(true);
   };
 
@@ -9590,7 +9601,7 @@ export default function App({
     setChatLoading(true);
 
     if (trip?.id) {
-      supabase.from("trip_messages").insert({
+      persistMessage({
         id: userId,
         trip_id: trip.id,
         user_id: session.user.id,

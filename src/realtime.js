@@ -45,7 +45,13 @@ export function subscribeTrip(tripId, handlers = {}) {
       },
     );
   }
-  channel.subscribe();
+  channel.subscribe((status, err) => {
+    if (import.meta.env.DEV)
+      console.debug(
+        `[realtime] channel trip:${tripId} → ${status}`,
+        err ? err.message : "",
+      );
+  });
 
   return () => {
     supabase.removeChannel(channel);
