@@ -187,6 +187,7 @@ export default function AdminConsole({ session, onHome }) {
       { data: days },
       { data: messages },
       { data: genLog },
+      { data: rgLog },
       { data: brainstorm },
       { data: todos },
       { data: bookmarks },
@@ -199,6 +200,11 @@ export default function AdminConsole({ session, onHome }) {
       supabase.from("trip_messages").select("id, role").eq("trip_id", tripId),
       supabase
         .from("generation_log")
+        .select("*")
+        .eq("trip_id", tripId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("rg_log")
         .select("*")
         .eq("trip_id", tripId)
         .order("created_at", { ascending: false }),
@@ -229,6 +235,7 @@ export default function AdminConsole({ session, onHome }) {
       days: days || [],
       messages: messages || [],
       genLog: genLog || [],
+      rgLog: rgLog || [],
       brainstorm: brainstorm || [],
       todos: todos || [],
       bookmarks: bookmarks || [],
@@ -614,6 +621,27 @@ export default function AdminConsole({ session, onHome }) {
                       ),
                     )}
                   </div>
+                  {/* RG timing — rg_log stores timestamps, not durations */}
+                  {tripDetail.rgLog?.length > 0 &&
+                    (() => {
+                      const r = tripDetail.rgLog[0];
+                      const secs = (from, to) =>
+                        from && to
+                          ? Math.round((new Date(to) - new Date(from)) / 1000)
+                          : null;
+                      const first = secs(r.rg_started_at, r.first_route_at);
+                      const all = secs(r.rg_started_at, r.all_routes_at);
+                      return (
+                        <div style={{ fontSize: 12, marginBottom: 8 }}>
+                          <span style={{ color: T.mist }}>Latest RG: </span>
+                          <span style={{ color: T.ink }}>
+                            First route {first ?? "?"}s
+                            {all != null ? ` · All routes ${all}s` : ""}
+                            {r.num_routes != null ? ` (${r.num_routes})` : ""}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   {/* IG timing — generation_log stores timestamps, not durations */}
                   {tripDetail.genLog.length > 0 &&
                     (() => {

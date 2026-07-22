@@ -2015,6 +2015,14 @@ function BrainstormView({
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
+      // RG timing (mirrors IG compact/detailed). "First route" = the first
+      // tier-1 route parsed from the stream; "all routes" = stream complete.
+      // Logged to PostHog (rg_first_route / rg_all_routes) + the rg_log table.
+      const __rgStartedAt = Date.now();
+      const rgStartedAt = new Date().toISOString();
+      const rgTripId = trip?.id || editTripIdRef.current || null;
+      let rgFirstRouteAt = null;
+
       // Stream text deltas and progressively parse complete JSON objects
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -2079,6 +2087,14 @@ function BrainstormView({
                         }
                       : item;
                     streamedItems.push(itemWithId);
+                    if (item.tier === 1 && !rgFirstRouteAt) {
+                      rgFirstRouteAt = new Date().toISOString();
+                      posthog.capture("rg_first_route", {
+                        trip_id: rgTripId,
+                        ms_since_start: Date.now() - __rgStartedAt,
+                        add_more: !!isAddingMore.current,
+                      });
+                    }
                     if (isAddingMore.current) {
                       setItems((prev) => {
                         // Filter by title to prevent duplicates (temp IDs won't match UUIDs)
@@ -2132,6 +2148,30 @@ function BrainstormView({
       }
 
       if (!streamedItems.length) throw new Error("no_items");
+
+      // RG complete — log "time to all routes" (and first-route time) to
+      // PostHog + rg_log, mirroring IG's ig_detailed_complete + generation_log.
+      const rgAllRoutesAt = new Date().toISOString();
+      const rgNumRoutes = streamedItems.filter((s) => s.tier === 1).length;
+      posthog.capture("rg_all_routes", {
+        trip_id: rgTripId,
+        ms_since_start: Date.now() - __rgStartedAt,
+        routes: rgNumRoutes,
+        add_more: !!isAddingMore.current,
+      });
+      supabase
+        .from("rg_log")
+        .insert({
+          trip_id: rgTripId,
+          num_routes: rgNumRoutes,
+          add_more: !!isAddingMore.current,
+          rg_started_at: rgStartedAt,
+          first_route_at: rgFirstRouteAt,
+          all_routes_at: rgAllRoutesAt,
+        })
+        .then(({ error }) => {
+          if (error) console.warn("rg_log insert failed:", error.message);
+        });
 
       const targetTripId = trip?.id || editTripIdRef.current;
       if (targetTripId) {
