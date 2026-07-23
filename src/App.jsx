@@ -1778,7 +1778,11 @@ function BrainstormView({
           supabase
             .from("brainstorm_items")
             .update({ dismissed: false })
-            .eq("id", routeId);
+            .eq("id", routeId)
+            .then(({ error }) => {
+              if (error)
+                console.warn("route un-dismiss failed:", error.message);
+            });
         }
       };
     }
@@ -2716,7 +2720,14 @@ function BrainstormView({
                         supabase
                           .from("brainstorm_items")
                           .update({ dismissed: true })
-                          .eq("id", item.id);
+                          .eq("id", item.id)
+                          .then(({ error }) => {
+                            if (error)
+                              console.warn(
+                                "route dismiss failed:",
+                                error.message,
+                              );
+                          });
                       }
                       onDismissRoute?.(label, item.id);
                     }}
@@ -7801,7 +7812,10 @@ export default function App({
         supabase
           .from("trips")
           .update({ ig_response: null })
-          .eq("id", editingTrip.id);
+          .eq("id", editingTrip.id)
+          .then(({ error }) => {
+            if (error) console.warn("clear ig_response failed:", error.message);
+          });
         // Delete existing days + activities
         const { data: existingDays } = await supabase
           .from("days")
@@ -8307,7 +8321,14 @@ export default function App({
                             compact_ready_at: compactReadyAt,
                             generation_started_at: generationStartedAt,
                           })
-                          .eq("id", capturedTripId);
+                          .eq("id", capturedTripId)
+                          .then(({ error }) => {
+                            if (error)
+                              console.warn(
+                                "compact IG save failed:",
+                                error.message,
+                              );
+                          });
                         supabase
                           .from("generation_log")
                           .insert({
@@ -9126,7 +9147,11 @@ export default function App({
               supabase
                 .from("brainstorm_items")
                 .update({ dismissed: true })
-                .eq("id", rid);
+                .eq("id", rid)
+                .then(({ error }) => {
+                  if (error)
+                    console.warn("route dismiss (chat) failed:", error.message);
+                });
             }
           }
           // Add undo message
@@ -9241,7 +9266,14 @@ export default function App({
                 supabase
                   .from("activities")
                   .update({ photo_url: url })
-                  .eq("id", insertedAct.id);
+                  .eq("id", insertedAct.id)
+                  .then(({ error }) => {
+                    if (error)
+                      console.warn(
+                        "activity photo persist failed:",
+                        error.message,
+                      );
+                  });
                 setDays((prev) =>
                   prev.map((d) =>
                     d.id !== dayId
