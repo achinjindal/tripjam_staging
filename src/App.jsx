@@ -8714,7 +8714,14 @@ export default function App({
     setTimeout(() => setChatAttention(false), 3000);
     _igInFlight = false;
     if (session?.user?.id) refreshCredits(session.user.id);
-    // Log generation timing — update by trip_id as fallback since genLogId may not be set yet
+    // Log generation timing — update by trip_id as fallback since genLogId may
+    // not be set yet. NOTE: supabase-js v2 only sends a query when it's
+    // awaited/.then()'d — these were bare and silently never ran, so
+    // detailed_ready_at was never recorded (compact worked because its write is
+    // .then()'d). The trailing .then() makes them actually execute.
+    const logDetailedErr = ({ error }) =>
+      error &&
+      console.warn("generation_log detailed write failed:", error.message);
     if (genLogId) {
       supabase
         .from("generation_log")
@@ -8722,7 +8729,8 @@ export default function App({
           detailed_ready_at: generationCompletedAt,
           ig_count: tripPayload.ig_count,
         })
-        .eq("id", genLogId);
+        .eq("id", genLogId)
+        .then(logDetailedErr);
     } else if (capturedTripId) {
       supabase
         .from("generation_log")
@@ -8731,14 +8739,18 @@ export default function App({
           ig_count: tripPayload.ig_count,
         })
         .eq("trip_id", capturedTripId)
-        .is("detailed_ready_at", null);
+        .is("detailed_ready_at", null)
+        .then(logDetailedErr);
     } else if (tripData.id) {
-      supabase.from("generation_log").insert({
-        trip_id: tripData.id,
-        generation_started_at: generationStartedAt,
-        detailed_ready_at: generationCompletedAt,
-        ig_count: tripPayload.ig_count,
-      });
+      supabase
+        .from("generation_log")
+        .insert({
+          trip_id: tripData.id,
+          generation_started_at: generationStartedAt,
+          detailed_ready_at: generationCompletedAt,
+          ig_count: tripPayload.ig_count,
+        })
+        .then(logDetailedErr);
     }
     // Land on Magazine tab so user continues reading while photos load in background.
     setActiveBottomTab("brainstorm");
