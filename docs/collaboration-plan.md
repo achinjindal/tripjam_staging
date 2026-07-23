@@ -27,12 +27,12 @@ Status: **Planning** · Author: product+eng · Grounded against the code as of 2
 
 How we'll know collaboration is working (tag events with `app_env`, filter to shared trips where relevant):
 
-| Metric | Definition | Why it matters |
-| --- | --- | --- |
-| **Weekly retention** | % of active users who return the following week (overall + a shared-trip cohort cut) | The north star — collaboration should lift stickiness, not just add surface area. Compare shared-trip members vs. solo users. |
-| **% of paying users** | share of users who hold/purchase credits | Collaboration should pull more people into paying (pooled credits let one payer unlock a group). Watch that shared trips don't just free-ride. |
-| **% of trips with multiple travelers** | trips with `memberCount > 1` ÷ all trips | Adoption of the feature at all — is anyone inviting co-travelers? |
-| **% of trips where multiple travelers engage** | of multi-traveler trips, share where ≥2 members took a real action (message, edit, vote, fund) within the trip | The quality metric — invited ≠ engaged. Guards against "invited but nobody showed up." |
+| Metric                                         | Definition                                                                                                     | Why it matters                                                                                                                                 |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Weekly retention**                           | % of active users who return the following week (overall + a shared-trip cohort cut)                           | The north star — collaboration should lift stickiness, not just add surface area. Compare shared-trip members vs. solo users.                  |
+| **% of paying users**                          | share of users who hold/purchase credits                                                                       | Collaboration should pull more people into paying (pooled credits let one payer unlock a group). Watch that shared trips don't just free-ride. |
+| **% of trips with multiple travelers**         | trips with `memberCount > 1` ÷ all trips                                                                       | Adoption of the feature at all — is anyone inviting co-travelers?                                                                              |
+| **% of trips where multiple travelers engage** | of multi-traveler trips, share where ≥2 members took a real action (message, edit, vote, fund) within the trip | The quality metric — invited ≠ engaged. Guards against "invited but nobody showed up."                                                         |
 
 Instrument these in Phase 1 (membership) and Phase 2 (engagement events) so the numbers exist from launch, not retrofitted.
 

@@ -35,10 +35,16 @@ const ok = (cond, msg) => {
 
 async function signIn(email) {
   const c = createClient(URL_, ANON);
-  let { data, error } = await c.auth.signInWithPassword({ email, password: PASS });
+  let { data, error } = await c.auth.signInWithPassword({
+    email,
+    password: PASS,
+  });
   if (error) {
     await c.auth.signUp({ email, password: PASS });
-    ({ data, error } = await c.auth.signInWithPassword({ email, password: PASS }));
+    ({ data, error } = await c.auth.signInWithPassword({
+      email,
+      password: PASS,
+    }));
     if (error) throw new Error(`sign-in failed for ${email}: ${error.message}`);
   }
   return { client: c, id: data.user.id, token: data.session.access_token };
@@ -103,7 +109,10 @@ const main = async () => {
       .select("user_id", { count: "exact", head: true })
       .eq("trip_id", sharedId)
   ).count;
-  ok(memberCount === 2, `setup: trip is SHARED (2 members, got ${memberCount})`);
+  ok(
+    memberCount === 2,
+    `setup: trip is SHARED (2 members, got ${memberCount})`,
+  );
 
   const before = (
     await a.client.from("profiles").select("credits").eq("id", a.id).single()
@@ -135,12 +144,19 @@ const main = async () => {
       .select("id", { count: "exact", head: true })
       .eq("user_id", a.id)
   ).count;
-  ok(txAfter === txBefore, `no credit_transactions row written (${txBefore} → ${txAfter})`);
+  ok(
+    txAfter === txBefore,
+    `no credit_transactions row written (${txBefore} → ${txAfter})`,
+  );
 
   // cleanup
   await a.client.from("trips").delete().eq("id", sharedId);
 
-  console.log(failures === 0 ? "\n🎉 ALL E2E GATE TESTS PASSED" : `\n❌ ${failures} failure(s)`);
+  console.log(
+    failures === 0
+      ? "\n🎉 ALL E2E GATE TESTS PASSED"
+      : `\n❌ ${failures} failure(s)`,
+  );
   process.exit(failures === 0 ? 0 : 1);
 };
 
