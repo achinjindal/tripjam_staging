@@ -22,7 +22,10 @@ jobs:
       - name: Setup Deno
         uses: denoland/setup-deno@v2
         with:
-          deno-version: v1.x
+          # v2.x — the edge functions' deno.lock is lockfile version 5, which
+          # Deno 1.x cannot read (fails typecheck:functions). Local dev uses
+          # Deno 2.x; align CI to match.
+          deno-version: v2.x
 
       - name: Install dependencies
         run: npm install --legacy-peer-deps
