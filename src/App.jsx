@@ -9466,6 +9466,9 @@ export default function App({
           name: m.profiles?.username || "Traveler",
         }))
       : null;
+    // Response-time telemetry: full client round-trip (client is non-streaming,
+    // so this is send → complete reply — what the user actually waits for).
+    const __chatT0 = Date.now();
     const res = await fetch(
       `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`,
       {
@@ -9511,9 +9514,23 @@ export default function App({
       openPaywall("Chatting with Trippy needs credits.");
       throw new Error("Out of credits");
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      posthog.capture("trippy_chat_response", {
+        screen,
+        ms: Date.now() - __chatT0,
+        ok: false,
+        status: res.status,
+      });
+      throw new Error(`HTTP ${res.status}`);
+    }
     const data = await res.json();
     if (session?.user?.id) refreshCredits(session.user.id);
+    posthog.capture("trippy_chat_response", {
+      screen,
+      ms: Date.now() - __chatT0,
+      ok: true,
+      actions: Array.isArray(data.actions) ? data.actions.length : 0,
+    });
     return data;
   };
 

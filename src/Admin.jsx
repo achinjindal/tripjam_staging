@@ -856,6 +856,7 @@ export default function AdminConsole({ session, onHome }) {
                     <th style={thStyle}>Calls</th>
                     <th style={thStyle}>Input Tokens</th>
                     <th style={thStyle}>Output Tokens</th>
+                    <th style={thStyle}>Avg latency</th>
                     <th style={thStyle}>Cost</th>
                   </tr>
                 </thead>
@@ -872,10 +873,16 @@ export default function AdminConsole({ session, onHome }) {
                           input: 0,
                           output: 0,
                           cost: 0,
+                          durSum: 0,
+                          durCount: 0,
                         };
                       grouped[key].calls++;
                       grouped[key].input += u.input_tokens;
                       grouped[key].output += u.output_tokens;
+                      if (u.duration_ms != null) {
+                        grouped[key].durSum += u.duration_ms;
+                        grouped[key].durCount++;
+                      }
                       grouped[key].cost += calcCost(
                         u.model,
                         u.input_tokens,
@@ -895,6 +902,11 @@ export default function AdminConsole({ session, onHome }) {
                           <td style={tdStyle}>{g.calls}</td>
                           <td style={tdStyle}>{fmtNum(g.input)}</td>
                           <td style={tdStyle}>{fmtNum(g.output)}</td>
+                          <td style={tdStyle}>
+                            {g.durCount
+                              ? `${(g.durSum / g.durCount / 1000).toFixed(1)}s (n=${g.durCount})`
+                              : "—"}
+                          </td>
                           <td style={{ ...tdStyle, fontWeight: 600 }}>
                             {fmtCost(g.cost)}
                           </td>

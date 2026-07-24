@@ -302,6 +302,9 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
       messages,
     });
 
+    // Latency: time from just before the Anthropic request to when the stream
+    // finishes (written to llm_usage.duration_ms below).
+    const __anthropicStart = Date.now();
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -351,6 +354,7 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
 
     // Prefer the API's real token counts; fall back to a length estimate only
     // if the usage events never arrived (so billing never silently zeroes out).
+    const durationMs = Date.now() - __anthropicStart;
     const inputTokens = hasStreamUsage(usage)
       ? usage.inputTokens
       : Math.round(requestBody.length / 4);
@@ -380,6 +384,7 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
             output_tokens: outputTokens,
             cache_creation_tokens: cacheCreationTokens,
             cache_read_tokens: cacheReadTokens,
+            duration_ms: durationMs,
           }),
         }).catch(() => {});
 
