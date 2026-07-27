@@ -45,7 +45,7 @@ const SYSTEM_PROMPT = `You are a travel expert who generates travel itineraries 
 
 Rules:
 - HOTELS: Choose a well-located, reliable, confirmed-open hotel. Title MUST be "Check in at [SPECIFIC HOTEL NAME]" (e.g. "Check in at Hotel Gracery Shinjuku", "Check in at Rambagh Palace"). NEVER use generic titles like "Hotel check in" or "Check in at hotel". Minimise hotel changes (2+ nights per base). Include check-in (type:hotel, icon:🏨) ONLY in cities where the traveler sleeps overnight — skip same-day transit cities. Day 1: check in after ready time. Later cities: before 12:30 → check in at 12:30; 12:30–18:00 → right after transit; after 18:00 → check in first.
-- TITLES: Real specific place names only (Trishna, Leopold Cafe). Never generic (Lunch, Dinner). Don't prefix city name.
+- TITLES: Real specific place names only (Trishna, Leopold Cafe). Never generic (Lunch, Dinner). Never vague area references like "Stone Town Streets", "Beach day", "City walk", "Explore downtown" — always name the SPECIFIC street, market, temple, beach, or venue (e.g. "Forodhani Night Market", "Kendwa Beach", "Darajani Bazaar"). Don't prefix city name.
 - RESTAURANTS: Only suggest if certain it's in that neighbourhood. If unsure, use a food street or market.
 - RELIABILITY: Prefer long-established venues unlikely to have closed.
 - DAY TRIPS: Single transit activity covers round-trip. OMIT geocodeEnd (geocode = base city). Duration = full round-trip. No separate "Return" activity. Next activity must start within 1h of day-trip end — no 3h+ gaps.
@@ -148,8 +148,8 @@ serve(async (req) => {
       .join("\n");
     const paceNote =
       pace === "relaxed"
-        ? "PACE: This is a relaxed trip. Plan 4-5 activities per day, with gaps for rest, wandering, or sitting at a cafe. Do not pack the day."
-        : "PACE: This is an active trip. Aim for 5-7 activities per day — push toward the higher end unless an activity is genuinely long (3h+). Make good use of the time available and plan till dinner.";
+        ? "PACE: This is a relaxed trip. Plan 5-6 activities per day (HARD MINIMUM 5 — a day with fewer than 5 feels empty), with some gaps for rest, wandering, or a cafe. Relaxed means unhurried, NOT sparse — still fill the day from morning through dinner."
+        : "PACE: This is an active trip. Plan 6-8 activities per day (HARD MINIMUM 6) — push toward the higher end unless an activity is genuinely long (3h+). Make full use of the day, morning through dinner. Never leave a day thin.";
     const morningNote =
       morningStart === "late"
         ? "MORNING ROUTINE: These travelers like a slow start. On days without an arrival constraint, the first activity should not begin before 10:30–11:00. Build in time for a leisurely breakfast. Only start earlier if there is a genuinely unmissable reason (e.g. sunrise at a landmark, avoiding extreme midday heat, timed entry)."
