@@ -302,6 +302,113 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
       messages,
     });
 
+    // ── Provider switch: CHAT_MODEL env var selects the chat model per env.
+    // Unset (prod) → Sonnet 4.6 (the Anthropic path below, unchanged). Set to a
+    // "gemini-*" id (staging) → Gemini non-streaming path (chat returns full
+    // JSON, so no client streaming). Same code ships to both; behaviour differs
+    // only by the env var.
+    const chatModel = Deno.env.get("CHAT_MODEL") || "claude-sonnet-4-6";
+    if (chatModel.startsWith("gemini")) {
+      const gResp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${chatModel}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "x-goog-api-key": Deno.env.get("GEMINI_API_KEY") ?? "",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            systemInstruction: {
+              parts: [{ text: staticInstructions + "\n\n" + dynamicContext }],
+            },
+            contents: (
+              messages as Array<{ role: string; content: string }>
+            ).map((m) => ({
+              role: m.role === "assistant" ? "model" : "user",
+              parts: [{ text: m.content }],
+            })),
+            generationConfig: {
+              maxOutputTokens: 4000,
+              responseMimeType: "application/json",
+            },
+          }),
+        },
+      );
+      if (!gResp.ok) {
+        const e = await gResp.text();
+        throw new Error(`Gemini error: ${e}`);
+      }
+      const gdata = (await gResp.json()) as any;
+      const content: string =
+        gdata.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+
+      // Log usage only (credit deduction on the canary path is skipped — the
+      // credit cost model is Anthropic-priced; resolveAndGate above still ran).
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      runInBackground(
+        fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+          },
+          body: JSON.stringify({
+            trip_id: trip?.id || null,
+            function_name: "chat",
+            model: chatModel,
+            input_tokens: gdata.usageMetadata?.promptTokenCount || 0,
+            output_tokens: gdata.usageMetadata?.candidatesTokenCount || 0,
+          }),
+        })
+          .then(() => {})
+          .catch(() => {}),
+      );
+
+      // Parse the same way the Anthropic path does: first `{` / last `}`.
+      const gStart = content.indexOf("{");
+      const gEnd = content.lastIndexOf("}");
+      let data: any = { message: "Done." };
+      try {
+        data = JSON.parse(content.slice(gStart, gEnd + 1));
+        if (!data.message) data.message = "Done.";
+      } catch {
+        data = { message: content };
+      }
+
+      // Backwards compat: convert old-style updatedRoutes/updatedDays to actions.
+      if (data.updatedRoutes && !data.actions) {
+        data.actions = data.updatedRoutes.map((r: any) => ({
+          type: "update_route",
+          route: r,
+        }));
+        if (data.pendingRoutes) {
+          data.actions.push({
+            type: "pending_routes",
+            routeIds: data.pendingRoutes,
+          });
+        }
+        delete data.updatedRoutes;
+        delete data.pendingRoutes;
+      }
+      if (data.updatedDays && !data.actions) {
+        data.actions = data.updatedDays.map((d: any) => ({
+          type: "update_day",
+          day: d,
+        }));
+        if (data.suggestions) {
+          data.actions.push({ type: "suggest", suggestions: data.suggestions });
+        }
+        delete data.updatedDays;
+        delete data.suggestions;
+      }
+
+      return new Response(JSON.stringify(data), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // Latency: time from just before the Anthropic request to when the stream
     // finishes (written to llm_usage.duration_ms below).
     const __anthropicStart = Date.now();

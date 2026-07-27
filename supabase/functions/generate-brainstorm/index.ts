@@ -180,6 +180,109 @@ serve(async (req) => {
       messages: [{ role: "user", content: userMessage }],
     });
 
+    // ── Provider switch: RG_MODEL env var selects the RG model per environment.
+    // Unset (prod) → Sonnet 4.6 (the Anthropic path below, unchanged). Set to a
+    // "gemini-*" id (staging) → Gemini streaming path (canary A/B). Same code
+    // ships to both; behaviour differs only by the env var.
+    const rgModel = Deno.env.get("RG_MODEL") || "claude-sonnet-4-6";
+    if (rgModel.startsWith("gemini")) {
+      const gResp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${rgModel}:streamGenerateContent?alt=sse`,
+        {
+          method: "POST",
+          headers: {
+            "x-goog-api-key": Deno.env.get("GEMINI_API_KEY") ?? "",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+            contents: [{ role: "user", parts: [{ text: userMessage }] }],
+            generationConfig: {
+              maxOutputTokens: 8000,
+              responseMimeType: "application/json",
+            },
+          }),
+        },
+      );
+      if (!gResp.ok) {
+        const e = await gResp.text();
+        throw new Error(`Gemini error: ${e}`);
+      }
+      // Re-emit Gemini SSE as the client's `data: "<text delta>"` format — same
+      // shape the Anthropic path emits, so the client parser is unchanged.
+      const { readable, writable } = new TransformStream();
+      const writer = writable.getWriter();
+      const encoder = new TextEncoder();
+      (async () => {
+        let inTok = 0;
+        let outTok = 0;
+        try {
+          const reader = gResp.body!.getReader();
+          const decoder = new TextDecoder();
+          let buf = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split("\n");
+            buf = lines.pop() ?? "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const raw = line.slice(6).trim();
+              if (!raw) continue;
+              try {
+                const ev = JSON.parse(raw);
+                const txt = ev.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (txt)
+                  await writer.write(
+                    encoder.encode(`data: ${JSON.stringify(txt)}\n\n`),
+                  );
+                if (ev.usageMetadata) {
+                  inTok = ev.usageMetadata.promptTokenCount || inTok;
+                  outTok = ev.usageMetadata.candidatesTokenCount || outTok;
+                }
+              } catch {
+                /* skip non-JSON keep-alive lines */
+              }
+            }
+          }
+        } finally {
+          await writer.write(encoder.encode("data: [DONE]\n\n"));
+          await writer.close();
+          // Log usage only (credit deduction on the canary path is skipped —
+          // the credit cost model is Anthropic-priced; the gate above still ran).
+          const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+          const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+          runInBackground(
+            fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                apikey: supabaseKey,
+                Authorization: `Bearer ${supabaseKey}`,
+              },
+              body: JSON.stringify({
+                trip_id: tripId || null,
+                function_name: "generate-brainstorm",
+                model: rgModel,
+                input_tokens: inTok,
+                output_tokens: outTok,
+              }),
+            })
+              .then(() => {})
+              .catch(() => {}),
+          );
+        }
+      })();
+      return new Response(readable, {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+        },
+      });
+    }
+
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
