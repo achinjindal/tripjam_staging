@@ -3817,11 +3817,14 @@ function TransitionRow({
     async function load() {
       const placeA = from.geocode || extractPlace(from.title);
       const placeB = to.geocode || extractPlace(to.title);
-      // For transit activities, use geocodeEnd (destination) as the origin for the next leg
+      // For transit activities, use the destination as the origin for the next
+      // leg. DB-loaded activities carry snake_case `geocode_end`, freshly
+      // streamed ones camelCase `geocodeEnd` — read both so the transit
+      // destination isn't silently dropped (which routed from the transit's
+      // ORIGIN instead — the wrong-origin bug).
+      const fromEnd = from.geocode_end ?? from.geocodeEnd;
       const fromGeocode =
-        from.type === "transit" && from.geocodeEnd
-          ? from.geocodeEnd
-          : from.geocode;
+        from.type === "transit" && fromEnd ? fromEnd : from.geocode;
       // Retry with backoff so a cold-start timeout doesn't immediately drop us to the "Get directions"
       // fallback — that's the failure state, not a loading state. Keep the `···` showing while we retry.
       let lastReason = null;
@@ -3924,7 +3927,11 @@ function TransitionRow({
   // text-resolved different coord (the Westin Sapporo / Rusutsu bug).
   // Transit-as-origin still uses text because we don't have lat_end/lng_end.
   const originParamSrc = (() => {
-    if (from.type === "transit" && from.geocodeEnd) return from.geocodeEnd;
+    // Read both casings (DB snake_case geocode_end / streamed camelCase
+    // geocodeEnd) so a transit's DESTINATION is used as this leg's origin —
+    // not its origin (the wrong-origin Maps bug).
+    const fromEnd = from.geocode_end ?? from.geocodeEnd;
+    if (from.type === "transit" && fromEnd) return fromEnd;
     if (from.lat != null && from.lng != null) return `${from.lat},${from.lng}`;
     return from.geocode || `${extractPlace(from.title)} ${city}`;
   })();
