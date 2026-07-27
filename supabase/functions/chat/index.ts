@@ -162,7 +162,8 @@ ${
 2. dismiss_route — Remove plan(s) from view (user can undo)
    Single: {"type":"dismiss_route","routeId":"..."}
    Bulk: {"type":"dismiss_route","routeIds":["id1","id2","id3"]}
-   Use routeIds (array) when dismissing multiple plans at once. Use the actual id values from the plan data in the TRIP CONTEXT provided.
+   REQUIRED: every dismiss_route action MUST include "routeId" (one plan) or "routeIds" (multiple) — NEVER emit a dismiss_route without it. Copy the exact id from the matching PLAN Pn (id="...") in the TRIP CONTEXT; do not invent or omit it. A dismiss_route with no routeId/routeIds is invalid and will do nothing.
+   Use routeIds (array) when dismissing multiple plans at once.
    Use when user says "remove P3", "dismiss P2", "clear all plans", "dismiss P1 to P6", etc.
 
 3. generate_more_plans — Trigger generation of additional plan options

@@ -49,8 +49,8 @@ ROUTE RULES:
 - Keep drives honest: Sri Lanka drives are slow. Colombo–Galle ~2.5h, Colombo–Kandy ~3h, Galle–Yala ~3h.
 - If traveler notes mention a specific activity (e.g. scuba, safari, cooking class), ensure at least one route is strongly compatible with it. Do not force every route to include it — be honest about which routes work and which don't.
 
-TIER 2 — EXPERIENCES:
-After route options, generate 15–20 specific named places and activities. tier = 2.
+TIER 2 — EXPERIENCES (MANDATORY — your response is INCOMPLETE without these):
+After the 4 route options, you MUST ALSO append 15–20 specific named places and activities as separate items with tier = 2. Never stop after the routes — the array always ends with the tier-2 experiences.
 Rules:
 - Only SPECIFIC named places — "Mirissa Beach", "Galle Fort", "Temple of the Tooth". Never "Local beach" or "City park".
 - Only well-established, operating venues.
@@ -71,7 +71,7 @@ When the destination is a specific city rather than a country/region, STILL gene
 - All the same fields apply (tagline, bestFor, warning, recommended, points)
 - The "city" field must use neighbourhood/area names, NOT repeat the city name
 
-Return ONLY a raw JSON array. No markdown, no code fences. Start with [ and end with ].
+Return ONLY a raw JSON array. No markdown, no code fences. Start with [ and end with ]. The array MUST contain the 4 tier-1 routes FOLLOWED BY 15–20 tier-2 experiences — a response with only the routes and no tier-2 items is invalid.
 
 Example (country-level, 5 days, Colombo to Colombo, traveler wants scuba):
 [{"title":"South Coast Loop","tagline":"Minimal travel, best beaches","tier":1,"category":"Route","icon":"🏖️","city":"Galle, Unawatuna, Hikkaduwa, Mirissa","days":["Colombo → Galle (2.5h drive)","Galle Fort walk and Unawatuna beach","Day trip to Hikkaduwa for scuba diving, back to Galle","Mirissa beach day and Coconut Tree Hill at sunset","Drive back to Colombo"],"bestFor":"Beach and diving lovers","warning":null,"recommended":true,"points":[{"text":"Hikkaduwa has excellent scuba sites for all levels","good":true},{"text":"Least time in transit of all routes","good":true},{"text":"No wildlife or hill country","good":false}]},{"title":"Hills + Beach","tagline":"Culture, tea country, then coast","tier":1,"category":"Route","icon":"🍃","city":"Kandy, Nuwara Eliya, Bentota","days":["Colombo → Kandy (3h)","Kandy: Temple of the Tooth + lake walk","Kandy → Nuwara Eliya, tea estates","Nuwara Eliya → Bentota (4.5h drive)","Bentota beach + back to Colombo"],"bestFor":"Variety seekers","warning":"Nuwara Eliya to Bentota is a long 4.5h drive","recommended":false,"points":[{"text":"No dedicated scuba — Bentota is calm, not a dive destination","good":false},{"text":"Best mix of culture and coast","good":true},{"text":"Long drive on day 4","good":false}]},{"title":"Mirissa Beach","city":"Mirissa","category":"Sightseeing","note":"Wide beach, whale watching from Nov to Apr","icon":"🐳","tier":2}]`;
