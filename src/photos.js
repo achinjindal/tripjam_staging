@@ -403,6 +403,19 @@ export function setTripDestination(dest) {
   _tripDestination = dest || "";
 }
 
+// Append the trip destination/country to a bare city so ambiguous place names
+// don't geocode to the wrong continent — e.g. "Nara" (read as the acronym NARA
+// = US National Archives) → "Nara, Japan". No-op when the city already contains
+// the destination or no trip destination is set.
+function enrichCity(city) {
+  if (!city || !_tripDestination) return city;
+  const dest = _tripDestination.split("→")[0].trim();
+  const destHead = dest.split(",")[0].trim().toLowerCase();
+  return destHead && city.toLowerCase().includes(destHead)
+    ? city
+    : `${city}, ${dest}`;
+}
+
 export async function geocodePlace(title, city, geocodeHint) {
   // If geocodeHint is raw coordinates "lat,lng", use directly
   if (geocodeHint) {
@@ -542,7 +555,9 @@ export async function verifyActivity(activity, city, session, tripId) {
         },
         body: JSON.stringify({
           name,
-          city: city || null,
+          // Enrich with the trip country so ambiguous names (e.g. "Nara") and
+          // the proximity-bias resolution don't land on the wrong continent.
+          city: enrichCity(city) || null,
           hint: activity.geocode || null,
           type: activity.type === "hotel" ? "lodging" : null,
           tripId: tripId || null,
