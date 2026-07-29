@@ -1,8 +1,12 @@
 name: Build Android APK
 
 on:
+  # Build an APK only when explicitly wanted — a version tag or a manual run —
+  # not on every commit to main (that piled up 90-day-retained APK artifacts
+  # and filled the account's Actions storage). Use `git tag v1.2.3 && git push
+  # --tags`, or trigger "Build Android APK" from the Actions tab.
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
@@ -53,3 +57,5 @@ jobs:
         with:
           name: app-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          # Auto-expire quickly so APKs don't accumulate in Actions storage.
+          retention-days: 5
