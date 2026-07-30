@@ -1721,6 +1721,8 @@ function BrainstormView({
   onBuild,
   onBack,
   onEditForm = null,
+  onInvite = null,
+  members = [],
   onOpenChat = null,
   onDismissRoute = null,
   onModifyRoute = null,
@@ -2466,24 +2468,61 @@ function BrainstormView({
                 )}
               </div>
             </div>
-            {onEditForm && (
-              <button
-                onClick={onEditForm}
-                style={{
-                  background: T.sand,
-                  border: "none",
-                  borderRadius: RADIUS.full,
-                  padding: "5px 11px",
-                  color: T.ink,
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontFamily: "Georgia,serif",
-                  fontWeight: 600,
-                }}
-              >
-                ✏️ Edit details
-              </button>
-            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {INVITE_ENABLED && onInvite && (
+                <button
+                  onClick={onInvite}
+                  title="Trip members"
+                  style={{
+                    background: T.sand,
+                    border: "none",
+                    borderRadius: RADIUS.full,
+                    padding: "5px 11px",
+                    color: T.ink,
+                    fontSize: 12,
+                    cursor: "pointer",
+                    fontFamily: "Georgia,serif",
+                    fontWeight: 600,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  {members.length > 1 ? (
+                    <>
+                      <AvatarStack
+                        names={members.map((m) =>
+                          memberName(m, session?.user?.id),
+                        )}
+                        size={18}
+                        ring={T.chalk}
+                      />
+                      {members.length}
+                    </>
+                  ) : (
+                    "👥 Invite"
+                  )}
+                </button>
+              )}
+              {onEditForm && (
+                <button
+                  onClick={onEditForm}
+                  style={{
+                    background: T.sand,
+                    border: "none",
+                    borderRadius: RADIUS.full,
+                    padding: "5px 11px",
+                    color: T.ink,
+                    fontSize: 12,
+                    cursor: "pointer",
+                    fontFamily: "Georgia,serif",
+                    fontWeight: 600,
+                  }}
+                >
+                  ✏️ Edit details
+                </button>
+              )}
+            </div>
           </div>
 
           {!isPretripMode && (
@@ -10913,6 +10952,8 @@ export default function App({
                         }
                       : null
                   }
+                  onInvite={editingTrip?.id ? () => setShowMembers(true) : null}
+                  members={members}
                   onOpenChat={() => {
                     setChatOpen(true);
                     setChatUnread(false);
@@ -12644,6 +12685,8 @@ export default function App({
                         trip={trip}
                         session={session}
                         days={days}
+                        onInvite={trip?.id ? () => setShowMembers(true) : null}
+                        members={members}
                         onGeneratingChange={setRoutesGenerating}
                         deepDiveCache={deepDiveCacheApp}
                         loadCityDeepDive={loadCityDeepDiveApp}

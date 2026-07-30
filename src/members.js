@@ -95,3 +95,63 @@ export function memberName(m, selfId) {
   if (m.user_id === selfId) return "You";
   return m.profiles?.username || "Traveler";
 }
+
+// ── Account-targeted invites (hybrid with the link flow) ────────────────────
+
+/** Invite a co-traveler by username or email (exact, case-insensitive).
+ *  Returns { invite_id, username, already_invited }. Errors bubble so callers
+ *  can map error.message codes (user_not_found / already_member / trip_full …)
+ *  to toasts / inline hints. */
+export async function inviteByHandle(tripId, handle) {
+  const { data, error } = await supabase.rpc("invite_user_by_handle", {
+    p_trip: tripId,
+    p_handle: handle,
+  });
+  if (error) throw error;
+  return data;
+}
+
+/** The current user's pending invites, enriched with trip + inviter info. */
+export async function listPendingInvites() {
+  const { data, error } = await supabase.rpc("list_pending_invites");
+  if (error) {
+    if (import.meta.env.DEV)
+      console.warn("listPendingInvites failed:", error.message);
+    return [];
+  }
+  return data || [];
+}
+
+/** Accept (true) or decline (false) a pending invite. Returns the joined
+ *  trip_id on accept, null on decline. */
+export async function respondInvite(inviteId, accept) {
+  const { data, error } = await supabase.rpc("respond_invite", {
+    p_invite: inviteId,
+    p_accept: accept,
+  });
+  if (error) throw error;
+  return data;
+}
+
+/** Cancel a pending invite (trip owner or original inviter). */
+export async function cancelInvite(inviteId) {
+  const { error } = await supabase.rpc("cancel_invite", { p_invite: inviteId });
+  if (error) throw error;
+}
+
+/** A trip's pending invites (for the roster in MembersSheet). Members-readable
+ *  via RLS; returns [] on error. */
+export async function fetchTripInvites(tripId) {
+  if (!tripId) return [];
+  const { data, error } = await supabase
+    .from("trip_invites")
+    .select("id, invitee_user_id, status, profiles:invitee_user_id(username)")
+    .eq("trip_id", tripId)
+    .eq("status", "pending");
+  if (error) {
+    if (import.meta.env.DEV)
+      console.warn("fetchTripInvites failed:", error.message);
+    return [];
+  }
+  return data || [];
+}

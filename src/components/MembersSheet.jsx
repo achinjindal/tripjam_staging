@@ -9,12 +9,15 @@ import { showToast, confirmSheet } from "../dialogs.jsx";
 import MemberAvatar from "../MemberAvatar.jsx";
 import {
   fetchMembers,
+  fetchTripInvites,
   getInviteUrl,
   revokeInvite,
   removeMember,
   transferOwnership,
   leaveTrip,
   memberName,
+  inviteByHandle,
+  cancelInvite,
 } from "../members.js";
 
 export default function MembersSheet({
@@ -27,13 +30,20 @@ export default function MembersSheet({
   const selfId = session?.user?.id;
   const isOwner = trip?.owner_id === selfId;
   const [members, setMembers] = useState([]);
+  const [pending, setPending] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [transferMode, setTransferMode] = useState(false);
+  const [handle, setHandle] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [notFound, setNotFound] = useState("");
 
   const reload = async () => {
     setLoading(true);
-    const list = await fetchMembers(trip.id);
+    const [list, invites] = await Promise.all([
+      fetchMembers(trip.id),
+      fetchTripInvites(trip.id),
+    ]);
     // Owner first, then by join time.
     list.sort((a, b) => {
       if (a.user_id === trip.owner_id) return -1;
@@ -41,8 +51,58 @@ export default function MembersSheet({
       return new Date(a.joined_at) - new Date(b.joined_at);
     });
     setMembers(list);
+    setPending(invites);
     setLoading(false);
     onMembersChanged?.(list);
+  };
+
+  const doInvite = async () => {
+    const h = handle.trim().replace(/^@/, "");
+    if (!h || inviteBusy) return;
+    setInviteBusy(true);
+    setNotFound("");
+    try {
+      const res = await inviteByHandle(trip.id, h);
+      showToast(
+        res?.already_invited
+          ? `Already invited @${res.username}`
+          : `Invited @${res?.username || h}`,
+      );
+      setHandle("");
+      reload();
+    } catch (e) {
+      const msg = e?.message || "";
+      if (msg.includes("user_not_found")) {
+        setNotFound(h);
+      } else if (msg.includes("already_member")) {
+        showToast("Already on this trip");
+      } else if (msg.includes("trip_full")) {
+        showToast("This trip is full");
+      } else {
+        showToast("Couldn't send invite");
+      }
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
+  const doCancelInvite = async (inv) => {
+    const name = inv.profiles?.username || "this traveler";
+    const ok = await confirmSheet({
+      title: `Cancel invite to @${name}?`,
+      message: "They'll no longer see this trip in their invitations.",
+      confirmLabel: "Cancel invite",
+      cancelLabel: "Keep",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await cancelInvite(inv.id);
+      showToast("Invite cancelled");
+      reload();
+    } catch {
+      showToast("Couldn't cancel invite");
+    }
   };
 
   useEffect(() => {
@@ -329,6 +389,123 @@ export default function MembersSheet({
                 </div>
               );
             })}
+
+            {/* Pending invites (account-targeted) */}
+            {pending.map((inv) => {
+              const name = inv.profiles?.username || "traveler";
+              return (
+                <div
+                  key={inv.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 11,
+                    background: T.chalk,
+                    border: `1px solid ${T.border}`,
+                    borderRadius: RADIUS.lg,
+                    padding: "12px 14px",
+                    marginBottom: 8,
+                    opacity: 0.75,
+                  }}
+                >
+                  <MemberAvatar name={name} size={34} />
+                  <div style={{ flex: 1 }}>
+                    <div
+                      style={{ fontSize: 14, color: T.ink, fontWeight: 700 }}
+                    >
+                      {name}
+                    </div>
+                    <div style={{ fontSize: 11, color: T.mist }}>
+                      Invited · pending
+                    </div>
+                  </div>
+                  {isOwner && (
+                    <div
+                      onClick={() => doCancelInvite(inv)}
+                      style={{
+                        color: T.mist,
+                        fontSize: 18,
+                        cursor: "pointer",
+                        padding: "0 4px",
+                      }}
+                      title="Cancel invite"
+                    >
+                      ⋯
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Add a co-traveller (account-targeted invite) */}
+            <div style={{ marginTop: 14 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 14,
+                  color: T.ink,
+                  fontWeight: 700,
+                }}
+              >
+                👥 Add a co-traveller
+              </div>
+              <div
+                style={{ fontSize: 11, color: T.mist, margin: "3px 0 10px" }}
+              >
+                Invite by username or email — they'll see it on their trips.
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={handle}
+                  onChange={(e) => {
+                    setHandle(e.target.value);
+                    if (notFound) setNotFound("");
+                  }}
+                  onKeyDown={(e) => e.key === "Enter" && doInvite()}
+                  placeholder="@username or email"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    border: `1px solid ${T.border}`,
+                    borderRadius: RADIUS.md,
+                    padding: "10px 12px",
+                    fontFamily: "Georgia, serif",
+                    fontSize: 13,
+                    color: T.ink,
+                    background: T.chalk,
+                  }}
+                />
+                <button
+                  onClick={doInvite}
+                  disabled={inviteBusy || !handle.trim()}
+                  style={{
+                    background: T.ocean,
+                    color: T.chalk,
+                    border: "none",
+                    borderRadius: RADIUS.md,
+                    padding: "10px 16px",
+                    fontFamily: "Georgia, serif",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor:
+                      inviteBusy || !handle.trim() ? "default" : "pointer",
+                    opacity: inviteBusy || !handle.trim() ? 0.6 : 1,
+                    flexShrink: 0,
+                  }}
+                >
+                  {inviteBusy ? "…" : "Invite"}
+                </button>
+              </div>
+              {notFound && (
+                <div
+                  style={{ fontSize: 11, color: T.terra, margin: "7px 2px 0" }}
+                >
+                  No traveller found for "@{notFound}". Share a link instead ↓
+                </div>
+              )}
+            </div>
 
             {/* Invite block */}
             <div style={{ marginTop: 14 }}>

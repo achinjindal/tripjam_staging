@@ -321,6 +321,10 @@ function Root() {
         <Home
           session={session}
           onOpenTrip={openTrip}
+          onOpenTripById={async (tripId) => {
+            const trip = await loadTrip(tripId);
+            if (trip) openTrip(trip);
+          }}
           onCreateTrip={() => {
             setActiveTrip(null);
             setScreen("create");
