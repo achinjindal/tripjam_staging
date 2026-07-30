@@ -35,6 +35,12 @@ const corsHeaders = {
 
 const CACHE_TTL_DAYS = 30;
 const MODEL = "claude-haiku-4-5-20251001";
+// Rescue model. Haiku sometimes over-refuses this strict task and returns an
+// empty digest even for content-rich destinations (e.g. Morocco). When the
+// Haiku cold call comes back with zero inspirations we retry once with Sonnet
+// 4.6 — the model this feature originally shipped on — which reliably finds
+// content. Only fires on the ~10% of cold calls Haiku bails on.
+const ESCALATION_MODEL = "claude-sonnet-4-6";
 // Min credits required to attempt a cold call. Sized to comfortably cover
 // the worst case (1 tag-extract Haiku + 1 main Haiku with 4 web searches).
 const MIN_CREDITS = 8;
@@ -179,6 +185,64 @@ function countWebSearches(content: any[], usage: any): number {
   return (content || []).filter(
     (b) => b?.type === "server_tool_use" && b?.name === "web_search",
   ).length;
+}
+
+// One web_search-backed research call for a given model. Returns the raw text
+// plus usage so the caller can parse, bill, and decide whether to escalate.
+async function callResearchLLM(
+  model: string,
+  maxUses: number,
+  apiKey: string,
+  systemPrompt: string,
+  userMessage: string,
+): Promise<{
+  ok: boolean;
+  status: number;
+  errText: string;
+  text: string;
+  inputTokens: number;
+  outputTokens: number;
+  webSearchCount: number;
+}> {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 4000,
+      tools: [
+        { type: "web_search_20250305", name: "web_search", max_uses: maxUses },
+      ],
+      system: systemPrompt,
+      messages: [{ role: "user", content: userMessage }],
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    return {
+      ok: false,
+      status: res.status,
+      errText,
+      text: "",
+      inputTokens: 0,
+      outputTokens: 0,
+      webSearchCount: 0,
+    };
+  }
+  const data = await res.json();
+  return {
+    ok: true,
+    status: res.status,
+    errText: "",
+    text: extractText(data?.content || []),
+    inputTokens: data?.usage?.input_tokens || 0,
+    outputTokens: data?.usage?.output_tokens || 0,
+    webSearchCount: countWebSearches(data?.content || [], data?.usage),
+  };
 }
 
 function tryParseJson(text: string): any | null {
@@ -431,53 +495,68 @@ serve(async (req) => {
         : "") +
       `\n\nUse web_search to find recent (≤ 24 months) first-person articles and YouTube videos by named individual creators. Return the JSON object only.`;
 
-    const llmRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 4000,
-        // Bumped to 6 (was 4) so Haiku has room for separate article-focused
-        // and YouTube-focused queries (enforced by the prompt's mandatory mix).
-        // Cost ceiling: 6 × $0.01 = $0.06 per cold call. Cache hits are free.
-        tools: [
-          { type: "web_search_20250305", name: "web_search", max_uses: 6 },
-        ],
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      }),
-    });
+    // Haiku first (cheap, 6 web searches). If it returns an empty digest
+    // (over-refusal), escalate once to Sonnet 4.6 (8 web searches).
+    const HAIKU_MAX_USES = 6;
+    const SONNET_MAX_USES = 8;
 
-    if (!llmRes.ok) {
-      const errText = await llmRes.text();
-      throw new Error(`Anthropic error ${llmRes.status}: ${errText}`);
+    const haiku = await callResearchLLM(
+      MODEL,
+      HAIKU_MAX_USES,
+      apiKey,
+      SYSTEM_PROMPT,
+      userMessage,
+    );
+    if (!haiku.ok) {
+      throw new Error(`Anthropic error ${haiku.status}: ${haiku.errText}`);
     }
-    const llm = await llmRes.json();
 
-    const text = extractText(llm?.content || []);
-    const webSearchCount = countWebSearches(llm?.content || [], llm?.usage);
-    const parsed = tryParseJson(text);
-    if (!parsed || !Array.isArray(parsed.inspirations)) {
-      // Log raw text for debugging — truncated to 500 chars to avoid log bloat
-      console.error(
-        "unparseable digest. raw text (first 500):",
-        text?.slice(0, 500),
+    let parsed = tryParseJson(haiku.text);
+    let usedModel = MODEL;
+    let webSearchCount = haiku.webSearchCount;
+    let sonnet: Awaited<ReturnType<typeof callResearchLLM>> | null = null;
+
+    const haikuEmpty =
+      !parsed ||
+      !Array.isArray(parsed.inspirations) ||
+      parsed.inspirations.length === 0;
+
+    if (haikuEmpty) {
+      sonnet = await callResearchLLM(
+        ESCALATION_MODEL,
+        SONNET_MAX_USES,
+        apiKey,
+        SYSTEM_PROMPT,
+        userMessage,
       );
-      // Graceful fallback: if parsing totally failed return an empty digest
-      // rather than a 500. The frontend shows "No recent stories" with a
-      // retry button, which is better than an error state.
-      if (!parsed) {
-        throw new Error("model returned unparseable digest");
+      if (sonnet.ok) {
+        const sonnetParsed = tryParseJson(sonnet.text);
+        const sonnetHasResults =
+          sonnetParsed &&
+          Array.isArray(sonnetParsed.inspirations) &&
+          sonnetParsed.inspirations.length > 0;
+        // Prefer Sonnet if it found anything, or if Haiku was unparseable and
+        // Sonnet at least parsed (even to empty).
+        if (sonnetHasResults || (!parsed && sonnetParsed)) {
+          parsed = sonnetParsed;
+          usedModel = ESCALATION_MODEL;
+          webSearchCount = sonnet.webSearchCount;
+        }
       }
-      // parsed exists but has no inspirations array — treat as empty
-      parsed.inspirations = [];
-      parsed.place_insights = parsed.place_insights || [];
-      parsed.sources = parsed.sources || [];
     }
+
+    if (!parsed) {
+      // Both models failed to produce parseable JSON.
+      console.error(
+        "unparseable digest. haiku raw (first 500):",
+        haiku.text?.slice(0, 500),
+        sonnet ? "| sonnet raw (first 500): " + sonnet.text?.slice(0, 500) : "",
+      );
+      throw new Error("model returned unparseable digest");
+    }
+    if (!Array.isArray(parsed.inspirations)) parsed.inspirations = [];
+    parsed.place_insights = parsed.place_insights || [];
+    parsed.sources = parsed.sources || [];
 
     const digest = {
       destinations,
@@ -489,25 +568,32 @@ serve(async (req) => {
       generated_at: new Date().toISOString(),
     };
 
-    // Persist — upsert by cache_key.
-    const expiresAt = new Date(
-      Date.now() + CACHE_TTL_DAYS * 24 * 60 * 60 * 1000,
-    ).toISOString();
-    fetch(`${supabaseUrl}/rest/v1/destination_research?on_conflict=cache_key`, {
-      method: "POST",
-      headers: { ...dbHeaders, Prefer: "resolution=merge-duplicates" },
-      body: JSON.stringify({
-        cache_key: cacheKey,
-        destinations,
-        tags: tagResult.tags,
-        month_bucket: monthBucket,
-        digest,
-        web_search_count: webSearchCount,
-        expires_at: expiresAt,
-      }),
-    }).catch(() => {});
+    // Persist — upsert by cache_key. NEVER cache an empty digest: caching a
+    // zero-result run for 30 days poisons the destination after a single bad
+    // generation. Skipping the write lets the next open retry (and re-escalate).
+    if (digest.inspirations.length > 0) {
+      const expiresAt = new Date(
+        Date.now() + CACHE_TTL_DAYS * 24 * 60 * 60 * 1000,
+      ).toISOString();
+      fetch(
+        `${supabaseUrl}/rest/v1/destination_research?on_conflict=cache_key`,
+        {
+          method: "POST",
+          headers: { ...dbHeaders, Prefer: "resolution=merge-duplicates" },
+          body: JSON.stringify({
+            cache_key: cacheKey,
+            destinations,
+            tags: tagResult.tags,
+            month_bucket: monthBucket,
+            digest,
+            web_search_count: webSearchCount,
+            expires_at: expiresAt,
+          }),
+        },
+      ).catch(() => {});
+    }
 
-    // Log llm_usage (fire-and-forget)
+    // Log llm_usage (fire-and-forget) — one row per model actually called.
     fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
       method: "POST",
       headers: dbHeaders,
@@ -515,31 +601,57 @@ serve(async (req) => {
         trip_id: tripId,
         function_name: "generate-destination-research",
         model: MODEL,
-        input_tokens: llm?.usage?.input_tokens || 0,
-        output_tokens: llm?.usage?.output_tokens || 0,
-        web_search_count: webSearchCount,
+        input_tokens: haiku.inputTokens,
+        output_tokens: haiku.outputTokens,
+        web_search_count: haiku.webSearchCount,
       }),
     }).catch(() => {});
+    if (sonnet && sonnet.ok) {
+      fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+        method: "POST",
+        headers: dbHeaders,
+        body: JSON.stringify({
+          trip_id: tripId,
+          function_name: "generate-destination-research:escalation",
+          model: ESCALATION_MODEL,
+          input_tokens: sonnet.inputTokens,
+          output_tokens: sonnet.outputTokens,
+          web_search_count: sonnet.webSearchCount,
+        }),
+      }).catch(() => {});
+    }
 
-    // Deduct credits — combined cost of tag-extract Haiku + main Haiku call.
-    // Web search cost is currently absorbed in the input_tokens bill from
-    // Anthropic (server-side tool call) so the standard costToCredits()
-    // captures it implicitly. If Anthropic bills web_search separately in
-    // the future we can add a per-search surcharge here.
-    const mainIn = llm?.usage?.input_tokens || 0;
-    const mainOut = llm?.usage?.output_tokens || 0;
+    // Deduct credits — Haiku (tag-extract + main) always; Sonnet on escalation.
+    // Web search cost is absorbed in the input_tokens bill from Anthropic
+    // (server-side tool call) so costToCredits() captures it implicitly.
     deductCredits({
       userId: user.id,
       model: MODEL,
-      inputTokens: mainIn + tagResult.inputTokens,
-      outputTokens: mainOut + tagResult.outputTokens,
+      inputTokens: haiku.inputTokens + tagResult.inputTokens,
+      outputTokens: haiku.outputTokens + tagResult.outputTokens,
       functionName: "generate-destination-research",
       tripId,
       source,
     }).catch(() => {});
+    if (sonnet && sonnet.ok) {
+      deductCredits({
+        userId: user.id,
+        model: ESCALATION_MODEL,
+        inputTokens: sonnet.inputTokens,
+        outputTokens: sonnet.outputTokens,
+        functionName: "generate-destination-research:escalation",
+        tripId,
+        source,
+      }).catch(() => {});
+    }
 
     return new Response(
-      JSON.stringify({ digest, cached: false, tags: tagResult.tags }),
+      JSON.stringify({
+        digest,
+        cached: false,
+        tags: tagResult.tags,
+        model: usedModel,
+      }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       },

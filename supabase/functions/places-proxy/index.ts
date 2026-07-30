@@ -9,6 +9,8 @@ const corsHeaders = {
 
 const PLACES_KEY = Deno.env.get("GOOGLE_PLACES_KEY") ?? "";
 const TRIPADVISOR_KEY = Deno.env.get("TRIPADVISOR_KEY") ?? "";
+// Stock food photos (free tier). No-op when unset → client falls back to emoji.
+const PEXELS_KEY = Deno.env.get("PEXELS_API_KEY") ?? "";
 const PLACES_BASE = "https://places.googleapis.com/v1";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
@@ -465,6 +467,69 @@ async function handleHotelPhoto(req: Request): Promise<Response> {
   }
 
   // 3. No photo found (Google fallback removed — zero Google photo charges)
+  return Response.json({ url: null, source: null }, { headers: corsHeaders });
+}
+
+// ── Pexels stock food photos ────────────────────────────────────────────────
+//
+// Fallback for dish photos when Wikipedia/Commons have no image. Free tier
+// (200 req/hr, 20k/mo). Attribution: "Photos provided by Pexels". No-op when
+// PEXELS_API_KEY is unset (client then shows the dish emoji).
+
+async function pexelsPhoto(query: string): Promise<string | null> {
+  if (!PEXELS_KEY) return null;
+  try {
+    const res = await fetch(
+      `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=1&orientation=landscape`,
+      { headers: { Authorization: PEXELS_KEY } },
+    );
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    const p = data?.photos?.[0];
+    return p?.src?.large || p?.src?.medium || null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleFoodPhoto(req: Request): Promise<Response> {
+  const { q } = await req.json();
+  if (!q)
+    return Response.json({ url: null, source: null }, { headers: corsHeaders });
+
+  const dish = String(q).trim().toLowerCase();
+  const cacheKey = `food-photo:${dish}`;
+
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
+    incrementUsage("food-photo", "cache-hit", today()).catch(() => {});
+    return Response.json(
+      { url: cached.url, source: cached.source },
+      { headers: corsHeaders },
+    );
+  }
+
+  const url = await pexelsPhoto(`${dish} food dish`);
+  if (url) {
+    await cacheSet(
+      cacheKey,
+      "food-photo",
+      { url, source: "pexels" },
+      "pexels",
+      30,
+    );
+    incrementUsage("food-photo", "pexels", today()).catch(() => {});
+    return Response.json({ url, source: "pexels" }, { headers: corsHeaders });
+  }
+
+  // Cache the miss briefly so we don't re-hit Pexels for dishes with no match.
+  cacheSet(
+    cacheKey,
+    "food-photo",
+    { url: null, source: null },
+    "miss",
+    1,
+  ).catch(() => {});
   return Response.json({ url: null, source: null }, { headers: corsHeaders });
 }
 
@@ -1500,6 +1565,7 @@ serve(async (req) => {
   try {
     if (action === "autocomplete") return await handleAutocomplete(req);
     if (action === "hotel-photo") return await handleHotelPhoto(req);
+    if (action === "food-photo") return await handleFoodPhoto(req);
     if (action === "geocode") return await handleGeocode(req);
     if (action === "lookup-place") return await handleLookupPlace(req);
     if (action === "resolve-coords") return await handleResolveCoords(req);

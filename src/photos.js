@@ -176,6 +176,88 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
     return null;
   }
 
+  // Food dishes: the landmark pipeline (city-scoped Wikipedia + relevance
+  // filters) almost never matches a dish. Query the BARE dish name — most named
+  // dishes (Tagine, Couscous, Pho, Pad Thai) have a Wikipedia article with an
+  // appetising lead image. Then Commons, then a server-side stock fallback.
+  // Skip the _usedPhotoUrls dedup: a dish photo isn't a unique-place photo.
+  if (type === "food") {
+    const foodGood = (url) =>
+      url && !_isPortrait(url) && !BAD_PATTERNS.test(url);
+    // Normalise: drop parentheticals and a leading protein word so
+    // "Chicken Tagine (slow-cooked)" also tries "Tagine".
+    const dishRaw = geocode.replace(/\([^)]*\)/g, "").trim();
+    const dishHead = dishRaw
+      .replace(
+        /^(chicken|beef|lamb|pork|fish|prawn|shrimp|vegetable|veg)\s+/i,
+        "",
+      )
+      .trim();
+    const dishCandidates = Array.from(
+      new Set([dishRaw, dishHead].filter(Boolean)),
+    );
+
+    // 1. Wikipedia REST summary by bare dish name (follows redirects, returns a
+    //    lead image). No city, no landmark relevance filter.
+    for (const dish of dishCandidates) {
+      const summary = await wikiQueuedFetch(
+        `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(dish)}?redirect=true`,
+      );
+      const img =
+        summary?.originalimage?.source || summary?.thumbnail?.source || null;
+      if (
+        img &&
+        foodGood(img) &&
+        summary?.type !== "disambiguation" &&
+        !/may refer to/i.test(summary?.extract || "")
+      ) {
+        _photoCache[cacheKey] = img;
+        return img;
+      }
+    }
+
+    // 2. Wikimedia Commons file search by bare dish name.
+    for (const dish of dishCandidates) {
+      const data4 = await wikiQueuedFetch(
+        `https://commons.wikimedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(dish + " food")}&srnamespace=6&srlimit=3&format=json&origin=*`,
+      );
+      const results = data4?.query?.search || [];
+      for (const cr of results) {
+        const title = cr.title;
+        if (!title || /\.svg|logo|flag|icon|map|category/i.test(title))
+          continue;
+        const data4b = await wikiQueuedFetch(
+          `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=imageinfo&iiprop=url&iiurlwidth=700&format=json&origin=*`,
+        );
+        const page4 = Object.values(data4b?.query?.pages || {})[0];
+        const src4 = page4?.imageinfo?.[0]?.thumburl;
+        if (foodGood(src4)) {
+          _photoCache[cacheKey] = src4;
+          return src4;
+        }
+      }
+    }
+
+    // 3. Server-side stock fallback (Pexels) — keyed API, so proxied.
+    try {
+      const res = await fetch(`${PLACES_PROXY}?action=food-photo`, {
+        method: "POST",
+        headers: PLACES_HEADERS,
+        body: JSON.stringify({ q: dishHead || dishRaw }),
+      });
+      const { url: stockUrl } = await res.json();
+      if (stockUrl && foodGood(stockUrl)) {
+        _photoCache[cacheKey] = stockUrl;
+        return stockUrl;
+      }
+    } catch {
+      /* food-photo endpoint unavailable */
+    }
+
+    _photoCache[cacheKey] = null;
+    return null;
+  }
+
   const STOPWORDS = new Set([
     "the",
     "a",

@@ -3502,6 +3502,25 @@ function BrainstormView({
               (c) =>
                 !destinations.some((dest) => cityMatchesDestination(c, dest)),
             );
+            // Cross-card dedup for "Must try" (food) and "Good to know"
+            // (etiquette). The destination card and each city card are generated
+            // independently and most food/etiquette is national, so they heavily
+            // overlap. Walk cards in render order (destinations first, then
+            // cities) and show each unique item once. Sets are recreated each
+            // render and the order is deterministic → the result is stable.
+            const _seenFood = new Set();
+            // Etiquette is ~national and Haiku rewords it per city, so
+            // text-level dedup fails. Show the tips block once (on the first
+            // card that has any) and hide it on the rest.
+            let _tipsShown = false;
+            const _normDedup = (s) =>
+              (s || "")
+                .toLowerCase()
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "")
+                .replace(/\([^)]*\)/g, "")
+                .replace(/[^a-z0-9]+/g, " ")
+                .trim();
             const renderItineraryCityCard = (city, ci, keyPrefix) => {
               const isDestCard = keyPrefix === "dest-";
               const cityDays = cityGroups[city] || [];
@@ -3549,6 +3568,25 @@ function BrainstormView({
               }
               const dd = deepDiveCache[city];
               const data = dd && typeof dd === "object" ? dd : null;
+              // Filter this card's food + tips against what earlier cards
+              // (destination first, then prior cities) already showed.
+              let ddForCard = dd;
+              if (data) {
+                const dedupFood = (data.foodSpecialties || []).filter((f) => {
+                  const k = _normDedup(f?.name);
+                  if (!k || _seenFood.has(k)) return false;
+                  _seenFood.add(k);
+                  return true;
+                });
+                let dedupTips = data.etiquette || [];
+                if (dedupTips.length && _tipsShown) dedupTips = [];
+                if (dedupTips.length) _tipsShown = true;
+                ddForCard = {
+                  ...data,
+                  foodSpecialties: dedupFood,
+                  etiquette: dedupTips,
+                };
+              }
               const destHighlights = (data?.moreSights || []).map((s) => ({
                 ...s,
                 type: "sight",
@@ -3574,7 +3612,7 @@ function BrainstormView({
                   <CityCard
                     city={city}
                     writeup={isDestCard ? data?.writeup || "" : writeup}
-                    deepDive={deepDiveCache[city]}
+                    deepDive={ddForCard}
                     onVisible={() => loadCityDeepDive(city)}
                     onDeepDive={() => {
                       setDeepDiveCity(city);
