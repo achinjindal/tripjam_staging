@@ -137,7 +137,8 @@ ${JSON.stringify(payload)}`;
       },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: days.length * 450 + 500,
+        // Measured ~520 output tokens/day (uuid keys + narrative); headroom on top.
+        max_tokens: Math.min(16000, days.length * 800 + 1000),
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userMessage }],
       }),
