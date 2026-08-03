@@ -17,10 +17,13 @@ export function joinUrl(token) {
 /** Fetch a trip's members with their profile (username), owner first. */
 export async function fetchMembers(tripId) {
   if (!tripId) return [];
-  const { data, error } = await supabase
-    .from("trip_members")
-    .select("user_id, role, joined_at, profiles(id, username)")
-    .eq("trip_id", tripId);
+  // Via RPC (not a direct embed): profiles RLS hides other users' rows, so a
+  // client-side profiles(username) embed returns null for co-members and the
+  // UI shows "Traveler". This SECURITY DEFINER RPC returns members enriched
+  // with username only (never email/credits).
+  const { data, error } = await supabase.rpc("list_trip_members", {
+    p_trip: tripId,
+  });
   if (error) {
     if (import.meta.env.DEV)
       console.warn("fetchMembers failed:", error.message);
@@ -139,15 +142,14 @@ export async function cancelInvite(inviteId) {
   if (error) throw error;
 }
 
-/** A trip's pending invites (for the roster in MembersSheet). Members-readable
- *  via RLS; returns [] on error. */
+/** A trip's pending invites (for the roster in MembersSheet), enriched with the
+ *  invitee's username. Via SECURITY DEFINER RPC (profiles RLS hides other users'
+ *  rows from a client-side embed). Members-only; returns [] on error. */
 export async function fetchTripInvites(tripId) {
   if (!tripId) return [];
-  const { data, error } = await supabase
-    .from("trip_invites")
-    .select("id, invitee_user_id, status, profiles:invitee_user_id(username)")
-    .eq("trip_id", tripId)
-    .eq("status", "pending");
+  const { data, error } = await supabase.rpc("list_trip_invites", {
+    p_trip: tripId,
+  });
   if (error) {
     if (import.meta.env.DEV)
       console.warn("fetchTripInvites failed:", error.message);
