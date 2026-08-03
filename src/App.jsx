@@ -47,6 +47,7 @@ import {
   needsVerification,
 } from "./photos";
 import { MapView, RouteMapView } from "./components/MapView.jsx";
+import StoryView from "./components/StoryView.jsx";
 import { useIsDesktop } from "./hooks/useViewport.js";
 import {
   FoodSpotlightCard,
@@ -6865,6 +6866,115 @@ export default function App({
   ); // true if opening existing trip
   const preloadedDaysRef = useRef(new Set()); // track which day indices have been pre-loaded
 
+  // ── Story mode (Design A) ──
+  const [itineraryMode, setItineraryModeRaw] = useState("plan"); // 'story' | 'plan'
+  const [narrativesPending, setNarrativesPending] = useState(false);
+  const narrativesInflightRef = useRef(null); // trip.id the backfill has run for
+  const storyOpenedRef = useRef(false);
+
+  // Per-trip persisted mode; smart default: upcoming trips open in Story.
+  useEffect(() => {
+    if (!trip?.id) return;
+    let mode = null;
+    try {
+      mode = localStorage.getItem(`tripjam_itin_mode_${trip.id}`);
+    } catch {}
+    if (mode !== "story" && mode !== "plan") {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      mode =
+        trip.start_date && new Date(trip.start_date) > today ? "story" : "plan";
+    }
+    setItineraryModeRaw(mode);
+  }, [trip?.id]);
+
+  // Story renders only once the detailed itinerary is fully loaded; while
+  // streaming (or with no days) the Plan timeline stays in charge.
+  const storyAvailable = detailedReady && !detailedLoading && days.length > 0;
+  const storyActive = itineraryMode === "story" && storyAvailable;
+
+  const setItineraryMode = (mode, scrollToDayIndex) => {
+    setItineraryModeRaw(mode);
+    try {
+      if (trip?.id) localStorage.setItem(`tripjam_itin_mode_${trip.id}`, mode);
+    } catch {}
+    posthog.capture("itinerary_mode_toggled", { trip_id: trip?.id, to: mode });
+    if (mode === "plan" && scrollToDayIndex != null) {
+      setTimeout(() => scrollToDay(scrollToDayIndex), 80);
+    } else {
+      scrollRef.current?.scrollTo({ top: 0 });
+    }
+  };
+
+  // First Story open per trip: log it, and backfill story_title/narrative/gloss
+  // for itineraries generated before those fields existed. 402/errors degrade
+  // silently — StoryView falls back to day.description, no paywall.
+  useEffect(() => {
+    if (!storyActive || !trip?.id) {
+      storyOpenedRef.current = false;
+      return;
+    }
+    if (!storyOpenedRef.current) {
+      storyOpenedRef.current = true;
+      posthog.capture("story_mode_opened", {
+        trip_id: trip.id,
+        num_days: days.length,
+      });
+    }
+    if (narrativesInflightRef.current === trip.id) return;
+    if (!days.some((d) => !d.narrative)) return;
+    narrativesInflightRef.current = trip.id;
+    setNarrativesPending(true);
+    (async () => {
+      try {
+        const res = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-day-narratives`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token}`,
+            },
+            body: JSON.stringify({ tripId: trip.id }),
+          },
+        );
+        if (!res.ok) {
+          posthog.capture("story_narratives_failed", {
+            trip_id: trip.id,
+            status: res.status,
+          });
+          return;
+        }
+        const patch = await res.json();
+        if (patch?.days?.length || patch?.activities?.length) {
+          const dayPatch = Object.fromEntries(
+            (patch.days || []).map((d) => [d.id, d]),
+          );
+          const actPatch = Object.fromEntries(
+            (patch.activities || []).map((a) => [a.id, a]),
+          );
+          setDays((prev) =>
+            prev.map((d) => ({
+              ...d,
+              ...(dayPatch[d.id] || {}),
+              activities: (d.activities || []).map((a) =>
+                actPatch[a.id] ? { ...a, ...actPatch[a.id] } : a,
+              ),
+            })),
+          );
+          posthog.capture("story_narratives_generated", {
+            trip_id: trip.id,
+            days_patched: patch.days?.length || 0,
+          });
+        }
+      } catch (e) {
+        console.error("narratives backfill failed:", e);
+      } finally {
+        setNarrativesPending(false);
+      }
+    })();
+  }, [storyActive, trip?.id, days]);
+
   // Pre-load a day's geocoding + photos (warms caches for TransitionRow + PhotoStrip)
   // Also kicks off lazy verify-place for activities that have not yet been
   // verified, persisting coords + metadata back to the DB and re-rendering
@@ -12265,8 +12375,73 @@ export default function App({
                       );
                     })()}
 
+                  {/* Story|Plan mode toggle — appears once the detailed
+                      itinerary is ready; Story is forced off while streaming */}
+                  {storyAvailable && (
+                    <div
+                      style={{
+                        position: storyActive ? "sticky" : "static",
+                        top: 0,
+                        zIndex: 12,
+                        display: "flex",
+                        justifyContent: "center",
+                        padding: "8px 16px",
+                        background: "rgba(245,240,232,0.88)",
+                        backdropFilter: "blur(14px)",
+                        WebkitBackdropFilter: "blur(14px)",
+                        borderBottom: `1px solid ${T.border}B0`,
+                      }}
+                    >
+                      <div
+                        role="group"
+                        aria-label="Itinerary view mode"
+                        style={{
+                          display: "inline-flex",
+                          gap: 2,
+                          background: T.sand,
+                          borderRadius: RADIUS.full,
+                          padding: 3,
+                        }}
+                      >
+                        {[
+                          { key: "story", label: "✦ Story" },
+                          { key: "plan", label: "Plan" },
+                        ].map(({ key, label }) => {
+                          const active = itineraryMode === key;
+                          return (
+                            <button
+                              key={key}
+                              aria-pressed={active}
+                              onClick={() => {
+                                if (!active) setItineraryMode(key);
+                              }}
+                              style={{
+                                fontFamily: "Georgia,serif",
+                                fontSize: 12,
+                                letterSpacing: 0.6,
+                                border: 0,
+                                background: active ? T.ink : "transparent",
+                                color: active ? T.warm : T.mist,
+                                padding: "6px 16px",
+                                borderRadius: RADIUS.full,
+                                cursor: "pointer",
+                                transition: `all ${MOTION.normal}`,
+                                boxShadow: active
+                                  ? "0 1px 3px rgba(15,25,35,0.2)"
+                                  : "none",
+                              }}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {/* City-pill strip — only in detailed view */}
-                  {!compactView &&
+                  {!storyActive &&
+                    !compactView &&
                     (() => {
                       // Derive hotel city per day: use the day's city when it has a hotel activity,
                       // carry forward the last known hotel city for day-trip / non-hotel days
@@ -12361,289 +12536,315 @@ export default function App({
                       );
                     })()}
 
-                  {(() => {
-                    // Build hotel-per-day array: carry forward last seen hotel across days
-                    const hotelByCity = {};
-                    days.forEach((d) =>
-                      d.activities.forEach((a) => {
-                        if (a.type === "hotel") hotelByCity[d.city] = a;
-                      }),
-                    );
-                    // For each day, track which hotel the traveler is currently staying at
-                    let currentHotel = null;
-                    let currentHotelCity = null;
-                    const hotelPerDay = days.map((d) => {
-                      const dayHotel = d.activities.find(
-                        (a) => a.type === "hotel",
-                      );
-                      if (dayHotel) {
-                        currentHotel = dayHotel;
-                        currentHotelCity = d.city;
+                  {storyActive ? (
+                    <StoryView
+                      trip={trip}
+                      days={days}
+                      preloadDay={preloadDay}
+                      narrativesPending={narrativesPending}
+                      onOpenPlan={(dayIndex) =>
+                        setItineraryMode("plan", dayIndex)
                       }
-                      return { hotel: currentHotel, city: currentHotelCity };
-                    });
+                      onError={() => setItineraryModeRaw("plan")}
+                      onPhotoSwiped={() =>
+                        posthog.capture("story_photo_swiped", {
+                          trip_id: trip?.id,
+                        })
+                      }
+                    />
+                  ) : (
+                    (() => {
+                      // Build hotel-per-day array: carry forward last seen hotel across days
+                      const hotelByCity = {};
+                      days.forEach((d) =>
+                        d.activities.forEach((a) => {
+                          if (a.type === "hotel") hotelByCity[d.city] = a;
+                        }),
+                      );
+                      // For each day, track which hotel the traveler is currently staying at
+                      let currentHotel = null;
+                      let currentHotelCity = null;
+                      const hotelPerDay = days.map((d) => {
+                        const dayHotel = d.activities.find(
+                          (a) => a.type === "hotel",
+                        );
+                        if (dayHotel) {
+                          currentHotel = dayHotel;
+                          currentHotelCity = d.city;
+                        }
+                        return { hotel: currentHotel, city: currentHotelCity };
+                      });
 
-                    return days.map((day, i) => {
-                      const firstIsHotel = day.activities[0]?.type === "hotel";
-                      const lastAct = day.activities[day.activities.length - 1];
-                      const lastIsHotel = lastAct?.type === "hotel";
-                      const prevDay = i > 0 ? days[i - 1] : null;
-                      const cityChanged = prevDay && prevDay.city !== day.city;
+                      return days.map((day, i) => {
+                        const firstIsHotel =
+                          day.activities[0]?.type === "hotel";
+                        const lastAct =
+                          day.activities[day.activities.length - 1];
+                        const lastIsHotel = lastAct?.type === "hotel";
+                        const prevDay = i > 0 ? days[i - 1] : null;
+                        const cityChanged =
+                          prevDay && prevDay.city !== day.city;
 
-                      // Start-of-day hotel: on city-change days use previous day's hotel
-                      const prevHotel = i > 0 ? hotelPerDay[i - 1] : null;
-                      const startHotel = cityChanged
-                        ? prevHotel?.hotel || null
-                        : !firstIsHotel
-                          ? hotelPerDay[i]?.hotel || null
-                          : null;
-                      const startHotelCity = cityChanged
-                        ? prevHotel?.city
-                        : hotelPerDay[i]?.city;
+                        // Start-of-day hotel: on city-change days use previous day's hotel
+                        const prevHotel = i > 0 ? hotelPerDay[i - 1] : null;
+                        const startHotel = cityChanged
+                          ? prevHotel?.hotel || null
+                          : !firstIsHotel
+                            ? hotelPerDay[i]?.hotel || null
+                            : null;
+                        const startHotelCity = cityChanged
+                          ? prevHotel?.city
+                          : hotelPerDay[i]?.city;
 
-                      // End-of-day hotel: use current day's hotel (or carried-forward)
-                      // Skip on last day if user has a departure (they're leaving, no hotel needed)
-                      const isLastDay = i === days.length - 1;
-                      const hasDeparture =
-                        isLastDay &&
-                        (trip.departure_time || trip.departure_city);
-                      const endHotel =
-                        !lastIsHotel &&
-                        day.activities.length > 0 &&
-                        !hasDeparture
-                          ? hotelPerDay[i]?.hotel || null
-                          : null;
+                        // End-of-day hotel: use current day's hotel (or carried-forward)
+                        // Skip on last day if user has a departure (they're leaving, no hotel needed)
+                        const isLastDay = i === days.length - 1;
+                        const hasDeparture =
+                          isLastDay &&
+                          (trip.departure_time || trip.departure_city);
+                        const endHotel =
+                          !lastIsHotel &&
+                          day.activities.length > 0 &&
+                          !hasDeparture
+                            ? hotelPerDay[i]?.hotel || null
+                            : null;
 
-                      return (
-                        <div
-                          key={day.id}
-                          ref={(el) => {
-                            dayRefs.current[i] = el;
-                          }}
-                        >
-                          {compactView || collapsedDays.has(day.id) ? (
-                            <DayCompact
-                              day={day}
-                              canExpand={detailedReady || i < streamingDays}
-                              displayCity={(() => {
-                                const hCity = hotelPerDay[i]?.city;
-                                if (!hCity) return day.city;
-                                return hCity === day.city
-                                  ? day.city
-                                  : `${day.city} (${hCity})`;
-                              })()}
-                              onExpand={() => {
-                                if (compactView) {
-                                  setCompactView(false);
-                                  const allOtherIds = new Set(
-                                    days
-                                      .filter((d) => d.id !== day.id)
-                                      .map((d) => d.id),
-                                  );
-                                  setCollapsedDays(allOtherIds);
-                                } else {
-                                  setCollapsedDays((prev) => {
-                                    const next = new Set(prev);
-                                    next.delete(day.id);
-                                    return next;
-                                  });
-                                }
-                                setActiveDay(i);
-                                // Pre-load current day (if not already) + next day
-                                preloadDay(i);
-                                if (i + 1 < days.length) preloadDay(i + 1);
-                                const tryScroll = (attempts = 0) => {
-                                  requestAnimationFrame(() => {
-                                    const el = dayRefs.current[i];
-                                    if (el && scrollRef.current) {
-                                      const top = el.offsetTop;
-                                      if (top === 0 && i > 0 && attempts < 10) {
-                                        setTimeout(
-                                          () => tryScroll(attempts + 1),
-                                          100,
-                                        );
-                                        return;
+                        return (
+                          <div
+                            key={day.id}
+                            ref={(el) => {
+                              dayRefs.current[i] = el;
+                            }}
+                          >
+                            {compactView || collapsedDays.has(day.id) ? (
+                              <DayCompact
+                                day={day}
+                                canExpand={detailedReady || i < streamingDays}
+                                displayCity={(() => {
+                                  const hCity = hotelPerDay[i]?.city;
+                                  if (!hCity) return day.city;
+                                  return hCity === day.city
+                                    ? day.city
+                                    : `${day.city} (${hCity})`;
+                                })()}
+                                onExpand={() => {
+                                  if (compactView) {
+                                    setCompactView(false);
+                                    const allOtherIds = new Set(
+                                      days
+                                        .filter((d) => d.id !== day.id)
+                                        .map((d) => d.id),
+                                    );
+                                    setCollapsedDays(allOtherIds);
+                                  } else {
+                                    setCollapsedDays((prev) => {
+                                      const next = new Set(prev);
+                                      next.delete(day.id);
+                                      return next;
+                                    });
+                                  }
+                                  setActiveDay(i);
+                                  // Pre-load current day (if not already) + next day
+                                  preloadDay(i);
+                                  if (i + 1 < days.length) preloadDay(i + 1);
+                                  const tryScroll = (attempts = 0) => {
+                                    requestAnimationFrame(() => {
+                                      const el = dayRefs.current[i];
+                                      if (el && scrollRef.current) {
+                                        const top = el.offsetTop;
+                                        if (
+                                          top === 0 &&
+                                          i > 0 &&
+                                          attempts < 10
+                                        ) {
+                                          setTimeout(
+                                            () => tryScroll(attempts + 1),
+                                            100,
+                                          );
+                                          return;
+                                        }
+                                        scrollRef.current.scrollTo({
+                                          top: top - 50,
+                                          behavior: "smooth",
+                                        });
                                       }
-                                      scrollRef.current.scrollTo({
-                                        top: top - 50,
-                                        behavior: "smooth",
-                                      });
-                                    }
-                                  });
-                                };
-                                setTimeout(() => tryScroll(), 150);
-                              }}
-                            />
-                          ) : (
-                            <DaySection
-                              day={day}
-                              dayIndex={i}
-                              onCollapse={() =>
-                                setCollapsedDays((prev) =>
-                                  new Set(prev).add(day.id),
-                                )
-                              }
-                              onEditActivity={editActivity}
-                              onRemoveActivity={removeActivity}
-                              onReplaceActivity={(act) => {
-                                setChatInput(`Replace "${act.title}" with `);
-                                setChatOpen(true);
-                                setChatUnread(false);
-                                setTimeout(
-                                  () => chatInputRef.current?.focus(),
-                                  50,
-                                );
-                              }}
-                              onSuggestAlternatives={(act) => {
-                                setChatOpen(true);
-                                setChatUnread(false);
-                                sendChatDirect(
-                                  `Suggest 2-3 alternatives to "${act.title}" for the same time slot, without making any changes yet`,
-                                );
-                              }}
-                              onAddGemToItinerary={(d, gem) => {
-                                setChatOpen(true);
-                                setChatUnread(false);
-                                sendChatDirect(
-                                  `Please add ${gem.title} to the itinerary on ${d.label} at a suitable time.`,
-                                );
-                                dismissGemPersist(
-                                  d,
-                                  gem,
-                                  `Added "${gem.title}" to itinerary.`,
-                                );
-                              }}
-                              onDismissGem={(d, gem) =>
-                                dismissGemPersist(
-                                  d,
-                                  gem,
-                                  `"${gem.title}" dismissed.`,
-                                )
-                              }
-                              onChangeHotel={(dayId, act, mode) => {
-                                const dayLabel =
-                                  days.find((d) => d.id === dayId)?.label ||
-                                  "this day";
-                                if (mode === "own") {
-                                  setChatInput(
-                                    `I've booked my own hotel for ${dayLabel} — please replace the "${act.title}" with`,
-                                  );
+                                    });
+                                  };
+                                  setTimeout(() => tryScroll(), 150);
+                                }}
+                              />
+                            ) : (
+                              <DaySection
+                                day={day}
+                                dayIndex={i}
+                                onCollapse={() =>
+                                  setCollapsedDays((prev) =>
+                                    new Set(prev).add(day.id),
+                                  )
+                                }
+                                onEditActivity={editActivity}
+                                onRemoveActivity={removeActivity}
+                                onReplaceActivity={(act) => {
+                                  setChatInput(`Replace "${act.title}" with `);
                                   setChatOpen(true);
                                   setChatUnread(false);
                                   setTimeout(
                                     () => chatInputRef.current?.focus(),
                                     50,
                                   );
-                                } else {
+                                }}
+                                onSuggestAlternatives={(act) => {
                                   setChatOpen(true);
                                   setChatUnread(false);
-                                  const dayCity =
-                                    days.find((d) => d.id === dayId)?.city ||
-                                    "";
                                   sendChatDirect(
-                                    `I want to consider other hotel options for ${dayLabel}. Currently at "${act.title}"${dayCity ? ` in ${dayCity}` : ""}.`,
+                                    `Suggest 2-3 alternatives to "${act.title}" for the same time slot, without making any changes yet`,
                                   );
+                                }}
+                                onAddGemToItinerary={(d, gem) => {
+                                  setChatOpen(true);
+                                  setChatUnread(false);
+                                  sendChatDirect(
+                                    `Please add ${gem.title} to the itinerary on ${d.label} at a suitable time.`,
+                                  );
+                                  dismissGemPersist(
+                                    d,
+                                    gem,
+                                    `Added "${gem.title}" to itinerary.`,
+                                  );
+                                }}
+                                onDismissGem={(d, gem) =>
+                                  dismissGemPersist(
+                                    d,
+                                    gem,
+                                    `"${gem.title}" dismissed.`,
+                                  )
                                 }
-                              }}
-                              arrivalTime={
-                                i === 0
-                                  ? trip.arrival_time ||
-                                    (trip.start_date
-                                      ? `${trip.start_date}T09:00:00`
-                                      : null)
-                                  : null
-                              }
-                              arrivalMode={
-                                i === 0 ? trip.arrival_mode || "flight" : null
-                              }
-                              arrivalCity={i === 0 ? trip.arrival_city : null}
-                              arrivalAirportIata={
-                                i === 0
-                                  ? trip.arrival_airport_iata || null
-                                  : null
-                              }
-                              originIata={i === 0 ? baseAirportIata : null}
-                              originDepartureHHMM={
-                                i === 0 ? originDepartureHHMM : null
-                              }
-                              onEditFlight={
-                                i === 0
-                                  ? () => {
-                                      setBoardInitialSection("logistics");
-                                      setActiveBottomTab("board");
-                                    }
-                                  : undefined
-                              }
-                              departureTime={
-                                i === days.length - 1
-                                  ? trip.departure_time ||
-                                    (trip.end_date
-                                      ? `${trip.end_date}T22:00:00`
-                                      : null)
-                                  : null
-                              }
-                              departureMode={
-                                i === days.length - 1
-                                  ? trip.departure_mode || "flight"
-                                  : null
-                              }
-                              departureCity={
-                                i === days.length - 1
-                                  ? trip.departure_city || null
-                                  : null
-                              }
-                              departureAirportIata={
-                                i === days.length - 1
-                                  ? trip.departure_airport_iata || null
-                                  : null
-                              }
-                              destIata={
-                                i === days.length - 1 ? baseAirportIata : null
-                              }
-                              destArrivalHHMM={
-                                i === days.length - 1 ? destArrivalHHMM : null
-                              }
-                              onEditDeparture={
-                                i === days.length - 1
-                                  ? () => {
-                                      setBoardInitialSection("logistics");
-                                      setActiveBottomTab("board");
-                                    }
-                                  : undefined
-                              }
-                              hotelActivity={startHotel}
-                              hotelCity={startHotelCity}
-                              endHotelActivity={endHotel}
-                              displayCity={(() => {
-                                const hCity = hotelPerDay[i]?.city;
-                                if (!hCity) return day.city;
-                                // Hotel city matches this day's city: use it (covers day trips from base)
-                                if (hCity === day.city) return hCity;
-                                // Hotel city is from a prior destination (e.g. cruise carried forward): use day's city
-                                const hotelCheckedInToday = day.activities.some(
-                                  (a) => a.type === "hotel",
-                                );
-                                if (!hotelCheckedInToday) return day.city;
-                                return hCity;
-                              })()}
-                              onSelectHotel={(hotel) =>
-                                selectHotel(day.id, hotel)
-                              }
-                              onAskTrippy={(title) => {
-                                setChatInput(`Tell me about "${title}"`);
-                                setChatOpen(true);
-                                setChatUnread(false);
-                                setTimeout(
-                                  () => chatInputRef.current?.focus(),
-                                  50,
-                                );
-                              }}
-                            />
-                          )}
-                        </div>
-                      );
-                    });
-                  })()}
+                                onChangeHotel={(dayId, act, mode) => {
+                                  const dayLabel =
+                                    days.find((d) => d.id === dayId)?.label ||
+                                    "this day";
+                                  if (mode === "own") {
+                                    setChatInput(
+                                      `I've booked my own hotel for ${dayLabel} — please replace the "${act.title}" with`,
+                                    );
+                                    setChatOpen(true);
+                                    setChatUnread(false);
+                                    setTimeout(
+                                      () => chatInputRef.current?.focus(),
+                                      50,
+                                    );
+                                  } else {
+                                    setChatOpen(true);
+                                    setChatUnread(false);
+                                    const dayCity =
+                                      days.find((d) => d.id === dayId)?.city ||
+                                      "";
+                                    sendChatDirect(
+                                      `I want to consider other hotel options for ${dayLabel}. Currently at "${act.title}"${dayCity ? ` in ${dayCity}` : ""}.`,
+                                    );
+                                  }
+                                }}
+                                arrivalTime={
+                                  i === 0
+                                    ? trip.arrival_time ||
+                                      (trip.start_date
+                                        ? `${trip.start_date}T09:00:00`
+                                        : null)
+                                    : null
+                                }
+                                arrivalMode={
+                                  i === 0 ? trip.arrival_mode || "flight" : null
+                                }
+                                arrivalCity={i === 0 ? trip.arrival_city : null}
+                                arrivalAirportIata={
+                                  i === 0
+                                    ? trip.arrival_airport_iata || null
+                                    : null
+                                }
+                                originIata={i === 0 ? baseAirportIata : null}
+                                originDepartureHHMM={
+                                  i === 0 ? originDepartureHHMM : null
+                                }
+                                onEditFlight={
+                                  i === 0
+                                    ? () => {
+                                        setBoardInitialSection("logistics");
+                                        setActiveBottomTab("board");
+                                      }
+                                    : undefined
+                                }
+                                departureTime={
+                                  i === days.length - 1
+                                    ? trip.departure_time ||
+                                      (trip.end_date
+                                        ? `${trip.end_date}T22:00:00`
+                                        : null)
+                                    : null
+                                }
+                                departureMode={
+                                  i === days.length - 1
+                                    ? trip.departure_mode || "flight"
+                                    : null
+                                }
+                                departureCity={
+                                  i === days.length - 1
+                                    ? trip.departure_city || null
+                                    : null
+                                }
+                                departureAirportIata={
+                                  i === days.length - 1
+                                    ? trip.departure_airport_iata || null
+                                    : null
+                                }
+                                destIata={
+                                  i === days.length - 1 ? baseAirportIata : null
+                                }
+                                destArrivalHHMM={
+                                  i === days.length - 1 ? destArrivalHHMM : null
+                                }
+                                onEditDeparture={
+                                  i === days.length - 1
+                                    ? () => {
+                                        setBoardInitialSection("logistics");
+                                        setActiveBottomTab("board");
+                                      }
+                                    : undefined
+                                }
+                                hotelActivity={startHotel}
+                                hotelCity={startHotelCity}
+                                endHotelActivity={endHotel}
+                                displayCity={(() => {
+                                  const hCity = hotelPerDay[i]?.city;
+                                  if (!hCity) return day.city;
+                                  // Hotel city matches this day's city: use it (covers day trips from base)
+                                  if (hCity === day.city) return hCity;
+                                  // Hotel city is from a prior destination (e.g. cruise carried forward): use day's city
+                                  const hotelCheckedInToday =
+                                    day.activities.some(
+                                      (a) => a.type === "hotel",
+                                    );
+                                  if (!hotelCheckedInToday) return day.city;
+                                  return hCity;
+                                })()}
+                                onSelectHotel={(hotel) =>
+                                  selectHotel(day.id, hotel)
+                                }
+                                onAskTrippy={(title) => {
+                                  setChatInput(`Tell me about "${title}"`);
+                                  setChatOpen(true);
+                                  setChatUnread(false);
+                                  setTimeout(
+                                    () => chatInputRef.current?.focus(),
+                                    50,
+                                  );
+                                }}
+                              />
+                            )}
+                          </div>
+                        );
+                      });
+                    })()
+                  )}
                 </div>
 
                 {/* ── INSPIRATIONS / MAGAZINE TAB (post-trip) ──

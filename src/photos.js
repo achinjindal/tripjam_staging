@@ -17,6 +17,78 @@ export function getActiveTripId() {
   return _activeTripId;
 }
 
+/* ─── Story-mode photo helpers ──────────────────────────────────────── */
+// Wikimedia only serves bucketed thumb widths (1280/1920); arbitrary widths 400.
+const WIKIMEDIA_THUMB_RE =
+  /^(https:\/\/upload\.wikimedia\.org\/[^?#]*\/thumb\/[^?#]*\/)(\d+)px-([^/?#]+)$/;
+
+// Upgrade a stored Wikimedia thumb (typically 700px) to the 1280px bucket for
+// full-bleed hero use. Strict no-op for anything else (originalimage URLs
+// without /thumb/, Pexels, TripAdvisor…). Callers should keep the original as
+// an onError fallback.
+export function upgradePhotoUrl(url) {
+  if (typeof url !== "string") return url;
+  const m = url.match(WIKIMEDIA_THUMB_RE);
+  if (!m || Number(m[2]) >= 1280) return url;
+  return `${m[1]}1280px-${m[3]}`;
+}
+
+// Commons file-description page for a stored Wikimedia thumb URL (the ⓘ photo
+// credit link). Returns null for non-Wikimedia/non-thumb URLs so the caller
+// hides the chip.
+export function commonsFilePageUrl(url) {
+  if (typeof url !== "string") return null;
+  const m = url.match(WIKIMEDIA_THUMB_RE);
+  if (!m) return null;
+  // /thumb/<a>/<ab>/<File.ext>/<w>px-<File.ext> — the file name is the
+  // second-to-last path segment of the prefix.
+  const segs = m[1].split("/").filter(Boolean);
+  const file = segs[segs.length - 1];
+  if (!file) return null;
+  try {
+    return `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(decodeURIComponent(file))}`;
+  } catch {
+    return `https://commons.wikimedia.org/wiki/File:${file}`;
+  }
+}
+
+// Photo credit line via Commons extmetadata (share card only; not called on
+// normal Story browsing). Returns e.g. "Photo: Basile Morin, CC BY-SA 4.0" or
+// null. Cached per file name.
+const _attributionCache = {};
+export async function fetchPhotoAttribution(url) {
+  const page = commonsFilePageUrl(url);
+  if (!page) return null;
+  const file = page.slice(page.indexOf("File:"));
+  if (file in _attributionCache) return _attributionCache[file];
+  try {
+    const res = await fetch(
+      `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(
+        file,
+      )}&prop=imageinfo&iiprop=extmetadata&format=json&origin=*`,
+    );
+    const data = await res.json();
+    const pages = data?.query?.pages || {};
+    const meta = Object.values(pages)[0]?.imageinfo?.[0]?.extmetadata || null;
+    const strip = (html) =>
+      html
+        ? String(html)
+            .replace(/<[^>]*>/g, "")
+            .trim()
+        : "";
+    const artist = strip(meta?.Artist?.value);
+    const license = strip(meta?.LicenseShortName?.value);
+    const credit =
+      artist || license
+        ? `Photo: ${[artist, license].filter(Boolean).join(", ")}`
+        : null;
+    _attributionCache[file] = credit;
+    return credit;
+  } catch {
+    return null;
+  }
+}
+
 // Returns true if the URL looks like a person portrait or otherwise unsuitable place photo
 export function _isPortrait(url) {
   const decoded = decodeURIComponent(url);
