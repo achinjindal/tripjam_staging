@@ -6808,6 +6808,40 @@ export default function App({
       onUrlChange(`/trip/${trip.id}/plans`);
     }
   }, [screen, activeBottomTab, trip?.id]);
+
+  // Analytics: fire once per visit to the itinerary tab (load, deep-link, or
+  // tab switch back). Ref guards StrictMode double-fire; leaving the tab
+  // resets it so a return visit counts as a new view.
+  const itineraryViewedRef = useRef(false);
+  useEffect(() => {
+    const onItineraryTab =
+      screen === "itinerary" && activeBottomTab === "itinerary" && !!trip?.id;
+    if (!onItineraryTab) {
+      itineraryViewedRef.current = false;
+      return;
+    }
+    if (itineraryViewedRef.current) return;
+    itineraryViewedRef.current = true;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const start = trip.start_date ? new Date(trip.start_date) : null;
+    const end = trip.end_date ? new Date(trip.end_date) : null;
+    const tripPhase = !start
+      ? "undated"
+      : today < start
+        ? "upcoming"
+        : end && today > end
+          ? "past"
+          : "active";
+    posthog.capture("itinerary_viewed", {
+      trip_id: trip.id,
+      trip_phase: tripPhase,
+      days_until_start: start
+        ? Math.round((start.getTime() - today.getTime()) / 86400000)
+        : null,
+    });
+  }, [screen, activeBottomTab, trip?.id, trip?.start_date, trip?.end_date]);
+
   const [compactView, setCompactView] = useState(true); // start in compact mode
   const [collapsedDays, setCollapsedDays] = useState(new Set()); // per-day collapse in detailed view
   const [detailedLoading, setDetailedLoading] = useState(false); // true while full IG loads in background
