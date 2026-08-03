@@ -79,12 +79,10 @@ Rules:
 - NARRATIVE: Each entry in "days" MUST include a "narrative": 2–3 magazine-style sentences with the day's mood and arc — sensory and specific, written like a travel-magazine opening paragraph. Unlike "description" (a practical overview), the narrative avoids listing stops: mention at most one place, by the name used in that day's activities.
 - GLOSS: Each activity except type:"transit" MUST include a "gloss": one evocative line, max 12 words, capturing what this place IS (e.g. "Ten thousand vermilion gates threading up a sacred mountainside"). Not practical advice — that stays in "note".
 
-IMPORTANT OUTPUT ORDER: Generate the "compact" array BEFORE the "days" array. The app renders compact immediately while days stream in.
+IMPORTANT OUTPUT ORDER: Generate "name", "summary" and "cities" BEFORE the "days" array. The app saves the trip header immediately while days stream in.
 
 Return ONLY a raw JSON object. Start with { end with }. Structure:
-{"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"compact":[{"label":"Day 1","city":"...","hotel":"specific hotel name","highlights":[{"title":"Place 1","icon":"🏛"},{"title":"Place 2","icon":"🍜"},{"title":"Place 3","icon":"🌿"}],"description":"1 sentence day overview"}],"days":[{"label":"Day 1","city":"...","story_title":"2–4 word evocative title","narrative":"2–3 magazine-style sentences","description":"2–3 evocative sentences about this day","transit_tip":"Use Suica card · Ginza Line today","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","gloss":"one evocative line, max 12 words","icon":"🏛️","transition":{"mode":"metro"}}],"wishlist":[{"title":"...","geocode":"...","near":"Activity Title from this day"}]}]}
-
-The "compact" array must have one entry per day with: label, city, hotel (specific name), highlights (3-4 objects with "title" and "icon" emoji), description (1 sentence). Keep it brief — this is a quick preview. Example highlight: {"title":"Tsukiji Market","icon":"🍜"}.`;
+{"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"days":[{"label":"Day 1","city":"...","story_title":"2–4 word evocative title","narrative":"2–3 magazine-style sentences","description":"2–3 evocative sentences about this day","transit_tip":"Use Suica card · Ginza Line today","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","gloss":"one evocative line, max 12 words","icon":"🏛️","transition":{"mode":"metro"}}],"wishlist":[{"title":"...","geocode":"...","near":"Activity Title from this day"}]}]}`;
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {

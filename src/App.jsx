@@ -6721,6 +6721,10 @@ export default function App({
   const [streamingDays, setStreamingDays] = useState(0);
   const [streamingTotal, setStreamingTotal] = useState(0);
   const [allDaysPlanned, setAllDaysPlanned] = useState(false);
+  // Activity titles seen so far in the IG stream — drives live ✓ marks on
+  // Magazine cards while days stream in (updated once per completed day)
+  const [igStreamTitles, setIgStreamTitles] = useState([]);
+  const igStreamTitlesCountRef = useRef(0);
   const [generatingRoute, setGeneratingRoute] = useState(null); // selected route shown during IG generation
   const [igGenerating, setIgGenerating] = useState(false); // true while IG is in flight (Magazine shown instead of generating screen)
 
@@ -8286,6 +8290,8 @@ export default function App({
     setStreamingDays(0);
     preloadedDaysRef.current = new Set();
     setAllDaysPlanned(false);
+    setIgStreamTitles([]);
+    igStreamTitlesCountRef.current = 0;
     setDetailedLoading(false);
     setDetailedReady(false);
     setCompactView(true);
@@ -8340,8 +8346,10 @@ export default function App({
       tripId: trip?.id || null,
     };
 
-    // ── Single call: streams compact first, then full days ──
-    let compactShown = false;
+    // ── Single call: streams the trip header (name/summary/cities) first,
+    // then full days. (The separate compact preview phase was removed to save
+    // tokens + time-to-first-day; DayCompact still renders from real days.)
+    let headerSaved = false;
     let itinerary;
     let accumulated = "";
     const generationStartedAt = new Date().toISOString();
@@ -8387,118 +8395,31 @@ export default function App({
           try {
             accumulated += JSON.parse(raw);
 
-            // Detect compact section complete — render immediately
-            if (
-              !compactShown &&
-              /"compact"\s*:\s*\[/.test(accumulated) &&
-              /"days"\s*:\s*\[/.test(accumulated)
-            ) {
+            // Detect trip header (name/summary/cities) complete — save the trip
+            // early so Magazine shows the real name while days stream in.
+            if (!headerSaved && /"days"\s*:\s*\[/.test(accumulated)) {
               try {
-                // Extract just enough JSON to parse compact
-                const compactEnd = accumulated.indexOf('"days"');
-                if (compactEnd > 0) {
+                // Extract just enough JSON to parse the header
+                const headerEnd = accumulated.indexOf('"days"');
+                if (headerEnd > 0) {
                   let partial =
-                    accumulated.slice(0, compactEnd).replace(/,\s*$/, "") + "}";
+                    accumulated.slice(0, headerEnd).replace(/,\s*$/, "") + "}";
                   partial = partial.replace(/^```(?:json)?\s*/i, "").trim();
                   const s = partial.indexOf("{");
                   if (s >= 0) {
                     const compactData = JSON.parse(partial.slice(s));
-                    if (compactData.compact?.length) {
-                      compactShown = true;
-                      posthog.capture("ig_compact_complete", {
+                    if (compactData.name) {
+                      headerSaved = true;
+                      posthog.capture("ig_header_complete", {
                         trip_id: capturedTripId,
                         ms_since_start: Date.now() - __igStartedAt,
-                        days: compactData.compact.length,
-                      });
-                      const start = new Date(form.startDate);
-                      const compactDays = compactData.compact.map((day, i) => {
-                        const dayDate = new Date(start);
-                        dayDate.setDate(start.getDate() + i);
-                        return {
-                          id: `compact-${i}`,
-                          label: day.label || `Day ${i + 1}`,
-                          city: day.city || "",
-                          date: dayDate.toISOString().split("T")[0],
-                          description: day.description || "",
-                          activities: [
-                            ...(day.hotel
-                              ? [
-                                  {
-                                    id: `c-hotel-${i}`,
-                                    type: "hotel",
-                                    title: `Check in at ${day.hotel}`,
-                                    icon: "🏨",
-                                    time: "14:00",
-                                    duration: "0.5h",
-                                    note: "",
-                                  },
-                                ]
-                              : []),
-                            ...(day.highlights || []).map((h, hi) => {
-                              const title =
-                                typeof h === "string" ? h : h.title || "";
-                              const llmIcon =
-                                typeof h === "object" ? h.icon : null;
-                              const tl = title.toLowerCase();
-                              const icon =
-                                llmIcon ||
-                                (/sushi|ramen|food|eat|dining|restaurant|cafe|bakery|market|street food/i.test(
-                                  tl,
-                                )
-                                  ? "🍜"
-                                  : /temple|shrine|mosque|church|cathedral/i.test(
-                                        tl,
-                                      )
-                                    ? "⛩"
-                                    : /museum|gallery|art/i.test(tl)
-                                      ? "🏛"
-                                      : /park|garden|nature|forest|lake|mountain|volcano|trek|hike/i.test(
-                                            tl,
-                                          )
-                                        ? "🌿"
-                                        : /beach|coast|island|bay|snorkel|dive/i.test(
-                                              tl,
-                                            )
-                                          ? "🏖"
-                                          : /shop|mall|bazaar|souk/i.test(tl)
-                                            ? "🛍"
-                                            : /bar|club|night/i.test(tl)
-                                              ? "🍸"
-                                              : /spa|onsen|bath|wellness/i.test(
-                                                    tl,
-                                                  )
-                                                ? "♨️"
-                                                : /walk|stroll|district|quarter|street|lane/i.test(
-                                                      tl,
-                                                    )
-                                                  ? "🚶"
-                                                  : /palace|castle|fort/i.test(
-                                                        tl,
-                                                      )
-                                                    ? "🏰"
-                                                    : "📍");
-                              return {
-                                id: `c-act-${i}-${hi}`,
-                                type: "sight",
-                                title,
-                                icon,
-                                time: "",
-                                duration: "",
-                                note: "",
-                              };
-                            }),
-                          ],
-                          wishlist: [],
-                        };
                       });
                       const fmt = (d) =>
                         new Date(d).toLocaleDateString("en-US", {
                           month: "short",
                           day: "numeric",
                         });
-                      const compactTripName = compactData.name
-                        ? `${compactData.name} · ${fmt(form.startDate)}–${fmt(form.endDate)}`
-                        : editingTrip?.name || igDestinations.join(" → ");
+                      const compactTripName = `${compactData.name} · ${fmt(form.startDate)}–${fmt(form.endDate)}`;
                       const compactDates =
                         form.startDate && form.endDate
                           ? `${fmt(form.startDate)} – ${fmt(form.endDate)}, ${new Date(form.endDate).getFullYear()}`
@@ -8530,7 +8451,7 @@ export default function App({
                           .then(({ error }) => {
                             if (error)
                               console.warn(
-                                "compact IG save failed:",
+                                "header IG save failed:",
                                 error.message,
                               );
                           });
@@ -8547,44 +8468,40 @@ export default function App({
                             if (data) genLogId = data.id;
                           });
                       }
-                      setDays(compactDays);
-                      setActiveDay(0);
-                      // Magazine-first: stay on pre-trip Magazine; compact arrives silently
-                      // so itineraryTitles populate and ✓ marks appear on Magazine cards.
-                      // setScreen("itinerary"); // disabled — navigated on full IG complete
-                      // setCompactView(true);   // disabled — compact not shown to user
+                      // Magazine-first: stay on pre-trip Magazine while days
+                      // stream in; navigate on full IG complete.
                       setDetailedLoading(true);
                     }
                   }
                 }
               } catch {
-                /* compact parse failed, continue streaming */
+                /* header parse failed, continue streaming */
               }
             }
 
-            // Track day progress — count "label" for pre-compact screen, "wishlist" for detailed progress
-            const daysInDaysArray = (accumulated.match(/"label"\s*:/g) || [])
-              .length;
-            const compactLabels = (
-              accumulated.match(/"compact"\s*:[\s\S]*?"label"/g) || []
+            // Track day progress: count completed days by "wishlist" markers
+            // (one appears at the end of each streamed day)
+            const daysStart = accumulated.indexOf('"days"');
+            const daysSection =
+              daysStart >= 0 ? accumulated.slice(daysStart) : "";
+            const detailedDays = (
+              daysSection.match(/"wishlist"\s*:\s*\[/g) || []
             ).length;
-            const daysPlanned = Math.max(
-              0,
-              daysInDaysArray - (compactShown ? compactLabels : 0),
-            );
-            if (daysPlanned > 0 && !compactShown) setStreamingDays(daysPlanned);
-            // Detailed progress: count completed days by "wishlist" markers (appears at end of each day)
-            if (compactShown) {
-              const daysSection = accumulated.slice(
-                accumulated.indexOf('"days"'),
-              );
-              const detailedDays = (
-                daysSection.match(/"wishlist"\s*:\s*\[/g) || []
-              ).length;
+            if (detailedDays > 0) {
               setStreamingDays(detailedDays);
+              // Live ✓ marks on Magazine cards: surface streamed activity
+              // titles as each day completes (compact previews used to do this)
+              if (detailedDays > igStreamTitlesCountRef.current) {
+                igStreamTitlesCountRef.current = detailedDays;
+                setIgStreamTitles(
+                  [
+                    ...daysSection.matchAll(/"title"\s*:\s*"([^"]{2,80})"/g),
+                  ].map((m) => m[1]),
+                );
+              }
             }
             if (
-              daysPlanned >= numDays &&
+              detailedDays >= numDays &&
               (/"summary"\s*:/.test(accumulated) ||
                 /"wishlist"\s*:\s*\[[\s\S]*?\][\s\S]{200,}/.test(accumulated))
             ) {
@@ -8674,16 +8591,6 @@ export default function App({
       console.error("AI generation failed:", e.message);
       console.error("Accumulated length:", accumulated.length);
       console.error("Accumulated tail:", accumulated.slice(-300));
-      if (compactShown) {
-        setDetailedLoading(false);
-        setDetailedReady(true);
-        setIgGenerating(false);
-        setActiveBottomTab("brainstorm"); // land on Magazine with compact fallback
-        setScreen("itinerary");
-        _igInFlight = false;
-        console.warn("Detailed IG failed, using compact itinerary as fallback");
-        return;
-      }
       setGenerateError(`Generation failed: ${e.message}. Please try again.`);
       setIgGenerating(false);
       setScreen("setup");
@@ -8925,7 +8832,6 @@ export default function App({
     });
     setDays(savedDays);
     setActiveDay(0);
-    if (!compactShown) playDoneChime(); // chime only if compact didn't already play it
     posthog.capture("ig_detailed_complete", {
       trip_id: capturedTripId,
       ms_since_start: Date.now() - __igStartedAt,
@@ -11815,15 +11721,17 @@ export default function App({
                               }
                             }
                           }
-                          // Compact days arrive silently during IG — derive titles
-                          // so ✓ marks appear on Magazine cards as planning progresses.
-                          const igItineraryTitles = new Set(
-                            (days || []).flatMap((d) =>
+                          // Titles stream in silently during IG — derive from
+                          // saved days plus the live stream so ✓ marks appear
+                          // on Magazine cards as planning progresses.
+                          const igItineraryTitles = new Set([
+                            ...(days || []).flatMap((d) =>
                               (d.activities || []).map((a) =>
                                 (a.title || "").toLowerCase(),
                               ),
                             ),
-                          );
+                            ...igStreamTitles.map((t) => t.toLowerCase()),
+                          ]);
                           const renderCityCard = (city, ci, keyPrefix) => {
                             const dd = deepDiveCacheApp[city];
                             const data =
@@ -12308,12 +12216,13 @@ export default function App({
                   {/* Refining banner with progress — shown while detailed IG streams in background */}
                   {detailedLoading &&
                     (() => {
-                      // 50% = compact done. 50-95% = detailed days streaming. Based on wishlist markers per day.
+                      // 10% = header saved; 10-95% = detailed days streaming
+                      // (based on wishlist markers per day).
                       const detailedPct =
                         streamingTotal > 0
-                          ? Math.round((streamingDays / streamingTotal) * 45)
+                          ? Math.round((streamingDays / streamingTotal) * 85)
                           : 0;
-                      const pct = Math.min(95, 50 + detailedPct);
+                      const pct = Math.min(95, 10 + detailedPct);
                       return (
                         <div
                           style={{

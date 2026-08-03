@@ -66,7 +66,9 @@ const STORY_CSS = `
 .sv-arrow{position:absolute;top:50%;transform:translateY(-50%);z-index:5;width:36px;height:36px;justify-content:center;padding:0;font-size:18px;display:none;}
 .sv-arrow-prev{left:14px;}
 .sv-arrow-next{right:14px;}
-@container (min-width: 900px){.sv-arrow{display:inline-flex;}}
+/* Mouse/trackpad users can't swipe a snap gallery — show arrows whenever a
+   fine pointer is present, at any width (touch users swipe instead). */
+@media (hover: hover) and (pointer: fine){.sv-arrow{display:inline-flex;}}
 
 /* ── paper sheet + folio ── */
 .sv-sheet{position:relative;background:${T.warm};max-width:640px;margin:-26px auto 0;border-radius:18px 18px 0 0;padding:34px 26px 10px;box-shadow:0 -8px 30px rgba(15,25,35,0.10);}
