@@ -56,6 +56,21 @@ import {
   InspirationsSection,
 } from "./components/Magazine.jsx";
 
+// Fresh access token for edge-function calls. The `session` prop captured at
+// render can go stale (access tokens expire while a tab sleeps); getSession()
+// returns a valid session, refreshing it first when needed. Same hardening as
+// the city-deep-dive path (2a83b5d), applied everywhere.
+async function freshAccessToken() {
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session?.access_token || null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Error Boundary ──
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -1982,7 +1997,7 @@ function BrainstormView({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session.access_token}`,
           },
           body: JSON.stringify({
             destinations,
@@ -7042,7 +7057,7 @@ export default function App({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
           body: JSON.stringify({
             notes: pendingForm?.notes || "",
@@ -7129,7 +7144,7 @@ export default function App({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
           body: JSON.stringify({
             city,
@@ -7224,7 +7239,7 @@ export default function App({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
           body: JSON.stringify({
             destinations,
@@ -7542,7 +7557,7 @@ export default function App({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session.access_token}`,
           },
           body: JSON.stringify({
             name: hotel.title,
@@ -8231,7 +8246,7 @@ export default function App({
           signal: controller.signal,
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session.access_token}`,
           },
           body: JSON.stringify(igBody),
         },
@@ -9555,7 +9570,7 @@ export default function App({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${(await freshAccessToken()) || session.access_token}`,
         },
         body: JSON.stringify({
           screen,
