@@ -114,14 +114,10 @@ export default function MembersSheet({
     setBusy(true);
     try {
       const url = await getInviteUrl(trip.id);
-      if (navigator.share) {
-        await navigator.share({ title: trip.name, url });
-      } else {
-        await navigator.clipboard.writeText(url);
-        showToast("Invite link copied");
-      }
+      await navigator.clipboard.writeText(url);
+      showToast("Invite link copied");
     } catch (e) {
-      if (e?.name !== "AbortError") showToast("Couldn't create invite link");
+      if (e?.name !== "AbortError") showToast("Couldn't copy invite link");
     } finally {
       setBusy(false);
     }
