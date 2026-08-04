@@ -255,7 +255,10 @@ function dayCoverPhoto(day) {
 }
 
 /* The player's frame list: trip cover → per day: day cover + one frame per
- * photo-bearing stop → ending. Reads persisted photo_urls only. */
+ * story stop → ending. Photo-less stops still get a frame (editorial dusk
+ * background with title + gloss + note) — the play-through covers every
+ * moment of the plan, not just the photogenic ones. Hotels keep their
+ * photo-only rule: a hotel without a photo stays Plan-only entirely. */
 function buildFrames(trip, days) {
   const frames = [{ type: "cover", key: "cover" }];
   days.forEach((day, i) => {
@@ -267,15 +270,14 @@ function buildFrames(trip, days) {
       photoUrl: dayCoverPhoto(day),
     });
     for (const act of (day.activities || []).filter(isStoryStop)) {
-      if (act.photo_url)
-        frames.push({
-          type: "activity",
-          key: `act-${act.id}`,
-          day,
-          dayNumber: i + 1,
-          act,
-          photoUrl: act.photo_url,
-        });
+      frames.push({
+        type: "activity",
+        key: `act-${act.id}`,
+        day,
+        dayNumber: i + 1,
+        act,
+        photoUrl: act.photo_url || null,
+      });
     }
   });
   frames.push({ type: "end", key: "end" });

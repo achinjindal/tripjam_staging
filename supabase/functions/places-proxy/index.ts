@@ -165,13 +165,43 @@ async function autocomplete(q: string, types?: string): Promise<unknown> {
 
 const TA_BASE = "https://api.content.tripadvisor.com/api/v1";
 
-async function taSearch(query: string): Promise<string | null> {
+// hotelName: the bare hotel name (without city), used for the name-match
+// guard. latLong biases TripAdvisor's ranking to the verified coordinates.
+// The guard exists because TA's top hit for a fuzzy query can be a DIFFERENT
+// nearby hotel ("Coco Tam's Resort" → Anantara Bophut) — a wrong photo is
+// worse than no photo.
+async function taSearch(
+  query: string,
+  hotelName?: string,
+  latLong?: string | null,
+): Promise<string | null> {
   const res = await fetch(
-    `${TA_BASE}/location/search?key=${TRIPADVISOR_KEY}&searchQuery=${encodeURIComponent(query)}&language=en&category=hotels`,
+    `${TA_BASE}/location/search?key=${TRIPADVISOR_KEY}&searchQuery=${encodeURIComponent(query)}&language=en&category=hotels${latLong ? `&latLong=${encodeURIComponent(latLong)}` : ""}`,
   );
   if (!res.ok) return null;
   const data: any = await res.json();
-  return data?.data?.[0]?.location_id ?? null;
+  const top = data?.data?.[0];
+  if (!top?.location_id) return null;
+  if (hotelName && top.name) {
+    const GENERIC =
+      /^(hotel|resort|the|at|and|inn|villa|villas|spa|beach|house|samui|koh)$/i;
+    const tokens = (s: string) =>
+      s
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((t) => t.length > 2 && !GENERIC.test(t));
+    const want = tokens(hotelName);
+    const got = new Set(tokens(top.name));
+    const hits = want.filter((t) => got.has(t)).length;
+    // At least half of the distinctive name tokens must appear in the match
+    if (want.length > 0 && hits / want.length < 0.5) {
+      console.warn(
+        `hotel-photo name guard: "${hotelName}" !~ TA "${top.name}" — rejecting`,
+      );
+      return null;
+    }
+  }
+  return top.location_id;
 }
 
 async function taPhoto(locationId: string): Promise<string | null> {
@@ -415,11 +445,19 @@ async function handleAutocomplete(req: Request): Promise<Response> {
 }
 
 async function handleHotelPhoto(req: Request): Promise<Response> {
-  const { q, city, tripId: _tripId, context: _context } = await req.json();
+  const {
+    q,
+    city,
+    lat,
+    lng,
+    tripId: _tripId,
+    context: _context,
+  } = await req.json();
   if (!q)
     return Response.json({ url: null, source: null }, { headers: corsHeaders });
 
   const query = city ? `${q} ${city}` : q;
+  const latLong = lat && lng ? `${lat},${lng}` : null;
   const cacheKey = `hotel-photo:${query.toLowerCase()}`;
 
   // 1. Check DB cache
@@ -438,7 +476,7 @@ async function handleHotelPhoto(req: Request): Promise<Response> {
 
   if (dailyCount < 1000 && monthlyCount < 4900 && TRIPADVISOR_KEY) {
     try {
-      const locationId = await taSearch(query);
+      const locationId = await taSearch(query, q, latLong);
       // Count 1 API call for search
       await incrementUsage("tripadvisor", "daily", today());
       await incrementUsage("tripadvisor", "monthly", thisMonth());

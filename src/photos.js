@@ -236,6 +236,10 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
         body: JSON.stringify({
           q: geocodeQ,
           city,
+          // Verified coords bias TripAdvisor to the right property and arm
+          // the server's wrong-hotel name guard
+          lat: extras.lat || undefined,
+          lng: extras.lng || undefined,
           tripId: hotelOpts?.tripId || _activeTripId,
           context: hotelOpts?.context || "itinerary",
         }),
