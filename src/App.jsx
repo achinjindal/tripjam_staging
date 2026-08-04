@@ -6654,56 +6654,156 @@ export default function App({
       } catch {}
     }
   }, [days, trip?.id]);
-  // Phase 0b: per-trip realtime subscription (ships dark behind VITE_REALTIME_ENABLED).
-  // Handlers are placeholders until the phases that consume them; RLS scopes events
-  // to trips the user is a member of. Subscribe on trip open, unsubscribe on change.
+  // Phase 2: per-trip realtime live sync (behind VITE_REALTIME_ENABLED).
+  // Reconcile-from-DB (debounced) rather than patch-from-payload — sidesteps the
+  // clobber traps (nested activities / wishlist) and the unusable REPLICA
+  // IDENTITY payload.old. Days/routes reconcile only when the trip is shared
+  // (members > 1) so solo trips carry zero self-echo overhead; trip_members
+  // always reconciles so the owner sees the first joiner live. postgres_changes
+  // doesn't replay on reconnect → onSubscribed backfills. See
+  // realtime-implementation-plan.md.
   useEffect(() => {
     const tripId = trip?.id;
     if (!tripId) return;
-    const unsubscribe = subscribeTrip(tripId, {
-      days: (payload) => {
-        // TODO(Phase 2): merge remote day change into local state (last-write-wins).
-        if (import.meta.env.DEV)
-          console.debug("[realtime] days", payload.eventType);
+    const timers = {};
+    const debounce = (key, fn, ms = 400) => {
+      clearTimeout(timers[key]);
+      timers[key] = setTimeout(fn, ms);
+    };
+    const dedupDays = (data) => {
+      const seenPhotos = new Set();
+      const out = (data || []).map((d) => ({
+        ...d,
+        activities: (d.activities || [])
+          .sort((a, b) => a.position - b.position)
+          .map((a) => {
+            if (a.photo_url) {
+              if (seenPhotos.has(a.photo_url)) return { ...a, photo_url: null };
+              seenPhotos.add(a.photo_url);
+              _usedPhotoUrls.add(a.photo_url);
+            }
+            return a;
+          }),
+      }));
+      const seen = new Set();
+      return out.filter((d) => {
+        if (seen.has(d.label)) return false;
+        seen.add(d.label);
+        return true;
+      });
+    };
+    const reconcileDays = async () => {
+      const { data } = await supabase
+        .from("days")
+        .select("*, activities(*)")
+        .eq("trip_id", tripId)
+        .order("position");
+      if (data) setDays(dedupDays(data));
+    };
+    const reconcileRoutes = async () => {
+      const { data } = await supabase
+        .from("brainstorm_items")
+        .select("*")
+        .eq("trip_id", tripId)
+        .order("position");
+      const flattened = (data || []).map((row) => {
+        const merged = { ...row, ...(row.data || {}) };
+        if (Array.isArray(merged.days))
+          merged.days = merged.days
+            .map((d) =>
+              typeof d === "string"
+                ? d
+                : d?.description || d?.text || d?.day || "",
+            )
+            .filter(Boolean);
+        if (Array.isArray(merged.points))
+          merged.points = merged.points
+            .map((p) => ({
+              text:
+                typeof p === "string"
+                  ? p
+                  : typeof p?.text === "string"
+                    ? p.text
+                    : "",
+              good: typeof p === "object" ? p.good : true,
+            }))
+            .filter((p) => p.text);
+        return merged;
+      });
+      setPretripRoutes(flattened);
+    };
+    const reconcileMembers = async () => {
+      if (!INVITE_ENABLED) return;
+      const list = await fetchMembers(tripId);
+      setMembers(list);
+    };
+    // Reconnect / initial backfill (postgres_changes doesn't replay).
+    const backfill = () => {
+      reconcileMembers();
+      if (membersRef.current.length > 1) {
+        reconcileDays();
+        reconcileRoutes();
+      }
+    };
+    const unsubscribe = subscribeTrip(
+      tripId,
+      {
+        days: () => {
+          if (membersRef.current.length > 1) debounce("days", reconcileDays);
+        },
+        brainstorm_items: (payload) => {
+          if (membersRef.current.length <= 1) return;
+          // author-suppress our own route edits (id-based echo isn't available
+          // here; last_modified_by is set by the route-edit path).
+          if (payload.new?.last_modified_by === session?.user?.id) return;
+          debounce("routes", reconcileRoutes);
+        },
+        trip_members: () => debounce("members", reconcileMembers, 200),
+        trip_messages: (payload) => {
+          // Echo-safe append: dedup by the client-supplied id (our optimistic
+          // bubble already carries it), so our own echoes are skipped and remote
+          // members' rows append once.
+          if (payload.eventType !== "INSERT" || !payload.new) return;
+          const row = payload.new;
+          const mapped = {
+            id: row.id,
+            role: row.role,
+            content: row.content,
+            user_id: row.user_id,
+            audience: row.audience,
+            directed_user_id: row.directed_user_id,
+          };
+          setChatMessages((prev) =>
+            prev.some((m) => m.id === row.id) ? prev : [...prev, mapped],
+          );
+        },
+        activity_log: (payload) => {
+          // TODO(Phase 3): activity feed / "while you were away".
+          if (import.meta.env.DEV)
+            console.debug("[realtime] activity", payload.eventType);
+        },
+        polls: (payload) => {
+          // TODO(Phase 6): Decisions hub / open-poll pin.
+          if (import.meta.env.DEV)
+            console.debug("[realtime] poll", payload.eventType);
+        },
       },
-      trip_messages: (payload) => {
-        if (import.meta.env.DEV)
-          console.debug("[realtime] message", payload.eventType);
-        // Echo-safe append: co-travelers' messages (and our own INSERT echoes)
-        // arrive here. Dedup by the client-supplied id — our optimistic bubble
-        // already carries it, so our own echoes are skipped and remote members'
-        // rows are appended once. Observers see the finished assistant bubble as
-        // a single INSERT (no token streaming — that's expected).
-        if (payload.eventType !== "INSERT" || !payload.new) return;
-        const row = payload.new;
-        const mapped = {
-          id: row.id,
-          role: row.role,
-          content: row.content,
-          user_id: row.user_id,
-          audience: row.audience,
-          directed_user_id: row.directed_user_id,
-        };
-        setChatMessages((prev) =>
-          prev.some((m) => m.id === row.id) ? prev : [...prev, mapped],
-        );
-      },
-      activity_log: (payload) => {
-        // TODO(Phase 3): push into the activity feed / "while you were away".
-        if (import.meta.env.DEV)
-          console.debug("[realtime] activity", payload.eventType);
-      },
-      polls: (payload) => {
-        // TODO(Phase 6): update Decisions hub / open-poll pin.
-        if (import.meta.env.DEV)
-          console.debug("[realtime] poll", payload.eventType);
-      },
-    });
-    return unsubscribe;
+      backfill,
+    );
+    return () => {
+      Object.values(timers).forEach(clearTimeout);
+      unsubscribe();
+    };
   }, [trip?.id]);
   // Phase 1: trip members (behind VITE_INVITE_ENABLED). Drives the header
   // affordance (＋ Invite when solo → avatar stack when shared) + the sheet.
   const [members, setMembers] = useState([]);
+  // Mirror members into a ref so the realtime handlers (subscribed per trip.id,
+  // not per members) can read the current count without re-subscribing.
+  const membersRef = useRef(members);
+  useEffect(() => {
+    membersRef.current = members;
+  }, [members]);
   const [showMembers, setShowMembers] = useState(false);
   // Phase 2.5 pooled credits: the Trip Credits sheet (pool balance + funding).
   // Ships dark behind INVITE_ENABLED + shared-trip gating (see isSharedTrip).
@@ -12687,6 +12787,8 @@ export default function App({
                         days={days}
                         onInvite={trip?.id ? () => setShowMembers(true) : null}
                         members={members}
+                        externalRoutes={pretripRoutes}
+                        onItemsChange={setPretripRoutes}
                         onGeneratingChange={setRoutesGenerating}
                         deepDiveCache={deepDiveCacheApp}
                         loadCityDeepDive={loadCityDeepDiveApp}
