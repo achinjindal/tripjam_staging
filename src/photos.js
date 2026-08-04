@@ -254,8 +254,14 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
   // appetising lead image. Then Commons, then a server-side stock fallback.
   // Skip the _usedPhotoUrls dedup: a dish photo isn't a unique-place photo.
   if (type === "food") {
+    // Same trip-wide dedup as the sight path: without the _usedPhotoUrls check
+    // several restaurants used to share one stock photo (the Pexels fallback
+    // returns the same image for similar dish queries).
     const foodGood = (url) =>
-      url && !_isPortrait(url) && !BAD_PATTERNS.test(url);
+      url &&
+      !_isPortrait(url) &&
+      !BAD_PATTERNS.test(url) &&
+      !_usedPhotoUrls.has(url);
     // Normalise: drop parentheticals and a leading protein word so
     // "Chicken Tagine (slow-cooked)" also tries "Tagine".
     const dishRaw = geocode.replace(/\([^)]*\)/g, "").trim();
@@ -284,6 +290,7 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
         !/may refer to/i.test(summary?.extract || "")
       ) {
         _photoCache[cacheKey] = img;
+        _usedPhotoUrls.add(img);
         return img;
       }
     }
@@ -305,6 +312,7 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
         const src4 = page4?.imageinfo?.[0]?.thumburl;
         if (foodGood(src4)) {
           _photoCache[cacheKey] = src4;
+          _usedPhotoUrls.add(src4);
           return src4;
         }
       }
@@ -320,6 +328,7 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
       const { url: stockUrl } = await res.json();
       if (stockUrl && foodGood(stockUrl)) {
         _photoCache[cacheKey] = stockUrl;
+        _usedPhotoUrls.add(stockUrl);
         return stockUrl;
       }
     } catch {

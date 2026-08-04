@@ -17,6 +17,7 @@ import {
   _fetchPhoto,
   _photoCache,
   _PHOTO_IN_FLIGHT,
+  _usedPhotoUrls,
   extractPlace,
   upgradePhotoUrl,
   commonsFilePageUrl,
@@ -165,15 +166,20 @@ function fmtStoryDate(iso) {
 /* Resolve photos for a day's story stops. Reads activity.photo_url first,
  * then the shared _photoCache, then _fetchPhoto (same contract as PhotoStrip;
  * resolved URLs are persisted back to activities.photo_url). Fetches only
- * start once `active` is true (IntersectionObserver-gated by the caller). */
-function useDayPhotos(day, active) {
+ * start once `active` is true (IntersectionObserver-gated by the caller).
+ * `photoOwner` maps each stored URL to the first activity (trip-wide,
+ * chronological) that carries it — later duplicates lose the slide and try to
+ * fetch a distinct photo instead (which also heals the stored duplicate). */
+function useDayPhotos(day, active, photoOwner) {
   const stops = useMemo(
     () => (day.activities || []).filter(isStoryStop),
     [day.activities],
   );
+  const ownsStored = (a) =>
+    a.photo_url && (!photoOwner || photoOwner.get(a.photo_url) === a.id);
   const [urls, setUrls] = useState(() => {
     const init = {};
-    for (const a of stops) if (a.photo_url) init[a.id] = a.photo_url;
+    for (const a of stops) if (ownsStored(a)) init[a.id] = a.photo_url;
     return init;
   });
 
@@ -182,10 +188,16 @@ function useDayPhotos(day, active) {
     let alive = true;
     const timers = [];
     stops.forEach((act) => {
-      if (act.photo_url) {
+      if (ownsStored(act)) {
         setUrls((u) =>
           u[act.id] === act.photo_url ? u : { ...u, [act.id]: act.photo_url },
         );
+        return;
+      }
+      // Hotels only ever use their stored photo — a duplicate hotel shot
+      // (e.g. dinner at the same property already claimed it) just drops out.
+      if (act.type === "hotel") {
+        setUrls((u) => ({ ...u, [act.id]: null }));
         return;
       }
       const key = `${extractPlace(act.title) || act.geocode}||${day.city || ""}`;
@@ -193,8 +205,10 @@ function useDayPhotos(day, active) {
         if (!alive) return;
         setUrls((u) => ({ ...u, [act.id]: src || null }));
         if (src) {
+          _usedPhotoUrls.add(src);
           // Persist like PhotoStrip does (must .then() — bare supabase-js
-          // builders never execute).
+          // builders never execute). Also overwrites a duplicate stored URL
+          // with the freshly-found distinct one.
           supabase
             .from("activities")
             .update({ photo_url: src })
@@ -204,7 +218,15 @@ function useDayPhotos(day, active) {
       };
       const attempt = (retriesLeft) => {
         const cached = _photoCache[key];
-        if (typeof cached === "string") return resolve(cached);
+        if (typeof cached === "string") {
+          // Reject a cached URL that another activity already owns/uses
+          const claimed =
+            (photoOwner &&
+              photoOwner.has(cached) &&
+              photoOwner.get(cached) !== act.id) ||
+            (_usedPhotoUrls.has(cached) && cached !== act.photo_url);
+          return resolve(claimed ? null : cached);
+        }
         if (cached === null) return resolve(null);
         if (cached === _PHOTO_IN_FLIGHT) {
           if (retriesLeft > 0)
@@ -227,7 +249,8 @@ function useDayPhotos(day, active) {
       alive = false;
       timers.forEach(clearTimeout);
     };
-  }, [active, stops, day.city]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, stops, day.city, photoOwner]);
 
   const slides = stops
     .filter((a) => urls[a.id])
@@ -473,6 +496,7 @@ function StoryDayCard({
   onOpenPlan,
   preloadDay,
   onPhotoSwiped,
+  photoOwner,
 }) {
   const dayNumber = index + 1;
   const rootRef = useRef(null);
@@ -506,7 +530,7 @@ function StoryDayCard({
     if (near && preloadDay) preloadDay(index);
   }, [near, index, preloadDay]);
 
-  const { slides, pending } = useDayPhotos(day, near);
+  const { slides, pending } = useDayPhotos(day, near, photoOwner);
   const clampedIdx = Math.max(
     0,
     Math.min(activeIdx, Math.max(slides.length - 1, 0)),
@@ -650,6 +674,16 @@ export default function StoryView({
   narrativesPending,
   onPhotoSwiped,
 }) {
+  // First activity (trip-wide, chronological) owns each stored photo URL —
+  // duplicates further down lose their slide and re-fetch a distinct photo.
+  const photoOwner = useMemo(() => {
+    const owner = new Map();
+    for (const d of days)
+      for (const a of d.activities || [])
+        if (a.photo_url && !owner.has(a.photo_url))
+          owner.set(a.photo_url, a.id);
+    return owner;
+  }, [days]);
   return (
     <StoryErrorBoundary onError={onError}>
       <div className="sv-root">
@@ -664,6 +698,7 @@ export default function StoryView({
             onOpenPlan={onOpenPlan}
             preloadDay={preloadDay}
             onPhotoSwiped={onPhotoSwiped}
+            photoOwner={photoOwner}
           />
         ))}
         <div className="sv-ending">
