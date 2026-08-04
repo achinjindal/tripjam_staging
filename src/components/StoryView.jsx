@@ -72,6 +72,7 @@ const STORY_CSS = `
 .sv-chip-info{position:absolute;right:16px;top:16px;z-index:5;width:26px;height:26px;justify-content:center;padding:0;font-size:13px;font-style:italic;font-family:'DM Serif Display',Georgia,serif;color:${T.dusk};opacity:0.85;}
 .sv-chip-share{position:absolute;right:50px;top:16px;z-index:5;}
 .sv-editorial .sv-chip-share{right:16px;}
+.sv-chip-loading{position:absolute;right:16px;top:16px;z-index:5;pointer-events:none;background:rgba(255,255,255,0.16);color:rgba(255,255,255,0.85);animation:svShimmer 1.6s ease-in-out infinite;}
 .sv-arrow{position:absolute;top:50%;transform:translateY(-50%);z-index:5;width:36px;height:36px;justify-content:center;padding:0;font-size:18px;display:none;}
 .sv-arrow-prev{left:14px;}
 .sv-arrow-next{right:14px;}
@@ -709,14 +710,18 @@ function useDayPhotos(day, active, photoOwner, claimRef) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, stops, day.city, photoOwner]);
 
-  const slides = stops
+  let slides = stops
     .filter((a) => urls[a.id])
     .map((a) => ({ act: a, url: urls[a.id] }));
-  // A hotel never opens the day — the hero should be a destination shot, so a
-  // chronologically-first check-in demotes to slide 2 when alternatives exist.
+  // A hotel never opens the day — the hero must be a destination shot. With
+  // alternatives it demotes to slide 2; alone (hotel photos load instantly
+  // from TripAdvisor while wiki photos trickle in) it's held out of the
+  // gallery entirely, and the timeline keeps its thumbnail.
   if (slides.length > 1 && slides[0].act.type === "hotel") {
     const [hotel] = slides.splice(0, 1);
     slides.splice(1, 0, hotel);
+  } else if (slides.length === 1 && slides[0].act.type === "hotel") {
+    slides = [];
   }
   const pending = active && stops.some((a) => urls[a.id] === undefined);
   return { stops, slides, pending };
@@ -771,11 +776,13 @@ function StoryHeroGallery({
     // Editorial cover once photos have settled at zero; dusk placeholder while
     // fetches are still pending (per the approved loading-state spec).
     return (
-      <div className={`sv-hero${pending ? "" : " sv-editorial"}`}>
-        {!pending && (
-          <div className="sv-ghost">{String(dayNumber).padStart(2, "0")}</div>
-        )}
-        {!pending && (
+      <div className="sv-hero sv-editorial">
+        <div className="sv-ghost">{String(dayNumber).padStart(2, "0")}</div>
+        {pending ? (
+          <span className="sv-chip sv-chip-loading" aria-hidden="true">
+            ✦&nbsp;finding photos…
+          </span>
+        ) : (
           <button
             className="sv-chip sv-chip-share"
             onClick={() => onShare(null)}
@@ -902,9 +909,10 @@ function StoryTimeline({ day, slides, activeIdx, onRowTap }) {
   return (
     <div className="sv-timeline">
       {(day.activities || []).map((act) => {
-        // Hotels appear only when they earned a gallery slide (photo exists)
-        if (act.type === "hotel" && slideIndexByActId[act.id] === undefined)
-          return null;
+        // Hotels appear when the property has a real photo — as a tappable
+        // row when it earned a gallery slide, thumbnail-only otherwise (e.g.
+        // the hotel is the day's lone photo and is held out of the hero).
+        if (act.type === "hotel" && !act.photo_url) return null;
         if (act.type === "transit") {
           const route = [act.from_station, act.to_station]
             .filter(Boolean)
@@ -925,7 +933,11 @@ function StoryTimeline({ day, slides, activeIdx, onRowTap }) {
         const slideIdx = slideIndexByActId[act.id];
         const tappable = slideIdx !== undefined;
         const active = tappable && slideIdx === activeIdx;
-        const thumbSrc = tappable ? slides[slideIdx].url : null;
+        const thumbSrc = tappable
+          ? slides[slideIdx].url
+          : act.type === "hotel"
+            ? act.photo_url
+            : null;
         return (
           <div
             key={act.id}

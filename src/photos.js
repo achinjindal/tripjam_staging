@@ -151,7 +151,9 @@ export function makeQueue(delayMs, concurrency = 1) {
     });
 }
 
-export const wikiQueuedFetch = makeQueue(400, 2); // Wikimedia — 2 concurrent, 400ms stagger (avoid 429s)
+// 3 concurrent / 250ms: still polite to Wikimedia, but a fresh multi-day trip
+// (~80 lookups × up to 4 tiers) fills the Story heroes in ~1min instead of ~3.
+export const wikiQueuedFetch = makeQueue(250, 3); // Wikimedia — 3 concurrent, 250ms stagger (still polite; fills Story heroes ~2.5x faster)
 
 /**
  * Fetch a representative photo for an activity/place using free Wikipedia/Commons sources.
