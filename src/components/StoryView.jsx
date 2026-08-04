@@ -23,9 +23,12 @@ import {
 } from "../photos";
 import { supabase } from "../supabase";
 
-/* Activities that can appear in the Story timeline (hotels + wishlist are
- * Plan-only per the approved design; transit renders as an interlude). */
-const isStoryStop = (a) => a.type !== "transit" && a.type !== "hotel";
+/* Activities that can appear in the Story timeline. Wishlist is Plan-only;
+ * transit renders as an interlude. Hotels join case-by-case: only when the
+ * property has an actual photo (TripAdvisor/Google found a real shot) — no
+ * photo means the hotel stays Plan-only. */
+const isStoryStop = (a) =>
+  a.type !== "transit" && (a.type !== "hotel" || !!a.photo_url);
 
 const STORY_CSS = `
 .sv-root{container-type:inline-size;background:${T.bgPage};font-family:Georgia,serif;color:${T.ink};}
@@ -89,6 +92,7 @@ const STORY_CSS = `
 .sv-stop .sv-time{grid-column:2;margin-top:3px;font-size:11px;letter-spacing:1.4px;color:${T.mist};font-variant-numeric:tabular-nums;position:relative;padding-left:12px;}
 .sv-stop .sv-time::before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:5px;height:5px;border-radius:50%;background:${T.ocean};}
 .sv-stop.sv-food .sv-time::before{background:${T.terra};}
+.sv-stop.sv-hotel .sv-time::before{background:${T.gold};}
 .sv-stop .sv-title{grid-column:2 / 4;font-family:'DM Serif Display',Georgia,serif;font-size:18px;line-height:1.25;}
 .sv-stop .sv-dur{grid-column:3;margin-top:3px;font-size:11px;color:${T.mistOnDark};letter-spacing:0.6px;white-space:nowrap;font-variant-numeric:tabular-nums;}
 .sv-stop .sv-gloss{grid-column:2 / 4;font-size:13px;font-style:italic;color:${T.mist};line-height:1.55;max-width:52ch;}
@@ -228,6 +232,12 @@ function useDayPhotos(day, active) {
   const slides = stops
     .filter((a) => urls[a.id])
     .map((a) => ({ act: a, url: urls[a.id] }));
+  // A hotel never opens the day — the hero should be a destination shot, so a
+  // chronologically-first check-in demotes to slide 2 when alternatives exist.
+  if (slides.length > 1 && slides[0].act.type === "hotel") {
+    const [hotel] = slides.splice(0, 1);
+    slides.splice(1, 0, hotel);
+  }
   const pending = active && stops.some((a) => urls[a.id] === undefined);
   return { stops, slides, pending };
 }
@@ -395,7 +405,9 @@ function StoryTimeline({ day, slides, activeIdx, onRowTap }) {
   return (
     <div className="sv-timeline">
       {(day.activities || []).map((act) => {
-        if (act.type === "hotel") return null;
+        // Hotels appear only when they earned a gallery slide (photo exists)
+        if (act.type === "hotel" && slideIndexByActId[act.id] === undefined)
+          return null;
         if (act.type === "transit") {
           const route = [act.from_station, act.to_station]
             .filter(Boolean)
@@ -420,7 +432,7 @@ function StoryTimeline({ day, slides, activeIdx, onRowTap }) {
         return (
           <div
             key={act.id}
-            className={`sv-stop${act.type === "food" ? " sv-food" : ""}${active ? " sv-active" : ""}`}
+            className={`sv-stop${act.type === "food" ? " sv-food" : ""}${act.type === "hotel" ? " sv-hotel" : ""}${active ? " sv-active" : ""}`}
             data-tappable={tappable || undefined}
             role={tappable ? "button" : undefined}
             tabIndex={tappable ? 0 : undefined}
