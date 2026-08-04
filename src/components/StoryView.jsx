@@ -170,13 +170,27 @@ function fmtStoryDate(iso) {
  * `photoOwner` maps each stored URL to the first activity (trip-wide,
  * chronological) that carries it — later duplicates lose the slide and try to
  * fetch a distinct photo instead (which also heals the stored duplicate). */
-function useDayPhotos(day, active, photoOwner) {
+function useDayPhotos(day, active, photoOwner, claimRef) {
   const stops = useMemo(
     () => (day.activities || []).filter(isStoryStop),
     [day.activities],
   );
   const ownsStored = (a) =>
     a.photo_url && (!photoOwner || photoOwner.get(a.photo_url) === a.id);
+  // A URL is off-limits when a *different* activity owns it — either stored in
+  // the DB (photoOwner) or claimed during this session (claimRef). The global
+  // _usedPhotoUrls set can't arbitrate here: preloadDay/PhotoStrip register
+  // every URL they warm, including ones destined for this very activity.
+  const claimedByOther = (url, actId) => {
+    const stored = photoOwner?.get(url);
+    if (stored && stored !== actId) return true;
+    const session = claimRef?.current?.get(url);
+    return !!session && session !== actId;
+  };
+  const claim = (url, actId) => {
+    if (claimRef?.current && !claimRef.current.has(url))
+      claimRef.current.set(url, actId);
+  };
   const [urls, setUrls] = useState(() => {
     const init = {};
     for (const a of stops) if (ownsStored(a)) init[a.id] = a.photo_url;
@@ -189,6 +203,7 @@ function useDayPhotos(day, active, photoOwner) {
     const timers = [];
     stops.forEach((act) => {
       if (ownsStored(act)) {
+        claim(act.photo_url, act.id);
         setUrls((u) =>
           u[act.id] === act.photo_url ? u : { ...u, [act.id]: act.photo_url },
         );
@@ -219,13 +234,9 @@ function useDayPhotos(day, active, photoOwner) {
       const attempt = (retriesLeft) => {
         const cached = _photoCache[key];
         if (typeof cached === "string") {
-          // Reject a cached URL that another activity already owns/uses
-          const claimed =
-            (photoOwner &&
-              photoOwner.has(cached) &&
-              photoOwner.get(cached) !== act.id) ||
-            (_usedPhotoUrls.has(cached) && cached !== act.photo_url);
-          return resolve(claimed ? null : cached);
+          if (claimedByOther(cached, act.id)) return resolve(null);
+          claim(cached, act.id);
+          return resolve(cached);
         }
         if (cached === null) return resolve(null);
         if (cached === _PHOTO_IN_FLIGHT) {
@@ -234,10 +245,18 @@ function useDayPhotos(day, active, photoOwner) {
           else resolve(null);
           return;
         }
-        _fetchPhoto(extractPlace(act.title) || act.geocode, day.city, act.type)
+        _fetchPhoto(
+          extractPlace(act.title) || act.geocode,
+          day.city,
+          act.type,
+          undefined,
+          { lat: act.lat, lng: act.lng, photoQuery: act.photo_query },
+        )
           .then((src) => {
-            if (src) resolve(src);
-            else if (retriesLeft > 0)
+            if (src && !claimedByOther(src, act.id)) {
+              claim(src, act.id);
+              resolve(src);
+            } else if (retriesLeft > 0)
               timers.push(setTimeout(() => attempt(retriesLeft - 1), 2500));
             else resolve(null);
           })
@@ -497,6 +516,7 @@ function StoryDayCard({
   preloadDay,
   onPhotoSwiped,
   photoOwner,
+  claimRef,
 }) {
   const dayNumber = index + 1;
   const rootRef = useRef(null);
@@ -530,7 +550,7 @@ function StoryDayCard({
     if (near && preloadDay) preloadDay(index);
   }, [near, index, preloadDay]);
 
-  const { slides, pending } = useDayPhotos(day, near, photoOwner);
+  const { slides, pending } = useDayPhotos(day, near, photoOwner, claimRef);
   const clampedIdx = Math.max(
     0,
     Math.min(activeIdx, Math.max(slides.length - 1, 0)),
@@ -684,6 +704,8 @@ export default function StoryView({
           owner.set(a.photo_url, a.id);
     return owner;
   }, [days]);
+  // Session-level claims for freshly fetched URLs (url → activity id)
+  const claimRef = useRef(new Map());
   return (
     <StoryErrorBoundary onError={onError}>
       <div className="sv-root">
@@ -699,6 +721,7 @@ export default function StoryView({
             preloadDay={preloadDay}
             onPhotoSwiped={onPhotoSwiped}
             photoOwner={photoOwner}
+            claimRef={claimRef}
           />
         ))}
         <div className="sv-ending">

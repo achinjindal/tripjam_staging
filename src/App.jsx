@@ -188,7 +188,11 @@ function PhotoStrip({ activity, city }) {
       return;
     }
     let cancelled = false;
-    _fetchPhoto(geocode, city, activity?.type).then((src) => {
+    _fetchPhoto(geocode, city, activity?.type, undefined, {
+      lat: activity?.lat,
+      lng: activity?.lng,
+      photoQuery: activity?.photo_query,
+    }).then((src) => {
       if (cancelled) return;
       if (src) {
         if (!isHotel) _usedPhotoUrls.add(src);
@@ -7000,7 +7004,12 @@ export default function App({
       for (const act of acts) {
         if (act.type !== "transit" && act.type !== "hotel" && !act.photo_url) {
           const key = act.geocode || act.title;
-          if (key) _fetchPhoto(key, day.city, act.type || "sight");
+          if (key)
+            _fetchPhoto(key, day.city, act.type || "sight", undefined, {
+              lat: act.lat,
+              lng: act.lng,
+              photoQuery: act.photo_query,
+            });
         }
       }
       // Lazy verify — only for activities that have never been verified and
@@ -8799,6 +8808,7 @@ export default function App({
                   duration: act.duration,
                   note: act.note,
                   gloss: act.gloss || null,
+                  photo_query: act.photo_query || null,
                   confirmed: act.confirmed,
                   icon: act.icon,
                   package: act.package || null,
@@ -8899,7 +8909,13 @@ export default function App({
           .map((act) => ({ act, city: day.city })),
       );
       for (const { act, city } of toFetch) {
-        const url = await _fetchPhoto(act.geocode || act.title, city, act.type);
+        const url = await _fetchPhoto(
+          act.geocode || act.title,
+          city,
+          act.type,
+          undefined,
+          { lat: act.lat, lng: act.lng, photoQuery: act.photo_query },
+        );
         if (url) {
           // Update in-memory state immediately so PhotoStrip stops shimming without waiting for DB
           setDays((prev) =>
@@ -9374,36 +9390,44 @@ export default function App({
               continue;
             const insertedAct = insertedActs?.[i];
             if (!insertedAct) continue;
-            _fetchPhoto(act.geocode || act.title, dayCity, act.type).then(
-              (url) => {
-                if (!url) return;
-                supabase
-                  .from("activities")
-                  .update({ photo_url: url })
-                  .eq("id", insertedAct.id)
-                  .then(({ error }) => {
-                    if (error)
-                      console.warn(
-                        "activity photo persist failed:",
-                        error.message,
-                      );
-                  });
-                setDays((prev) =>
-                  prev.map((d) =>
-                    d.id !== dayId
-                      ? d
-                      : {
-                          ...d,
-                          activities: d.activities.map((a) =>
-                            a.id === insertedAct.id
-                              ? { ...a, photo_url: url }
-                              : a,
-                          ),
-                        },
-                  ),
-                );
+            _fetchPhoto(
+              act.geocode || act.title,
+              dayCity,
+              act.type,
+              undefined,
+              {
+                lat: act.lat,
+                lng: act.lng,
+                photoQuery: act.photo_query,
               },
-            );
+            ).then((url) => {
+              if (!url) return;
+              supabase
+                .from("activities")
+                .update({ photo_url: url })
+                .eq("id", insertedAct.id)
+                .then(({ error }) => {
+                  if (error)
+                    console.warn(
+                      "activity photo persist failed:",
+                      error.message,
+                    );
+                });
+              setDays((prev) =>
+                prev.map((d) =>
+                  d.id !== dayId
+                    ? d
+                    : {
+                        ...d,
+                        activities: d.activities.map((a) =>
+                          a.id === insertedAct.id
+                            ? { ...a, photo_url: url }
+                            : a,
+                        ),
+                      },
+                ),
+              );
+            });
           }
           logActivity({
             tripId: trip?.id,

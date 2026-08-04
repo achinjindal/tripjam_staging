@@ -190,7 +190,11 @@ export const wikiQueuedFetch = makeQueue(400, 2); // Wikimedia — 2 concurrent,
  *
  * Returns the photo URL or `null` if no acceptable photo was found.
  */
-export async function _fetchPhoto(geocode, city, type, hotelOpts) {
+// extras (all optional): { lat, lng, photoQuery }
+//  - lat/lng: verified activity coords → enables the Commons geosearch tier
+//    (photos taken AT the place, immune to naming mismatches)
+//  - photoQuery: LLM-authored "iconic view" search used by the text-search tiers
+export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
   const BAD_PATTERNS =
     /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive/i;
   const good = (url) =>
@@ -431,6 +435,20 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
     }
   }
 
+  // Hero-shape preference: landscape and reasonably large images crop well in
+  // full-bleed heroes; portrait/small ones become the last-resort fallback so
+  // coverage never regresses. Unknown dimensions are not rejected.
+  const heroShaped = (dims) => {
+    if (!dims?.width || !dims?.height) return true;
+    return dims.width > dims.height && dims.width >= 1000;
+  };
+  let shapeFallback = null;
+  const accept = (src) => {
+    _usedPhotoUrls.add(src);
+    _photoCache[cacheKey] = src;
+    return src;
+  };
+
   // Tier 1 + 2: Wikipedia exact title lookup across the candidate variants in order.
   // Trust the article's hero image when the page title is relevant — exact-title matches
   // with redirects are authoritative, and the filename check would reject valid hero
@@ -438,21 +456,49 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
   // Wat Phra Yai → Big_Buddha_Koh_Samui.jpg, Senso-ji → Sensoji_2023.jpg).
   for (const candidate of titleCandidates) {
     const data = await wikiQueuedFetch(
-      `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(candidate)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`,
+      `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(candidate)}&prop=pageimages&format=json&pithumbsize=700&piprop=thumbnail%7Coriginal&redirects=1&origin=*`,
     );
     const page = Object.values(data?.query?.pages || {})[0];
     const src = page?.thumbnail?.source;
     if (good(src) && pageRelevant(page?.title)) {
-      _usedPhotoUrls.add(src);
-      _photoCache[cacheKey] = src;
-      return src;
+      if (heroShaped(page?.original || page?.thumbnail)) return accept(src);
+      if (!shapeFallback) shapeFallback = src;
     }
   }
 
-  // Tier 3: Wikipedia full-text search — finds the right article even when title doesn't match geocode exactly
-  const searchQ = city ? `${geocode} ${city}` : geocode;
+  // Tier 2.5: Commons geosearch — photos taken within 300m of the verified
+  // coordinates. Finds real photos OF the place regardless of what anything is
+  // named; strict hero-shape only (it's a bonus tier, text search follows).
+  if (extras.lat && extras.lng) {
+    const geoData = await wikiQueuedFetch(
+      `https://commons.wikimedia.org/w/api.php?action=query&generator=geosearch&ggscoord=${extras.lat}%7C${extras.lng}&ggsradius=300&ggslimit=12&ggsnamespace=6&prop=imageinfo&iiprop=url%7Csize&iiurlwidth=700&format=json&origin=*`,
+    );
+    const geoPages = Object.values(geoData?.query?.pages || {}).sort(
+      (a, b) => (a.index ?? 999) - (b.index ?? 999),
+    );
+    for (const gp of geoPages) {
+      const info = gp?.imageinfo?.[0];
+      const gsrc = info?.thumburl;
+      if (
+        good(gsrc) &&
+        !/\.svg|logo|flag|icon|map|plan|diagram/i.test(gp?.title || "") &&
+        heroShaped(info)
+      ) {
+        return accept(gsrc);
+      }
+    }
+  }
+
+  // Tier 3: Wikipedia full-text search — finds the right article even when
+  // title doesn't match geocode exactly. The LLM's photo_query ("Kinkaku-ji
+  // golden pavilion pond reflection") beats the raw geocode when present.
+  const searchQ = extras.photoQuery
+    ? `${extras.photoQuery}${city ? ` ${city}` : ""}`
+    : city
+      ? `${geocode} ${city}`
+      : geocode;
   const data3 = await wikiQueuedFetch(
-    `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages|description&pithumbsize=700&format=json&origin=*`,
+    `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages|description&pithumbsize=700&piprop=thumbnail%7Coriginal&format=json&origin=*`,
   );
   // Sort search results by their "index" field so we evaluate in the actual search-rank
   // order (Object.values on the response is unordered — top results were being skipped).
@@ -476,14 +522,17 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
     if (!relaxed && !titleHit) continue;
     const src3 = page?.thumbnail?.source;
     if (good(src3) && (titleHit || photoFilenameRelevant(src3))) {
-      _usedPhotoUrls.add(src3);
-      _photoCache[cacheKey] = src3;
-      return src3;
+      if (heroShaped(page?.original || page?.thumbnail)) return accept(src3);
+      if (!shapeFallback) shapeFallback = src3;
     }
   }
 
   // Tier 4: Wikimedia Commons file search — much larger photo pool than Wikipedia articles
-  const commonsSearchQ = city ? `${geocode} ${city}` : geocode;
+  const commonsSearchQ = extras.photoQuery
+    ? extras.photoQuery
+    : city
+      ? `${geocode} ${city}`
+      : geocode;
   const data4 = await wikiQueuedFetch(
     `https://commons.wikimedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(commonsSearchQ)}&srnamespace=6&srlimit=3&format=json&origin=*`,
   );
@@ -492,16 +541,20 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
     const title = cr.title;
     if (!title || /\.svg|logo|flag|icon|map|category/i.test(title)) continue;
     const data4b = await wikiQueuedFetch(
-      `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=imageinfo&iiprop=url&iiurlwidth=700&format=json&origin=*`,
+      `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=imageinfo&iiprop=url%7Csize&iiurlwidth=700&format=json&origin=*`,
     );
     const page4 = Object.values(data4b?.query?.pages || {})[0];
-    const src4 = page4?.imageinfo?.[0]?.thumburl;
+    const info4 = page4?.imageinfo?.[0];
+    const src4 = info4?.thumburl;
     if (good(src4)) {
-      _usedPhotoUrls.add(src4);
-      _photoCache[cacheKey] = src4;
-      return src4;
+      if (heroShaped(info4)) return accept(src4);
+      if (!shapeFallback) shapeFallback = src4;
     }
   }
+
+  // All tiers exhausted without a hero-shaped hit — a portrait/small photo of
+  // the right place still beats no photo.
+  if (shapeFallback) return accept(shapeFallback);
 
   _photoCache[cacheKey] = null;
   return null;
