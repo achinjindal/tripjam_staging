@@ -8733,32 +8733,62 @@ export default function App({
     }
     const tripData = tripPayload;
 
-    // 2b. Persist pre-trip brainstorm items (route options) so the user can refer to them later
+    // 2b. Persist pre-trip brainstorm items (route options) so the user can
+    // refer to them later — but only when the trip has none yet. Regenerations
+    // (and flows that persisted routes pre-IG) already have them; inserting
+    // unconditionally duplicated the entire route set on every IG run.
     if (votedItems && votedItems.length) {
-      const rows = votedItems.map((it, i) => ({
-        trip_id: tripData.id,
-        title: it.title,
-        city: it.city || null,
-        category: it.category || "Route",
-        note: it.tagline || null,
-        icon: it.icon || null,
-        geocode: it.geocode || null,
-        position: i,
-        tier: it.tier || 2,
-        selected: it.vote === 1,
-        data: {
-          tagline: it.tagline || null,
-          days: it.days || null,
-          bestFor: it.bestFor || null,
-          warning: it.warning || null,
-          recommended: !!it.recommended,
-          points: it.points || null,
-        },
-      }));
-      const { error: brainErr } = await supabase
+      const { data: existingBrainstorm } = await supabase
         .from("brainstorm_items")
-        .insert(rows);
-      if (brainErr) console.warn("Failed to save brainstorm items:", brainErr);
+        .select("id")
+        .eq("trip_id", tripData.id)
+        .limit(1);
+      if (!existingBrainstorm?.length) {
+        const rows = votedItems.map((it, i) => ({
+          trip_id: tripData.id,
+          title: it.title,
+          city: it.city || null,
+          category: it.category || "Route",
+          note: it.tagline || null,
+          icon: it.icon || null,
+          geocode: it.geocode || null,
+          position: i,
+          tier: it.tier || 2,
+          selected: it.vote === 1,
+          data: {
+            tagline: it.tagline || null,
+            days: it.days || null,
+            bestFor: it.bestFor || null,
+            warning: it.warning || null,
+            recommended: !!it.recommended,
+            points: it.points || null,
+          },
+        }));
+        const { error: brainErr } = await supabase
+          .from("brainstorm_items")
+          .insert(rows);
+        if (brainErr)
+          console.warn("Failed to save brainstorm items:", brainErr);
+      } else {
+        // Rows already exist — just sync which route is selected now
+        const selectedTitles = votedItems
+          .filter((it) => it.vote === 1)
+          .map((it) => it.title)
+          .filter(Boolean);
+        const { error: clearErr } = await supabase
+          .from("brainstorm_items")
+          .update({ selected: false })
+          .eq("trip_id", tripData.id)
+          .eq("tier", 1);
+        if (!clearErr && selectedTitles.length) {
+          await supabase
+            .from("brainstorm_items")
+            .update({ selected: true })
+            .eq("trip_id", tripData.id)
+            .eq("tier", 1)
+            .in("title", selectedTitles);
+        }
+      }
     }
 
     // 3. Insert days + activities (all days in parallel)
