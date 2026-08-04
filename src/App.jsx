@@ -1734,6 +1734,187 @@ function RouteCard({
   );
 }
 
+/* ─── RG LOADING — the drafting card ─────────────────────────────────
+ * Shown while routes generate. Editorial dusk card (Story-mode language):
+ * a gold route being sketched between destination waypoints, DM Serif
+ * headline, rotating craft lines, and a climbing "routes weighed" counter.
+ */
+const RG_CRAFT_LINES = [
+  "Weighing beach mornings against mountain afternoons…",
+  "Checking ferry timetables and train connections…",
+  "Keeping the good cafés within walking distance…",
+  "Trading a museum for a night market…",
+  "Counting the hours between check-ins…",
+  "Leaving room for the unplanned hour…",
+];
+
+function RouteDraftingCard({ destinations }) {
+  const [lineIdx, setLineIdx] = useState(0);
+  const [count, setCount] = useState(12);
+  const reducedMotion =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  useEffect(() => {
+    if (reducedMotion) return;
+    const t = setInterval(() => {
+      setLineIdx((i) => (i + 1) % RG_CRAFT_LINES.length);
+    }, 3200);
+    return () => clearInterval(t);
+  }, [reducedMotion]);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      // Fast at first, slowing to a crawl — never quite settles
+      setCount((n) => n + Math.max(1, Math.round(19 * Math.exp(-n / 160))));
+    }, 240);
+    return () => clearInterval(t);
+  }, []);
+
+  const names = (destinations || [])
+    .map((d) => (d || "").split(",")[0].trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  const headline = names.length
+    ? `Sketching four ways through ${names.length > 2 ? `${names[0]} & beyond` : names.join(" & ")}`
+    : "Sketching four ways through your trip";
+
+  // Waypoints along the drafting path (labels only when multi-city)
+  const W = 320;
+  const dotXs = [26, 124, 216, 294];
+  const dotYs = [46, 20, 50, 26];
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        overflow: "hidden",
+        borderRadius: RADIUS.lg,
+        padding: "22px 20px 18px",
+        marginBottom: 12,
+        background: `radial-gradient(120% 90% at 15% 0%, rgba(74,144,217,0.16) 0%, rgba(74,144,217,0) 55%), linear-gradient(160deg, ${T.dusk} 0%, ${T.ink} 78%)`,
+      }}
+    >
+      <style>{`
+        @keyframes rgDashMarch { to { stroke-dashoffset: -26; } }
+        @keyframes rgDotPulse { 0%,100% { opacity: 0.45; r: 3; } 50% { opacity: 1; r: 4.5; } }
+        @keyframes rgLineFade { 0% { opacity: 0; transform: translateY(4px); } 14%,100% { opacity: 1; transform: none; } }
+      `}</style>
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: 2.4,
+          textTransform: "uppercase",
+          color: T.mistOnDark,
+          fontFamily: "Georgia,serif",
+        }}
+      >
+        <span style={{ color: T.gold }}>✦</span>&nbsp; Drafting your routes
+      </div>
+      <svg
+        viewBox={`0 0 ${W} 64`}
+        style={{ width: "100%", height: 56, margin: "14px 0 4px" }}
+        aria-hidden="true"
+      >
+        <path
+          d={`M ${dotXs[0]} ${dotYs[0]} C 60 ${dotYs[0] - 30}, 90 ${dotYs[1] + 22}, ${dotXs[1]} ${dotYs[1]} S 190 ${dotYs[2] + 8}, ${dotXs[2]} ${dotYs[2]} S 275 ${dotYs[3] - 6}, ${dotXs[3]} ${dotYs[3]}`}
+          fill="none"
+          stroke={T.gold}
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeDasharray="7 6"
+          style={
+            reducedMotion
+              ? undefined
+              : { animation: "rgDashMarch 1.1s linear infinite" }
+          }
+        />
+        {dotXs.map((x, i) => (
+          <circle
+            key={i}
+            cx={x}
+            cy={dotYs[i]}
+            r="3.5"
+            fill={T.chalk}
+            style={
+              reducedMotion
+                ? undefined
+                : {
+                    animation: `rgDotPulse 2.2s ease-in-out ${i * 0.4}s infinite`,
+                  }
+            }
+          />
+        ))}
+        {names.length > 1 &&
+          names.map((n, i) => (
+            <text
+              key={n}
+              x={dotXs[i]}
+              y={dotYs[i] + 14}
+              textAnchor={
+                i === 0 ? "start" : i === names.length - 1 ? "end" : "middle"
+              }
+              style={{
+                fill: T.mistOnDark,
+                fontSize: 8.5,
+                letterSpacing: 0.8,
+                fontFamily: "Georgia,serif",
+              }}
+            >
+              {n.length > 12 ? `${n.slice(0, 11)}…` : n}
+            </text>
+          ))}
+      </svg>
+      <div
+        style={{
+          fontFamily: "'DM Serif Display',Georgia,serif",
+          fontSize: 21,
+          lineHeight: 1.15,
+          color: T.chalk,
+          textWrap: "balance",
+          marginBottom: 8,
+        }}
+      >
+        {headline}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: 12,
+        }}
+      >
+        <div
+          key={lineIdx}
+          style={{
+            fontFamily: "Georgia,serif",
+            fontStyle: "italic",
+            fontSize: 12.5,
+            color: "rgba(255,255,255,0.78)",
+            lineHeight: 1.5,
+            animation: reducedMotion ? undefined : "rgLineFade 3.2s ease both",
+          }}
+        >
+          {RG_CRAFT_LINES[lineIdx]}
+        </div>
+        <div
+          style={{
+            fontFamily: "Georgia,serif",
+            fontSize: 11,
+            color: T.mistOnDark,
+            whiteSpace: "nowrap",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {count.toLocaleString()} routes weighed
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BrainstormView({
   trip,
   session,
@@ -2628,6 +2809,7 @@ function BrainstormView({
                 <div
                   style={{ display: "flex", flexDirection: "column", gap: 10 }}
                 >
+                  <RouteDraftingCard destinations={destinations} />
                   {[0, 1, 2, 3].map((i) => (
                     <div
                       key={i}
