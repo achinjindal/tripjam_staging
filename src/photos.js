@@ -28,6 +28,11 @@ const WIKIMEDIA_THUMB_RE =
 // an onError fallback.
 export function upgradePhotoUrl(url) {
   if (typeof url !== "string") return url;
+  // TripAdvisor CDN serves size variants by path segment: photo-s (550px,
+  // what the API's images.large returns) → photo-w (~1200px). Heals every
+  // stored hotel photo without a refetch; onError falls back to the original.
+  if (url.includes("media-cdn.tripadvisor.com/media/photo-s/"))
+    return url.replace("/media/photo-s/", "/media/photo-w/");
   const m = url.match(WIKIMEDIA_THUMB_RE);
   if (!m || Number(m[2]) >= 1280) return url;
   return `${m[1]}1280px-${m[3]}`;
@@ -198,7 +203,7 @@ export const wikiQueuedFetch = makeQueue(250, 3); // Wikimedia — 3 concurrent,
 //  - photoQuery: LLM-authored "iconic view" search used by the text-search tiers
 export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
   const BAD_PATTERNS =
-    /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive/i;
+    /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive|painting|drawing|ukiyo|woodblock|engraving|lithograph|poster|artwork|sketch|illustration/i;
   const good = (url) =>
     url &&
     !_isPortrait(url) &&
@@ -444,6 +449,8 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
   // Hero-shape preference: landscape and reasonably large images crop well in
   // full-bleed heroes; portrait/small ones become the last-resort fallback so
   // coverage never regresses. Unknown dimensions are not rejected.
+  // Fallback floor: never keep a photo under 500px wide, even as last resort
+  const bigEnough = (dims) => (dims?.width ?? 1000) >= 500;
   const heroShaped = (dims) => {
     if (!dims?.width || !dims?.height) return true;
     return dims.width > dims.height && dims.width >= 1000;
@@ -468,13 +475,17 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
     const src = page?.thumbnail?.source;
     if (good(src) && pageRelevant(page?.title)) {
       if (heroShaped(page?.original || page?.thumbnail)) return accept(src);
-      if (!shapeFallback) shapeFallback = src;
+      if (!shapeFallback && bigEnough(page?.original || page?.thumbnail))
+        shapeFallback = src;
     }
   }
 
   // Tier 2.5: Commons geosearch — photos taken within 300m of the verified
-  // coordinates. Finds real photos OF the place regardless of what anything is
-  // named; strict hero-shape only (it's a bonus tier, text search follows).
+  // coordinates. A geotag proves WHERE the shot was taken, not WHAT it shows
+  // (tourist selfies and street snaps carry the same coords), so a hit is
+  // trusted immediately only when its file name mentions the place; anonymous
+  // geotagged hits are kept as a fallback behind the text-search tiers.
+  let geoFallback = null;
   if (extras.lat && extras.lng) {
     const geoData = await wikiQueuedFetch(
       `https://commons.wikimedia.org/w/api.php?action=query&generator=geosearch&ggscoord=${extras.lat}%7C${extras.lng}&ggsradius=300&ggslimit=12&ggsnamespace=6&prop=imageinfo&iiprop=url%7Csize&iiurlwidth=700&format=json&origin=*`,
@@ -482,16 +493,22 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
     const geoPages = Object.values(geoData?.query?.pages || {}).sort(
       (a, b) => (a.index ?? 999) - (b.index ?? 999),
     );
+    const placeTokens = `${geocode} ${extras.photoQuery || ""}`
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length > 3);
     for (const gp of geoPages) {
       const info = gp?.imageinfo?.[0];
       const gsrc = info?.thumburl;
       if (
-        good(gsrc) &&
-        !/\.svg|logo|flag|icon|map|plan|diagram/i.test(gp?.title || "") &&
-        heroShaped(info)
-      ) {
-        return accept(gsrc);
-      }
+        !good(gsrc) ||
+        /\.svg|logo|flag|icon|map|plan|diagram/i.test(gp?.title || "") ||
+        !heroShaped(info)
+      )
+        continue;
+      const fileTitle = (gp?.title || "").toLowerCase();
+      if (placeTokens.some((t) => fileTitle.includes(t))) return accept(gsrc);
+      if (!geoFallback) geoFallback = gsrc;
     }
   }
 
@@ -529,7 +546,8 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
     const src3 = page?.thumbnail?.source;
     if (good(src3) && (titleHit || photoFilenameRelevant(src3))) {
       if (heroShaped(page?.original || page?.thumbnail)) return accept(src3);
-      if (!shapeFallback) shapeFallback = src3;
+      if (!shapeFallback && bigEnough(page?.original || page?.thumbnail))
+        shapeFallback = src3;
     }
   }
 
@@ -554,12 +572,14 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
     const src4 = info4?.thumburl;
     if (good(src4)) {
       if (heroShaped(info4)) return accept(src4);
-      if (!shapeFallback) shapeFallback = src4;
+      if (!shapeFallback && bigEnough(info4)) shapeFallback = src4;
     }
   }
 
-  // All tiers exhausted without a hero-shaped hit — a portrait/small photo of
-  // the right place still beats no photo.
+  // All named tiers exhausted. An anonymous geotagged photo from the right
+  // spot beats a portrait/small one; either beats the editorial cover.
+  if (geoFallback && !_usedPhotoUrls.has(geoFallback))
+    return accept(geoFallback);
   if (shapeFallback) return accept(shapeFallback);
 
   _photoCache[cacheKey] = null;

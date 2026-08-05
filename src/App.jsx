@@ -6958,6 +6958,11 @@ export default function App({
           if (data?.length) {
             const deduped = processDays(data);
             setDays(deduped);
+            // Resume any unfinished photo backfill for this trip (once per open)
+            if (photoSweepTripRef.current !== initialTrip.id) {
+              photoSweepTripRef.current = initialTrip.id;
+              setTimeout(() => sweepTripPhotos(deduped, initialTrip.id), 2500);
+            }
             // Persist any newly-generated gem IDs (fire-and-forget; idempotent)
             for (let i = 0; i < deduped.length; i++) {
               const orig = data[i];
@@ -7055,6 +7060,47 @@ export default function App({
     initialScreen === "itinerary",
   ); // true if opening existing trip
   const preloadedDaysRef = useRef(new Set()); // track which day indices have been pre-loaded
+  const photoSweepTripRef = useRef(null); // trip id the background photo sweep has run for
+
+  // Background photo sweep: fetch + persist photos for every activity that
+  // still lacks one. Runs after IG completes AND on trip open — the post-IG
+  // pass dies with its tab, which left ~half of older trips' stops photo-less.
+  const sweepTripPhotos = (daysList, tripId) => {
+    const toFetch = (daysList || []).flatMap((day) =>
+      (day.activities || [])
+        .filter((a) => a.type !== "transit" && !a.photo_url)
+        .map((act) => ({ act, city: day.city })),
+    );
+    if (!toFetch.length) return;
+    (async () => {
+      for (const { act, city } of toFetch) {
+        // Trip changed underneath us — stop quietly
+        if (tripId && photoSweepTripRef.current !== tripId) return;
+        const url = await _fetchPhoto(
+          act.geocode || act.title,
+          city,
+          act.type,
+          undefined,
+          { lat: act.lat, lng: act.lng, photoQuery: act.photo_query },
+        );
+        if (url) {
+          setDays((prev) =>
+            prev.map((day) => ({
+              ...day,
+              activities: day.activities.map((a) =>
+                a.id === act.id ? { ...a, photo_url: url } : a,
+              ),
+            })),
+          );
+          await supabase
+            .from("activities")
+            .update({ photo_url: url })
+            .eq("id", act.id);
+        }
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    })();
+  };
 
   // ── Story mode (Design A) ──
   const [itineraryMode, setItineraryModeRaw] = useState("plan"); // 'story' | 'plan'
@@ -9114,38 +9160,8 @@ export default function App({
     setScreen("itinerary");
 
     // Fetch and persist photos in background — staggered to avoid Wikimedia rate limits
-    (async () => {
-      const toFetch = savedDays.flatMap((day) =>
-        day.activities
-          .filter((a) => a.type !== "transit")
-          .map((act) => ({ act, city: day.city })),
-      );
-      for (const { act, city } of toFetch) {
-        const url = await _fetchPhoto(
-          act.geocode || act.title,
-          city,
-          act.type,
-          undefined,
-          { lat: act.lat, lng: act.lng, photoQuery: act.photo_query },
-        );
-        if (url) {
-          // Update in-memory state immediately so PhotoStrip stops shimming without waiting for DB
-          setDays((prev) =>
-            prev.map((day) => ({
-              ...day,
-              activities: day.activities.map((a) =>
-                a.id === act.id ? { ...a, photo_url: url } : a,
-              ),
-            })),
-          );
-          await supabase
-            .from("activities")
-            .update({ photo_url: url })
-            .eq("id", act.id);
-        }
-        await new Promise((r) => setTimeout(r, 500)); // Wikimedia rate limit buffer
-      }
-    })();
+    photoSweepTripRef.current = tripData.id;
+    sweepTripPhotos(savedDays, tripData.id);
 
     // Eager hybrid verification: Day 1 activities + all hotels (across all days)
     // verified in parallel right after IG completion. Non-blocking — IG perceived
