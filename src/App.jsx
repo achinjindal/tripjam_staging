@@ -30,9 +30,11 @@ import { showToast, confirmSheet } from "./dialogs.jsx";
 import { logActivity } from "./activity";
 import { subscribeTrip } from "./realtime";
 import MembersSheet from "./components/MembersSheet.jsx";
+import PreferencesSheet from "./components/PreferencesSheet.jsx";
 import { TripCreditsSheet } from "./CreditsOverlay.jsx";
 import { AvatarStack } from "./MemberAvatar.jsx";
 import { fetchMembers, INVITE_ENABLED, memberName } from "./members.js";
+import { fetchPreferences } from "./preferences.js";
 import {
   _photoCache,
   _usedPhotoUrls,
@@ -6737,12 +6739,18 @@ export default function App({
       const list = await fetchMembers(tripId);
       setMembers(list);
     };
+    const reconcilePreferences = async () => {
+      if (!INVITE_ENABLED) return;
+      const list = await fetchPreferences(tripId);
+      setPreferences(list);
+    };
     // Reconnect / initial backfill (postgres_changes doesn't replay).
     const backfill = () => {
       reconcileMembers();
       if (membersRef.current.length > 1) {
         reconcileDays();
         reconcileRoutes();
+        reconcilePreferences();
       }
     };
     const unsubscribe = subscribeTrip(
@@ -6759,6 +6767,10 @@ export default function App({
           debounce("routes", reconcileRoutes);
         },
         trip_members: () => debounce("members", reconcileMembers, 200),
+        trip_preferences: () => {
+          if (membersRef.current.length > 1)
+            debounce("prefs", reconcilePreferences, 300);
+        },
         trip_messages: (payload) => {
           // Echo-safe append: dedup by the client-supplied id (our optimistic
           // bubble already carries it), so our own echoes are skipped and remote
@@ -6804,6 +6816,9 @@ export default function App({
   useEffect(() => {
     membersRef.current = members;
   }, [members]);
+  // Phase 5: per-traveller preferences ("Your travel style").
+  const [preferences, setPreferences] = useState([]);
+  const [showPreferences, setShowPreferences] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
   // Phase 2.5 pooled credits: the Trip Credits sheet (pool balance + funding).
   // Ships dark behind INVITE_ENABLED + shared-trip gating (see isSharedTrip).
@@ -6817,6 +6832,7 @@ export default function App({
     }
     let cancelled = false;
     fetchMembers(tripId).then((list) => !cancelled && setMembers(list));
+    fetchPreferences(tripId).then((list) => !cancelled && setPreferences(list));
     return () => {
       cancelled = true;
     };
@@ -6824,6 +6840,28 @@ export default function App({
   // A trip is "shared" once it has more than one member. Only then do we show
   // the pool pill / Trip Credits sheet — solo trips behave exactly as before.
   const isSharedTrip = INVITE_ENABLED && members.length > 1;
+  // Phase 5: gentle one-time nudge to share your travel style once a trip is
+  // shared and you haven't set yours. Guarded by localStorage so it shows once
+  // per (trip, user); the sheet is skippable (close = decline).
+  useEffect(() => {
+    if (!isSharedTrip || !trip?.id || !session?.user?.id) return;
+    const key = `tripjam_prefs_nudged_${trip.id}_${session.user.id}`;
+    if (localStorage.getItem(key)) return;
+    let cancelled = false;
+    fetchPreferences(trip.id).then((list) => {
+      if (cancelled) return;
+      const hasMine = list.some(
+        (p) => p.user_id === session.user.id && p.prefs_text?.trim(),
+      );
+      if (!hasMine) {
+        localStorage.setItem(key, "1");
+        setShowPreferences(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isSharedTrip, trip?.id]);
   // Pool balance lives on trips.credit_balance. Clamp to >= 0 for display —
   // the pool can dip slightly negative server-side but users never see it.
   const poolBalance = Math.max(
@@ -9651,6 +9689,17 @@ export default function App({
           name: m.profiles?.username || "Traveler",
         }))
       : null;
+    // Phase 5: attach each member's free-text travel style (shared trips only)
+    // so Trippy plans for everyone and attributes by name.
+    const preferencesList =
+      isSharedTrip && Array.isArray(preferences)
+        ? preferences
+            .filter((p) => p?.prefs_text && p.prefs_text.trim())
+            .map((p) => ({
+              name: nameOf(p.user_id) || "Traveler",
+              prefs_text: p.prefs_text,
+            }))
+        : null;
     // Response-time telemetry: full client round-trip (client is non-streaming,
     // so this is send → complete reply — what the user actually waits for).
     const __chatT0 = Date.now();
@@ -9672,6 +9721,9 @@ export default function App({
           ...(spendPersonal ? { spend_personal: true } : {}),
           ...(memberList
             ? { members: memberList, sender: nameOf(session.user.id) }
+            : {}),
+          ...(preferencesList && preferencesList.length
+            ? { preferences: preferencesList }
             : {}),
           history: history.map((m) => ({
             role: m.role === "assistant" ? "assistant" : "user",
@@ -15512,10 +15564,30 @@ export default function App({
             session={session}
             onClose={() => setShowMembers(false)}
             onMembersChanged={(list) => setMembers(list)}
+            onEditPreferences={
+              isSharedTrip
+                ? () => {
+                    setShowMembers(false);
+                    setShowPreferences(true);
+                  }
+                : null
+            }
             onLeftTrip={() => {
               setShowMembers(false);
               onHome?.();
             }}
+          />
+        )}
+        {INVITE_ENABLED && showPreferences && trip?.id && isSharedTrip && (
+          <PreferencesSheet
+            trip={trip}
+            session={session}
+            members={members}
+            preferences={preferences}
+            onClose={() => setShowPreferences(false)}
+            onSaved={() =>
+              fetchPreferences(trip.id).then((list) => setPreferences(list))
+            }
           />
         )}
         {isSharedTrip && showTripCredits && trip?.id && (

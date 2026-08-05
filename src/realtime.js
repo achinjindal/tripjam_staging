@@ -28,6 +28,7 @@ const TRIP_SCOPED_TABLES = [
   "polls",
   "brainstorm_items",
   "trip_members",
+  "trip_preferences",
 ];
 
 /**

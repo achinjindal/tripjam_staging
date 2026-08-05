@@ -25,6 +25,7 @@ export default function MembersSheet({
   session,
   onClose,
   onMembersChanged,
+  onEditPreferences,
   onLeftTrip,
 }) {
   const selfId = session?.user?.id;
@@ -562,6 +563,23 @@ export default function MembersSheet({
                 margin: "18px 0 14px",
               }}
             />
+            {onEditPreferences && (
+              <div
+                onClick={onEditPreferences}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 9,
+                  color: T.ink,
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  marginBottom: 14,
+                }}
+              >
+                ✎ Your travel style
+              </div>
+            )}
             <div
               onClick={doLeave}
               style={{
