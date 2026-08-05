@@ -85,6 +85,110 @@ IMPORTANT OUTPUT ORDER: Generate "name", "summary" and "cities" BEFORE the "days
 Return ONLY a raw JSON object, MINIFIED — no indentation, no newlines, no spaces between tokens (pretty-printing wastes the output budget and truncates the itinerary). Start with { end with }. Structure:
 {"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"days":[{"label":"Day 1","city":"...","story_title":"2–4 word evocative title","narrative":"2–3 magazine-style sentences","description":"2–3 evocative sentences about this day","transit_tip":"Use Suica card · Ginza Line today","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","gloss":"one evocative line, max 12 words","photo_query":"iconic view search, 2-6 words","icon":"🏛️","transition":{"mode":"metro"}}],"wishlist":[{"title":"...","geocode":"...","near":"Activity Title from this day"}]}]}`;
 
+// ── Parallel architecture (default path) ────────────────────────────────────
+// One PLAN call produces the authoritative trip skeleton, then every day is
+// expanded concurrently. Wall-clock ≈ plan + slowest single day, regardless of
+// trip length — which keeps any model (incl. Sonnet 5) under the edge runtime's
+// ~150s limit, vs 2-3min single-shot on 6-day trips.
+
+const PLAN_SYSTEM = `You are a travel expert who PLANS multi-day itineraries as JSON — the trip skeleton, not the hour-by-hour detail.
+Rules:
+- The "plan" array is the AUTHORITATIVE trip skeleton: one entry per day with:
+  label ("Day 1"...), city (the day's base area), hotel (a SPECIFIC well-located confirmed-open hotel name — minimise hotel changes, 2+ nights per base, NEVER relocate to a different hotel for a single night when staying in the same area; on a small island or single city ONE base hotel for the whole trip is strongly preferred; name a hotel ONLY for cities where the traveler sleeps that night), sleep_city (the city where the traveler sleeps AFTER this day; empty string "" on the final departure day), highlights (4-6 objects {title,icon} — the SPECIFIC named places/experiences anchoring that day, INCLUDING 1-2 legendary meal venues; REAL place names only, never generic like "lunch" or "temple"), description (1 sentence).
+- NO REPEATS ACROSS DAYS: every highlighted place — sights AND restaurants/markets — appears on AT MOST ONE day in the whole trip. Never place the same venue on two different days.
+- GEOGRAPHIC SEQUENCE & PACING: order days so travel flows logically, cover each area fully in one visit, no backtracking. Fixed-time things (sunrise spots, morning markets, night markets) go on sensible days.
+- Obey the SELECTED ROUTE cities/overnight bases and any Day-1 arrival / last-day departure HARD RULES in the user message EXACTLY.
+- Also produce top-level "name", "summary" (2 sentences max), and "cities" (one {name,writeup} per unique city; writeup = 2-3 evocative sentences).
+Return ONLY a raw JSON object, MINIFIED — no indentation, no newlines. Start with { end with }:
+{"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"plan":[{"label":"Day 1","city":"...","hotel":"...","sleep_city":"...","highlights":[{"title":"...","icon":"🏛"}],"description":"..."}]}
+Do NOT include a "days" array — days are filled in a later step.`;
+
+// Appended to SYSTEM_PROMPT for day-fill calls: all activity/day rules above
+// still apply; only the output shape and plan-obedience rules change. Sharing
+// the SYSTEM_PROMPT prefix keeps the prompt cache warm across all fill calls.
+const DAYFILL_OVERRIDE = `
+
+──── SINGLE-DAY MODE ────
+You are expanding exactly ONE day of an ALREADY-AGREED whole-trip plan (provided in the user message) into its detailed day schedule. Every rule above still applies, with these overrides:
+- Output ONLY the single day object for the requested day — do NOT output "name", "summary", "cities", or a "days" array.
+- The whole-trip plan is AUTHORITATIVE: stay in this day's city/base, expand THIS day's anchor highlights into a full schedule (adding meals, stops and connective activities around them), and use the hotel the plan names for this day. NEVER use a place the plan assigns to a DIFFERENT day.
+- Hotel check-in (type:hotel) appears ONLY if the user message says this day starts a NEW overnight base. If it says the traveler already checked in earlier, do NOT include any check-in activity.
+- Honor the Day-1 arrival / last-day departure HARD RULES only if they apply to THIS day.
+Return ONLY a raw JSON object for the single day, MINIFIED — no indentation, no newlines. Start with { end with }:
+{"label":"Day K","city":"...","story_title":"2–4 word evocative title","narrative":"2–3 magazine-style sentences","description":"2–3 evocative sentences","transit_tip":"...","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","gloss":"...","photo_query":"...","icon":"🏛️","transition":{"mode":"metro"}}],"wishlist":[{"title":"...","geocode":"...","near":"Activity Title from this day"}]}`;
+
+// Strip \`\`\`json ... \`\`\` fences and return the raw JSON string.
+function stripFences(text: string): string {
+  let t = (text || "").trim();
+  if (t.startsWith("\`\`\`")) {
+    const nl = t.indexOf("\n");
+    if (nl !== -1) t = t.slice(nl + 1);
+    if (t.endsWith("\`\`\`")) t = t.slice(0, -3);
+  }
+  return t.trim();
+}
+
+interface AnthropicUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+// Single non-streamed Anthropic call → text + usage. System passed as blocks
+// so fill calls can share the cached SYSTEM_PROMPT prefix.
+async function callClaude(
+  model: string,
+  systemBlocks: { type: string; text: string; cache_control?: object }[],
+  userMessage: string,
+  maxTokens: number,
+): Promise<{ text: string; usage: AnthropicUsage }> {
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "prompt-caching-2024-07-31",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      // Claude 5 family: temperature is rejected, and thinking is ON by
+      // default — thinking tokens count against max_tokens, which starved the
+      // text block and truncated day JSON mid-string. Disable it: these calls
+      // want fast structured output, not deliberation.
+      ...(model.startsWith("claude-sonnet-5")
+        ? { thinking: { type: "disabled" } }
+        : { temperature: 0.8 }),
+      stream: false,
+      system: systemBlocks,
+      messages: [{ role: "user", content: userMessage }],
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Anthropic error: ${err}`);
+  }
+  const data = await response.json();
+  if (data.stop_reason === "max_tokens")
+    throw new Error(`hit max_tokens (${maxTokens}) — output truncated`);
+  const text = (data.content || [])
+    .filter((b: { type?: string }) => b.type === "text")
+    .map((b: { text?: string }) => b.text || "")
+    .join("");
+  return { text, usage: (data.usage || {}) as AnthropicUsage };
+}
+
+interface PlanDay {
+  label: string;
+  city: string;
+  hotel?: string;
+  sleep_city?: string;
+  highlights: { title: string; icon?: string }[];
+  description?: string;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -338,15 +442,14 @@ Trip: ${travelers} travelers, ${stylesText} style, ${budgetLabel} budget.${trave
 ${paceNote}
 ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDayNote}` : ""}${notesNote ? `\n${notesNote}` : ""}${extraPrefs}`;
 
-    // ── Provider switch: IG_MODEL env var selects the IG model per environment.
-    // Unset (prod) → Sonnet 4.6 (the Anthropic path below, unchanged). Set to a
-    // "gemini-*" id (staging) → Gemini streaming path (canary A/B). Same code
-    // ships to both; behaviour differs only by the env var.
-    // Default: Sonnet 4.6. Sonnet 5 (IG_MODEL=claude-sonnet-5) writes noticeably
-    // better prose but takes 60s/2-day scaling past the edge runtime's ~150s
-    // wall-clock on 4+ day trips — needs chunked generation before it can be the
-    // default. Full support (no temperature, minified output, higher caps) is in.
+    // ── Provider/arch switch: IG_MODEL picks the model ("gemini-*" → the
+    // single-shot Gemini streaming path; anything else → Anthropic). On the
+    // Anthropic side, IG_ARCH picks the architecture: default "parallel" =
+    // PLAN skeleton + concurrent day fills (wall-clock ≈ plan + one day, any
+    // trip length — what makes Sonnet 5 viable under the ~150s edge limit);
+    // "single" = the original one-call streaming path, kept as escape hatch.
     const igModel = Deno.env.get("IG_MODEL") || "claude-sonnet-4-6";
+    const igArch = Deno.env.get("IG_ARCH") || "parallel";
     if (igModel.startsWith("gemini")) {
       const gResp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${igModel}:streamGenerateContent?alt=sse`,
@@ -445,6 +548,242 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       });
     }
 
+    if (igArch !== "single") {
+      // ── PHASE 1: PLAN skeleton (awaited before the stream opens, so a plan
+      // failure surfaces as a clean HTTP 500 the client already handles).
+      // The skeleton is structural (route, anchors, hotels) — IG_PLAN_MODEL
+      // lets it run on a faster model than the day fills. Credits are deducted
+      // at igModel rates for the whole batch; when the plan model is cheaper,
+      // the ~2k plan tokens are slightly overcharged, never undercharged.
+      const igPlanModel = Deno.env.get("IG_PLAN_MODEL") || igModel;
+      const totalStart = Date.now();
+      const planRes = await callClaude(
+        igPlanModel,
+        [
+          {
+            type: "text",
+            text: PLAN_SYSTEM,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        userMessage,
+        Math.min(8000, numDays * 300 + 2500),
+      );
+      let plan: {
+        name?: string;
+        summary?: string;
+        cities?: unknown[];
+        plan?: PlanDay[];
+      };
+      try {
+        plan = JSON.parse(stripFences(planRes.text));
+      } catch (e) {
+        console.error(
+          "Plan parse error:",
+          e.message,
+          planRes.text.slice(0, 200),
+        );
+        throw new Error("Failed to parse itinerary plan");
+      }
+      const planDays: PlanDay[] = Array.isArray(plan.plan) ? plan.plan : [];
+      if (planDays.length === 0) throw new Error("Plan produced no days");
+      if (planDays.length !== numDays)
+        console.warn(`Plan has ${planDays.length} days, expected ${numDays}`);
+      console.log(
+        `Plan done in ${Date.now() - totalStart}ms, ${planDays.length} days`,
+      );
+
+      // Whole-trip skeleton string — cross-day context for every fill call.
+      const skeleton = planDays
+        .map((d) => {
+          const titles = (d.highlights || []).map((h) => h.title).join(", ");
+          const sleeps = d.sleep_city
+            ? ` — sleeps in ${d.sleep_city}${d.hotel ? ` (${d.hotel})` : ""}`
+            : " — departure day, no overnight";
+          return `${d.label} — ${d.city}${sleeps}\n  Anchors: ${titles}\n  ${d.description || ""}`.trim();
+        })
+        .join("\n\n");
+
+      const fillSystem = [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+        { type: "text", text: DAYFILL_OVERRIDE },
+      ];
+
+      const allUsages: AnthropicUsage[] = [planRes.usage];
+      const fillErrors: { day: string; error: string }[] = [];
+
+      async function fillOne(day: PlanDay, i: number): Promise<any> {
+        const titles = (day.highlights || []).map((h) => h.title).join(", ");
+        const prevSleep = i > 0 ? planDays[i - 1].sleep_city : null;
+        const newBase = !!day.sleep_city && day.sleep_city !== prevSleep;
+        const baseNote = newBase
+          ? `Tonight the traveler sleeps in ${day.sleep_city}${day.hotel ? ` at ${day.hotel}` : ""} — this day STARTS A NEW OVERNIGHT BASE, so include the hotel check-in activity per the check-in timing rules.`
+          : day.sleep_city
+            ? `The traveler already checked in at this base on an earlier day — do NOT include any check-in activity today.`
+            : `This is the final departure day — no hotel check-in.`;
+        const dayUser =
+          userMessage +
+          "\n\n──── AGREED WHOLE-TRIP PLAN (all days) ────\n" +
+          skeleton +
+          `\n\n──── YOUR TASK ────\nProduce ONLY the detailed day object for ${day.label} in ${day.city}. Expand THIS day's anchors (${titles}) into a full schedule. NEVER use any place the plan assigns to a different day — this includes meals and connective stops you add yourself: if a venue is named anywhere in the plan for another day, pick a different one. ${baseNote}`;
+        const attempt = async () => {
+          const res = await callClaude(igModel, fillSystem, dayUser, 4500);
+          let parsed = JSON.parse(stripFences(res.text));
+          if (Array.isArray(parsed?.days)) parsed = parsed.days[0];
+          if (!parsed || !Array.isArray(parsed.activities))
+            throw new Error("day object missing activities");
+          allUsages.push(res.usage);
+          parsed.label = day.label;
+          parsed.wishlist = Array.isArray(parsed.wishlist)
+            ? parsed.wishlist
+            : [];
+          return parsed;
+        };
+        try {
+          return await attempt();
+        } catch (e1) {
+          console.error(
+            `Day fill failed for ${day.label}, retrying:`,
+            e1.message,
+          );
+          try {
+            return await attempt();
+          } catch (e2) {
+            console.error(
+              `Day fill failed twice for ${day.label}:`,
+              e2.message,
+            );
+            fillErrors.push({ day: day.label, error: e2.message });
+            return {
+              label: day.label,
+              city: day.city,
+              description: day.description || "",
+              activities: [],
+              wishlist: [],
+            };
+          }
+        }
+      }
+
+      // ── PHASE 2: stream header now, then fills in parallel with ordered
+      // flush — the client's accumulating parser sees the exact same byte
+      // stream shape as the single-shot path.
+      const { readable, writable } = new TransformStream();
+      const writer = writable.getWriter();
+      const encoder = new TextEncoder();
+      // Serialized, error-swallowing write chain: fragments always land in
+      // call order, and a client disconnect can't raise an unhandled rejection
+      // from a fire-and-forget send inside flush().
+      let sendChain: Promise<void> = Promise.resolve();
+      const send = (fragment: string) => {
+        sendChain = sendChain
+          .then(() =>
+            writer.write(
+              encoder.encode(`data: ${JSON.stringify(fragment)}\n\n`),
+            ),
+          )
+          .catch((e) => console.error("SSE write failed:", e.message));
+        return sendChain;
+      };
+
+      (async () => {
+        try {
+          const header =
+            `{"name":${JSON.stringify(plan.name || destinations.join(" → "))},` +
+            `"summary":${JSON.stringify(plan.summary || "")},` +
+            `"cities":${JSON.stringify(plan.cities || [])},"days":[`;
+          await send(header);
+
+          const results: any[] = new Array(planDays.length).fill(null);
+          let next = 0;
+          // Synchronous drain: writer.write queues in call order, so a single
+          // pass here cannot interleave with another resolve's pass.
+          const flush = () => {
+            while (next < results.length && results[next]) {
+              send((next > 0 ? "," : "") + JSON.stringify(results[next]));
+              next++;
+            }
+          };
+          await Promise.all(
+            planDays.map(async (d, i) => {
+              results[i] = await fillOne(d, i);
+              flush();
+            }),
+          );
+          await send("]}");
+        } catch (e) {
+          console.error("Parallel fill stream error:", e.message);
+        } finally {
+          await sendChain;
+          await writer
+            .write(encoder.encode("data: [DONE]\n\n"))
+            .catch(() => {});
+          await writer.close().catch(() => {});
+
+          const sum = (fn: (u: AnthropicUsage) => number | undefined) =>
+            allUsages.reduce((acc, u) => acc + (fn(u) || 0), 0);
+          const inputTokens = sum((u) => u.input_tokens);
+          const outputTokens = sum((u) => u.output_tokens);
+          const cacheCreationTokens = sum((u) => u.cache_creation_input_tokens);
+          const cacheReadTokens = sum((u) => u.cache_read_input_tokens);
+          if (fillErrors.length)
+            console.error("Fill errors:", JSON.stringify(fillErrors));
+          console.log(
+            `Parallel IG done in ${Date.now() - totalStart}ms, tokens in=${inputTokens} out=${outputTokens}`,
+          );
+
+          const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+          const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+          runInBackground(
+            (async () => {
+              await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  apikey: supabaseKey,
+                  Authorization: `Bearer ${supabaseKey}`,
+                },
+                body: JSON.stringify({
+                  trip_id: tripId || null,
+                  function_name: "generate-itinerary",
+                  model: igModel,
+                  input_tokens: inputTokens,
+                  output_tokens: outputTokens,
+                  cache_creation_tokens: cacheCreationTokens,
+                  cache_read_tokens: cacheReadTokens,
+                  duration_ms: Date.now() - totalStart,
+                }),
+              }).catch(() => {});
+
+              await deductCredits({
+                userId: user.id,
+                model: igModel,
+                inputTokens,
+                outputTokens,
+                cacheCreationTokens,
+                cacheReadTokens,
+                functionName: "generate-itinerary",
+                tripId: tripId || null,
+                source,
+              });
+            })(),
+          );
+        }
+      })();
+
+      return new Response(readable, {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+        },
+      });
+    }
+
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -457,7 +796,9 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
         model: igModel,
         max_tokens: Math.min(40000, numDays * 3500 + 3000),
         // temperature is rejected by the Claude 5 family; keep for older models
-        ...(igModel.startsWith("claude-sonnet-5") ? {} : { temperature: 0.8 }),
+        ...(igModel.startsWith("claude-sonnet-5")
+          ? { thinking: { type: "disabled" } }
+          : { temperature: 0.8 }),
         stream: true,
         system: [
           {
@@ -481,7 +822,9 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
     const requestBodyStr = JSON.stringify({
       model: igModel,
       max_tokens: Math.min(40000, numDays * 3500 + 3000),
-      ...(igModel.startsWith("claude-sonnet-5") ? {} : { temperature: 0.8 }),
+      ...(igModel.startsWith("claude-sonnet-5")
+        ? { thinking: { type: "disabled" } }
+        : { temperature: 0.8 }),
       stream: true,
       system: [
         {
