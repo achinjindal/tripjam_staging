@@ -82,7 +82,7 @@ Rules:
 
 IMPORTANT OUTPUT ORDER: Generate "name", "summary" and "cities" BEFORE the "days" array. The app saves the trip header immediately while days stream in.
 
-Return ONLY a raw JSON object. Start with { end with }. Structure:
+Return ONLY a raw JSON object, MINIFIED — no indentation, no newlines, no spaces between tokens (pretty-printing wastes the output budget and truncates the itinerary). Start with { end with }. Structure:
 {"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"days":[{"label":"Day 1","city":"...","story_title":"2–4 word evocative title","narrative":"2–3 magazine-style sentences","description":"2–3 evocative sentences about this day","transit_tip":"Use Suica card · Ginza Line today","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","gloss":"one evocative line, max 12 words","photo_query":"iconic view search, 2-6 words","icon":"🏛️","transition":{"mode":"metro"}}],"wishlist":[{"title":"...","geocode":"...","near":"Activity Title from this day"}]}]}`;
 
 serve(async (req) => {
@@ -342,6 +342,10 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
     // Unset (prod) → Sonnet 4.6 (the Anthropic path below, unchanged). Set to a
     // "gemini-*" id (staging) → Gemini streaming path (canary A/B). Same code
     // ships to both; behaviour differs only by the env var.
+    // Default: Sonnet 4.6. Sonnet 5 (IG_MODEL=claude-sonnet-5) writes noticeably
+    // better prose but takes 60s/2-day scaling past the edge runtime's ~150s
+    // wall-clock on 4+ day trips — needs chunked generation before it can be the
+    // default. Full support (no temperature, minified output, higher caps) is in.
     const igModel = Deno.env.get("IG_MODEL") || "claude-sonnet-4-6";
     if (igModel.startsWith("gemini")) {
       const gResp = await fetch(
@@ -450,9 +454,10 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: Math.min(24000, numDays * 2000 + 2000),
-        temperature: 0.8,
+        model: igModel,
+        max_tokens: Math.min(40000, numDays * 3500 + 3000),
+        // temperature is rejected by the Claude 5 family; keep for older models
+        ...(igModel.startsWith("claude-sonnet-5") ? {} : { temperature: 0.8 }),
         stream: true,
         system: [
           {
@@ -474,9 +479,9 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
 
     // Estimate input tokens from request body size
     const requestBodyStr = JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: Math.min(24000, numDays * 2000 + 2000),
-      temperature: 0.8,
+      model: igModel,
+      max_tokens: Math.min(40000, numDays * 3500 + 3000),
+      ...(igModel.startsWith("claude-sonnet-5") ? {} : { temperature: 0.8 }),
       stream: true,
       system: [
         {
@@ -567,7 +572,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
               body: JSON.stringify({
                 trip_id: tripId || null,
                 function_name: "generate-itinerary",
-                model: "claude-sonnet-4-6",
+                model: igModel,
                 input_tokens: inputTokens,
                 output_tokens: outputTokens,
                 cache_creation_tokens: cacheCreationTokens,
@@ -577,7 +582,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
 
             await deductCredits({
               userId: user.id,
-              model: "claude-sonnet-4-6",
+              model: igModel,
               inputTokens,
               outputTokens,
               cacheCreationTokens,
