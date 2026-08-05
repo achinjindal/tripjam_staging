@@ -175,14 +175,12 @@ export async function saveVoteNote(pollId, userId, content) {
 
   const trimmed = (content || "").trim();
   if (!trimmed) return;
-  const { error } = await supabase
-    .from("comments")
-    .insert({
-      entity_type: "poll",
-      entity_id: pollId,
-      user_id: userId,
-      content: trimmed,
-    });
+  const { error } = await supabase.from("comments").insert({
+    entity_type: "poll",
+    entity_id: pollId,
+    user_id: userId,
+    content: trimmed,
+  });
   if (error) throw error;
 }
 
