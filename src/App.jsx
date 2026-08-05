@@ -6913,6 +6913,7 @@ export default function App({
   const igStreamTitlesCountRef = useRef(0);
   const [generatingRoute, setGeneratingRoute] = useState(null); // selected route shown during IG generation
   const [igGenerating, setIgGenerating] = useState(false); // true while IG is in flight (Magazine shown instead of generating screen)
+  const [igCompletedInPlace, setIgCompletedInPlace] = useState(false); // IG finished while the user stayed on the pre-trip Magazine
 
   useEffect(() => {
     if (initialScreen === "itinerary" && initialTrip?.id) {
@@ -8529,6 +8530,7 @@ export default function App({
     setAllDaysPlanned(false);
     setIgStreamTitles([]);
     igStreamTitlesCountRef.current = 0;
+    setIgCompletedInPlace(false);
     setDetailedLoading(false);
     setDetailedReady(false);
     setCompactView(true);
@@ -9155,9 +9157,18 @@ export default function App({
         })
         .then(logDetailedErr);
     }
-    // Land on Magazine tab so user continues reading while photos load in background.
-    setActiveBottomTab("brainstorm");
-    setScreen("itinerary");
+    // Stay exactly where the user is (no navigation, no scroll reset) — the
+    // sticky banner flips to its done state and a toast offers the jump.
+    setIgCompletedInPlace(true);
+    setActiveBottomTab("itinerary");
+    showToast("Your itinerary is ready", {
+      action: {
+        label: "View it →",
+        onClick: () => {
+          setScreen("itinerary");
+        },
+      },
+    });
 
     // Fetch and persist photos in background — staggered to avoid Wikimedia rate limits
     photoSweepTripRef.current = tripData.id;
@@ -11710,38 +11721,110 @@ export default function App({
                       paddingBottom: 80, // clears Trippy chat bar at bottom
                     }}
                   >
-                    {/* IG progress banner — sticky at top while itinerary generates */}
-                    {igGenerating &&
+                    {/* IG progress banner — editorial strip, sticky while the itinerary
+                        writes itself; flips to a done state that stays until the
+                        user jumps over */}
+                    {(igGenerating || igCompletedInPlace) &&
                       (() => {
-                        const isDone = detailedReady;
+                        const isDone = igCompletedInPlace;
                         const hasProgress =
                           streamingDays > 0 && streamingTotal > 0;
-                        const pct = hasProgress
-                          ? Math.min(
-                              99,
-                              Math.round(
-                                (streamingDays / streamingTotal) * 100,
-                              ),
-                            )
-                          : 0;
+                        const pct = isDone
+                          ? 100
+                          : hasProgress
+                            ? Math.min(
+                                99,
+                                Math.round(
+                                  (streamingDays / streamingTotal) * 100,
+                                ),
+                              )
+                            : 4;
                         return (
                           <div
                             style={{
                               position: "sticky",
                               top: 0,
                               zIndex: 10,
-                              background: isDone ? `${T.ocean}12` : T.chalk,
-                              borderBottom: `1px solid ${isDone ? T.ocean + "40" : T.sand}`,
-                              padding: "10px 16px 12px",
+                              background: `radial-gradient(120% 160% at 12% 0%, rgba(74,144,217,0.18) 0%, rgba(74,144,217,0) 55%), linear-gradient(160deg, ${T.dusk} 0%, ${T.ink} 85%)`,
+                              padding: "12px 16px 13px",
                             }}
                           >
-                            {/* Progress bar track */}
                             <div
                               style={{
-                                height: 3,
-                                background: T.sand,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: 12,
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <div
+                                  style={{
+                                    fontFamily: "'DM Serif Display',serif",
+                                    fontSize: 15.5,
+                                    color: T.chalk,
+                                    lineHeight: 1.25,
+                                  }}
+                                >
+                                  {isDone ? (
+                                    <>
+                                      <span style={{ color: T.gold }}>✦</span>{" "}
+                                      Your itinerary is ready
+                                    </>
+                                  ) : hasProgress ? (
+                                    <>
+                                      Writing Day {streamingDays} of{" "}
+                                      {streamingTotal}…
+                                    </>
+                                  ) : (
+                                    <>Opening the notebook…</>
+                                  )}
+                                </div>
+                                <div
+                                  style={{
+                                    fontFamily: "Georgia,serif",
+                                    fontStyle: "italic",
+                                    fontSize: 11,
+                                    color: "rgba(255,255,255,0.6)",
+                                    marginTop: 2,
+                                  }}
+                                >
+                                  {isDone
+                                    ? "Every day planned, photos on their way"
+                                    : "Keep browsing — days appear as they're written"}
+                                </div>
+                              </div>
+                              {isDone && (
+                                <button
+                                  onClick={() => {
+                                    setScreen("itinerary");
+                                    setActiveBottomTab("itinerary");
+                                  }}
+                                  style={{
+                                    background: T.gold,
+                                    color: T.ink,
+                                    border: "none",
+                                    borderRadius: RADIUS.full,
+                                    padding: "8px 16px",
+                                    fontSize: 12,
+                                    fontFamily: "Georgia,serif",
+                                    fontWeight: 700,
+                                    cursor: "pointer",
+                                    flexShrink: 0,
+                                    boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                                  }}
+                                >
+                                  View itinerary →
+                                </button>
+                              )}
+                            </div>
+                            {/* gold progress hairline */}
+                            <div
+                              style={{
+                                height: 2.5,
+                                background: "rgba(255,255,255,0.16)",
                                 borderRadius: 99,
-                                marginBottom: 8,
+                                marginTop: 10,
                                 overflow: "hidden",
                               }}
                             >
@@ -11749,12 +11832,8 @@ export default function App({
                                 style={{
                                   height: "100%",
                                   borderRadius: 99,
-                                  background: isDone ? T.ocean : T.dusk,
-                                  width: isDone
-                                    ? "100%"
-                                    : hasProgress
-                                      ? `${pct}%`
-                                      : "0%",
+                                  background: T.gold,
+                                  width: `${pct}%`,
                                   transition: "width 0.8s ease",
                                   ...(hasProgress || isDone
                                     ? {}
@@ -11764,50 +11843,6 @@ export default function App({
                                       }),
                                 }}
                               />
-                            </div>
-                            {/* Status row */}
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                gap: 8,
-                              }}
-                            >
-                              <div
-                                style={{
-                                  fontSize: 12,
-                                  fontFamily: "Georgia,serif",
-                                  color: isDone ? T.ocean : T.mist,
-                                }}
-                              >
-                                {isDone
-                                  ? "✓ Itinerary ready!"
-                                  : hasProgress
-                                    ? `✈ Planning Day ${streamingDays} of ${streamingTotal}`
-                                    : "✈ Crafting your itinerary…"}
-                              </div>
-                              {isDone && (
-                                <button
-                                  onClick={() =>
-                                    setActiveBottomTab("itinerary")
-                                  }
-                                  style={{
-                                    background: T.ocean,
-                                    color: "white",
-                                    border: "none",
-                                    borderRadius: RADIUS.full,
-                                    padding: "5px 12px",
-                                    fontSize: 11,
-                                    fontFamily: "Georgia,serif",
-                                    fontWeight: 600,
-                                    cursor: "pointer",
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  View days →
-                                </button>
-                              )}
                             </div>
                           </div>
                         );
