@@ -12732,6 +12732,79 @@ export default function App({
                       );
                     })()}
 
+                  {/* Recovery state: the trip exists but has no days — the
+                      generation was interrupted (tab closed mid-stream) or
+                      failed after the trip row was created. Without this the
+                      itinerary tab is silently blank. */}
+                  {days.length === 0 &&
+                    !igGenerating &&
+                    !detailedLoading &&
+                    !loading && (
+                      <div
+                        style={{
+                          maxWidth: 460,
+                          margin: "0 auto",
+                          padding: "72px 28px",
+                          textAlign: "center",
+                          fontFamily: "Georgia,serif",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: 11,
+                            letterSpacing: 2.2,
+                            textTransform: "uppercase",
+                            color: T.mist,
+                          }}
+                        >
+                          <span style={{ color: T.gold }}>✦</span> The itinerary
+                        </div>
+                        <div
+                          style={{
+                            fontFamily: "'DM Serif Display',serif",
+                            fontSize: 26,
+                            lineHeight: 1.15,
+                            color: T.ink,
+                            margin: "12px 0 10px",
+                          }}
+                        >
+                          This trip never finished building
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 13.5,
+                            fontStyle: "italic",
+                            color: T.mist,
+                            lineHeight: 1.6,
+                            marginBottom: 22,
+                          }}
+                        >
+                          The itinerary generation was interrupted before any
+                          days were saved. Pick a route and build it again — it
+                          only takes a minute.
+                        </div>
+                        <button
+                          onClick={() => {
+                            setScreen("brainstorm");
+                            if (onUrlChange)
+                              onUrlChange(`/trip/${trip.id}/plans`);
+                          }}
+                          style={{
+                            background: T.ink,
+                            color: T.warm,
+                            border: "none",
+                            borderRadius: RADIUS.full,
+                            padding: "11px 24px",
+                            fontFamily: "Georgia,serif",
+                            fontSize: 13,
+                            cursor: "pointer",
+                            boxShadow: "0 2px 8px rgba(15,25,35,0.25)",
+                          }}
+                        >
+                          🛣 Explore plans
+                        </button>
+                      </div>
+                    )}
                   {storyActive ? (
                     <StoryView
                       trip={trip}
