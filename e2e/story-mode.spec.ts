@@ -33,7 +33,9 @@ async function openStory(page: Page): Promise<boolean> {
   // Past-dated trip defaults to Plan; flip to Story unless already active
   if ((await storyBtn.getAttribute("aria-pressed")) !== "true")
     await storyBtn.click();
-  await page.waitForSelector(".sv-masthead", { timeout: 10000 });
+  await page.waitForSelector(".sv-root", { timeout: 10000 });
+  // First-view curtain may hold the reveal while day-1 photos resolve
+  await page.waitForSelector(".sv-masthead", { timeout: 15000 });
   return true;
 }
 

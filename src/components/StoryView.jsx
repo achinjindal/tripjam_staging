@@ -125,6 +125,17 @@ const STORY_CSS = `
 .sv-hero.sv-editorial h2{color:${T.warm};text-shadow:none;}
 .sv-goldrule{width:44px;height:2px;background:${T.gold};margin-top:16px;}
 
+/* ── first-view curtain: shown while the opening day's photos resolve ── */
+.sv-curtain{position:relative;min-height:calc(100dvh - 170px);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:40px 28px;background:radial-gradient(120% 90% at 15% 0%,rgba(74,144,217,0.16) 0%,rgba(74,144,217,0) 55%),linear-gradient(160deg,${T.dusk} 0%,${T.ink} 78%);}
+.sv-curtain .sv-eyebrow{color:${T.mistOnDark};}
+.sv-curtain .sv-eyebrow::before,.sv-curtain .sv-eyebrow::after{content:" ✦ ";color:${T.gold};letter-spacing:0;}
+.sv-curtain h2{font-family:'DM Serif Display',Georgia,serif;font-weight:400;font-size:clamp(28px,7cqw,40px);line-height:1.1;color:${T.chalk};margin:12px 0 10px;text-wrap:balance;}
+.sv-curtain p{font-family:Georgia,serif;font-style:italic;font-size:13.5px;line-height:1.6;color:rgba(255,255,255,0.75);max-width:40ch;}
+.sv-curtain svg{width:min(320px,80%);height:56px;margin-top:26px;}
+@keyframes svCurtainDash{to{stroke-dashoffset:-26;}}
+@keyframes svCurtainDot{0%,100%{opacity:0.45;}50%{opacity:1;}}
+@media (prefers-reduced-motion: reduce){.sv-curtain svg *{animation:none !important;}}
+
 /* ── ending footer ── */
 .sv-ending{max-width:640px;margin:0 auto;padding:44px 24px 80px;text-align:center;}
 .sv-ending .sv-rule{width:54px;height:2px;background:${T.gold};margin:0 auto 20px;}
@@ -985,6 +996,7 @@ function StoryDayCard({
   onPhotoSwiped,
   photoOwner,
   claimRef,
+  onFirstDaySettled,
 }) {
   const dayNumber = index + 1;
   const rootRef = useRef(null);
@@ -1023,6 +1035,13 @@ function StoryDayCard({
     0,
     Math.min(activeIdx, Math.max(slides.length - 1, 0)),
   );
+
+  // First-view curtain: tell the parent when the opening day's photos have
+  // settled (every stop resolved to a URL or a definitive miss)
+  useEffect(() => {
+    if (index === 0 && near && !pending && onFirstDaySettled)
+      onFirstDaySettled();
+  }, [index, near, pending, onFirstDaySettled]);
 
   const onSlideChange = useCallback(
     (i) => {
@@ -1170,6 +1189,23 @@ export default function StoryView({
   const [shareJob, setShareJob] = useState(null);
   const shareStageRef = useRef(null);
 
+  // First-view curtain: the opening view must be impressive, so when the
+  // first day still lacks photos we hold the reveal behind an editorial
+  // loading panel until its fetches settle (hard cap below — never hang).
+  // Trips whose day 1 is already photographed skip the curtain entirely.
+  const [curtain, setCurtain] = useState(() => {
+    const d0 = days[0];
+    return (d0?.activities || []).some(
+      (a) => isStoryStop(a) && a.type !== "hotel" && !a.photo_url,
+    );
+  });
+  useEffect(() => {
+    if (!curtain) return;
+    const t = setTimeout(() => setCurtain(false), 8000);
+    return () => clearTimeout(t);
+  }, [curtain]);
+  const onFirstDaySettled = useCallback(() => setCurtain(false), []);
+
   const openPlayer = () => {
     setPlayerOpen(true);
     posthog.capture("story_player_opened", {
@@ -1279,34 +1315,70 @@ export default function StoryView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareJob]);
 
+  const { title: curtainTitle } = deriveMasthead(trip, days);
   return (
     <StoryErrorBoundary onError={onError}>
       <div className="sv-root">
         <style>{STORY_CSS}</style>
-        <StoryMasthead trip={trip} days={days} onPlay={openPlayer} />
-        {days.map((day, i) => (
-          <StoryDayCard
-            key={day.id}
-            day={day}
-            index={i}
-            narrativesPending={narrativesPending}
-            onOpenPlan={onOpenPlan}
-            onShareDay={shareDay}
-            preloadDay={preloadDay}
-            onPhotoSwiped={onPhotoSwiped}
-            photoOwner={photoOwner}
-            claimRef={claimRef}
-          />
-        ))}
-        <div className="sv-ending">
-          <div className="sv-rule" />
-          <p>
-            The end — for now.{" "}
-            <button onClick={() => onOpenPlan(null)}>
-              Switch to Plan anytime
-            </button>{" "}
-            to edit times, notes and bookings.
-          </p>
+        {curtain && (
+          <div className="sv-curtain" role="status" aria-live="polite">
+            <div className="sv-eyebrow">The Story</div>
+            <h2>Setting the scene…</h2>
+            <p>
+              Gathering the photographs for {curtainTitle} — just a few seconds.
+            </p>
+            <svg viewBox="0 0 320 64" aria-hidden="true">
+              <path
+                d="M 26 46 C 60 16, 90 42, 124 20 S 190 58, 216 50 S 275 20, 294 26"
+                fill="none"
+                stroke={T.gold}
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeDasharray="7 6"
+                style={{ animation: "svCurtainDash 1.1s linear infinite" }}
+              />
+              {[26, 124, 216, 294].map((x, i) => (
+                <circle
+                  key={x}
+                  cx={x}
+                  cy={[46, 20, 50, 26][i]}
+                  r="3.5"
+                  fill={T.chalk}
+                  style={{
+                    animation: `svCurtainDot 2.2s ease-in-out ${i * 0.4}s infinite`,
+                  }}
+                />
+              ))}
+            </svg>
+          </div>
+        )}
+        <div style={curtain ? { display: "none" } : undefined}>
+          <StoryMasthead trip={trip} days={days} onPlay={openPlayer} />
+          {days.map((day, i) => (
+            <StoryDayCard
+              key={day.id}
+              day={day}
+              index={i}
+              narrativesPending={narrativesPending}
+              onOpenPlan={onOpenPlan}
+              onShareDay={shareDay}
+              preloadDay={preloadDay}
+              onPhotoSwiped={onPhotoSwiped}
+              photoOwner={photoOwner}
+              claimRef={claimRef}
+              onFirstDaySettled={onFirstDaySettled}
+            />
+          ))}
+          <div className="sv-ending">
+            <div className="sv-rule" />
+            <p>
+              The end — for now.{" "}
+              <button onClick={() => onOpenPlan(null)}>
+                Switch to Plan anytime
+              </button>{" "}
+              to edit times, notes and bookings.
+            </p>
+          </div>
         </div>
         {playerOpen && (
           <StoryPlayer
