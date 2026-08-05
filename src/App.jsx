@@ -2,6 +2,7 @@ import {
   useState,
   useRef,
   useEffect,
+  useMemo,
   useCallback,
   useContext,
   Fragment,
@@ -37,6 +38,14 @@ import { fetchMembers, INVITE_ENABLED, memberName } from "./members.js";
 import { fetchPreferences } from "./preferences.js";
 import { fetchPolls, closePoll } from "./polls.js";
 import { PollComposeSheet, OpenPollPin } from "./components/Polls.jsx";
+import {
+  fetchActivity,
+  fetchReadState,
+  markSeen,
+  undoActivity,
+} from "./feed.js";
+import ActivityFeed from "./components/ActivityFeed.jsx";
+import WhileAwaySheet from "./components/WhileAwaySheet.jsx";
 import {
   _photoCache,
   _usedPhotoUrls,
@@ -6751,6 +6760,11 @@ export default function App({
       const list = await fetchPolls(tripId);
       setPolls(list);
     };
+    const reconcileActivity = async () => {
+      if (!INVITE_ENABLED) return;
+      const list = await fetchActivity(tripId);
+      setActivity(list);
+    };
     // Reconnect / initial backfill (postgres_changes doesn't replay).
     const backfill = () => {
       reconcileMembers();
@@ -6759,6 +6773,7 @@ export default function App({
         reconcileRoutes();
         reconcilePreferences();
         reconcilePolls();
+        reconcileActivity();
       }
     };
     const unsubscribe = subscribeTrip(
@@ -6798,9 +6813,14 @@ export default function App({
           );
         },
         activity_log: (payload) => {
-          // TODO(Phase 3): activity feed / "while you were away".
-          if (import.meta.env.DEV)
-            console.debug("[realtime] activity", payload.eventType);
+          // Phase 3: prepend new change rows live. Only INSERT is consumed (NEW is
+          // always complete). Dedup by id so our own echo appears once.
+          if (membersRef.current.length <= 1) return;
+          if (payload.eventType !== "INSERT" || !payload.new) return;
+          const row = payload.new;
+          setActivity((prev) =>
+            prev.some((r) => r.id === row.id) ? prev : [row, ...prev],
+          );
         },
         polls: () => {
           // Live tallies: poll_votes / comments writes touch polls.updated_at
@@ -6832,6 +6852,12 @@ export default function App({
   // Phase 6: polls / group decisions.
   const [polls, setPolls] = useState([]);
   const [showPollCompose, setShowPollCompose] = useState(false);
+  // Phase 3: activity feed / "while you were away".
+  const [activity, setActivity] = useState([]);
+  const [lastSeenAt, setLastSeenAt] = useState(null);
+  const [showFeed, setShowFeed] = useState(false);
+  const [showWhileAway, setShowWhileAway] = useState(false);
+  const tripOpenedAtRef = useRef(0);
   // Phase 2.5 pooled credits: the Trip Credits sheet (pool balance + funding).
   // Ships dark behind INVITE_ENABLED + shared-trip gating (see isSharedTrip).
   const [showTripCredits, setShowTripCredits] = useState(false);
@@ -6843,9 +6869,18 @@ export default function App({
       return;
     }
     let cancelled = false;
+    // Timestamp of this trip-open. "While you were away" only surfaces changes
+    // from BEFORE this moment; changes that arrive live afterwards just bump the
+    // bell badge (they didn't happen "while away").
+    tripOpenedAtRef.current = Date.now();
     fetchMembers(tripId).then((list) => !cancelled && setMembers(list));
     fetchPreferences(tripId).then((list) => !cancelled && setPreferences(list));
     fetchPolls(tripId).then((list) => !cancelled && setPolls(list));
+    fetchActivity(tripId).then((list) => !cancelled && setActivity(list));
+    if (session?.user?.id)
+      fetchReadState(tripId, session.user.id).then(
+        (ts) => !cancelled && setLastSeenAt(ts),
+      );
     return () => {
       cancelled = true;
     };
@@ -6875,6 +6910,58 @@ export default function App({
       cancelled = true;
     };
   }, [isSharedTrip, trip?.id]);
+  // Phase 3: unseen changes by others (drives the bell badge + while-away sheet).
+  const selfId = session?.user?.id;
+  const unseen = useMemo(
+    () =>
+      (activity || []).filter(
+        (r) =>
+          r.user_id !== selfId &&
+          r.action !== "undo" &&
+          new Date(r.created_at).getTime() >
+            (lastSeenAt ? new Date(lastSeenAt).getTime() : 0),
+      ),
+    [activity, lastSeenAt, selfId],
+  );
+  const unseenN = unseen.length;
+  const unseenBadge = unseenN > 9 ? "9+" : String(unseenN);
+  // Only changes from BEFORE this trip-open count as "while you were away";
+  // live arrivals bump the badge but never pop the sheet mid-session.
+  const awayUnseen = useMemo(
+    () =>
+      unseen.filter(
+        (r) => new Date(r.created_at).getTime() <= tripOpenedAtRef.current,
+      ),
+    [unseen],
+  );
+  const feedBadgeStyle = {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    minWidth: 15,
+    height: 15,
+    padding: "0 3px",
+    borderRadius: 8,
+    background: T.clay || "#C4553B",
+    color: "#fff",
+    fontSize: 9,
+    fontWeight: 700,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    lineHeight: 1,
+  };
+  // "While you were away" — fire once per trip-open (guarded by a ref keyed on
+  // trip.id) when there are unseen changes from BEFORE the trip was opened.
+  const whileAwayShownFor = useRef(null);
+  useEffect(() => {
+    if (!isSharedTrip || !trip?.id) return;
+    if (whileAwayShownFor.current === trip.id) return;
+    if (awayUnseen.length > 0) {
+      whileAwayShownFor.current = trip.id;
+      setShowWhileAway(true);
+    }
+  }, [isSharedTrip, trip?.id, awayUnseen.length]);
   // Pool balance lives on trips.credit_balance. Clamp to >= 0 for display —
   // the pool can dip slightly negative server-side but users never see it.
   const poolBalance = Math.max(
@@ -9304,6 +9391,67 @@ export default function App({
     if (trip?.id) fetchPolls(trip.id).then(setPolls);
   };
 
+  // ── Phase 3: feed / undo ──
+  const refreshActivity = () => {
+    if (trip?.id) fetchActivity(trip.id).then(setActivity);
+  };
+  // Opening the feed clears the badge (stamp last_seen_at = now()).
+  const openFeed = () => {
+    setShowFeed(true);
+    setShowWhileAway(false);
+    if (trip?.id && session?.user?.id) {
+      markSeen(trip.id, session.user.id);
+      setLastSeenAt(new Date().toISOString());
+    }
+  };
+  const dismissWhileAway = () => {
+    setShowWhileAway(false);
+    if (trip?.id && session?.user?.id) {
+      markSeen(trip.id, session.user.id);
+      setLastSeenAt(new Date().toISOString());
+    }
+  };
+  // Reverse a change from its undo_payload. Cross-user allowed; best-effort +
+  // warn when the entity was changed since (R5). The "Reverted" toast must not
+  // depend on the action='undo' log write (fire-and-forget). Day/activity undos
+  // refresh live via the activities→days.updated_at trigger + days channel.
+  const handleUndo = async (row) => {
+    let res = await undoActivity(row);
+    if (res.conflict) {
+      const go = await confirmSheet({
+        title: "Undo this change?",
+        message:
+          "This was built on since — undoing may revert newer edits. Undo anyway?",
+        confirmLabel: "Undo anyway",
+        cancelLabel: "Keep",
+        danger: true,
+      });
+      if (!go) return;
+      res = await undoActivity(row, { force: true });
+    }
+    if (!res.ok) {
+      showToast(
+        res.error === "not undoable" ? "Can't undo this" : "Undo failed",
+      );
+      return;
+    }
+    const actorName =
+      members.find((m) => m.user_id === row.user_id)?.profiles?.username ||
+      "someone";
+    const actor = row.user_id === session?.user?.id ? "your" : `${actorName}'s`;
+    logActivity({
+      tripId: trip?.id,
+      userId: session?.user?.id,
+      action: "undo",
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      summary: `undid ${actor} change${row.summary ? ` — ${row.summary}` : ""}`,
+      undoPayload: { undid: row.id },
+    });
+    showToast("Reverted");
+    refreshActivity();
+  };
+
   // Close a poll (creator/owner, enforced server-side) and — for anchored day
   // polls (D-P8 auto-apply) — hand the winning option to Trippy through the
   // normal chat path so it regenerates the day (reuses actions + pool credits +
@@ -9620,14 +9768,19 @@ export default function App({
         case "add_todo": {
           const tripId = trip?.id || editingTrip?.id;
           if (!tripId || !action.text) break;
-          const { error: todoErr } = await supabase.from("trip_todos").insert({
-            trip_id: tripId,
-            text: action.text,
-            done: false,
-            category: action.category || null,
-            due_date: action.due_date || null,
-            position: 0,
-          });
+          // .select() the inserted id so Phase-3 undo can delete this exact row.
+          const { data: todoRow, error: todoErr } = await supabase
+            .from("trip_todos")
+            .insert({
+              trip_id: tripId,
+              text: action.text,
+              done: false,
+              category: action.category || null,
+              due_date: action.due_date || null,
+              position: 0,
+            })
+            .select("id")
+            .single();
           if (todoErr) console.warn("add_todo failed:", todoErr);
           else
             logActivity({
@@ -9635,14 +9788,16 @@ export default function App({
               userId: session?.user?.id,
               action: "add_todo",
               entityType: "todo",
+              entityId: todoRow?.id || null,
               summary: `Added to-do: ${action.text}`,
+              undoPayload: todoRow?.id ? { id: todoRow.id } : null,
             });
           break;
         }
         case "add_expense": {
           const tripId = trip?.id || editingTrip?.id;
           if (!tripId || !action.title || !action.amount) break;
-          const { error: expErr } = await supabase
+          const { data: expRow, error: expErr } = await supabase
             .from("trip_expenses")
             .insert({
               trip_id: tripId,
@@ -9652,7 +9807,9 @@ export default function App({
               category: action.category || "Other",
               is_planned: action.is_planned !== false,
               position: 0,
-            });
+            })
+            .select("id")
+            .single();
           if (expErr) console.warn("add_expense failed:", expErr);
           else
             logActivity({
@@ -9660,14 +9817,16 @@ export default function App({
               userId: session?.user?.id,
               action: "add_expense",
               entityType: "expense",
+              entityId: expRow?.id || null,
               summary: `Added expense: ${action.title}`,
+              undoPayload: expRow?.id ? { id: expRow.id } : null,
             });
           break;
         }
         case "add_bookmark": {
           const tripId = trip?.id || editingTrip?.id;
           if (!tripId || !action.title || !action.url) break;
-          const { error: bmErr } = await supabase
+          const { data: bmRow, error: bmErr } = await supabase
             .from("trip_bookmarks")
             .insert({
               trip_id: tripId,
@@ -9675,7 +9834,9 @@ export default function App({
               url: action.url,
               icon: "🔗",
               position: 0,
-            });
+            })
+            .select("id")
+            .single();
           if (bmErr) console.warn("add_bookmark failed:", bmErr);
           else
             logActivity({
@@ -9683,13 +9844,17 @@ export default function App({
               userId: session?.user?.id,
               action: "add_bookmark",
               entityType: "bookmark",
+              entityId: bmRow?.id || null,
               summary: `Added bookmark: ${action.title}`,
+              undoPayload: bmRow?.id ? { id: bmRow.id } : null,
             });
           break;
         }
         case "set_budget": {
           const tripId = trip?.id || editingTrip?.id;
           if (!tripId || !action.amount) break;
+          // Capture the prior budget so Phase-3 undo can restore it.
+          const priorBudget = trip?.budget_amount ?? null;
           const { error: budgetErr } = await supabase
             .from("trips")
             .update({ budget_amount: action.amount })
@@ -9703,6 +9868,7 @@ export default function App({
               entityType: "trip",
               entityId: tripId,
               summary: `Set budget to ${action.amount}`,
+              undoPayload: { budget_amount: priorBudget },
             });
           break;
         }
@@ -11042,6 +11208,19 @@ export default function App({
               )}
               {isSharedTrip && (
                 <button
+                  onClick={openFeed}
+                  style={{ ...tripContextBtnStyle, position: "relative" }}
+                  aria-label="Activity"
+                  title="Activity"
+                >
+                  🔔
+                  {unseenN > 0 && (
+                    <span style={feedBadgeStyle}>{unseenBadge}</span>
+                  )}
+                </button>
+              )}
+              {isSharedTrip && (
+                <button
                   onClick={() => setShowTripCredits(true)}
                   style={tripContextBtnStyle}
                   title="Trip credits"
@@ -12342,6 +12521,30 @@ export default function App({
                             </>
                           ) : (
                             "＋ Invite"
+                          )}
+                        </button>
+                      )}
+                      {isSharedTrip && !useDesktopShell && (
+                        <button
+                          onClick={openFeed}
+                          aria-label="Activity"
+                          title="Activity"
+                          style={{
+                            position: "relative",
+                            background: "rgba(255,255,255,0.15)",
+                            border: "none",
+                            borderRadius: RADIUS.full,
+                            padding: "4px 11px",
+                            color: "white",
+                            fontSize: 12,
+                            cursor: "pointer",
+                            flexShrink: 0,
+                            marginLeft: 8,
+                          }}
+                        >
+                          🔔
+                          {unseenN > 0 && (
+                            <span style={feedBadgeStyle}>{unseenBadge}</span>
                           )}
                         </button>
                       )}
@@ -15689,6 +15892,31 @@ export default function App({
             days={days}
             onClose={() => setShowPollCompose(false)}
             onCreated={refreshPolls}
+          />
+        )}
+        {INVITE_ENABLED && showFeed && trip?.id && isSharedTrip && (
+          <ActivityFeed
+            members={members}
+            session={session}
+            activity={activity}
+            onUndo={handleUndo}
+            onClose={() => setShowFeed(false)}
+          />
+        )}
+        {INVITE_ENABLED && showWhileAway && trip?.id && isSharedTrip && (
+          <WhileAwaySheet
+            members={members}
+            session={session}
+            unseen={awayUnseen}
+            sinceLabel={
+              lastSeenAt
+                ? new Date(lastSeenAt).toLocaleDateString(undefined, {
+                    weekday: "short",
+                  })
+                : null
+            }
+            onReview={openFeed}
+            onDismiss={dismissWhileAway}
           />
         )}
       </div>

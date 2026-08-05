@@ -233,14 +233,12 @@ const note = async (uid, txt, cl) => {
     .eq("user_id", uid);
   if (d.error) throw d.error;
   if (txt) {
-    const e = await cl
-      .from("comments")
-      .insert({
-        entity_type: "poll",
-        entity_id: p3.id,
-        user_id: uid,
-        content: txt,
-      });
+    const e = await cl.from("comments").insert({
+      entity_type: "poll",
+      entity_id: p3.id,
+      user_id: uid,
+      content: txt,
+    });
     if (e.error) throw e.error;
   }
 };

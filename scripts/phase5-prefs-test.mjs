@@ -77,17 +77,15 @@ const inv = await A.rpc("invite_user_by_handle", {
 await B.rpc("respond_invite", { p_invite: inv.data.invite_id, p_accept: true });
 
 const up = (cl, uid, text) =>
-  cl
-    .from("trip_preferences")
-    .upsert(
-      {
-        trip_id: T,
-        user_id: uid,
-        prefs_text: text,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "trip_id,user_id" },
-    );
+  cl.from("trip_preferences").upsert(
+    {
+      trip_id: T,
+      user_id: uid,
+      prefs_text: text,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "trip_id,user_id" },
+  );
 
 ok(
   "A saves own style",

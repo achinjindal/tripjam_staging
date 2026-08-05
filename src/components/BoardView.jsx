@@ -309,6 +309,7 @@ function TodoView({ trip, onBack }) {
         entityType: "todo",
         entityId: data.id,
         summary: `Added to-do: ${text}`,
+        undoPayload: { id: data.id },
       });
     }
   };
@@ -914,7 +915,17 @@ function BookmarksView({ trip, onBack }) {
       })
       .select()
       .single();
-    if (data) setBookmarks((prev) => [...prev, data]);
+    if (data) {
+      setBookmarks((prev) => [...prev, data]);
+      logActivity({
+        tripId: trip.id,
+        action: "add_bookmark",
+        entityType: "bookmark",
+        entityId: data.id,
+        summary: `Added bookmark: ${t}`,
+        undoPayload: { id: data.id },
+      });
+    }
   };
 
   const deleteBookmark = async (bm) => {
@@ -1337,6 +1348,7 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
         entityType: "expense",
         entityId: editingExpense.id,
         summary: `Edited expense: ${t}`,
+        undoPayload: { expense: editingExpense },
       });
     } else {
       setAddTitle("");
@@ -1363,6 +1375,7 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
           entityType: "expense",
           entityId: data.id,
           summary: `Added expense: ${t}`,
+          undoPayload: { id: data.id },
         });
       }
     }
@@ -1400,6 +1413,7 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
   const saveBudget = async () => {
     const amt = parseFloat(budgetInput);
     if (isNaN(amt) || amt <= 0) return;
+    const priorBudget = trip.budget_amount ?? null; // for Phase-3 undo
     setBudget(amt);
     setEditingBudget(false);
     await supabase
@@ -1413,6 +1427,7 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
       entityType: "trip",
       entityId: trip.id,
       summary: `Set budget to ${amt}`,
+      undoPayload: { budget_amount: priorBudget },
     });
   };
 
