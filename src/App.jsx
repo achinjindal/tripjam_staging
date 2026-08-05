@@ -35,6 +35,8 @@ import { TripCreditsSheet } from "./CreditsOverlay.jsx";
 import { AvatarStack } from "./MemberAvatar.jsx";
 import { fetchMembers, INVITE_ENABLED, memberName } from "./members.js";
 import { fetchPreferences } from "./preferences.js";
+import { fetchPolls, closePoll } from "./polls.js";
+import { PollComposeSheet, OpenPollPin } from "./components/Polls.jsx";
 import {
   _photoCache,
   _usedPhotoUrls,
@@ -6744,6 +6746,11 @@ export default function App({
       const list = await fetchPreferences(tripId);
       setPreferences(list);
     };
+    const reconcilePolls = async () => {
+      if (!INVITE_ENABLED) return;
+      const list = await fetchPolls(tripId);
+      setPolls(list);
+    };
     // Reconnect / initial backfill (postgres_changes doesn't replay).
     const backfill = () => {
       reconcileMembers();
@@ -6751,6 +6758,7 @@ export default function App({
         reconcileDays();
         reconcileRoutes();
         reconcilePreferences();
+        reconcilePolls();
       }
     };
     const unsubscribe = subscribeTrip(
@@ -6794,10 +6802,11 @@ export default function App({
           if (import.meta.env.DEV)
             console.debug("[realtime] activity", payload.eventType);
         },
-        polls: (payload) => {
-          // TODO(Phase 6): Decisions hub / open-poll pin.
-          if (import.meta.env.DEV)
-            console.debug("[realtime] poll", payload.eventType);
+        polls: () => {
+          // Live tallies: poll_votes / comments writes touch polls.updated_at
+          // (trigger) → this fires → reconcile all polls (votes + notes) from DB.
+          if (membersRef.current.length > 1)
+            debounce("polls", reconcilePolls, 200);
         },
       },
       backfill,
@@ -6820,6 +6829,9 @@ export default function App({
   const [preferences, setPreferences] = useState([]);
   const [showPreferences, setShowPreferences] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
+  // Phase 6: polls / group decisions.
+  const [polls, setPolls] = useState([]);
+  const [showPollCompose, setShowPollCompose] = useState(false);
   // Phase 2.5 pooled credits: the Trip Credits sheet (pool balance + funding).
   // Ships dark behind INVITE_ENABLED + shared-trip gating (see isSharedTrip).
   const [showTripCredits, setShowTripCredits] = useState(false);
@@ -6833,6 +6845,7 @@ export default function App({
     let cancelled = false;
     fetchMembers(tripId).then((list) => !cancelled && setMembers(list));
     fetchPreferences(tripId).then((list) => !cancelled && setPreferences(list));
+    fetchPolls(tripId).then((list) => !cancelled && setPolls(list));
     return () => {
       cancelled = true;
     };
@@ -9286,6 +9299,57 @@ export default function App({
       });
   };
 
+  // ── Phase 6: polls ──
+  const refreshPolls = () => {
+    if (trip?.id) fetchPolls(trip.id).then(setPolls);
+  };
+
+  // Close a poll (creator/owner, enforced server-side) and — for anchored day
+  // polls (D-P8 auto-apply) — hand the winning option to Trippy through the
+  // normal chat path so it regenerates the day (reuses actions + pool credits +
+  // realtime). Freeform polls just record the result. Idempotent: only the caller
+  // that actually flips open→resolved (closed_now) applies, so no double-apply.
+  const applyPollClose = async (poll) => {
+    try {
+      const res = await closePoll(poll.id);
+      refreshPolls();
+      if (!res?.closed_now) {
+        if (res) showToast("This poll was already closed");
+        return;
+      }
+      const winnerId = res.winner;
+      if (!winnerId) {
+        showToast("Poll closed — no clear winner, nothing changed");
+        return;
+      }
+      const winnerLabel =
+        poll.options?.find((o) => o.id === winnerId)?.label || "the winner";
+      if (res.entity_type === "day" && res.entity_id) {
+        const idx = (days || []).findIndex((d) => d.id === res.entity_id);
+        const dayName =
+          idx >= 0
+            ? `Day ${idx + 1}${days[idx].city ? ` (${days[idx].city})` : ""}`
+            : "the chosen day";
+        const noteCtx = (poll.notes || []).length
+          ? " Notes from the group: " +
+            poll.notes.map((n) => `"${n.content}"`).join("; ") +
+            "."
+          : "";
+        showToast(`Applying “${winnerLabel}” to ${dayName}…`);
+        setActiveBottomTab("itinerary");
+        await sendChatDirect(
+          `The group voted on "${poll.question}" and chose "${winnerLabel}". ` +
+            `Please update ${dayName} to reflect this group decision.${noteCtx}`,
+        );
+      } else {
+        showToast(`Decided: ${winnerLabel}`);
+      }
+    } catch (e) {
+      refreshPolls();
+      showToast(e?.message || "Couldn't close the poll");
+    }
+  };
+
   // ── Action dispatcher: executes actions returned by unified chat ──
   const dispatchActions = async (actions, userMsg, history) => {
     if (!actions?.length) return;
@@ -9659,10 +9723,11 @@ export default function App({
           break;
         }
         case "create_poll": {
-          // Phase 6 wires this to the polls table + Board→Decisions UI. Until
-          // then it's a deliberate no-op so an early/hallucinated create_poll is
-          // inert rather than a broken action. Not yet advertised in the chat
-          // function's action vocabulary.
+          // Phase 6 polls are manual-only in v1 (product decision D-P4): polls are
+          // created from the ＋Poll compose sheet, not by Trippy, so create_poll is
+          // deliberately NOT in the chat function's action vocabulary. This stays a
+          // no-op so any early/hallucinated create_poll is inert. Trippy-suggested
+          // polls are a planned fast-follow.
           break;
         }
       }
@@ -12929,9 +12994,28 @@ export default function App({
                             .update({ board_notes: text })
                             .eq("id", trip.id);
                         }}
+                        isSharedTrip={isSharedTrip}
+                        session={session}
+                        members={members}
+                        polls={polls}
+                        onPollChanged={refreshPolls}
+                        onClosePoll={applyPollClose}
+                        onComposePoll={() => setShowPollCompose(true)}
                       />
                     </div>
                   ))}
+
+                {/* Phase 6: open-poll pin — slim cross-tab bar so live decisions
+                    don't get buried. Shared trips only; taps into Board → Decisions. */}
+                {isSharedTrip && (
+                  <OpenPollPin
+                    polls={polls}
+                    onOpen={() => {
+                      setBoardInitialSection("decisions");
+                      setActiveBottomTab("board");
+                    }}
+                  />
+                )}
 
                 {/* ── BOTTOM NAV ──
                   Hidden on desktop (D22): Map tab is redundant because the map
@@ -15596,6 +15680,15 @@ export default function App({
             members={members}
             session={session}
             onClose={() => setShowTripCredits(false)}
+          />
+        )}
+        {INVITE_ENABLED && showPollCompose && trip?.id && isSharedTrip && (
+          <PollComposeSheet
+            trip={trip}
+            session={session}
+            days={days}
+            onClose={() => setShowPollCompose(false)}
+            onCreated={refreshPolls}
           />
         )}
       </div>

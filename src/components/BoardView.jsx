@@ -10,6 +10,7 @@ import {
 import { supabase } from "../supabase";
 import { handleGatedResponse, refreshCredits } from "../credits";
 import { logActivity } from "../activity";
+import { DecisionsView } from "./Polls.jsx";
 
 /* ─── BOARD VIEW ─────────────────────────────────────────────────────── */
 
@@ -2809,6 +2810,13 @@ function BoardView({
   onApplyHotels,
   initialSection = null,
   onInitialSectionConsumed,
+  isSharedTrip = false,
+  session = null,
+  members = [],
+  polls = [],
+  onPollChanged,
+  onClosePoll,
+  onComposePoll,
 }) {
   const [activeSection, setActiveSection] = useState(null);
   const [todoItems, setTodoItems] = useState(null);
@@ -2868,6 +2876,20 @@ function BoardView({
   }
   if (activeSection === "bookmarks") {
     return <BookmarksView trip={trip} onBack={goBack} />;
+  }
+  if (activeSection === "decisions") {
+    return (
+      <DecisionsView
+        trip={trip}
+        session={session}
+        members={members}
+        polls={polls}
+        onChanged={onPollChanged}
+        onClosePoll={onClosePoll}
+        onCompose={onComposePoll}
+        onBack={goBack}
+      />
+    );
   }
   if (activeSection === "expenses") {
     return (
@@ -2941,6 +2963,56 @@ function BoardView({
         gap: 12,
       }}
     >
+      {/* ── DECISIONS (shared trips only) ── */}
+      {isSharedTrip && (
+        <div
+          onClick={() => openSection("decisions")}
+          style={{
+            background: T.chalk,
+            borderRadius: RADIUS.lg,
+            border: `1px solid ${T.sand}`,
+            cursor: "pointer",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "14px 16px 10px",
+            }}
+          >
+            <div style={{ fontSize: 24, flexShrink: 0 }}>🗳️</div>
+            <div style={{ flex: 1 }}>
+              <div
+                style={{
+                  fontFamily: "'DM Serif Display',serif",
+                  fontSize: 15,
+                  color: T.ink,
+                }}
+              >
+                Decisions
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: T.mist,
+                  fontFamily: "Georgia,serif",
+                }}
+              >
+                {(() => {
+                  const open = polls.filter((p) => p.status === "open").length;
+                  return open > 0
+                    ? `${open} open ${open === 1 ? "poll" : "polls"} — cast your vote`
+                    : "Start a poll when the group can't agree";
+                })()}
+              </div>
+            </div>
+            <div style={{ fontSize: 16, color: T.mist, flexShrink: 0 }}>›</div>
+          </div>
+        </div>
+      )}
+
       {/* ── TRAVEL & HOTELS ── */}
       <div
         onClick={() => openSection("logistics")}
