@@ -161,7 +161,7 @@ const CATEGORY_ORDER = [
   "Day of travel",
 ];
 
-function TodoView({ trip, onBack }) {
+function TodoView({ trip, onBack, boardTick = 0 }) {
   const [todos, setTodos] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
   const [generating, setGenerating] = useState(false);
@@ -186,7 +186,7 @@ function TodoView({ trip, onBack }) {
         }
       })
       .catch(() => setLoading(false));
-  }, [trip.id]);
+  }, [trip.id, boardTick]); // boardTick: reconcile on live co-member changes
 
   const generateTodos = async (existing) => {
     setGenerating(true);
@@ -842,7 +842,7 @@ function TodoView({ trip, onBack }) {
 }
 
 /* ─── BOOKMARKS VIEW ─────────────────────────────────────────────────── */
-function BookmarksView({ trip, onBack }) {
+function BookmarksView({ trip, onBack, boardTick = 0 }) {
   const [bookmarks, setBookmarks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState("");
@@ -861,7 +861,7 @@ function BookmarksView({ trip, onBack }) {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [trip.id]);
+  }, [trip.id, boardTick]); // boardTick: reconcile on live co-member changes
 
   const iconForUrl = (u) => {
     if (/booking\.com/i.test(u)) return "🏨";
@@ -1279,7 +1279,7 @@ const EXPENSE_COLORS = {
   Other: "#6B7280",
 };
 
-function ExpensesView({ trip, onBack, onUpdateTrip }) {
+function ExpensesView({ trip, onBack, onUpdateTrip, boardTick = 0 }) {
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -1308,7 +1308,7 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [trip.id]);
+  }, [trip.id, boardTick]); // boardTick: reconcile on live co-member changes
 
   const addExpense = async () => {
     const t = addTitle.trim();
@@ -2832,6 +2832,7 @@ function BoardView({
   onPollChanged,
   onClosePoll,
   onComposePoll,
+  boardTick = 0,
 }) {
   const [activeSection, setActiveSection] = useState(null);
   const [todoItems, setTodoItems] = useState(null);
@@ -2881,16 +2882,16 @@ function BoardView({
       .eq("trip_id", trip.id)
       .then(({ count }) => setBookmarkCount(count || 0))
       .catch(() => setBookmarkCount(0));
-  }, [trip?.id, activeSection]); // re-fetch when returning from sub-view
+  }, [trip?.id, activeSection, boardTick]); // re-fetch on return + on live board changes
 
   if (activeSection === "notes") {
     return <NotesView trip={trip} onSaveNotes={onSaveNotes} onBack={goBack} />;
   }
   if (activeSection === "todo") {
-    return <TodoView trip={trip} onBack={goBack} />;
+    return <TodoView trip={trip} onBack={goBack} boardTick={boardTick} />;
   }
   if (activeSection === "bookmarks") {
-    return <BookmarksView trip={trip} onBack={goBack} />;
+    return <BookmarksView trip={trip} onBack={goBack} boardTick={boardTick} />;
   }
   if (activeSection === "decisions") {
     return (
@@ -2912,6 +2913,7 @@ function BoardView({
         trip={trip}
         onBack={goBack}
         onUpdateTrip={(updates) => Object.assign(trip, updates)}
+        boardTick={boardTick}
       />
     );
   }

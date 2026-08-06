@@ -29,6 +29,10 @@ const TRIP_SCOPED_TABLES = [
   "brainstorm_items",
   "trip_members",
   "trip_preferences",
+  // Tier 2 board live-sync (REPLICA IDENTITY FULL so filtered DELETEs deliver).
+  "trip_todos",
+  "trip_expenses",
+  "trip_bookmarks",
 ];
 
 /**

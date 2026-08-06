@@ -5,13 +5,13 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { login } from "./helpers";
 
-// Phase-3 collaboration: activity feed / "while you were away" / undo.
+// Realtime Tier 2 — board live-sync.
 //
-// One browser (member B) + a Node client (owner A) that drives a deterministic,
-// LLM-free change. Asserts the live loop: A makes a change → B's header 🔔 badge
-// increments via realtime → B opens the feed and sees the attributed row → B taps
-// Undo → the change is reversed (owner confirms the row is gone) and the row is
-// annotated. Gated on the flags + collab RPCs + Phase-3 migration; skips cleanly.
+// One browser (member B, on Board → To-dos) + a Node client (owner A) driving
+// deterministic board writes. Asserts the live loop: A adds a to-do → it appears
+// in B's list live (boardTick refetch); A deletes it → it vanishes live (the
+// DELETE path that REPLICA IDENTITY FULL enables). Gated on the flags + collab
+// RPCs + Tier-2 migration; skips cleanly.
 
 const TRIP_NAME = "Tokyo to Kyoto Classic";
 const OWNER_EMAIL = "qa-tester";
@@ -87,14 +87,14 @@ function trackChannel(page: Page) {
   };
 }
 
-test.describe("Collaboration — activity feed / undo (Phase 3)", () => {
+test.describe("Collaboration — board live-sync (Tier 2)", () => {
   test.skip(
     !INVITE_ENABLED || !REALTIME_ENABLED,
-    "requires VITE_INVITE_ENABLED=true + VITE_REALTIME_ENABLED=true + collab RPCs + Phase-3 migration on the target DB",
+    "requires VITE_INVITE_ENABLED=true + VITE_REALTIME_ENABLED=true + collab RPCs + Tier-2 migration on the target DB",
   );
   test.setTimeout(150000);
 
-  test("a change syncs to the member's feed and can be undone", async ({
+  test("a co-member's to-do appears and disappears live", async ({
     browser,
   }) => {
     const owner = await signedClient(OWNER_EMAIL, OWNER_PASSWORD);
@@ -131,8 +131,8 @@ test.describe("Collaboration — activity feed / undo (Phase 3)", () => {
       test.skip(true, "trip not shared");
       return;
     }
-    // Pre-seed both styles + mark B's read-state now, so neither the Phase-5
-    // nudge nor a stale "while you were away" sheet blocks the header.
+    // Pre-seed styles + B read-state so neither the prefs nudge nor a while-away
+    // sheet blocks the Board navigation.
     for (const [cl, uid] of [
       [owner, ownerId],
       [bClient, bId],
@@ -144,18 +144,20 @@ test.describe("Collaboration — activity feed / undo (Phase 3)", () => {
           { onConflict: "trip_id,user_id" },
         );
     }
-    await bClient.from("trip_read_state").upsert(
-      {
-        trip_id: tripId,
-        user_id: bId,
-        last_seen_at: new Date().toISOString(),
-      },
-      { onConflict: "trip_id,user_id" },
-    );
+    await bClient
+      .from("trip_read_state")
+      .upsert(
+        {
+          trip_id: tripId,
+          user_id: bId,
+          last_seen_at: new Date().toISOString(),
+        },
+        { onConflict: "trip_id,user_id" },
+      );
 
     const b = await (await browser.newContext()).newPage();
     const waitB = trackChannel(b);
-    const marker = `e2e-feed-${Date.now()}`;
+    const marker = `e2e-board-${Date.now()}`;
     let todoId: string | null = null;
     try {
       await login(b, SECOND_USER);
@@ -164,51 +166,25 @@ test.describe("Collaboration — activity feed / undo (Phase 3)", () => {
         .locator('textarea[maxlength="2000"]')
         .first()
         .waitFor({ state: "visible", timeout: 20000 });
+      // Board tab → To-do card (bottom-nav "Board" is hidden on desktop).
+      await b.locator("button:has-text('Board'):visible").first().click();
+      await b.getByText("To-do", { exact: true }).first().click();
+      await b.waitForTimeout(800); // TodoView mounted + initial fetch
       expect(await waitB(), "member channel SUBSCRIBED").toBe(true);
 
-      // ---- Owner (Node) makes a deterministic change → activity_log row ----
+      // ---- A (Node) adds a to-do → appears live in B's list ----
       const { data: todo } = await owner
         .from("trip_todos")
-        .insert({ trip_id: tripId, text: marker, done: false, position: 0 })
+        .insert({ trip_id: tripId, text: marker, done: false, position: 99 })
         .select("id")
         .single();
       todoId = todo!.id as string;
-      await owner.from("activity_log").insert({
-        trip_id: tripId,
-        user_id: ownerId,
-        action: "add_todo",
-        entity_type: "todo",
-        entity_id: todoId,
-        summary: `Added to-do: ${marker}`,
-        undo_payload: { id: todoId },
-      });
+      await expect(b.getByText(marker)).toBeVisible({ timeout: 20000 });
 
-      // ---- B's header 🔔 badge increments live (realtime) ----
-      const bell = b.getByRole("button", { name: "Activity" });
-      await expect(bell).toBeVisible({ timeout: 15000 });
-      await expect(bell).toContainText("1", { timeout: 20000 });
-
-      // ---- B opens the feed and sees the attributed row ----
-      await bell.click();
-      await expect(b.getByText("Activity", { exact: true })).toBeVisible();
-      await expect(b.getByText(`Added to-do: ${marker}`)).toBeVisible({
-        timeout: 10000,
-      });
-
-      // ---- B taps Undo → the todo is reversed (owner confirms it's gone) ----
-      await b.getByText("Undo", { exact: true }).first().click();
-      await expect
-        .poll(
-          async () =>
-            (await owner.from("trip_todos").select("id").eq("id", todoId!)).data
-              ?.length ?? -1,
-          { timeout: 15000 },
-        )
-        .toBe(0);
-      // The original row is annotated "· undone".
-      await expect(b.getByText(/undone/).first()).toBeVisible({
-        timeout: 10000,
-      });
+      // ---- A deletes it → vanishes live (REPLICA IDENTITY FULL delete path) ----
+      await owner.from("trip_todos").delete().eq("id", todoId);
+      todoId = null;
+      await expect(b.getByText(marker)).toHaveCount(0, { timeout: 20000 });
     } finally {
       if (todoId) await owner.from("trip_todos").delete().eq("id", todoId);
       await bClient.rpc("leave_trip", { p_trip: tripId });

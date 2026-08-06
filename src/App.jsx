@@ -6765,6 +6765,9 @@ export default function App({
       const list = await fetchActivity(tripId);
       setActivity(list);
     };
+    // Tier 2: board tables (todos/expenses/bookmarks) are owned by BoardView's
+    // sub-views, so App can't hold their lists — bump a tick they refetch on.
+    const bumpBoard = () => setBoardTick((t) => t + 1);
     // Reconnect / initial backfill (postgres_changes doesn't replay).
     const backfill = () => {
       reconcileMembers();
@@ -6774,6 +6777,7 @@ export default function App({
         reconcilePreferences();
         reconcilePolls();
         reconcileActivity();
+        bumpBoard();
       }
     };
     const unsubscribe = subscribeTrip(
@@ -6828,6 +6832,19 @@ export default function App({
           if (membersRef.current.length > 1)
             debounce("polls", reconcilePolls, 200);
         },
+        // Tier 2 board live-sync. Any todo/expense/bookmark change (incl. filtered
+        // DELETEs, thanks to REPLICA IDENTITY FULL) bumps a single tick that
+        // BoardView + its sub-views refetch on. Debounced together; self-echo is
+        // harmless (refetch yields identical data).
+        trip_todos: () => {
+          if (membersRef.current.length > 1) debounce("board", bumpBoard, 250);
+        },
+        trip_expenses: () => {
+          if (membersRef.current.length > 1) debounce("board", bumpBoard, 250);
+        },
+        trip_bookmarks: () => {
+          if (membersRef.current.length > 1) debounce("board", bumpBoard, 250);
+        },
       },
       backfill,
     );
@@ -6858,6 +6875,9 @@ export default function App({
   const [showFeed, setShowFeed] = useState(false);
   const [showWhileAway, setShowWhileAway] = useState(false);
   const tripOpenedAtRef = useRef(0);
+  // Tier 2: bumped by realtime board-table events; BoardView + its sub-views add
+  // it to their fetch deps to reconcile-from-DB when a co-member edits the board.
+  const [boardTick, setBoardTick] = useState(0);
   // Phase 2.5 pooled credits: the Trip Credits sheet (pool balance + funding).
   // Ships dark behind INVITE_ENABLED + shared-trip gating (see isSharedTrip).
   const [showTripCredits, setShowTripCredits] = useState(false);
@@ -13204,6 +13224,7 @@ export default function App({
                         onPollChanged={refreshPolls}
                         onClosePoll={applyPollClose}
                         onComposePoll={() => setShowPollCompose(true)}
+                        boardTick={boardTick}
                       />
                     </div>
                   ))}
