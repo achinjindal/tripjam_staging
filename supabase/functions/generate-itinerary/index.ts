@@ -94,7 +94,7 @@ Return ONLY a raw JSON object, MINIFIED — no indentation, no newlines, no spac
 const PLAN_SYSTEM = `You are a travel expert who PLANS multi-day itineraries as JSON — the trip skeleton, not the hour-by-hour detail.
 Rules:
 - The "plan" array is the AUTHORITATIVE trip skeleton: one entry per day with:
-  label ("Day 1"...), city (the day's base area), hotel (a SPECIFIC well-located confirmed-open hotel name — minimise hotel changes, 2+ nights per base, NEVER relocate to a different hotel for a single night when staying in the same area; on a small island or single city ONE base hotel for the whole trip is strongly preferred; name a hotel ONLY for cities where the traveler sleeps that night), sleep_city (the city where the traveler sleeps AFTER this day; empty string "" on the final departure day), highlights (4-6 objects {title,icon} — the SPECIFIC named places/experiences anchoring that day, INCLUDING 1-2 legendary meal venues; REAL place names only, never generic like "lunch" or "temple"), description (1 sentence).
+  label ("Day 1"...), city (the day's base area), hotel (a SPECIFIC well-located confirmed-open hotel name — minimise hotel changes, 2+ nights per base, NEVER relocate to a different hotel for a single night when staying in the same area; on a small island or single city ONE base hotel for the whole trip is strongly preferred; towns under ~30 minutes apart — e.g. along one coastline — share ONE base, visited as day outings, never one-night hops; name a hotel ONLY for cities where the traveler sleeps that night), sleep_city (the city where the traveler sleeps AFTER this day; empty string "" on the final departure day), highlights (4-6 objects {title,icon} — the SPECIFIC named places/experiences anchoring that day, INCLUDING 1-2 legendary meal venues; REAL place names only, never generic like "lunch" or "temple"), description (1 sentence).
 - NO REPEATS ACROSS DAYS: every highlighted place — sights AND restaurants/markets — appears on AT MOST ONE day in the whole trip. Never place the same venue on two different days.
 - GEOGRAPHIC SEQUENCE & PACING: order days so travel flows logically, cover each area fully in one visit, no backtracking. Fixed-time things (sunrise spots, morning markets, night markets) go on sensible days.
 - Obey the SELECTED ROUTE cities/overnight bases and any Day-1 arrival / last-day departure HARD RULES in the user message EXACTLY.
@@ -620,8 +620,12 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
         const titles = (day.highlights || []).map((h) => h.title).join(", ");
         const prevSleep = i > 0 ? planDays[i - 1].sleep_city : null;
         const newBase = !!day.sleep_city && day.sleep_city !== prevSleep;
+        // The plan model is fast but weaker on venue knowledge — its hotel
+        // pick is a SUGGESTION the (stronger) fill model must verify. Only the
+        // new-base fill emits a check-in, so an override can't contradict
+        // another day.
         const baseNote = newBase
-          ? `Tonight the traveler sleeps in ${day.sleep_city}${day.hotel ? ` at ${day.hotel}` : ""} — this day STARTS A NEW OVERNIGHT BASE, so include the hotel check-in activity per the check-in timing rules.`
+          ? `Tonight the traveler sleeps in ${day.sleep_city} — this day STARTS A NEW OVERNIGHT BASE, so include the hotel check-in activity per the check-in timing rules.${day.hotel ? ` The plan suggests "${day.hotel}" — use it ONLY if you are confident it is a real, currently-operating HOTEL located in ${day.sleep_city}. If it is actually a restaurant/cafe/venue of another kind, located in a different city, or unknown to you, silently substitute a well-located, reliable, confirmed-open hotel you know in ${day.sleep_city} instead.` : ""}`
           : day.sleep_city
             ? `The traveler already checked in at this base on an earlier day — do NOT include any check-in activity today.`
             : `This is the final departure day — no hotel check-in.`;
