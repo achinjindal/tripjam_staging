@@ -10,6 +10,11 @@ import {
 import { DebugContext } from "./context.js";
 import posthog from "posthog-js";
 import { supabase } from "./supabase";
+import {
+  hotelRatesUrl as buildHotelRatesUrl,
+  hotelStayRange,
+  HOTEL_AFFILIATE_ENABLED,
+} from "./booking.js";
 import BoardView, { LogisticsTab } from "./components/BoardView.jsx";
 import SetupForm from "./components/SetupForm.jsx";
 import {
@@ -4348,6 +4353,7 @@ function ActivityCard({
   onChangeHotel,
   transitMapsUrl,
   onAskTrippy,
+  hotelRatesUrl = null,
 }) {
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -4939,6 +4945,47 @@ function ActivityCard({
                 }}
               >
                 💬 {activity.note}
+              </div>
+            )}
+            {activity.type === "hotel" && hotelRatesUrl && (
+              <div style={{ marginTop: 8 }}>
+                <a
+                  href={hotelRatesUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() =>
+                    posthog.capture("hotel_rates_clicked", {
+                      hotel: activity.title?.replace(/^Check in at /i, ""),
+                      city,
+                    })
+                  }
+                  style={{
+                    display: "inline-block",
+                    padding: "5px 14px",
+                    borderRadius: RADIUS.full,
+                    border: `1.5px solid ${T.gold}`,
+                    color: T.ink,
+                    background: "transparent",
+                    fontFamily: "Georgia,serif",
+                    fontSize: 12,
+                    textDecoration: "none",
+                  }}
+                >
+                  Check rates ↗
+                </a>
+                {HOTEL_AFFILIATE_ENABLED && (
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      fontSize: 10,
+                      color: T.mist,
+                      fontFamily: "Georgia,serif",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    TripJam may earn a commission
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -5800,7 +5847,13 @@ function WishlistSection({
 }
 
 /* ─── COMPACT DAY VIEW ────────────────────────────────────────────── */
-function DayCompact({ day, displayCity, onExpand, canExpand = true }) {
+function DayCompact({
+  day,
+  displayCity,
+  onExpand,
+  canExpand = true,
+  hotelRatesUrl = null,
+}) {
   const acts = day.activities || [];
   const hotel = acts.find((a) => a.type === "hotel");
   const transit = acts.find((a) => a.type === "transit");
@@ -5915,12 +5968,7 @@ function DayCompact({ day, displayCity, onExpand, canExpand = true }) {
 
       {/* Hotel */}
       {hotel && (
-        <a
-          href={mapsLink(
-            hotel.geocode || hotel.title.replace(/^Check in at /i, ""),
-          )}
-          target="_blank"
-          rel="noopener noreferrer"
+        <div
           style={{
             fontSize: 11,
             fontFamily: "Georgia,serif",
@@ -5929,12 +5977,44 @@ function DayCompact({ day, displayCity, onExpand, canExpand = true }) {
             display: "flex",
             alignItems: "center",
             gap: 4,
-            textDecoration: "none",
+            flexWrap: "wrap",
           }}
         >
-          🏨 {hotel.title.replace(/^Check in at /i, "")}{" "}
-          {hotel.note ? `· ${hotel.note}` : ""}
-        </a>
+          <a
+            href={mapsLink(
+              hotel.geocode || hotel.title.replace(/^Check in at /i, ""),
+            )}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: T.ink, textDecoration: "none" }}
+          >
+            🏨 {hotel.title.replace(/^Check in at /i, "")}{" "}
+            {hotel.note ? `· ${hotel.note}` : ""}
+          </a>
+          {hotelRatesUrl && (
+            <a
+              href={hotelRatesUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => {
+                e.stopPropagation();
+                posthog.capture("hotel_rates_clicked", {
+                  hotel: hotel.title?.replace(/^Check in at /i, ""),
+                  city: day.city,
+                  surface: "compact",
+                });
+              }}
+              style={{
+                color: T.gold,
+                textDecoration: "none",
+                fontWeight: 600,
+                marginLeft: 2,
+              }}
+            >
+              · rates ↗
+            </a>
+          )}
+        </div>
       )}
 
       {/* Activity lines — grouped */}
@@ -5986,6 +6066,7 @@ function DayCompact({ day, displayCity, onExpand, canExpand = true }) {
 function DaySection({
   day,
   dayIndex = 0,
+  hotelRatesUrl = null,
   onEditActivity,
   onRemoveActivity,
   onReplaceActivity,
@@ -6281,6 +6362,7 @@ function DaySection({
                 onChangeHotel={(mode) => onChangeHotel?.(day.id, act, mode)}
                 transitMapsUrl={transitMapsUrl}
                 onAskTrippy={onAskTrippy}
+                hotelRatesUrl={act.type === "hotel" ? hotelRatesUrl : null}
               />
               {!lastAct && !samePackageAsNext && (
                 <TransitionRow
@@ -12878,6 +12960,29 @@ export default function App({
                             ? hotelPerDay[i]?.hotel || null
                             : null;
 
+                        // Affiliate deep link for this day's check-in (if any)
+                        const dayHotelRatesUrl = (() => {
+                          const hotelAct = (day.activities || []).find(
+                            (a) => a.type === "hotel",
+                          );
+                          if (!hotelAct || !trip?.start_date) return null;
+                          const { checkin, checkout } = hotelStayRange(
+                            days,
+                            i,
+                            trip.start_date,
+                          );
+                          return buildHotelRatesUrl({
+                            hotelName: hotelAct.title?.replace(
+                              /^Check in at /i,
+                              "",
+                            ),
+                            city: hotelAct.city || day.city,
+                            checkin,
+                            checkout,
+                            adults: trip?.travelers,
+                          });
+                        })();
+
                         return (
                           <div
                             key={day.id}
@@ -12888,6 +12993,7 @@ export default function App({
                             {compactView || collapsedDays.has(day.id) ? (
                               <DayCompact
                                 day={day}
+                                hotelRatesUrl={dayHotelRatesUrl}
                                 canExpand={detailedReady || i < streamingDays}
                                 displayCity={(() => {
                                   const hCity = hotelPerDay[i]?.city;
@@ -12946,6 +13052,7 @@ export default function App({
                               <DaySection
                                 day={day}
                                 dayIndex={i}
+                                hotelRatesUrl={dayHotelRatesUrl}
                                 onCollapse={() =>
                                   setCollapsedDays((prev) =>
                                     new Set(prev).add(day.id),
