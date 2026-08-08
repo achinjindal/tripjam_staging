@@ -195,6 +195,7 @@ ${
    Per-item fields:
    - type: REQUIRED — "hotel" for hotel alternatives (this routes photos + booking links), else "sight"/"food"/"activity"
    - title + geocode: real, well-established places ONLY — fully-qualified geocode ("[Place], [area], [city], [country]"). If unsure a place exists under that exact name, pick a better-known one instead.
+   - LOCATION SANITY: alternatives MUST be in the same town/area as the place they replace (walkable or a few minutes away). Never suggest a venue in a different town — e.g. an Oia restaurant is NOT an alternative to a Fira dinner.
    - note: what it IS, max 8 words
    - description: 1-2 sentences a traveler needs to DECIDE — what's there, why it fits their ask
    - duration: rough time needed (e.g. "~1.5h") — activities/food only
