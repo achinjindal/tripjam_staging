@@ -6522,6 +6522,21 @@ function DaySection({
 }
 
 /* ─── SUGGESTION CARD ────────────────────────────────────────────────── */
+// Action types that actually change trip state — used for the "View Updated
+// Itinerary" affordance. A whitelist so future informational action types
+// (like richer suggests) can't masquerade as mutations on older clients.
+const CHAT_MUTATION_TYPES = new Set([
+  "update_route",
+  "dismiss_route",
+  "generate_more_plans",
+  "pending_routes",
+  "update_day",
+  "add_todo",
+  "add_expense",
+  "add_bookmark",
+  "set_budget",
+]);
+
 function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [loaded, setLoaded] = useState(false);
@@ -6540,11 +6555,13 @@ function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
       cancelled = true;
     };
   }, [suggestion.geocode]);
+  // Rich cards (description + decision meta) get more room to breathe.
+  const rich = !!(suggestion.description || suggestion.duration);
   return (
     <div
       style={{
         flexShrink: 0,
-        width: 148,
+        width: rich ? 186 : 148,
         borderRadius: RADIUS.lg,
         overflow: "hidden",
         border: `1px solid ${T.sand}`,
@@ -6609,6 +6626,40 @@ function SuggestionCard({ suggestion, onSelect, onKnowMore }) {
               }}
             >
               {suggestion.note}
+            </div>
+          )}
+          {suggestion.description && (
+            <div
+              style={{
+                fontFamily: "Georgia,serif",
+                fontSize: 10.5,
+                color: T.ink,
+                lineHeight: 1.4,
+                marginTop: 4,
+              }}
+            >
+              {suggestion.description}
+            </div>
+          )}
+          {(suggestion.duration ||
+            suggestion.distance_hint ||
+            suggestion.cost_hint) && (
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                fontFamily: "Georgia,serif",
+                fontSize: 9.5,
+                color: T.mist,
+                marginTop: 5,
+              }}
+            >
+              {suggestion.duration && <span>⏱ {suggestion.duration}</span>}
+              {suggestion.distance_hint && (
+                <span>📍 {suggestion.distance_hint}</span>
+              )}
+              {suggestion.cost_hint && <span>{suggestion.cost_hint}</span>}
             </div>
           )}
         </div>
@@ -9498,14 +9549,42 @@ export default function App({
     let hasChanges = false;
     let changedRouteIds = [];
     try {
-      const data = await callUnifiedChat(userMsg.content, history);
+      // Stream words into the assistant bubble as they generate; the
+      // streaming flag stays true so the blinking-cursor branch renders.
+      const onDelta = (text) =>
+        setChatMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: (m.content || "") + text }
+              : m,
+          ),
+        );
+      const data = await callUnifiedChat(
+        userMsg.content,
+        history,
+        false,
+        onDelta,
+      );
       finalContent = data.message || "Done.";
       const suggestAction = (data.actions || []).find(
         (a) => a.type === "suggest",
       );
-      if (suggestAction) suggestions = suggestAction.suggestions;
-      const mutationActions = (data.actions || []).filter(
-        (a) => a.type !== "suggest",
+      if (suggestAction) {
+        // Stamp the action-level context onto each item so the renderer can
+        // pick the hotel card (TripAdvisor photos, rates link) even when the
+        // model omits per-item type.
+        suggestions = (suggestAction.suggestions || []).map((sg) => ({
+          ...sg,
+          type:
+            sg.type || (suggestAction.context === "hotel" ? "hotel" : sg.type),
+        }));
+        posthog.capture("chat_suggestions_shown", {
+          context: suggestAction.context || null,
+          count: suggestions.length,
+        });
+      }
+      const mutationActions = (data.actions || []).filter((a) =>
+        CHAT_MUTATION_TYPES.has(a.type),
       );
       hasChanges = mutationActions.length > 0;
       changedRouteIds = mutationActions
@@ -9545,389 +9624,434 @@ export default function App({
   // ── Action dispatcher: executes actions returned by unified chat ──
   const dispatchActions = async (actions, userMsg, history) => {
     if (!actions?.length) return;
+    // Apply telemetry: the decision metric for any chat-model change. Failures
+    // used to be silent breaks/console.warns — invisible in any dashboard.
+    const logApply = (type, ok, reason = null) =>
+      posthog.capture("trippy_action_apply", { type, ok, reason, screen });
     for (const action of actions) {
-      switch (action.type) {
-        case "update_route": {
-          const upd = action.route;
-          if (!upd?.id) break;
-          setPretripRoutes((prev) => {
-            const merged = prev.map((r) => {
-              if (r.id !== upd.id) return r;
-              const result = { ...r, ...upd, id: r.id, tier: r.tier || 1 };
-              const badDays =
-                !Array.isArray(result.days) ||
-                result.days.length === 0 ||
-                result.days.some(
-                  (d) => typeof d !== "string" || d.trim().length < 5,
-                );
-              const badTitle =
-                !result.title || result.title.trim().length === 0;
-              if (badDays || badTitle)
-                result._error = badTitle
-                  ? "Route title is missing"
-                  : "Day descriptions are incomplete";
-              else delete result._error;
-              return result;
+      try {
+        switch (action.type) {
+          case "update_route": {
+            const upd = action.route;
+            if (!upd?.id) {
+              logApply("update_route", false, "missing_route_id");
+              throw new Error("__logged");
+            }
+            setPretripRoutes((prev) => {
+              const merged = prev.map((r) => {
+                if (r.id !== upd.id) return r;
+                const result = { ...r, ...upd, id: r.id, tier: r.tier || 1 };
+                const badDays =
+                  !Array.isArray(result.days) ||
+                  result.days.length === 0 ||
+                  result.days.some(
+                    (d) => typeof d !== "string" || d.trim().length < 5,
+                  );
+                const badTitle =
+                  !result.title || result.title.trim().length === 0;
+                if (badDays || badTitle)
+                  result._error = badTitle
+                    ? "Route title is missing"
+                    : "Day descriptions are incomplete";
+                else delete result._error;
+                return result;
+              });
+              // Persist ONLY the changed route (non-destructive). upd.id ===
+              // brainstorm_items.id (routes load as {...row, ...row.data}), so we
+              // update that single row in place. Concurrent edits to DIFFERENT
+              // routes touch different rows and can't clobber each other. (Was:
+              // delete().eq("trip_id") + insert-all, which lost co-editors' routes
+              // on any overlap — a data-loss bug even solo.)
+              const tripId = editingTrip?.id;
+              const changed = merged.find((r) => r.id === upd.id);
+              if (tripId && changed && !String(changed.id).startsWith("tmp-")) {
+                supabase
+                  .from("brainstorm_items")
+                  .update({
+                    title: changed.title,
+                    city: changed.city || null,
+                    note: changed.tagline || null,
+                    icon: changed.icon || null,
+                    geocode: changed.geocode || null,
+                    tier: changed.tier || 2,
+                    selected: !!changed.selected,
+                    data: {
+                      tagline: changed.tagline,
+                      days: changed.days,
+                      bestFor: changed.bestFor,
+                      warning: changed.warning,
+                      recommended: !!changed.recommended,
+                      points: changed.points,
+                    },
+                  })
+                  .eq("id", changed.id)
+                  .then(({ error }) => {
+                    if (error)
+                      console.warn(
+                        "Failed to persist route edit:",
+                        error.message,
+                      );
+                  });
+              }
+              return merged;
             });
-            // Persist ONLY the changed route (non-destructive). upd.id ===
-            // brainstorm_items.id (routes load as {...row, ...row.data}), so we
-            // update that single row in place. Concurrent edits to DIFFERENT
-            // routes touch different rows and can't clobber each other. (Was:
-            // delete().eq("trip_id") + insert-all, which lost co-editors' routes
-            // on any overlap — a data-loss bug even solo.)
-            const tripId = editingTrip?.id;
-            const changed = merged.find((r) => r.id === upd.id);
-            if (tripId && changed && !String(changed.id).startsWith("tmp-")) {
-              supabase
-                .from("brainstorm_items")
-                .update({
-                  title: changed.title,
-                  city: changed.city || null,
-                  note: changed.tagline || null,
-                  icon: changed.icon || null,
-                  geocode: changed.geocode || null,
-                  tier: changed.tier || 2,
-                  selected: !!changed.selected,
-                  data: {
-                    tagline: changed.tagline,
-                    days: changed.days,
-                    bestFor: changed.bestFor,
-                    warning: changed.warning,
-                    recommended: !!changed.recommended,
-                    points: changed.points,
-                  },
-                })
-                .eq("id", changed.id)
-                .then(({ error }) => {
-                  if (error)
-                    console.warn(
-                      "Failed to persist route edit:",
-                      error.message,
-                    );
-                });
-            }
-            return merged;
-          });
-          setPretripSelectedRouteId(upd.id);
-          break;
-        }
-        case "dismiss_route": {
-          // Support single routeId or array routeIds
-          const ids =
-            action.routeIds || (action.routeId ? [action.routeId] : []);
-          if (ids.length === 0) break;
-          setPretripRoutes((prev) =>
-            prev.map((it) =>
-              ids.includes(it.id) ? { ...it, dismissed: true } : it,
-            ),
-          );
-          for (const rid of ids) {
-            if (rid && !String(rid).startsWith("temp_")) {
-              supabase
-                .from("brainstorm_items")
-                .update({ dismissed: true })
-                .eq("id", rid)
-                .then(({ error }) => {
-                  if (error)
-                    console.warn("route dismiss (chat) failed:", error.message);
-                });
-            }
-          }
-          // Add undo message
-          const titles = ids
-            .map((rid) => pretripRoutes.find((r) => r.id === rid)?.title)
-            .filter(Boolean);
-          const label =
-            titles.length > 1
-              ? `${titles.length} plans`
-              : `"${titles[0] || "Plan"}"`;
-          setChatMessages((prev) => [
-            ...prev,
-            {
-              role: "system-undo",
-              content: `${label} dismissed.`,
-              undoData: { dismissedRouteIds: ids },
-              id: `undo-route-${Date.now()}`,
-            },
-          ]);
-          break;
-        }
-        case "generate_more_plans": {
-          // Trigger the "Show more plans" flow in BrainstormView
-          triggerRgRef.current?.({ addMore: true });
-          break;
-        }
-        case "update_day": {
-          const updatedDay = action.day;
-          if (!updatedDay?.label) break;
-          const existingDay = daysRef.current.find(
-            (d) =>
-              d.label?.trim().toLowerCase() ===
-              updatedDay.label?.trim().toLowerCase(),
-          );
-          if (!existingDay?.id) break;
-          const dayId = existingDay.id;
-          // Delete + re-insert activities (with RLS safety check)
-          const existingCount = existingDay.activities?.length ?? 0;
-          const { error: delErr, count: deletedCount } = await supabase
-            .from("activities")
-            .delete({ count: "exact" })
-            .eq("day_id", dayId);
-          if (delErr) {
-            console.error("update_day delete error:", delErr);
+            setPretripSelectedRouteId(upd.id);
             break;
           }
-          if (
-            existingCount > 0 &&
-            (deletedCount === null || deletedCount === 0)
-          ) {
-            console.warn(
-              "update_day: delete blocked by RLS, skipping insert to avoid duplicates",
+          case "dismiss_route": {
+            // Support single routeId or array routeIds
+            const ids =
+              action.routeIds || (action.routeId ? [action.routeId] : []);
+            if (ids.length === 0) break;
+            setPretripRoutes((prev) =>
+              prev.map((it) =>
+                ids.includes(it.id) ? { ...it, dismissed: true } : it,
+              ),
             );
+            for (const rid of ids) {
+              if (rid && !String(rid).startsWith("temp_")) {
+                supabase
+                  .from("brainstorm_items")
+                  .update({ dismissed: true })
+                  .eq("id", rid)
+                  .then(({ error }) => {
+                    if (error)
+                      console.warn(
+                        "route dismiss (chat) failed:",
+                        error.message,
+                      );
+                  });
+              }
+            }
+            // Add undo message
+            const titles = ids
+              .map((rid) => pretripRoutes.find((r) => r.id === rid)?.title)
+              .filter(Boolean);
+            const label =
+              titles.length > 1
+                ? `${titles.length} plans`
+                : `"${titles[0] || "Plan"}"`;
+            setChatMessages((prev) => [
+              ...prev,
+              {
+                role: "system-undo",
+                content: `${label} dismissed.`,
+                undoData: { dismissedRouteIds: ids },
+                id: `undo-route-${Date.now()}`,
+              },
+            ]);
             break;
           }
-          const existingPhotoMap = {};
-          (existingDay.activities || []).forEach((a) => {
-            if (a.geocode && a.photo_url)
-              existingPhotoMap[a.geocode] = a.photo_url;
-          });
-          const newActivities = (updatedDay.activities || []).map((act, j) => ({
-            day_id: dayId,
-            time: act.time,
-            title: act.title,
-            geocode: act.geocode || null,
-            geocode_end: act.geocodeEnd || null,
-            type: act.type,
-            duration: act.duration,
-            note: act.note,
-            confirmed: act.confirmed ?? false,
-            icon: act.icon,
-            package: act.package || null,
-            position: j,
-            added_by: session.user.id,
-            photo_url: (act.geocode && existingPhotoMap[act.geocode]) || null,
-            transition_data: act.transition || null,
-          }));
-          const { data: insertedActs } = await supabase
-            .from("activities")
-            .insert(newActivities)
-            .select();
-          if (updatedDay.wishlist)
-            await supabase
-              .from("days")
-              .update({ wishlist: updatedDay.wishlist })
-              .eq("id", dayId);
-          setDays((prev) =>
-            prev.map((day) =>
-              day.id !== dayId
-                ? day
-                : {
-                    ...day,
-                    city: updatedDay.city ?? day.city,
-                    wishlist: updatedDay.wishlist ?? day.wishlist,
-                    activities: (insertedActs || []).map((act, i) => ({
-                      ...act,
-                      ...updatedDay.activities[i],
-                    })),
-                  },
-            ),
-          );
-          // Fetch photos for new activities
-          const dayCity = updatedDay.city ?? existingDay.city;
-          for (const [i, act] of (updatedDay.activities || []).entries()) {
-            if (act.type === "transit" || existingPhotoMap[act.geocode])
-              continue;
-            const insertedAct = insertedActs?.[i];
-            if (!insertedAct) continue;
-            _fetchPhoto(
-              act.geocode || act.title,
-              dayCity,
-              act.type,
-              undefined,
-              {
-                lat: act.lat,
-                lng: act.lng,
-                photoQuery: act.photo_query,
-              },
-            ).then((url) => {
-              if (!url) return;
-              supabase
-                .from("activities")
-                .update({ photo_url: url })
-                .eq("id", insertedAct.id)
-                .then(({ error }) => {
-                  if (error)
-                    console.warn(
-                      "activity photo persist failed:",
-                      error.message,
-                    );
-                });
-              setDays((prev) =>
-                prev.map((d) =>
-                  d.id !== dayId
-                    ? d
-                    : {
-                        ...d,
-                        activities: d.activities.map((a) =>
-                          a.id === insertedAct.id
-                            ? { ...a, photo_url: url }
-                            : a,
-                        ),
-                      },
-                ),
-              );
-            });
+          case "generate_more_plans": {
+            // Trigger the "Show more plans" flow in BrainstormView
+            triggerRgRef.current?.({ addMore: true });
+            break;
           }
-          logActivity({
-            tripId: trip?.id,
-            userId: session?.user?.id,
-            action: "update_day",
-            entityType: "day",
-            entityId: dayId,
-            summary: `Updated ${updatedDay.label}`,
-            undoPayload: {
-              dayId,
-              activities: existingDay.activities || [],
-              wishlist: existingDay.wishlist ?? null,
-            },
-          });
-          break;
-        }
-        case "suggest": {
-          // Handled via suggestions in message metadata — no dispatch needed
-          break;
-        }
-        case "pending_routes": {
-          if (!action.routeIds?.length) break;
-          for (const pendingId of action.routeIds) {
-            try {
-              const followUp = await callUnifiedChat(
-                `Apply the same change to route id="${pendingId}". Return only this one route in actions.`,
-                [
-                  ...history,
-                  userMsg,
-                  { role: "assistant", content: "applying..." },
-                ],
-              );
-              if (followUp.actions?.length)
-                dispatchActions(followUp.actions, userMsg, history);
-            } catch (e) {
-              console.warn("Pending route update failed:", pendingId, e);
+          case "update_day": {
+            const updatedDay = action.day;
+            const fail = (reason) => {
+              logApply("update_day", false, reason);
+              throw new Error("__logged");
+            };
+            if (!updatedDay?.label) fail("missing_label");
+            const existingDay = daysRef.current.find(
+              (d) =>
+                d.label?.trim().toLowerCase() ===
+                updatedDay.label?.trim().toLowerCase(),
+            );
+            if (!existingDay?.id) fail("label_no_match");
+            // Guard: the applier below is delete-then-reinsert, so a hollow or
+            // malformed day from the model would EMPTY the user's day. Reject
+            // before any destructive write. (Matters double on cheaper models.)
+            const incoming = updatedDay.activities;
+            if (!Array.isArray(incoming) || incoming.length === 0)
+              fail("empty_activities");
+            if (
+              !incoming.every(
+                (a) => a && typeof a.title === "string" && a.title.trim(),
+              )
+            )
+              fail("malformed_activities");
+            const dayId = existingDay.id;
+            // Delete + re-insert activities (with RLS safety check)
+            const existingCount = existingDay.activities?.length ?? 0;
+            const { error: delErr, count: deletedCount } = await supabase
+              .from("activities")
+              .delete({ count: "exact" })
+              .eq("day_id", dayId);
+            if (delErr) {
+              console.error("update_day delete error:", delErr);
+              fail("delete_error");
             }
-          }
-          break;
-        }
-        case "add_todo": {
-          const tripId = trip?.id || editingTrip?.id;
-          if (!tripId || !action.text) break;
-          const { error: todoErr } = await supabase.from("trip_todos").insert({
-            trip_id: tripId,
-            text: action.text,
-            done: false,
-            category: action.category || null,
-            due_date: action.due_date || null,
-            position: 0,
-          });
-          if (todoErr) console.warn("add_todo failed:", todoErr);
-          else
-            logActivity({
-              tripId,
-              userId: session?.user?.id,
-              action: "add_todo",
-              entityType: "todo",
-              summary: `Added to-do: ${action.text}`,
-            });
-          break;
-        }
-        case "add_expense": {
-          const tripId = trip?.id || editingTrip?.id;
-          if (!tripId || !action.title || !action.amount) break;
-          const { error: expErr } = await supabase
-            .from("trip_expenses")
-            .insert({
-              trip_id: tripId,
-              title: action.title,
-              amount: action.amount,
-              currency: action.currency || "USD",
-              category: action.category || "Other",
-              is_planned: action.is_planned !== false,
-              position: 0,
-            });
-          if (expErr) console.warn("add_expense failed:", expErr);
-          else
-            logActivity({
-              tripId,
-              userId: session?.user?.id,
-              action: "add_expense",
-              entityType: "expense",
-              summary: `Added expense: ${action.title}`,
-            });
-          break;
-        }
-        case "add_bookmark": {
-          const tripId = trip?.id || editingTrip?.id;
-          if (!tripId || !action.title || !action.url) break;
-          const { error: bmErr } = await supabase
-            .from("trip_bookmarks")
-            .insert({
-              trip_id: tripId,
-              title: action.title,
-              url: action.url,
-              icon: "🔗",
-              position: 0,
-            });
-          if (bmErr) console.warn("add_bookmark failed:", bmErr);
-          else
-            logActivity({
-              tripId,
-              userId: session?.user?.id,
-              action: "add_bookmark",
-              entityType: "bookmark",
-              summary: `Added bookmark: ${action.title}`,
-            });
-          break;
-        }
-        case "set_budget": {
-          const tripId = trip?.id || editingTrip?.id;
-          if (!tripId || !action.amount) break;
-          const { error: budgetErr } = await supabase
-            .from("trips")
-            .update({ budget_amount: action.amount })
-            .eq("id", tripId);
-          if (budgetErr) console.warn("set_budget failed:", budgetErr);
-          else
-            logActivity({
-              tripId,
-              userId: session?.user?.id,
-              action: "set_budget",
-              entityType: "trip",
-              entityId: tripId,
-              summary: `Set budget to ${action.amount}`,
-            });
-          break;
-        }
-        case "navigate": {
-          if (action.tab === "magazine" || action.tab === "brainstorm") {
-            if (screen === "brainstorm")
-              setPretripTab(
-                action.tab === "magazine" ? "magazine" : "brainstorm",
+            if (
+              existingCount > 0 &&
+              (deletedCount === null || deletedCount === 0)
+            ) {
+              console.warn(
+                "update_day: delete blocked by RLS, skipping insert to avoid duplicates",
               );
-            else setActiveBottomTab("brainstorm");
-          } else if (action.tab === "itinerary")
-            setActiveBottomTab("itinerary");
-          else if (action.tab === "map") {
-            if (screen === "brainstorm") setPretripTab("map");
-            else setActiveBottomTab("map");
-          } else if (action.tab === "board") setActiveBottomTab("board");
-          setChatOpen(false);
-          break;
+              fail("rls_blocked");
+            }
+            const existingPhotoMap = {};
+            (existingDay.activities || []).forEach((a) => {
+              if (a.geocode && a.photo_url)
+                existingPhotoMap[a.geocode] = a.photo_url;
+            });
+            const newActivities = (updatedDay.activities || []).map(
+              (act, j) => ({
+                day_id: dayId,
+                time: act.time,
+                title: act.title,
+                geocode: act.geocode || null,
+                geocode_end: act.geocodeEnd || null,
+                type: act.type,
+                duration: act.duration,
+                note: act.note,
+                confirmed: act.confirmed ?? false,
+                icon: act.icon,
+                package: act.package || null,
+                position: j,
+                added_by: session.user.id,
+                photo_url:
+                  (act.geocode && existingPhotoMap[act.geocode]) || null,
+                transition_data: act.transition || null,
+              }),
+            );
+            const { data: insertedActs } = await supabase
+              .from("activities")
+              .insert(newActivities)
+              .select();
+            if (updatedDay.wishlist)
+              await supabase
+                .from("days")
+                .update({ wishlist: updatedDay.wishlist })
+                .eq("id", dayId);
+            setDays((prev) =>
+              prev.map((day) =>
+                day.id !== dayId
+                  ? day
+                  : {
+                      ...day,
+                      city: updatedDay.city ?? day.city,
+                      wishlist: updatedDay.wishlist ?? day.wishlist,
+                      activities: (insertedActs || []).map((act, i) => ({
+                        ...act,
+                        ...updatedDay.activities[i],
+                      })),
+                    },
+              ),
+            );
+            // Fetch photos for new activities
+            const dayCity = updatedDay.city ?? existingDay.city;
+            for (const [i, act] of (updatedDay.activities || []).entries()) {
+              if (act.type === "transit" || existingPhotoMap[act.geocode])
+                continue;
+              const insertedAct = insertedActs?.[i];
+              if (!insertedAct) continue;
+              _fetchPhoto(
+                act.geocode || act.title,
+                dayCity,
+                act.type,
+                undefined,
+                {
+                  lat: act.lat,
+                  lng: act.lng,
+                  photoQuery: act.photo_query,
+                },
+              ).then((url) => {
+                if (!url) return;
+                supabase
+                  .from("activities")
+                  .update({ photo_url: url })
+                  .eq("id", insertedAct.id)
+                  .then(({ error }) => {
+                    if (error)
+                      console.warn(
+                        "activity photo persist failed:",
+                        error.message,
+                      );
+                  });
+                setDays((prev) =>
+                  prev.map((d) =>
+                    d.id !== dayId
+                      ? d
+                      : {
+                          ...d,
+                          activities: d.activities.map((a) =>
+                            a.id === insertedAct.id
+                              ? { ...a, photo_url: url }
+                              : a,
+                          ),
+                        },
+                  ),
+                );
+              });
+            }
+            logActivity({
+              tripId: trip?.id,
+              userId: session?.user?.id,
+              action: "update_day",
+              entityType: "day",
+              entityId: dayId,
+              summary: `Updated ${updatedDay.label}`,
+              undoPayload: {
+                dayId,
+                activities: existingDay.activities || [],
+                wishlist: existingDay.wishlist ?? null,
+              },
+            });
+            break;
+          }
+          case "suggest": {
+            // Handled via suggestions in message metadata — no dispatch needed
+            break;
+          }
+          case "pending_routes": {
+            if (!action.routeIds?.length) break;
+            for (const pendingId of action.routeIds) {
+              try {
+                const followUp = await callUnifiedChat(
+                  `Apply the same change to route id="${pendingId}". Return only this one route in actions.`,
+                  [
+                    ...history,
+                    userMsg,
+                    { role: "assistant", content: "applying..." },
+                  ],
+                );
+                if (followUp.actions?.length)
+                  dispatchActions(followUp.actions, userMsg, history);
+              } catch (e) {
+                console.warn("Pending route update failed:", pendingId, e);
+              }
+            }
+            break;
+          }
+          case "add_todo": {
+            const tripId = trip?.id || editingTrip?.id;
+            if (!tripId || !action.text) break;
+            const { error: todoErr } = await supabase
+              .from("trip_todos")
+              .insert({
+                trip_id: tripId,
+                text: action.text,
+                done: false,
+                category: action.category || null,
+                due_date: action.due_date || null,
+                position: 0,
+              });
+            if (todoErr) console.warn("add_todo failed:", todoErr);
+            else
+              logActivity({
+                tripId,
+                userId: session?.user?.id,
+                action: "add_todo",
+                entityType: "todo",
+                summary: `Added to-do: ${action.text}`,
+              });
+            break;
+          }
+          case "add_expense": {
+            const tripId = trip?.id || editingTrip?.id;
+            if (!tripId || !action.title || !action.amount) break;
+            const { error: expErr } = await supabase
+              .from("trip_expenses")
+              .insert({
+                trip_id: tripId,
+                title: action.title,
+                amount: action.amount,
+                currency: action.currency || "USD",
+                category: action.category || "Other",
+                is_planned: action.is_planned !== false,
+                position: 0,
+              });
+            if (expErr) console.warn("add_expense failed:", expErr);
+            else
+              logActivity({
+                tripId,
+                userId: session?.user?.id,
+                action: "add_expense",
+                entityType: "expense",
+                summary: `Added expense: ${action.title}`,
+              });
+            break;
+          }
+          case "add_bookmark": {
+            const tripId = trip?.id || editingTrip?.id;
+            if (!tripId || !action.title || !action.url) break;
+            const { error: bmErr } = await supabase
+              .from("trip_bookmarks")
+              .insert({
+                trip_id: tripId,
+                title: action.title,
+                url: action.url,
+                icon: "🔗",
+                position: 0,
+              });
+            if (bmErr) console.warn("add_bookmark failed:", bmErr);
+            else
+              logActivity({
+                tripId,
+                userId: session?.user?.id,
+                action: "add_bookmark",
+                entityType: "bookmark",
+                summary: `Added bookmark: ${action.title}`,
+              });
+            break;
+          }
+          case "set_budget": {
+            const tripId = trip?.id || editingTrip?.id;
+            if (!tripId || !action.amount) break;
+            const { error: budgetErr } = await supabase
+              .from("trips")
+              .update({ budget_amount: action.amount })
+              .eq("id", tripId);
+            if (budgetErr) console.warn("set_budget failed:", budgetErr);
+            else
+              logActivity({
+                tripId,
+                userId: session?.user?.id,
+                action: "set_budget",
+                entityType: "trip",
+                entityId: tripId,
+                summary: `Set budget to ${action.amount}`,
+              });
+            break;
+          }
+          case "navigate": {
+            if (action.tab === "magazine" || action.tab === "brainstorm") {
+              if (screen === "brainstorm")
+                setPretripTab(
+                  action.tab === "magazine" ? "magazine" : "brainstorm",
+                );
+              else setActiveBottomTab("brainstorm");
+            } else if (action.tab === "itinerary")
+              setActiveBottomTab("itinerary");
+            else if (action.tab === "map") {
+              if (screen === "brainstorm") setPretripTab("map");
+              else setActiveBottomTab("map");
+            } else if (action.tab === "board") setActiveBottomTab("board");
+            setChatOpen(false);
+            break;
+          }
+          case "create_poll": {
+            // Phase 6 wires this to the polls table + Board→Decisions UI. Until
+            // then it's a deliberate no-op so an early/hallucinated create_poll is
+            // inert rather than a broken action. Not yet advertised in the chat
+            // function's action vocabulary.
+            break;
+          }
         }
-        case "create_poll": {
-          // Phase 6 wires this to the polls table + Board→Decisions UI. Until
-          // then it's a deliberate no-op so an early/hallucinated create_poll is
-          // inert rather than a broken action. Not yet advertised in the chat
-          // function's action vocabulary.
-          break;
+        // Cases that fail with a specific reason log it themselves and throw
+        // __logged; everything that falls through here applied (or no-op'd).
+        logApply(action.type, true);
+      } catch (e) {
+        if (e?.message !== "__logged") {
+          logApply(
+            action.type,
+            false,
+            e?.message?.slice(0, 120) || "exception",
+          );
+          console.warn(`chat action ${action.type} failed:`, e);
         }
       }
     }
@@ -9941,6 +10065,7 @@ export default function App({
     message,
     history = [],
     spendPersonal = false,
+    onDelta = null,
   ) => {
     // Group context (shared trips only): send the roster + per-message authorship
     // so Trippy can attribute who wanted what and propose compromises. Solo trips
@@ -9953,8 +10078,8 @@ export default function App({
           name: m.profiles?.username || "Traveler",
         }))
       : null;
-    // Response-time telemetry: full client round-trip (client is non-streaming,
-    // so this is send → complete reply — what the user actually waits for).
+    // Response-time telemetry: ms = full round-trip to complete reply;
+    // ms_first_token = send → first streamed words visible in the bubble.
     const __chatT0 = Date.now();
     const res = await fetch(
       `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`,
@@ -9962,6 +10087,9 @@ export default function App({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          // Opt into SSE streaming — old servers ignore this and return JSON;
+          // the response handler below branches on Content-Type either way.
+          "x-chat-stream": "1",
           Authorization: `Bearer ${(await freshAccessToken()) || session.access_token}`,
         },
         body: JSON.stringify({
@@ -10010,11 +10138,47 @@ export default function App({
       });
       throw new Error(`HTTP ${res.status}`);
     }
-    const data = await res.json();
+    // The Anthropic path streams (SSE with delta/final events); the Gemini
+    // path and error responses stay plain JSON — branch on Content-Type.
+    let data;
+    let firstTokenMs = null;
+    const ctype = res.headers.get("content-type") || "";
+    if (ctype.includes("text/event-stream") && res.body) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let lineBuffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        lineBuffer += decoder.decode(value, { stream: true });
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (raw === "[DONE]") continue;
+          try {
+            const ev = JSON.parse(raw);
+            if (ev.type === "delta" && ev.text) {
+              if (firstTokenMs === null) firstTokenMs = Date.now() - __chatT0;
+              onDelta?.(ev.text);
+            } else if (ev.type === "final") {
+              data = ev.data;
+            }
+          } catch {
+            /* skip malformed event */
+          }
+        }
+      }
+      if (!data) throw new Error("Reply stream ended unexpectedly");
+    } else {
+      data = await res.json();
+    }
     if (session?.user?.id) refreshCredits(session.user.id);
     posthog.capture("trippy_chat_response", {
       screen,
       ms: Date.now() - __chatT0,
+      ms_first_token: firstTokenMs,
       ok: true,
       actions: Array.isArray(data.actions) ? data.actions.length : 0,
     });
@@ -10039,10 +10203,21 @@ export default function App({
     let hasChanges = false;
     let changedRouteIds = [];
     try {
+      // Stream words into the assistant bubble as they generate (see
+      // sendChatDirect for the same pattern).
+      const onDelta = (text) =>
+        setChatMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: (m.content || "") + text }
+              : m,
+          ),
+        );
       const data = await callUnifiedChat(
         userMsg.content,
         history,
         spendPersonal,
+        onDelta,
       );
       finalContent = data.message || "Done.";
 
@@ -10050,11 +10225,24 @@ export default function App({
       const suggestAction = (data.actions || []).find(
         (a) => a.type === "suggest",
       );
-      if (suggestAction) suggestions = suggestAction.suggestions;
+      if (suggestAction) {
+        // Stamp the action-level context onto each item so the renderer can
+        // pick the hotel card (TripAdvisor photos, rates link) even when the
+        // model omits per-item type.
+        suggestions = (suggestAction.suggestions || []).map((sg) => ({
+          ...sg,
+          type:
+            sg.type || (suggestAction.context === "hotel" ? "hotel" : sg.type),
+        }));
+        posthog.capture("chat_suggestions_shown", {
+          context: suggestAction.context || null,
+          count: suggestions.length,
+        });
+      }
 
       // Check if there are mutation actions
-      const mutationActions = (data.actions || []).filter(
-        (a) => a.type !== "suggest",
+      const mutationActions = (data.actions || []).filter((a) =>
+        CHAT_MUTATION_TYPES.has(a.type),
       );
       hasChanges = mutationActions.length > 0;
       changedRouteIds = mutationActions
@@ -15529,35 +15717,72 @@ export default function App({
                                     <HotelSuggestionCard
                                       key={si}
                                       suggestion={s}
+                                      ratesUrl={buildHotelRatesUrl({
+                                        hotelName: s.title,
+                                        city:
+                                          s.area || s.city || trip?.destination,
+                                        checkin: trip?.start_date?.slice(0, 10),
+                                        checkout: trip?.end_date?.slice(0, 10),
+                                        adults: trip?.travelers,
+                                      })}
+                                      onRatesClick={() =>
+                                        posthog.capture("hotel_rates_clicked", {
+                                          hotel: s.title,
+                                          city: s.area || s.city || null,
+                                          surface: "chat",
+                                        })
+                                      }
                                       onSelect={() => {
+                                        posthog.capture(
+                                          "chat_suggestion_clicked",
+                                          { type: "hotel", cta: "use" },
+                                        );
                                         setChatInput(`Use "${s.title}"`);
                                         setTimeout(
                                           () => chatInputRef.current?.focus(),
                                           50,
                                         );
                                       }}
-                                      onKnowMore={() =>
+                                      onKnowMore={() => {
+                                        posthog.capture(
+                                          "chat_suggestion_clicked",
+                                          { type: "hotel", cta: "know_more" },
+                                        );
                                         sendChatDirect(
                                           `Tell me more about ${s.title} — location, vibe, and what makes it stand out`,
-                                        )
-                                      }
+                                        );
+                                      }}
                                     />
                                   ) : (
                                     <SuggestionCard
                                       key={si}
                                       suggestion={s}
                                       onSelect={() => {
+                                        posthog.capture(
+                                          "chat_suggestion_clicked",
+                                          {
+                                            type: s.type || "activity",
+                                            cta: "use",
+                                          },
+                                        );
                                         setChatInput(`Use "${s.title}"`);
                                         setTimeout(
                                           () => chatInputRef.current?.focus(),
                                           50,
                                         );
                                       }}
-                                      onKnowMore={() =>
+                                      onKnowMore={() => {
+                                        posthog.capture(
+                                          "chat_suggestion_clicked",
+                                          {
+                                            type: s.type || "activity",
+                                            cta: "know_more",
+                                          },
+                                        );
                                         sendChatDirect(
                                           `Tell me more about ${s.title} — how would it fit into the itinerary, what's special about it, and what else is there to do nearby?`,
-                                        )
-                                      }
+                                        );
+                                      }}
                                     />
                                   ),
                                 )}

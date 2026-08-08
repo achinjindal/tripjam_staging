@@ -963,7 +963,13 @@ export function MagazineHighlightCard({
 }
 
 /* ─── HOTEL SUGGESTION CARD (chat) ──────────────────────────────────── */
-export function HotelSuggestionCard({ suggestion, onSelect, onKnowMore }) {
+export function HotelSuggestionCard({
+  suggestion,
+  onSelect,
+  onKnowMore,
+  ratesUrl = null,
+  onRatesClick = null,
+}) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
@@ -1171,6 +1177,29 @@ export function HotelSuggestionCard({ suggestion, onSelect, onKnowMore }) {
           />
         </a>
       </div>
+      {ratesUrl && (
+        <div style={{ padding: "0 8px 8px" }}>
+          <a
+            href={ratesUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={onRatesClick}
+            style={{
+              display: "block",
+              textAlign: "center",
+              padding: "5px 0",
+              borderRadius: RADIUS.md,
+              border: `1.2px solid ${T.gold}`,
+              fontFamily: "Georgia,serif",
+              fontSize: 10,
+              color: T.ink,
+              textDecoration: "none",
+            }}
+          >
+            Check rates ↗
+          </a>
+        </div>
+      )}
     </div>
   );
 }
