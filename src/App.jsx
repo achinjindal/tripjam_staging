@@ -1782,8 +1782,8 @@ function RouteDraftingCard({ destinations }) {
     .filter(Boolean)
     .slice(0, 4);
   const headline = names.length
-    ? `Sketching four ways through ${names.length > 2 ? `${names[0]} & beyond` : names.join(" & ")}`
-    : "Sketching four ways through your trip";
+    ? `Sketching routes through ${names.length > 2 ? `${names[0]} & beyond` : names.join(" & ")}`
+    : "Sketching routes for your trip";
 
   // Waypoints along the drafting path (labels only when multi-city)
   const W = 320;
