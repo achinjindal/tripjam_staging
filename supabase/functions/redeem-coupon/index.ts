@@ -75,18 +75,42 @@ serve(async (req) => {
       });
     }
 
-    // provider_session_id is UNIQUE — second redemption will throw and be caught below
+    // Duplicate check MUST be explicit: grant_credits treats a repeated
+    // provider_session_id as a silent no-op returning the current balance
+    // (webhook-replay semantics) — it does NOT throw. Relying on the UNIQUE
+    // constraint here made every repeat redemption a fake 200 success.
+    const sessionId = `coupon_${normalised}_${user.id}`;
+    const ledger = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: { persistSession: false, autoRefreshToken: false } },
+    );
+    const { data: prior } = await ledger
+      .from("credit_transactions")
+      .select("id")
+      .eq("provider_session_id", sessionId)
+      .limit(1);
+    if (prior?.length) {
+      return new Response(
+        JSON.stringify({ error: "Coupon already redeemed" }),
+        {
+          status: 409,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
     const newBalance = await grantCredits({
       userId: user.id,
       amount: credits,
       reason: "coupon",
-      providerSessionId: `coupon_${normalised}_${user.id}`,
+      providerSessionId: sessionId,
       tripId,
       metadata: { code: normalised, ...(tripId ? { trip_id: tripId } : {}) },
     });
 
     if (newBalance === null) {
-      // grantCredits returns null if the RPC threw — most likely a duplicate
+      // RPC threw (race on the UNIQUE constraint, or a genuine failure)
       return new Response(
         JSON.stringify({ error: "Coupon already redeemed" }),
         {
