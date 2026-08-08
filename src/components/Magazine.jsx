@@ -32,50 +32,76 @@ export function DestinationHero({ dest, isLoading, data, children }) {
   const [photoLoaded, setPhotoLoaded] = useState(false);
   useEffect(() => {
     if (!dest) return;
-    (async () => {
-      try {
-        const BAD =
-          /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|panorama|blank|in_Indonesia|location|special_marker/i;
-        // Try Wikipedia exact (queued so we share the global Wikimedia rate-limit cooldown)
-        const d = await wikiQueuedFetch(
-          `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(dest)}&prop=pageimages&format=json&pithumbsize=900&redirects=1&origin=*`,
-        );
-        const page = Object.values(d?.query?.pages || {})[0];
-        const src = page?.thumbnail?.source;
-        if (src && !BAD.test(src)) {
-          setPhotoUrl(src);
-          setPhotoLoaded(true);
-          return;
-        }
-        // Fallback 1: search destination name
-        const d2 = await wikiQueuedFetch(
-          `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(dest)}&gsrlimit=3&prop=pageimages&pithumbsize=900&format=json&origin=*`,
-        );
-        for (const p of Object.values(d2?.query?.pages || {})) {
-          const s = p?.thumbnail?.source;
-          if (s && !BAD.test(s)) {
-            setPhotoUrl(s);
-            setPhotoLoaded(true);
-            return;
-          }
-        }
-        // Fallback 2: search "Tourism in {dest}" — country pages often have flag as main image
-        const d3 = await wikiQueuedFetch(
-          `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent("Tourism in " + dest)}&gsrlimit=5&prop=pageimages&pithumbsize=900&format=json&origin=*`,
-        );
-        for (const p of Object.values(d3?.query?.pages || {})) {
-          const s = p?.thumbnail?.source;
-          if (s && !BAD.test(s)) {
-            setPhotoUrl(s);
-            setPhotoLoaded(true);
-            return;
-          }
-        }
-      } catch {
-        /* ignore */
+    // Resolved heroes are cached per destination — a transient Wikimedia 429
+    // must never cost us the hero on later opens.
+    const cacheKey = `tj_hero_${dest.toLowerCase()}`;
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        setPhotoUrl(cached);
+        setPhotoLoaded(true);
+        return;
       }
-      setPhotoLoaded(true);
+    } catch {
+      /* private mode */
+    }
+    let cancelled = false;
+    const lookup = async () => {
+      const BAD =
+        /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|panorama|blank|in_Indonesia|location|special_marker/i;
+      // Try Wikipedia exact (queued so we share the global Wikimedia rate-limit cooldown)
+      const d = await wikiQueuedFetch(
+        `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(dest)}&prop=pageimages&format=json&pithumbsize=900&redirects=1&origin=*`,
+      );
+      const page = Object.values(d?.query?.pages || {})[0];
+      const src = page?.thumbnail?.source;
+      if (src && !BAD.test(src)) return src;
+      // Fallback 1: search destination name
+      const d2 = await wikiQueuedFetch(
+        `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(dest)}&gsrlimit=3&prop=pageimages&pithumbsize=900&format=json&origin=*`,
+      );
+      for (const p of Object.values(d2?.query?.pages || {})) {
+        const s = p?.thumbnail?.source;
+        if (s && !BAD.test(s)) return s;
+      }
+      // Fallback 2: search "Tourism in {dest}" — country pages often have flag as main image
+      const d3 = await wikiQueuedFetch(
+        `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent("Tourism in " + dest)}&gsrlimit=5&prop=pageimages&pithumbsize=900&format=json&origin=*`,
+      );
+      for (const p of Object.values(d3?.query?.pages || {})) {
+        const s = p?.thumbnail?.source;
+        if (s && !BAD.test(s)) return s;
+      }
+      return null;
+    };
+    (async () => {
+      // A failed attempt used to give up permanently (empty hero for the whole
+      // session). Retry twice with backoff before conceding.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const src = await lookup();
+          if (cancelled) return;
+          if (src) {
+            setPhotoUrl(src);
+            setPhotoLoaded(true);
+            try {
+              localStorage.setItem(cacheKey, src);
+            } catch {
+              /* private mode */
+            }
+            return;
+          }
+          break; // clean "no image found" — don't hammer retries
+        } catch {
+          if (cancelled) return;
+          await new Promise((r) => setTimeout(r, 2500 * (attempt + 1)));
+        }
+      }
+      if (!cancelled) setPhotoLoaded(true);
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [dest]);
   return (
     <div
@@ -1377,15 +1403,19 @@ export function InspirationsSection({
   hasLoaded,
   onLoadMore,
 }) {
-  // Deduplicate by author then interleave articles and videos so video content
-  // is distributed throughout rather than all appearing at the end.
+  // Cap items per author (2) then interleave articles and videos so video
+  // content is distributed throughout rather than all appearing at the end.
+  // A hard 1-per-author dedupe collapsed thin destinations to a single card
+  // when the web search only surfaced one blogger (e.g. Arunachal Pradesh).
   const items = (() => {
-    const seen = new Set();
+    const perAuthor = new Map();
     const deduped = (digest?.inspirations || []).filter((i) => {
       if (!i?.url) return false;
       const key = (i.author || "").toLowerCase().trim();
-      if (key && seen.has(key)) return false;
-      if (key) seen.add(key);
+      if (!key) return true;
+      const n = perAuthor.get(key) || 0;
+      if (n >= 2) return false;
+      perAuthor.set(key, n + 1);
       return true;
     });
     // Separate into videos and articles, then zip them together so they alternate.

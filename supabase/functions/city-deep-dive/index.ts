@@ -35,6 +35,8 @@ Rules:
 - didYouKnow: one or two interesting facts. Prefer things a local would know that a guidebook often omits.
 - moreSights: 5–8 specific named places, landmarks, or experiences in or near this city that a traveler should know about — NOT limited to the itinerary. Think broadly: temples, viewpoints, hidden beaches, street art, local markets, nature spots, museums, neighborhoods to wander.
   CRITICAL: Every place MUST be real and verifiable. Use only places that have a Wikipedia article or Google Maps listing. NEVER invent, combine, or embellish place names. If you're not 100% certain a place exists with that exact name, do not include it. "Uzuki Matsuri Valley" is an example of a HALLUCINATED name — it does not exist. Prefer well-known, established places over obscure ones.
+  NEVER rename or restyle a real place into something grander — use the plain common name exactly. WRONG: "Itanagar Citadel" (does not exist). RIGHT: "Ita Fort" (the real name of that fortress). If you only half-remember a name, OMIT the place.
+  For remote or lesser-documented regions, return FEWER sights (3-4) you are completely certain about rather than padding to 8 — an invented sight destroys trust in the whole guide.
   "geocode" must be the exact real-world name as it appears on Wikipedia/Maps (e.g. title "Golden Pavilion" → geocode "Kinkaku-ji", title "Shibuya Crossing" → geocode "Shibuya Crossing"). This is a discovery section — surprise the traveler with things they might not have planned.
 - If the traveler's notes mention a specific interest (scuba, photography, kids, food), subtly bias the content to reflect it (e.g. diving-specific etiquette for a scuba trip).
 - No markdown, no bullets inside string values. Short and readable.`;
