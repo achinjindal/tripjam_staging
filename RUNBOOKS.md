@@ -96,6 +96,70 @@ PGPASSWORD='<prod-db-password>' psql \
 
 ---
 
+## Staging environment gotchas (learned 2026-08-03)
+
+Four independent traps that all present as "staging is broken". Check them in this order.
+
+### 1. `tripjam-staging.vercel.app` is a manual alias — it goes stale on every push
+
+The alias does NOT follow new preview deployments; it keeps serving whatever build it
+was last pointed at (symptoms: old UI, missing features, 401s from old auth code).
+Raw preview URLs are behind Vercel SSO, so the alias is the practical test URL.
+After every push you want to test:
+
+```bash
+vercel ls                              # copy the newest Preview deployment URL
+vercel alias set <deployment-url> tripjam-staging.vercel.app
+```
+
+Then hard-refresh twice (PWA service worker holds the old bundle until the new SW activates).
+
+### 2. Vercel env vars must be scoped per environment
+
+`VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` were once defined as a single value
+across Development+Preview+Production — which silently pointed "staging" previews at
+the production database. Keep them split: `production` scope → prod project
+(`viyvdqwwnbbqjuwiuzbh`), `preview` + `development` scopes → staging project
+(`wlrzvwjdrjpfqcwgmzch`). Verify what a deployed bundle actually embeds with:
+
+```bash
+curl -s https://tripjam-staging.vercel.app/assets/<index-bundle>.js | grep -o 'wlrzvwjdrjpfqcwgmzch\|viyvdqwwnbbqjuwiuzbh' | sort | uniq -c
+```
+
+Env var changes only apply to builds started afterwards — push a commit (or redeploy) to pick them up.
+
+### 3. Staging Supabase auth URL configuration
+
+OAuth redirects fall back to the project's **Site URL** when the requested
+`redirectTo` isn't on the allow-list — this is what bounces staging logins to prod.
+Staging project → Auth → URL Configuration must have:
+
+- Site URL: `https://tripjam-staging.vercel.app`
+- Redirect URLs: `https://tripjam-staging.vercel.app/**`, `http://localhost:5173/**`,
+  `https://tripjam-*-achin-jindals-projects.vercel.app/**`
+
+### 4. Google OAuth provider must be enabled per Supabase project
+
+Providers are per-project; staging shipped with Google disabled (symptom: clicking
+"Sign in with Google" errors and bounces to the Site URL). Setup:
+
+1. Google Cloud Console → the prod OAuth client → Authorized redirect URIs → add
+   `https://wlrzvwjdrjpfqcwgmzch.supabase.co/auth/v1/callback` (prod's callback stays too).
+2. Staging Supabase → Auth → Providers → Google → Enable, with the same
+   Client ID + Secret as prod.
+
+Read the effective auth config without the dashboard (CLI token lives in the macOS keychain):
+
+```bash
+RAW=$(security find-generic-password -s "Supabase CLI" -w)
+TOKEN=$(echo "${RAW#go-keyring-base64:}" | base64 -d)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  https://api.supabase.com/v1/projects/wlrzvwjdrjpfqcwgmzch/config/auth | \
+  python3 -m json.tool | grep -E 'site_url|uri_allow_list|google_enabled'
+```
+
+---
+
 ## Auth & Account Management
 
 ### Manual password reset (user emailed support)

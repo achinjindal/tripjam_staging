@@ -10,6 +10,11 @@ import {
 import { DebugContext } from "./context.js";
 import posthog from "posthog-js";
 import { supabase } from "./supabase";
+import {
+  hotelRatesUrl as buildHotelRatesUrl,
+  hotelStayRange,
+  HOTEL_AFFILIATE_ENABLED,
+} from "./booking.js";
 import BoardView, { LogisticsTab } from "./components/BoardView.jsx";
 import SetupForm from "./components/SetupForm.jsx";
 import {
@@ -47,6 +52,7 @@ import {
   needsVerification,
 } from "./photos";
 import { MapView, RouteMapView } from "./components/MapView.jsx";
+import StoryView from "./components/StoryView.jsx";
 import { useIsDesktop } from "./hooks/useViewport.js";
 import {
   FoodSpotlightCard,
@@ -55,6 +61,21 @@ import {
   HotelSuggestionCard,
   InspirationsSection,
 } from "./components/Magazine.jsx";
+
+// Fresh access token for edge-function calls. The `session` prop captured at
+// render can go stale (access tokens expire while a tab sleeps); getSession()
+// returns a valid session, refreshing it first when needed. Same hardening as
+// the city-deep-dive path (2a83b5d), applied everywhere.
+async function freshAccessToken() {
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session?.access_token || null;
+  } catch {
+    return null;
+  }
+}
 
 // ── Error Boundary ──
 class ErrorBoundary extends Component {
@@ -172,7 +193,11 @@ function PhotoStrip({ activity, city }) {
       return;
     }
     let cancelled = false;
-    _fetchPhoto(geocode, city, activity?.type).then((src) => {
+    _fetchPhoto(geocode, city, activity?.type, undefined, {
+      lat: activity?.lat,
+      lng: activity?.lng,
+      photoQuery: activity?.photo_query,
+    }).then((src) => {
       if (cancelled) return;
       if (src) {
         if (!isHotel) _usedPhotoUrls.add(src);
@@ -1714,6 +1739,187 @@ function RouteCard({
   );
 }
 
+/* ─── RG LOADING — the drafting card ─────────────────────────────────
+ * Shown while routes generate. Editorial dusk card (Story-mode language):
+ * a gold route being sketched between destination waypoints, DM Serif
+ * headline, rotating craft lines, and a climbing "routes weighed" counter.
+ */
+const RG_CRAFT_LINES = [
+  "Weighing beach mornings against mountain afternoons…",
+  "Checking ferry timetables and train connections…",
+  "Keeping the good cafés within walking distance…",
+  "Trading a museum for a night market…",
+  "Counting the hours between check-ins…",
+  "Leaving room for the unplanned hour…",
+];
+
+function RouteDraftingCard({ destinations }) {
+  const [lineIdx, setLineIdx] = useState(0);
+  const [count, setCount] = useState(12);
+  const reducedMotion =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  useEffect(() => {
+    if (reducedMotion) return;
+    const t = setInterval(() => {
+      setLineIdx((i) => (i + 1) % RG_CRAFT_LINES.length);
+    }, 3200);
+    return () => clearInterval(t);
+  }, [reducedMotion]);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      // Fast at first, slowing to a crawl — never quite settles
+      setCount((n) => n + Math.max(1, Math.round(19 * Math.exp(-n / 160))));
+    }, 240);
+    return () => clearInterval(t);
+  }, []);
+
+  const names = (destinations || [])
+    .map((d) => (d || "").split(",")[0].trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  const headline = names.length
+    ? `Sketching four ways through ${names.length > 2 ? `${names[0]} & beyond` : names.join(" & ")}`
+    : "Sketching four ways through your trip";
+
+  // Waypoints along the drafting path (labels only when multi-city)
+  const W = 320;
+  const dotXs = [26, 124, 216, 294];
+  const dotYs = [46, 20, 50, 26];
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        overflow: "hidden",
+        borderRadius: RADIUS.lg,
+        padding: "22px 20px 18px",
+        marginBottom: 12,
+        background: `radial-gradient(120% 90% at 15% 0%, rgba(74,144,217,0.16) 0%, rgba(74,144,217,0) 55%), linear-gradient(160deg, ${T.dusk} 0%, ${T.ink} 78%)`,
+      }}
+    >
+      <style>{`
+        @keyframes rgDashMarch { to { stroke-dashoffset: -26; } }
+        @keyframes rgDotPulse { 0%,100% { opacity: 0.45; r: 3; } 50% { opacity: 1; r: 4.5; } }
+        @keyframes rgLineFade { 0% { opacity: 0; transform: translateY(4px); } 14%,100% { opacity: 1; transform: none; } }
+      `}</style>
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: 2.4,
+          textTransform: "uppercase",
+          color: T.mistOnDark,
+          fontFamily: "Georgia,serif",
+        }}
+      >
+        <span style={{ color: T.gold }}>✦</span>&nbsp; Drafting your routes
+      </div>
+      <svg
+        viewBox={`0 0 ${W} 64`}
+        style={{ width: "100%", height: 56, margin: "14px 0 4px" }}
+        aria-hidden="true"
+      >
+        <path
+          d={`M ${dotXs[0]} ${dotYs[0]} C 60 ${dotYs[0] - 30}, 90 ${dotYs[1] + 22}, ${dotXs[1]} ${dotYs[1]} S 190 ${dotYs[2] + 8}, ${dotXs[2]} ${dotYs[2]} S 275 ${dotYs[3] - 6}, ${dotXs[3]} ${dotYs[3]}`}
+          fill="none"
+          stroke={T.gold}
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeDasharray="7 6"
+          style={
+            reducedMotion
+              ? undefined
+              : { animation: "rgDashMarch 1.1s linear infinite" }
+          }
+        />
+        {dotXs.map((x, i) => (
+          <circle
+            key={i}
+            cx={x}
+            cy={dotYs[i]}
+            r="3.5"
+            fill={T.chalk}
+            style={
+              reducedMotion
+                ? undefined
+                : {
+                    animation: `rgDotPulse 2.2s ease-in-out ${i * 0.4}s infinite`,
+                  }
+            }
+          />
+        ))}
+        {names.length > 1 &&
+          names.map((n, i) => (
+            <text
+              key={n}
+              x={dotXs[i]}
+              y={dotYs[i] + 14}
+              textAnchor={
+                i === 0 ? "start" : i === names.length - 1 ? "end" : "middle"
+              }
+              style={{
+                fill: T.mistOnDark,
+                fontSize: 8.5,
+                letterSpacing: 0.8,
+                fontFamily: "Georgia,serif",
+              }}
+            >
+              {n.length > 12 ? `${n.slice(0, 11)}…` : n}
+            </text>
+          ))}
+      </svg>
+      <div
+        style={{
+          fontFamily: "'DM Serif Display',Georgia,serif",
+          fontSize: 21,
+          lineHeight: 1.15,
+          color: T.chalk,
+          textWrap: "balance",
+          marginBottom: 8,
+        }}
+      >
+        {headline}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: 12,
+        }}
+      >
+        <div
+          key={lineIdx}
+          style={{
+            fontFamily: "Georgia,serif",
+            fontStyle: "italic",
+            fontSize: 12.5,
+            color: "rgba(255,255,255,0.78)",
+            lineHeight: 1.5,
+            animation: reducedMotion ? undefined : "rgLineFade 3.2s ease both",
+          }}
+        >
+          {RG_CRAFT_LINES[lineIdx]}
+        </div>
+        <div
+          style={{
+            fontFamily: "Georgia,serif",
+            fontSize: 11,
+            color: T.mistOnDark,
+            whiteSpace: "nowrap",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {count.toLocaleString()} routes weighed
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BrainstormView({
   trip,
   session,
@@ -1982,7 +2188,7 @@ function BrainstormView({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session.access_token}`,
           },
           body: JSON.stringify({
             destinations,
@@ -2608,6 +2814,7 @@ function BrainstormView({
                 <div
                   style={{ display: "flex", flexDirection: "column", gap: 10 }}
                 >
+                  <RouteDraftingCard destinations={destinations} />
                   {[0, 1, 2, 3].map((i) => (
                     <div
                       key={i}
@@ -4146,6 +4353,7 @@ function ActivityCard({
   onChangeHotel,
   transitMapsUrl,
   onAskTrippy,
+  hotelRatesUrl = null,
 }) {
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -4737,6 +4945,47 @@ function ActivityCard({
                 }}
               >
                 💬 {activity.note}
+              </div>
+            )}
+            {activity.type === "hotel" && hotelRatesUrl && (
+              <div style={{ marginTop: 8 }}>
+                <a
+                  href={hotelRatesUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() =>
+                    posthog.capture("hotel_rates_clicked", {
+                      hotel: activity.title?.replace(/^Check in at /i, ""),
+                      city,
+                    })
+                  }
+                  style={{
+                    display: "inline-block",
+                    padding: "5px 14px",
+                    borderRadius: RADIUS.full,
+                    border: `1.5px solid ${T.gold}`,
+                    color: T.ink,
+                    background: "transparent",
+                    fontFamily: "Georgia,serif",
+                    fontSize: 12,
+                    textDecoration: "none",
+                  }}
+                >
+                  Check rates ↗
+                </a>
+                {HOTEL_AFFILIATE_ENABLED && (
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      fontSize: 10,
+                      color: T.mist,
+                      fontFamily: "Georgia,serif",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    TripJam may earn a commission
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -5598,7 +5847,13 @@ function WishlistSection({
 }
 
 /* ─── COMPACT DAY VIEW ────────────────────────────────────────────── */
-function DayCompact({ day, displayCity, onExpand, canExpand = true }) {
+function DayCompact({
+  day,
+  displayCity,
+  onExpand,
+  canExpand = true,
+  hotelRatesUrl = null,
+}) {
   const acts = day.activities || [];
   const hotel = acts.find((a) => a.type === "hotel");
   const transit = acts.find((a) => a.type === "transit");
@@ -5713,12 +5968,7 @@ function DayCompact({ day, displayCity, onExpand, canExpand = true }) {
 
       {/* Hotel */}
       {hotel && (
-        <a
-          href={mapsLink(
-            hotel.geocode || hotel.title.replace(/^Check in at /i, ""),
-          )}
-          target="_blank"
-          rel="noopener noreferrer"
+        <div
           style={{
             fontSize: 11,
             fontFamily: "Georgia,serif",
@@ -5727,12 +5977,44 @@ function DayCompact({ day, displayCity, onExpand, canExpand = true }) {
             display: "flex",
             alignItems: "center",
             gap: 4,
-            textDecoration: "none",
+            flexWrap: "wrap",
           }}
         >
-          🏨 {hotel.title.replace(/^Check in at /i, "")}{" "}
-          {hotel.note ? `· ${hotel.note}` : ""}
-        </a>
+          <a
+            href={mapsLink(
+              hotel.geocode || hotel.title.replace(/^Check in at /i, ""),
+            )}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: T.ink, textDecoration: "none" }}
+          >
+            🏨 {hotel.title.replace(/^Check in at /i, "")}{" "}
+            {hotel.note ? `· ${hotel.note}` : ""}
+          </a>
+          {hotelRatesUrl && (
+            <a
+              href={hotelRatesUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => {
+                e.stopPropagation();
+                posthog.capture("hotel_rates_clicked", {
+                  hotel: hotel.title?.replace(/^Check in at /i, ""),
+                  city: day.city,
+                  surface: "compact",
+                });
+              }}
+              style={{
+                color: T.gold,
+                textDecoration: "none",
+                fontWeight: 600,
+                marginLeft: 2,
+              }}
+            >
+              · rates ↗
+            </a>
+          )}
+        </div>
       )}
 
       {/* Activity lines — grouped */}
@@ -5784,6 +6066,7 @@ function DayCompact({ day, displayCity, onExpand, canExpand = true }) {
 function DaySection({
   day,
   dayIndex = 0,
+  hotelRatesUrl = null,
   onEditActivity,
   onRemoveActivity,
   onReplaceActivity,
@@ -6079,6 +6362,7 @@ function DaySection({
                 onChangeHotel={(mode) => onChangeHotel?.(day.id, act, mode)}
                 transitMapsUrl={transitMapsUrl}
                 onAskTrippy={onAskTrippy}
+                hotelRatesUrl={act.type === "hotel" ? hotelRatesUrl : null}
               />
               {!lastAct && !samePackageAsNext && (
                 <TransitionRow
@@ -6705,8 +6989,13 @@ export default function App({
   const [streamingDays, setStreamingDays] = useState(0);
   const [streamingTotal, setStreamingTotal] = useState(0);
   const [allDaysPlanned, setAllDaysPlanned] = useState(false);
+  // Activity titles seen so far in the IG stream — drives live ✓ marks on
+  // Magazine cards while days stream in (updated once per completed day)
+  const [igStreamTitles, setIgStreamTitles] = useState([]);
+  const igStreamTitlesCountRef = useRef(0);
   const [generatingRoute, setGeneratingRoute] = useState(null); // selected route shown during IG generation
   const [igGenerating, setIgGenerating] = useState(false); // true while IG is in flight (Magazine shown instead of generating screen)
+  const [igCompletedInPlace, setIgCompletedInPlace] = useState(false); // IG finished while the user stayed on the pre-trip Magazine
 
   useEffect(() => {
     if (initialScreen === "itinerary" && initialTrip?.id) {
@@ -6752,6 +7041,11 @@ export default function App({
           if (data?.length) {
             const deduped = processDays(data);
             setDays(deduped);
+            // Resume any unfinished photo backfill for this trip (once per open)
+            if (photoSweepTripRef.current !== initialTrip.id) {
+              photoSweepTripRef.current = initialTrip.id;
+              setTimeout(() => sweepTripPhotos(deduped, initialTrip.id), 2500);
+            }
             // Persist any newly-generated gem IDs (fire-and-forget; idempotent)
             for (let i = 0; i < deduped.length; i++) {
               const orig = data[i];
@@ -6808,6 +7102,40 @@ export default function App({
       onUrlChange(`/trip/${trip.id}/plans`);
     }
   }, [screen, activeBottomTab, trip?.id]);
+
+  // Analytics: fire once per visit to the itinerary tab (load, deep-link, or
+  // tab switch back). Ref guards StrictMode double-fire; leaving the tab
+  // resets it so a return visit counts as a new view.
+  const itineraryViewedRef = useRef(false);
+  useEffect(() => {
+    const onItineraryTab =
+      screen === "itinerary" && activeBottomTab === "itinerary" && !!trip?.id;
+    if (!onItineraryTab) {
+      itineraryViewedRef.current = false;
+      return;
+    }
+    if (itineraryViewedRef.current) return;
+    itineraryViewedRef.current = true;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const start = trip.start_date ? new Date(trip.start_date) : null;
+    const end = trip.end_date ? new Date(trip.end_date) : null;
+    const tripPhase = !start
+      ? "undated"
+      : today < start
+        ? "upcoming"
+        : end && today > end
+          ? "past"
+          : "active";
+    posthog.capture("itinerary_viewed", {
+      trip_id: trip.id,
+      trip_phase: tripPhase,
+      days_until_start: start
+        ? Math.round((start.getTime() - today.getTime()) / 86400000)
+        : null,
+    });
+  }, [screen, activeBottomTab, trip?.id, trip?.start_date, trip?.end_date]);
+
   const [compactView, setCompactView] = useState(true); // start in compact mode
   const [collapsedDays, setCollapsedDays] = useState(new Set()); // per-day collapse in detailed view
   const [detailedLoading, setDetailedLoading] = useState(false); // true while full IG loads in background
@@ -6815,6 +7143,156 @@ export default function App({
     initialScreen === "itinerary",
   ); // true if opening existing trip
   const preloadedDaysRef = useRef(new Set()); // track which day indices have been pre-loaded
+  const photoSweepTripRef = useRef(null); // trip id the background photo sweep has run for
+
+  // Background photo sweep: fetch + persist photos for every activity that
+  // still lacks one. Runs after IG completes AND on trip open — the post-IG
+  // pass dies with its tab, which left ~half of older trips' stops photo-less.
+  const sweepTripPhotos = (daysList, tripId) => {
+    const toFetch = (daysList || []).flatMap((day) =>
+      (day.activities || [])
+        .filter((a) => a.type !== "transit" && !a.photo_url)
+        .map((act) => ({ act, city: day.city })),
+    );
+    if (!toFetch.length) return;
+    (async () => {
+      for (const { act, city } of toFetch) {
+        // Trip changed underneath us — stop quietly
+        if (tripId && photoSweepTripRef.current !== tripId) return;
+        const url = await _fetchPhoto(
+          act.geocode || act.title,
+          city,
+          act.type,
+          undefined,
+          { lat: act.lat, lng: act.lng, photoQuery: act.photo_query },
+        );
+        if (url) {
+          setDays((prev) =>
+            prev.map((day) => ({
+              ...day,
+              activities: day.activities.map((a) =>
+                a.id === act.id ? { ...a, photo_url: url } : a,
+              ),
+            })),
+          );
+          await supabase
+            .from("activities")
+            .update({ photo_url: url })
+            .eq("id", act.id);
+        }
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    })();
+  };
+
+  // ── Story mode (Design A) ──
+  const [itineraryMode, setItineraryModeRaw] = useState("plan"); // 'story' | 'plan'
+  const [narrativesPending, setNarrativesPending] = useState(false);
+  const narrativesInflightRef = useRef(null); // trip.id the backfill has run for
+  const storyOpenedRef = useRef(false);
+
+  // Per-trip persisted mode; smart default: upcoming trips open in Story.
+  useEffect(() => {
+    if (!trip?.id) return;
+    let mode = null;
+    try {
+      mode = localStorage.getItem(`tripjam_itin_mode_${trip.id}`);
+    } catch {}
+    if (mode !== "story" && mode !== "plan") {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      mode =
+        trip.start_date && new Date(trip.start_date) > today ? "story" : "plan";
+    }
+    setItineraryModeRaw(mode);
+  }, [trip?.id]);
+
+  // Story renders only once the detailed itinerary is fully loaded; while
+  // streaming (or with no days) the Plan timeline stays in charge.
+  const storyAvailable = detailedReady && !detailedLoading && days.length > 0;
+  const storyActive = itineraryMode === "story" && storyAvailable;
+
+  const setItineraryMode = (mode, scrollToDayIndex) => {
+    setItineraryModeRaw(mode);
+    try {
+      if (trip?.id) localStorage.setItem(`tripjam_itin_mode_${trip.id}`, mode);
+    } catch {}
+    posthog.capture("itinerary_mode_toggled", { trip_id: trip?.id, to: mode });
+    if (mode === "plan" && scrollToDayIndex != null) {
+      setTimeout(() => scrollToDay(scrollToDayIndex), 80);
+    } else {
+      scrollRef.current?.scrollTo({ top: 0 });
+    }
+  };
+
+  // First Story open per trip: log it, and backfill story_title/narrative/gloss
+  // for itineraries generated before those fields existed. 402/errors degrade
+  // silently — StoryView falls back to day.description, no paywall.
+  useEffect(() => {
+    if (!storyActive || !trip?.id) {
+      storyOpenedRef.current = false;
+      return;
+    }
+    if (!storyOpenedRef.current) {
+      storyOpenedRef.current = true;
+      posthog.capture("story_mode_opened", {
+        trip_id: trip.id,
+        num_days: days.length,
+      });
+    }
+    if (narrativesInflightRef.current === trip.id) return;
+    if (!days.some((d) => !d.narrative)) return;
+    narrativesInflightRef.current = trip.id;
+    setNarrativesPending(true);
+    (async () => {
+      try {
+        const res = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-day-narratives`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token}`,
+            },
+            body: JSON.stringify({ tripId: trip.id }),
+          },
+        );
+        if (!res.ok) {
+          posthog.capture("story_narratives_failed", {
+            trip_id: trip.id,
+            status: res.status,
+          });
+          return;
+        }
+        const patch = await res.json();
+        if (patch?.days?.length || patch?.activities?.length) {
+          const dayPatch = Object.fromEntries(
+            (patch.days || []).map((d) => [d.id, d]),
+          );
+          const actPatch = Object.fromEntries(
+            (patch.activities || []).map((a) => [a.id, a]),
+          );
+          setDays((prev) =>
+            prev.map((d) => ({
+              ...d,
+              ...(dayPatch[d.id] || {}),
+              activities: (d.activities || []).map((a) =>
+                actPatch[a.id] ? { ...a, ...actPatch[a.id] } : a,
+              ),
+            })),
+          );
+          posthog.capture("story_narratives_generated", {
+            trip_id: trip.id,
+            days_patched: patch.days?.length || 0,
+          });
+        }
+      } catch (e) {
+        console.error("narratives backfill failed:", e);
+      } finally {
+        setNarrativesPending(false);
+      }
+    })();
+  }, [storyActive, trip?.id, days]);
 
   // Pre-load a day's geocoding + photos (warms caches for TransitionRow + PhotoStrip)
   // Also kicks off lazy verify-place for activities that have not yet been
@@ -6837,7 +7315,12 @@ export default function App({
       for (const act of acts) {
         if (act.type !== "transit" && act.type !== "hotel" && !act.photo_url) {
           const key = act.geocode || act.title;
-          if (key) _fetchPhoto(key, day.city, act.type || "sight");
+          if (key)
+            _fetchPhoto(key, day.city, act.type || "sight", undefined, {
+              lat: act.lat,
+              lng: act.lng,
+              photoQuery: act.photo_query,
+            });
         }
       }
       // Lazy verify — only for activities that have never been verified and
@@ -7008,7 +7491,7 @@ export default function App({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
           body: JSON.stringify({
             notes: pendingForm?.notes || "",
@@ -7095,7 +7578,7 @@ export default function App({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
           body: JSON.stringify({
             city,
@@ -7190,7 +7673,7 @@ export default function App({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
           body: JSON.stringify({
             destinations,
@@ -7508,7 +7991,7 @@ export default function App({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session.access_token}`,
           },
           body: JSON.stringify({
             name: hotel.title,
@@ -8127,6 +8610,9 @@ export default function App({
     setStreamingDays(0);
     preloadedDaysRef.current = new Set();
     setAllDaysPlanned(false);
+    setIgStreamTitles([]);
+    igStreamTitlesCountRef.current = 0;
+    setIgCompletedInPlace(false);
     setDetailedLoading(false);
     setDetailedReady(false);
     setCompactView(true);
@@ -8181,8 +8667,10 @@ export default function App({
       tripId: trip?.id || null,
     };
 
-    // ── Single call: streams compact first, then full days ──
-    let compactShown = false;
+    // ── Single call: streams the trip header (name/summary/cities) first,
+    // then full days. (The separate compact preview phase was removed to save
+    // tokens + time-to-first-day; DayCompact still renders from real days.)
+    let headerSaved = false;
     let itinerary;
     let accumulated = "";
     const generationStartedAt = new Date().toISOString();
@@ -8197,7 +8685,7 @@ export default function App({
           signal: controller.signal,
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${(await freshAccessToken()) || session.access_token}`,
           },
           body: JSON.stringify(igBody),
         },
@@ -8228,118 +8716,31 @@ export default function App({
           try {
             accumulated += JSON.parse(raw);
 
-            // Detect compact section complete — render immediately
-            if (
-              !compactShown &&
-              /"compact"\s*:\s*\[/.test(accumulated) &&
-              /"days"\s*:\s*\[/.test(accumulated)
-            ) {
+            // Detect trip header (name/summary/cities) complete — save the trip
+            // early so Magazine shows the real name while days stream in.
+            if (!headerSaved && /"days"\s*:\s*\[/.test(accumulated)) {
               try {
-                // Extract just enough JSON to parse compact
-                const compactEnd = accumulated.indexOf('"days"');
-                if (compactEnd > 0) {
+                // Extract just enough JSON to parse the header
+                const headerEnd = accumulated.indexOf('"days"');
+                if (headerEnd > 0) {
                   let partial =
-                    accumulated.slice(0, compactEnd).replace(/,\s*$/, "") + "}";
+                    accumulated.slice(0, headerEnd).replace(/,\s*$/, "") + "}";
                   partial = partial.replace(/^```(?:json)?\s*/i, "").trim();
                   const s = partial.indexOf("{");
                   if (s >= 0) {
                     const compactData = JSON.parse(partial.slice(s));
-                    if (compactData.compact?.length) {
-                      compactShown = true;
-                      posthog.capture("ig_compact_complete", {
+                    if (compactData.name) {
+                      headerSaved = true;
+                      posthog.capture("ig_header_complete", {
                         trip_id: capturedTripId,
                         ms_since_start: Date.now() - __igStartedAt,
-                        days: compactData.compact.length,
-                      });
-                      const start = new Date(form.startDate);
-                      const compactDays = compactData.compact.map((day, i) => {
-                        const dayDate = new Date(start);
-                        dayDate.setDate(start.getDate() + i);
-                        return {
-                          id: `compact-${i}`,
-                          label: day.label || `Day ${i + 1}`,
-                          city: day.city || "",
-                          date: dayDate.toISOString().split("T")[0],
-                          description: day.description || "",
-                          activities: [
-                            ...(day.hotel
-                              ? [
-                                  {
-                                    id: `c-hotel-${i}`,
-                                    type: "hotel",
-                                    title: `Check in at ${day.hotel}`,
-                                    icon: "🏨",
-                                    time: "14:00",
-                                    duration: "0.5h",
-                                    note: "",
-                                  },
-                                ]
-                              : []),
-                            ...(day.highlights || []).map((h, hi) => {
-                              const title =
-                                typeof h === "string" ? h : h.title || "";
-                              const llmIcon =
-                                typeof h === "object" ? h.icon : null;
-                              const tl = title.toLowerCase();
-                              const icon =
-                                llmIcon ||
-                                (/sushi|ramen|food|eat|dining|restaurant|cafe|bakery|market|street food/i.test(
-                                  tl,
-                                )
-                                  ? "🍜"
-                                  : /temple|shrine|mosque|church|cathedral/i.test(
-                                        tl,
-                                      )
-                                    ? "⛩"
-                                    : /museum|gallery|art/i.test(tl)
-                                      ? "🏛"
-                                      : /park|garden|nature|forest|lake|mountain|volcano|trek|hike/i.test(
-                                            tl,
-                                          )
-                                        ? "🌿"
-                                        : /beach|coast|island|bay|snorkel|dive/i.test(
-                                              tl,
-                                            )
-                                          ? "🏖"
-                                          : /shop|mall|bazaar|souk/i.test(tl)
-                                            ? "🛍"
-                                            : /bar|club|night/i.test(tl)
-                                              ? "🍸"
-                                              : /spa|onsen|bath|wellness/i.test(
-                                                    tl,
-                                                  )
-                                                ? "♨️"
-                                                : /walk|stroll|district|quarter|street|lane/i.test(
-                                                      tl,
-                                                    )
-                                                  ? "🚶"
-                                                  : /palace|castle|fort/i.test(
-                                                        tl,
-                                                      )
-                                                    ? "🏰"
-                                                    : "📍");
-                              return {
-                                id: `c-act-${i}-${hi}`,
-                                type: "sight",
-                                title,
-                                icon,
-                                time: "",
-                                duration: "",
-                                note: "",
-                              };
-                            }),
-                          ],
-                          wishlist: [],
-                        };
                       });
                       const fmt = (d) =>
                         new Date(d).toLocaleDateString("en-US", {
                           month: "short",
                           day: "numeric",
                         });
-                      const compactTripName = compactData.name
-                        ? `${compactData.name} · ${fmt(form.startDate)}–${fmt(form.endDate)}`
-                        : editingTrip?.name || igDestinations.join(" → ");
+                      const compactTripName = `${compactData.name} · ${fmt(form.startDate)}–${fmt(form.endDate)}`;
                       const compactDates =
                         form.startDate && form.endDate
                           ? `${fmt(form.startDate)} – ${fmt(form.endDate)}, ${new Date(form.endDate).getFullYear()}`
@@ -8371,7 +8772,7 @@ export default function App({
                           .then(({ error }) => {
                             if (error)
                               console.warn(
-                                "compact IG save failed:",
+                                "header IG save failed:",
                                 error.message,
                               );
                           });
@@ -8388,44 +8789,40 @@ export default function App({
                             if (data) genLogId = data.id;
                           });
                       }
-                      setDays(compactDays);
-                      setActiveDay(0);
-                      // Magazine-first: stay on pre-trip Magazine; compact arrives silently
-                      // so itineraryTitles populate and ✓ marks appear on Magazine cards.
-                      // setScreen("itinerary"); // disabled — navigated on full IG complete
-                      // setCompactView(true);   // disabled — compact not shown to user
+                      // Magazine-first: stay on pre-trip Magazine while days
+                      // stream in; navigate on full IG complete.
                       setDetailedLoading(true);
                     }
                   }
                 }
               } catch {
-                /* compact parse failed, continue streaming */
+                /* header parse failed, continue streaming */
               }
             }
 
-            // Track day progress — count "label" for pre-compact screen, "wishlist" for detailed progress
-            const daysInDaysArray = (accumulated.match(/"label"\s*:/g) || [])
-              .length;
-            const compactLabels = (
-              accumulated.match(/"compact"\s*:[\s\S]*?"label"/g) || []
+            // Track day progress: count completed days by "wishlist" markers
+            // (one appears at the end of each streamed day)
+            const daysStart = accumulated.indexOf('"days"');
+            const daysSection =
+              daysStart >= 0 ? accumulated.slice(daysStart) : "";
+            const detailedDays = (
+              daysSection.match(/"wishlist"\s*:\s*\[/g) || []
             ).length;
-            const daysPlanned = Math.max(
-              0,
-              daysInDaysArray - (compactShown ? compactLabels : 0),
-            );
-            if (daysPlanned > 0 && !compactShown) setStreamingDays(daysPlanned);
-            // Detailed progress: count completed days by "wishlist" markers (appears at end of each day)
-            if (compactShown) {
-              const daysSection = accumulated.slice(
-                accumulated.indexOf('"days"'),
-              );
-              const detailedDays = (
-                daysSection.match(/"wishlist"\s*:\s*\[/g) || []
-              ).length;
+            if (detailedDays > 0) {
               setStreamingDays(detailedDays);
+              // Live ✓ marks on Magazine cards: surface streamed activity
+              // titles as each day completes (compact previews used to do this)
+              if (detailedDays > igStreamTitlesCountRef.current) {
+                igStreamTitlesCountRef.current = detailedDays;
+                setIgStreamTitles(
+                  [
+                    ...daysSection.matchAll(/"title"\s*:\s*"([^"]{2,80})"/g),
+                  ].map((m) => m[1]),
+                );
+              }
             }
             if (
-              daysPlanned >= numDays &&
+              detailedDays >= numDays &&
               (/"summary"\s*:/.test(accumulated) ||
                 /"wishlist"\s*:\s*\[[\s\S]*?\][\s\S]{200,}/.test(accumulated))
             ) {
@@ -8515,16 +8912,6 @@ export default function App({
       console.error("AI generation failed:", e.message);
       console.error("Accumulated length:", accumulated.length);
       console.error("Accumulated tail:", accumulated.slice(-300));
-      if (compactShown) {
-        setDetailedLoading(false);
-        setDetailedReady(true);
-        setIgGenerating(false);
-        setActiveBottomTab("brainstorm"); // land on Magazine with compact fallback
-        setScreen("itinerary");
-        _igInFlight = false;
-        console.warn("Detailed IG failed, using compact itinerary as fallback");
-        return;
-      }
       setGenerateError(`Generation failed: ${e.message}. Please try again.`);
       setIgGenerating(false);
       setScreen("setup");
@@ -8658,32 +9045,62 @@ export default function App({
     }
     const tripData = tripPayload;
 
-    // 2b. Persist pre-trip brainstorm items (route options) so the user can refer to them later
+    // 2b. Persist pre-trip brainstorm items (route options) so the user can
+    // refer to them later — but only when the trip has none yet. Regenerations
+    // (and flows that persisted routes pre-IG) already have them; inserting
+    // unconditionally duplicated the entire route set on every IG run.
     if (votedItems && votedItems.length) {
-      const rows = votedItems.map((it, i) => ({
-        trip_id: tripData.id,
-        title: it.title,
-        city: it.city || null,
-        category: it.category || "Route",
-        note: it.tagline || null,
-        icon: it.icon || null,
-        geocode: it.geocode || null,
-        position: i,
-        tier: it.tier || 2,
-        selected: it.vote === 1,
-        data: {
-          tagline: it.tagline || null,
-          days: it.days || null,
-          bestFor: it.bestFor || null,
-          warning: it.warning || null,
-          recommended: !!it.recommended,
-          points: it.points || null,
-        },
-      }));
-      const { error: brainErr } = await supabase
+      const { data: existingBrainstorm } = await supabase
         .from("brainstorm_items")
-        .insert(rows);
-      if (brainErr) console.warn("Failed to save brainstorm items:", brainErr);
+        .select("id")
+        .eq("trip_id", tripData.id)
+        .limit(1);
+      if (!existingBrainstorm?.length) {
+        const rows = votedItems.map((it, i) => ({
+          trip_id: tripData.id,
+          title: it.title,
+          city: it.city || null,
+          category: it.category || "Route",
+          note: it.tagline || null,
+          icon: it.icon || null,
+          geocode: it.geocode || null,
+          position: i,
+          tier: it.tier || 2,
+          selected: it.vote === 1,
+          data: {
+            tagline: it.tagline || null,
+            days: it.days || null,
+            bestFor: it.bestFor || null,
+            warning: it.warning || null,
+            recommended: !!it.recommended,
+            points: it.points || null,
+          },
+        }));
+        const { error: brainErr } = await supabase
+          .from("brainstorm_items")
+          .insert(rows);
+        if (brainErr)
+          console.warn("Failed to save brainstorm items:", brainErr);
+      } else {
+        // Rows already exist — just sync which route is selected now
+        const selectedTitles = votedItems
+          .filter((it) => it.vote === 1)
+          .map((it) => it.title)
+          .filter(Boolean);
+        const { error: clearErr } = await supabase
+          .from("brainstorm_items")
+          .update({ selected: false })
+          .eq("trip_id", tripData.id)
+          .eq("tier", 1);
+        if (!clearErr && selectedTitles.length) {
+          await supabase
+            .from("brainstorm_items")
+            .update({ selected: true })
+            .eq("trip_id", tripData.id)
+            .eq("tier", 1)
+            .in("title", selectedTitles);
+        }
+      }
     }
 
     // 3. Insert days + activities (all days in parallel)
@@ -8704,6 +9121,8 @@ export default function App({
               city: day.city,
               position: i,
               description: day.description || null,
+              story_title: day.story_title || null,
+              narrative: day.narrative || null,
               wishlist: day.wishlist?.length ? day.wishlist : null,
               hotel_options: day.hotelOptions?.length ? day.hotelOptions : null,
               hotel_check_in_time: day.hotelCheckInTime || null,
@@ -8730,6 +9149,8 @@ export default function App({
                   type: act.type,
                   duration: act.duration,
                   note: act.note,
+                  gloss: act.gloss || null,
+                  photo_query: act.photo_query || null,
                   confirmed: act.confirmed,
                   icon: act.icon,
                   package: act.package || null,
@@ -8763,7 +9184,6 @@ export default function App({
     });
     setDays(savedDays);
     setActiveDay(0);
-    if (!compactShown) playDoneChime(); // chime only if compact didn't already play it
     posthog.capture("ig_detailed_complete", {
       trip_id: capturedTripId,
       ms_since_start: Date.now() - __igStartedAt,
@@ -8819,37 +9239,22 @@ export default function App({
         })
         .then(logDetailedErr);
     }
-    // Land on Magazine tab so user continues reading while photos load in background.
-    setActiveBottomTab("brainstorm");
-    setScreen("itinerary");
+    // Stay exactly where the user is (no navigation, no scroll reset) — the
+    // sticky banner flips to its done state and a toast offers the jump.
+    setIgCompletedInPlace(true);
+    setActiveBottomTab("itinerary");
+    showToast("Your itinerary is ready", {
+      action: {
+        label: "View it →",
+        onClick: () => {
+          setScreen("itinerary");
+        },
+      },
+    });
 
     // Fetch and persist photos in background — staggered to avoid Wikimedia rate limits
-    (async () => {
-      const toFetch = savedDays.flatMap((day) =>
-        day.activities
-          .filter((a) => a.type !== "transit")
-          .map((act) => ({ act, city: day.city })),
-      );
-      for (const { act, city } of toFetch) {
-        const url = await _fetchPhoto(act.geocode || act.title, city, act.type);
-        if (url) {
-          // Update in-memory state immediately so PhotoStrip stops shimming without waiting for DB
-          setDays((prev) =>
-            prev.map((day) => ({
-              ...day,
-              activities: day.activities.map((a) =>
-                a.id === act.id ? { ...a, photo_url: url } : a,
-              ),
-            })),
-          );
-          await supabase
-            .from("activities")
-            .update({ photo_url: url })
-            .eq("id", act.id);
-        }
-        await new Promise((r) => setTimeout(r, 500)); // Wikimedia rate limit buffer
-      }
-    })();
+    photoSweepTripRef.current = tripData.id;
+    sweepTripPhotos(savedDays, tripData.id);
 
     // Eager hybrid verification: Day 1 activities + all hotels (across all days)
     // verified in parallel right after IG completion. Non-blocking — IG perceived
@@ -9306,36 +9711,44 @@ export default function App({
               continue;
             const insertedAct = insertedActs?.[i];
             if (!insertedAct) continue;
-            _fetchPhoto(act.geocode || act.title, dayCity, act.type).then(
-              (url) => {
-                if (!url) return;
-                supabase
-                  .from("activities")
-                  .update({ photo_url: url })
-                  .eq("id", insertedAct.id)
-                  .then(({ error }) => {
-                    if (error)
-                      console.warn(
-                        "activity photo persist failed:",
-                        error.message,
-                      );
-                  });
-                setDays((prev) =>
-                  prev.map((d) =>
-                    d.id !== dayId
-                      ? d
-                      : {
-                          ...d,
-                          activities: d.activities.map((a) =>
-                            a.id === insertedAct.id
-                              ? { ...a, photo_url: url }
-                              : a,
-                          ),
-                        },
-                  ),
-                );
+            _fetchPhoto(
+              act.geocode || act.title,
+              dayCity,
+              act.type,
+              undefined,
+              {
+                lat: act.lat,
+                lng: act.lng,
+                photoQuery: act.photo_query,
               },
-            );
+            ).then((url) => {
+              if (!url) return;
+              supabase
+                .from("activities")
+                .update({ photo_url: url })
+                .eq("id", insertedAct.id)
+                .then(({ error }) => {
+                  if (error)
+                    console.warn(
+                      "activity photo persist failed:",
+                      error.message,
+                    );
+                });
+              setDays((prev) =>
+                prev.map((d) =>
+                  d.id !== dayId
+                    ? d
+                    : {
+                        ...d,
+                        activities: d.activities.map((a) =>
+                          a.id === insertedAct.id
+                            ? { ...a, photo_url: url }
+                            : a,
+                        ),
+                      },
+                ),
+              );
+            });
           }
           logActivity({
             tripId: trip?.id,
@@ -9521,7 +9934,7 @@ export default function App({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${(await freshAccessToken()) || session.access_token}`,
         },
         body: JSON.stringify({
           screen,
@@ -11390,38 +11803,110 @@ export default function App({
                       paddingBottom: 80, // clears Trippy chat bar at bottom
                     }}
                   >
-                    {/* IG progress banner — sticky at top while itinerary generates */}
-                    {igGenerating &&
+                    {/* IG progress banner — editorial strip, sticky while the itinerary
+                        writes itself; flips to a done state that stays until the
+                        user jumps over */}
+                    {(igGenerating || igCompletedInPlace) &&
                       (() => {
-                        const isDone = detailedReady;
+                        const isDone = igCompletedInPlace;
                         const hasProgress =
                           streamingDays > 0 && streamingTotal > 0;
-                        const pct = hasProgress
-                          ? Math.min(
-                              99,
-                              Math.round(
-                                (streamingDays / streamingTotal) * 100,
-                              ),
-                            )
-                          : 0;
+                        const pct = isDone
+                          ? 100
+                          : hasProgress
+                            ? Math.min(
+                                99,
+                                Math.round(
+                                  (streamingDays / streamingTotal) * 100,
+                                ),
+                              )
+                            : 4;
                         return (
                           <div
                             style={{
                               position: "sticky",
                               top: 0,
                               zIndex: 10,
-                              background: isDone ? `${T.ocean}12` : T.chalk,
-                              borderBottom: `1px solid ${isDone ? T.ocean + "40" : T.sand}`,
-                              padding: "10px 16px 12px",
+                              background: `radial-gradient(120% 160% at 12% 0%, rgba(74,144,217,0.18) 0%, rgba(74,144,217,0) 55%), linear-gradient(160deg, ${T.dusk} 0%, ${T.ink} 85%)`,
+                              padding: "12px 16px 13px",
                             }}
                           >
-                            {/* Progress bar track */}
                             <div
                               style={{
-                                height: 3,
-                                background: T.sand,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: 12,
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <div
+                                  style={{
+                                    fontFamily: "'DM Serif Display',serif",
+                                    fontSize: 15.5,
+                                    color: T.chalk,
+                                    lineHeight: 1.25,
+                                  }}
+                                >
+                                  {isDone ? (
+                                    <>
+                                      <span style={{ color: T.gold }}>✦</span>{" "}
+                                      Your itinerary is ready
+                                    </>
+                                  ) : hasProgress ? (
+                                    <>
+                                      Writing Day {streamingDays} of{" "}
+                                      {streamingTotal}…
+                                    </>
+                                  ) : (
+                                    <>Opening the notebook…</>
+                                  )}
+                                </div>
+                                <div
+                                  style={{
+                                    fontFamily: "Georgia,serif",
+                                    fontStyle: "italic",
+                                    fontSize: 11,
+                                    color: "rgba(255,255,255,0.6)",
+                                    marginTop: 2,
+                                  }}
+                                >
+                                  {isDone
+                                    ? "Every day planned, photos on their way"
+                                    : "Keep browsing — days appear as they're written"}
+                                </div>
+                              </div>
+                              {isDone && (
+                                <button
+                                  onClick={() => {
+                                    setScreen("itinerary");
+                                    setActiveBottomTab("itinerary");
+                                  }}
+                                  style={{
+                                    background: T.gold,
+                                    color: T.ink,
+                                    border: "none",
+                                    borderRadius: RADIUS.full,
+                                    padding: "8px 16px",
+                                    fontSize: 12,
+                                    fontFamily: "Georgia,serif",
+                                    fontWeight: 700,
+                                    cursor: "pointer",
+                                    flexShrink: 0,
+                                    boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                                  }}
+                                >
+                                  View itinerary →
+                                </button>
+                              )}
+                            </div>
+                            {/* gold progress hairline */}
+                            <div
+                              style={{
+                                height: 2.5,
+                                background: "rgba(255,255,255,0.16)",
                                 borderRadius: 99,
-                                marginBottom: 8,
+                                marginTop: 10,
                                 overflow: "hidden",
                               }}
                             >
@@ -11429,12 +11914,8 @@ export default function App({
                                 style={{
                                   height: "100%",
                                   borderRadius: 99,
-                                  background: isDone ? T.ocean : T.dusk,
-                                  width: isDone
-                                    ? "100%"
-                                    : hasProgress
-                                      ? `${pct}%`
-                                      : "0%",
+                                  background: T.gold,
+                                  width: `${pct}%`,
                                   transition: "width 0.8s ease",
                                   ...(hasProgress || isDone
                                     ? {}
@@ -11444,50 +11925,6 @@ export default function App({
                                       }),
                                 }}
                               />
-                            </div>
-                            {/* Status row */}
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                gap: 8,
-                              }}
-                            >
-                              <div
-                                style={{
-                                  fontSize: 12,
-                                  fontFamily: "Georgia,serif",
-                                  color: isDone ? T.ocean : T.mist,
-                                }}
-                              >
-                                {isDone
-                                  ? "✓ Itinerary ready!"
-                                  : hasProgress
-                                    ? `✈ Planning Day ${streamingDays} of ${streamingTotal}`
-                                    : "✈ Crafting your itinerary…"}
-                              </div>
-                              {isDone && (
-                                <button
-                                  onClick={() =>
-                                    setActiveBottomTab("itinerary")
-                                  }
-                                  style={{
-                                    background: T.ocean,
-                                    color: "white",
-                                    border: "none",
-                                    borderRadius: RADIUS.full,
-                                    padding: "5px 12px",
-                                    fontSize: 11,
-                                    fontFamily: "Georgia,serif",
-                                    fontWeight: 600,
-                                    cursor: "pointer",
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  View days →
-                                </button>
-                              )}
                             </div>
                           </div>
                         );
@@ -11653,15 +12090,17 @@ export default function App({
                               }
                             }
                           }
-                          // Compact days arrive silently during IG — derive titles
-                          // so ✓ marks appear on Magazine cards as planning progresses.
-                          const igItineraryTitles = new Set(
-                            (days || []).flatMap((d) =>
+                          // Titles stream in silently during IG — derive from
+                          // saved days plus the live stream so ✓ marks appear
+                          // on Magazine cards as planning progresses.
+                          const igItineraryTitles = new Set([
+                            ...(days || []).flatMap((d) =>
                               (d.activities || []).map((a) =>
                                 (a.title || "").toLowerCase(),
                               ),
                             ),
-                          );
+                            ...igStreamTitles.map((t) => t.toLowerCase()),
+                          ]);
                           const renderCityCard = (city, ci, keyPrefix) => {
                             const dd = deepDiveCacheApp[city];
                             const data =
@@ -12146,12 +12585,13 @@ export default function App({
                   {/* Refining banner with progress — shown while detailed IG streams in background */}
                   {detailedLoading &&
                     (() => {
-                      // 50% = compact done. 50-95% = detailed days streaming. Based on wishlist markers per day.
+                      // 10% = header saved; 10-95% = detailed days streaming
+                      // (based on wishlist markers per day).
                       const detailedPct =
                         streamingTotal > 0
-                          ? Math.round((streamingDays / streamingTotal) * 45)
+                          ? Math.round((streamingDays / streamingTotal) * 85)
                           : 0;
-                      const pct = Math.min(95, 50 + detailedPct);
+                      const pct = Math.min(95, 10 + detailedPct);
                       return (
                         <div
                           style={{
@@ -12213,8 +12653,73 @@ export default function App({
                       );
                     })()}
 
+                  {/* Story|Plan mode toggle — appears once the detailed
+                      itinerary is ready; Story is forced off while streaming */}
+                  {storyAvailable && (
+                    <div
+                      style={{
+                        position: storyActive ? "sticky" : "static",
+                        top: 0,
+                        zIndex: 12,
+                        display: "flex",
+                        justifyContent: "center",
+                        padding: "8px 16px",
+                        background: "rgba(245,240,232,0.88)",
+                        backdropFilter: "blur(14px)",
+                        WebkitBackdropFilter: "blur(14px)",
+                        borderBottom: `1px solid ${T.border}B0`,
+                      }}
+                    >
+                      <div
+                        role="group"
+                        aria-label="Itinerary view mode"
+                        style={{
+                          display: "inline-flex",
+                          gap: 2,
+                          background: T.sand,
+                          borderRadius: RADIUS.full,
+                          padding: 3,
+                        }}
+                      >
+                        {[
+                          { key: "story", label: "✦ Story" },
+                          { key: "plan", label: "Plan" },
+                        ].map(({ key, label }) => {
+                          const active = itineraryMode === key;
+                          return (
+                            <button
+                              key={key}
+                              aria-pressed={active}
+                              onClick={() => {
+                                if (!active) setItineraryMode(key);
+                              }}
+                              style={{
+                                fontFamily: "Georgia,serif",
+                                fontSize: 12,
+                                letterSpacing: 0.6,
+                                border: 0,
+                                background: active ? T.ink : "transparent",
+                                color: active ? T.warm : T.mist,
+                                padding: "6px 16px",
+                                borderRadius: RADIUS.full,
+                                cursor: "pointer",
+                                transition: `all ${MOTION.normal}`,
+                                boxShadow: active
+                                  ? "0 1px 3px rgba(15,25,35,0.2)"
+                                  : "none",
+                              }}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {/* City-pill strip — only in detailed view */}
-                  {!compactView &&
+                  {!storyActive &&
+                    !compactView &&
                     (() => {
                       // Derive hotel city per day: use the day's city when it has a hotel activity,
                       // carry forward the last known hotel city for day-trip / non-hotel days
@@ -12309,289 +12814,413 @@ export default function App({
                       );
                     })()}
 
-                  {(() => {
-                    // Build hotel-per-day array: carry forward last seen hotel across days
-                    const hotelByCity = {};
-                    days.forEach((d) =>
-                      d.activities.forEach((a) => {
-                        if (a.type === "hotel") hotelByCity[d.city] = a;
-                      }),
-                    );
-                    // For each day, track which hotel the traveler is currently staying at
-                    let currentHotel = null;
-                    let currentHotelCity = null;
-                    const hotelPerDay = days.map((d) => {
-                      const dayHotel = d.activities.find(
-                        (a) => a.type === "hotel",
-                      );
-                      if (dayHotel) {
-                        currentHotel = dayHotel;
-                        currentHotelCity = d.city;
-                      }
-                      return { hotel: currentHotel, city: currentHotelCity };
-                    });
-
-                    return days.map((day, i) => {
-                      const firstIsHotel = day.activities[0]?.type === "hotel";
-                      const lastAct = day.activities[day.activities.length - 1];
-                      const lastIsHotel = lastAct?.type === "hotel";
-                      const prevDay = i > 0 ? days[i - 1] : null;
-                      const cityChanged = prevDay && prevDay.city !== day.city;
-
-                      // Start-of-day hotel: on city-change days use previous day's hotel
-                      const prevHotel = i > 0 ? hotelPerDay[i - 1] : null;
-                      const startHotel = cityChanged
-                        ? prevHotel?.hotel || null
-                        : !firstIsHotel
-                          ? hotelPerDay[i]?.hotel || null
-                          : null;
-                      const startHotelCity = cityChanged
-                        ? prevHotel?.city
-                        : hotelPerDay[i]?.city;
-
-                      // End-of-day hotel: use current day's hotel (or carried-forward)
-                      // Skip on last day if user has a departure (they're leaving, no hotel needed)
-                      const isLastDay = i === days.length - 1;
-                      const hasDeparture =
-                        isLastDay &&
-                        (trip.departure_time || trip.departure_city);
-                      const endHotel =
-                        !lastIsHotel &&
-                        day.activities.length > 0 &&
-                        !hasDeparture
-                          ? hotelPerDay[i]?.hotel || null
-                          : null;
-
-                      return (
+                  {/* Recovery state: the trip exists but has no days — the
+                      generation was interrupted (tab closed mid-stream) or
+                      failed after the trip row was created. Without this the
+                      itinerary tab is silently blank. */}
+                  {days.length === 0 &&
+                    !igGenerating &&
+                    !detailedLoading &&
+                    !loading && (
+                      <div
+                        style={{
+                          maxWidth: 460,
+                          margin: "0 auto",
+                          padding: "72px 28px",
+                          textAlign: "center",
+                          fontFamily: "Georgia,serif",
+                        }}
+                      >
                         <div
-                          key={day.id}
-                          ref={(el) => {
-                            dayRefs.current[i] = el;
+                          style={{
+                            fontSize: 11,
+                            letterSpacing: 2.2,
+                            textTransform: "uppercase",
+                            color: T.mist,
                           }}
                         >
-                          {compactView || collapsedDays.has(day.id) ? (
-                            <DayCompact
-                              day={day}
-                              canExpand={detailedReady || i < streamingDays}
-                              displayCity={(() => {
-                                const hCity = hotelPerDay[i]?.city;
-                                if (!hCity) return day.city;
-                                return hCity === day.city
-                                  ? day.city
-                                  : `${day.city} (${hCity})`;
-                              })()}
-                              onExpand={() => {
-                                if (compactView) {
-                                  setCompactView(false);
-                                  const allOtherIds = new Set(
-                                    days
-                                      .filter((d) => d.id !== day.id)
-                                      .map((d) => d.id),
-                                  );
-                                  setCollapsedDays(allOtherIds);
-                                } else {
-                                  setCollapsedDays((prev) => {
-                                    const next = new Set(prev);
-                                    next.delete(day.id);
-                                    return next;
-                                  });
-                                }
-                                setActiveDay(i);
-                                // Pre-load current day (if not already) + next day
-                                preloadDay(i);
-                                if (i + 1 < days.length) preloadDay(i + 1);
-                                const tryScroll = (attempts = 0) => {
-                                  requestAnimationFrame(() => {
-                                    const el = dayRefs.current[i];
-                                    if (el && scrollRef.current) {
-                                      const top = el.offsetTop;
-                                      if (top === 0 && i > 0 && attempts < 10) {
-                                        setTimeout(
-                                          () => tryScroll(attempts + 1),
-                                          100,
-                                        );
-                                        return;
+                          <span style={{ color: T.gold }}>✦</span> The itinerary
+                        </div>
+                        <div
+                          style={{
+                            fontFamily: "'DM Serif Display',serif",
+                            fontSize: 26,
+                            lineHeight: 1.15,
+                            color: T.ink,
+                            margin: "12px 0 10px",
+                          }}
+                        >
+                          This trip never finished building
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 13.5,
+                            fontStyle: "italic",
+                            color: T.mist,
+                            lineHeight: 1.6,
+                            marginBottom: 22,
+                          }}
+                        >
+                          The itinerary generation was interrupted before any
+                          days were saved. Pick a route and build it again — it
+                          only takes a minute.
+                        </div>
+                        <button
+                          onClick={() => {
+                            setScreen("brainstorm");
+                            if (onUrlChange)
+                              onUrlChange(`/trip/${trip.id}/plans`);
+                          }}
+                          style={{
+                            background: T.ink,
+                            color: T.warm,
+                            border: "none",
+                            borderRadius: RADIUS.full,
+                            padding: "11px 24px",
+                            fontFamily: "Georgia,serif",
+                            fontSize: 13,
+                            cursor: "pointer",
+                            boxShadow: "0 2px 8px rgba(15,25,35,0.25)",
+                          }}
+                        >
+                          🛣 Explore plans
+                        </button>
+                      </div>
+                    )}
+                  {storyActive ? (
+                    <StoryView
+                      trip={trip}
+                      days={days}
+                      preloadDay={preloadDay}
+                      narrativesPending={narrativesPending}
+                      onOpenPlan={(dayIndex) =>
+                        setItineraryMode("plan", dayIndex)
+                      }
+                      onError={() => setItineraryModeRaw("plan")}
+                      onPhotoSwiped={() =>
+                        posthog.capture("story_photo_swiped", {
+                          trip_id: trip?.id,
+                        })
+                      }
+                    />
+                  ) : (
+                    (() => {
+                      // Build hotel-per-day array: carry forward last seen hotel across days
+                      const hotelByCity = {};
+                      days.forEach((d) =>
+                        d.activities.forEach((a) => {
+                          if (a.type === "hotel") hotelByCity[d.city] = a;
+                        }),
+                      );
+                      // For each day, track which hotel the traveler is currently staying at
+                      let currentHotel = null;
+                      let currentHotelCity = null;
+                      const hotelPerDay = days.map((d) => {
+                        const dayHotel = d.activities.find(
+                          (a) => a.type === "hotel",
+                        );
+                        if (dayHotel) {
+                          currentHotel = dayHotel;
+                          currentHotelCity = d.city;
+                        }
+                        return { hotel: currentHotel, city: currentHotelCity };
+                      });
+
+                      return days.map((day, i) => {
+                        const firstIsHotel =
+                          day.activities[0]?.type === "hotel";
+                        const lastAct =
+                          day.activities[day.activities.length - 1];
+                        const lastIsHotel = lastAct?.type === "hotel";
+                        const prevDay = i > 0 ? days[i - 1] : null;
+                        const cityChanged =
+                          prevDay && prevDay.city !== day.city;
+
+                        // Start-of-day hotel: on city-change days use previous day's hotel
+                        const prevHotel = i > 0 ? hotelPerDay[i - 1] : null;
+                        const startHotel = cityChanged
+                          ? prevHotel?.hotel || null
+                          : !firstIsHotel
+                            ? hotelPerDay[i]?.hotel || null
+                            : null;
+                        const startHotelCity = cityChanged
+                          ? prevHotel?.city
+                          : hotelPerDay[i]?.city;
+
+                        // End-of-day hotel: use current day's hotel (or carried-forward)
+                        // Skip on last day if user has a departure (they're leaving, no hotel needed)
+                        const isLastDay = i === days.length - 1;
+                        const hasDeparture =
+                          isLastDay &&
+                          (trip.departure_time || trip.departure_city);
+                        const endHotel =
+                          !lastIsHotel &&
+                          day.activities.length > 0 &&
+                          !hasDeparture
+                            ? hotelPerDay[i]?.hotel || null
+                            : null;
+
+                        // Affiliate deep link for this day's check-in (if any)
+                        const dayHotelRatesUrl = (() => {
+                          const hotelAct = (day.activities || []).find(
+                            (a) => a.type === "hotel",
+                          );
+                          if (!hotelAct || !trip?.start_date) return null;
+                          const { checkin, checkout } = hotelStayRange(
+                            days,
+                            i,
+                            trip.start_date,
+                          );
+                          return buildHotelRatesUrl({
+                            hotelName: hotelAct.title?.replace(
+                              /^Check in at /i,
+                              "",
+                            ),
+                            city: hotelAct.city || day.city,
+                            checkin,
+                            checkout,
+                            adults: trip?.travelers,
+                          });
+                        })();
+
+                        return (
+                          <div
+                            key={day.id}
+                            ref={(el) => {
+                              dayRefs.current[i] = el;
+                            }}
+                          >
+                            {compactView || collapsedDays.has(day.id) ? (
+                              <DayCompact
+                                day={day}
+                                hotelRatesUrl={dayHotelRatesUrl}
+                                canExpand={detailedReady || i < streamingDays}
+                                displayCity={(() => {
+                                  const hCity = hotelPerDay[i]?.city;
+                                  if (!hCity) return day.city;
+                                  return hCity === day.city
+                                    ? day.city
+                                    : `${day.city} (${hCity})`;
+                                })()}
+                                onExpand={() => {
+                                  if (compactView) {
+                                    setCompactView(false);
+                                    const allOtherIds = new Set(
+                                      days
+                                        .filter((d) => d.id !== day.id)
+                                        .map((d) => d.id),
+                                    );
+                                    setCollapsedDays(allOtherIds);
+                                  } else {
+                                    setCollapsedDays((prev) => {
+                                      const next = new Set(prev);
+                                      next.delete(day.id);
+                                      return next;
+                                    });
+                                  }
+                                  setActiveDay(i);
+                                  // Pre-load current day (if not already) + next day
+                                  preloadDay(i);
+                                  if (i + 1 < days.length) preloadDay(i + 1);
+                                  const tryScroll = (attempts = 0) => {
+                                    requestAnimationFrame(() => {
+                                      const el = dayRefs.current[i];
+                                      if (el && scrollRef.current) {
+                                        const top = el.offsetTop;
+                                        if (
+                                          top === 0 &&
+                                          i > 0 &&
+                                          attempts < 10
+                                        ) {
+                                          setTimeout(
+                                            () => tryScroll(attempts + 1),
+                                            100,
+                                          );
+                                          return;
+                                        }
+                                        scrollRef.current.scrollTo({
+                                          top: top - 50,
+                                          behavior: "smooth",
+                                        });
                                       }
-                                      scrollRef.current.scrollTo({
-                                        top: top - 50,
-                                        behavior: "smooth",
-                                      });
-                                    }
-                                  });
-                                };
-                                setTimeout(() => tryScroll(), 150);
-                              }}
-                            />
-                          ) : (
-                            <DaySection
-                              day={day}
-                              dayIndex={i}
-                              onCollapse={() =>
-                                setCollapsedDays((prev) =>
-                                  new Set(prev).add(day.id),
-                                )
-                              }
-                              onEditActivity={editActivity}
-                              onRemoveActivity={removeActivity}
-                              onReplaceActivity={(act) => {
-                                setChatInput(`Replace "${act.title}" with `);
-                                setChatOpen(true);
-                                setChatUnread(false);
-                                setTimeout(
-                                  () => chatInputRef.current?.focus(),
-                                  50,
-                                );
-                              }}
-                              onSuggestAlternatives={(act) => {
-                                setChatOpen(true);
-                                setChatUnread(false);
-                                sendChatDirect(
-                                  `Suggest 2-3 alternatives to "${act.title}" for the same time slot, without making any changes yet`,
-                                );
-                              }}
-                              onAddGemToItinerary={(d, gem) => {
-                                setChatOpen(true);
-                                setChatUnread(false);
-                                sendChatDirect(
-                                  `Please add ${gem.title} to the itinerary on ${d.label} at a suitable time.`,
-                                );
-                                dismissGemPersist(
-                                  d,
-                                  gem,
-                                  `Added "${gem.title}" to itinerary.`,
-                                );
-                              }}
-                              onDismissGem={(d, gem) =>
-                                dismissGemPersist(
-                                  d,
-                                  gem,
-                                  `"${gem.title}" dismissed.`,
-                                )
-                              }
-                              onChangeHotel={(dayId, act, mode) => {
-                                const dayLabel =
-                                  days.find((d) => d.id === dayId)?.label ||
-                                  "this day";
-                                if (mode === "own") {
-                                  setChatInput(
-                                    `I've booked my own hotel for ${dayLabel} — please replace the "${act.title}" with`,
-                                  );
+                                    });
+                                  };
+                                  setTimeout(() => tryScroll(), 150);
+                                }}
+                              />
+                            ) : (
+                              <DaySection
+                                day={day}
+                                dayIndex={i}
+                                hotelRatesUrl={dayHotelRatesUrl}
+                                onCollapse={() =>
+                                  setCollapsedDays((prev) =>
+                                    new Set(prev).add(day.id),
+                                  )
+                                }
+                                onEditActivity={editActivity}
+                                onRemoveActivity={removeActivity}
+                                onReplaceActivity={(act) => {
+                                  setChatInput(`Replace "${act.title}" with `);
                                   setChatOpen(true);
                                   setChatUnread(false);
                                   setTimeout(
                                     () => chatInputRef.current?.focus(),
                                     50,
                                   );
-                                } else {
+                                }}
+                                onSuggestAlternatives={(act) => {
                                   setChatOpen(true);
                                   setChatUnread(false);
-                                  const dayCity =
-                                    days.find((d) => d.id === dayId)?.city ||
-                                    "";
                                   sendChatDirect(
-                                    `I want to consider other hotel options for ${dayLabel}. Currently at "${act.title}"${dayCity ? ` in ${dayCity}` : ""}.`,
+                                    `Suggest 2-3 alternatives to "${act.title}" for the same time slot, without making any changes yet`,
                                   );
+                                }}
+                                onAddGemToItinerary={(d, gem) => {
+                                  setChatOpen(true);
+                                  setChatUnread(false);
+                                  sendChatDirect(
+                                    `Please add ${gem.title} to the itinerary on ${d.label} at a suitable time.`,
+                                  );
+                                  dismissGemPersist(
+                                    d,
+                                    gem,
+                                    `Added "${gem.title}" to itinerary.`,
+                                  );
+                                }}
+                                onDismissGem={(d, gem) =>
+                                  dismissGemPersist(
+                                    d,
+                                    gem,
+                                    `"${gem.title}" dismissed.`,
+                                  )
                                 }
-                              }}
-                              arrivalTime={
-                                i === 0
-                                  ? trip.arrival_time ||
-                                    (trip.start_date
-                                      ? `${trip.start_date}T09:00:00`
-                                      : null)
-                                  : null
-                              }
-                              arrivalMode={
-                                i === 0 ? trip.arrival_mode || "flight" : null
-                              }
-                              arrivalCity={i === 0 ? trip.arrival_city : null}
-                              arrivalAirportIata={
-                                i === 0
-                                  ? trip.arrival_airport_iata || null
-                                  : null
-                              }
-                              originIata={i === 0 ? baseAirportIata : null}
-                              originDepartureHHMM={
-                                i === 0 ? originDepartureHHMM : null
-                              }
-                              onEditFlight={
-                                i === 0
-                                  ? () => {
-                                      setBoardInitialSection("logistics");
-                                      setActiveBottomTab("board");
-                                    }
-                                  : undefined
-                              }
-                              departureTime={
-                                i === days.length - 1
-                                  ? trip.departure_time ||
-                                    (trip.end_date
-                                      ? `${trip.end_date}T22:00:00`
-                                      : null)
-                                  : null
-                              }
-                              departureMode={
-                                i === days.length - 1
-                                  ? trip.departure_mode || "flight"
-                                  : null
-                              }
-                              departureCity={
-                                i === days.length - 1
-                                  ? trip.departure_city || null
-                                  : null
-                              }
-                              departureAirportIata={
-                                i === days.length - 1
-                                  ? trip.departure_airport_iata || null
-                                  : null
-                              }
-                              destIata={
-                                i === days.length - 1 ? baseAirportIata : null
-                              }
-                              destArrivalHHMM={
-                                i === days.length - 1 ? destArrivalHHMM : null
-                              }
-                              onEditDeparture={
-                                i === days.length - 1
-                                  ? () => {
-                                      setBoardInitialSection("logistics");
-                                      setActiveBottomTab("board");
-                                    }
-                                  : undefined
-                              }
-                              hotelActivity={startHotel}
-                              hotelCity={startHotelCity}
-                              endHotelActivity={endHotel}
-                              displayCity={(() => {
-                                const hCity = hotelPerDay[i]?.city;
-                                if (!hCity) return day.city;
-                                // Hotel city matches this day's city: use it (covers day trips from base)
-                                if (hCity === day.city) return hCity;
-                                // Hotel city is from a prior destination (e.g. cruise carried forward): use day's city
-                                const hotelCheckedInToday = day.activities.some(
-                                  (a) => a.type === "hotel",
-                                );
-                                if (!hotelCheckedInToday) return day.city;
-                                return hCity;
-                              })()}
-                              onSelectHotel={(hotel) =>
-                                selectHotel(day.id, hotel)
-                              }
-                              onAskTrippy={(title) => {
-                                setChatInput(`Tell me about "${title}"`);
-                                setChatOpen(true);
-                                setChatUnread(false);
-                                setTimeout(
-                                  () => chatInputRef.current?.focus(),
-                                  50,
-                                );
-                              }}
-                            />
-                          )}
-                        </div>
-                      );
-                    });
-                  })()}
+                                onChangeHotel={(dayId, act, mode) => {
+                                  const dayLabel =
+                                    days.find((d) => d.id === dayId)?.label ||
+                                    "this day";
+                                  if (mode === "own") {
+                                    setChatInput(
+                                      `I've booked my own hotel for ${dayLabel} — please replace the "${act.title}" with`,
+                                    );
+                                    setChatOpen(true);
+                                    setChatUnread(false);
+                                    setTimeout(
+                                      () => chatInputRef.current?.focus(),
+                                      50,
+                                    );
+                                  } else {
+                                    setChatOpen(true);
+                                    setChatUnread(false);
+                                    const dayCity =
+                                      days.find((d) => d.id === dayId)?.city ||
+                                      "";
+                                    sendChatDirect(
+                                      `I want to consider other hotel options for ${dayLabel}. Currently at "${act.title}"${dayCity ? ` in ${dayCity}` : ""}.`,
+                                    );
+                                  }
+                                }}
+                                arrivalTime={
+                                  i === 0
+                                    ? trip.arrival_time ||
+                                      (trip.start_date
+                                        ? `${trip.start_date}T09:00:00`
+                                        : null)
+                                    : null
+                                }
+                                arrivalMode={
+                                  i === 0 ? trip.arrival_mode || "flight" : null
+                                }
+                                arrivalCity={i === 0 ? trip.arrival_city : null}
+                                arrivalAirportIata={
+                                  i === 0
+                                    ? trip.arrival_airport_iata || null
+                                    : null
+                                }
+                                originIata={i === 0 ? baseAirportIata : null}
+                                originDepartureHHMM={
+                                  i === 0 ? originDepartureHHMM : null
+                                }
+                                onEditFlight={
+                                  i === 0
+                                    ? () => {
+                                        setBoardInitialSection("logistics");
+                                        setActiveBottomTab("board");
+                                      }
+                                    : undefined
+                                }
+                                departureTime={
+                                  i === days.length - 1
+                                    ? trip.departure_time ||
+                                      (trip.end_date
+                                        ? `${trip.end_date}T22:00:00`
+                                        : null)
+                                    : null
+                                }
+                                departureMode={
+                                  i === days.length - 1
+                                    ? trip.departure_mode || "flight"
+                                    : null
+                                }
+                                departureCity={
+                                  i === days.length - 1
+                                    ? trip.departure_city || null
+                                    : null
+                                }
+                                departureAirportIata={
+                                  i === days.length - 1
+                                    ? trip.departure_airport_iata || null
+                                    : null
+                                }
+                                destIata={
+                                  i === days.length - 1 ? baseAirportIata : null
+                                }
+                                destArrivalHHMM={
+                                  i === days.length - 1 ? destArrivalHHMM : null
+                                }
+                                onEditDeparture={
+                                  i === days.length - 1
+                                    ? () => {
+                                        setBoardInitialSection("logistics");
+                                        setActiveBottomTab("board");
+                                      }
+                                    : undefined
+                                }
+                                hotelActivity={startHotel}
+                                hotelCity={startHotelCity}
+                                endHotelActivity={endHotel}
+                                displayCity={(() => {
+                                  const hCity = hotelPerDay[i]?.city;
+                                  if (!hCity) return day.city;
+                                  // Hotel city matches this day's city: use it (covers day trips from base)
+                                  if (hCity === day.city) return hCity;
+                                  // Hotel city is from a prior destination (e.g. cruise carried forward): use day's city
+                                  const hotelCheckedInToday =
+                                    day.activities.some(
+                                      (a) => a.type === "hotel",
+                                    );
+                                  if (!hotelCheckedInToday) return day.city;
+                                  return hCity;
+                                })()}
+                                onSelectHotel={(hotel) =>
+                                  selectHotel(day.id, hotel)
+                                }
+                                onAskTrippy={(title) => {
+                                  setChatInput(`Tell me about "${title}"`);
+                                  setChatOpen(true);
+                                  setChatUnread(false);
+                                  setTimeout(
+                                    () => chatInputRef.current?.focus(),
+                                    50,
+                                  );
+                                }}
+                              />
+                            )}
+                          </div>
+                        );
+                      });
+                    })()
+                  )}
                 </div>
 
                 {/* ── INSPIRATIONS / MAGAZINE TAB (post-trip) ──

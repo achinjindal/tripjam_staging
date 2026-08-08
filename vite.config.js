@@ -32,7 +32,9 @@ export default defineConfig({
             handler: "CacheFirst",
             options: {
               cacheName: "wikimedia-images",
-              expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 },
+              // Story mode adds 1280px hero variants alongside the 700px
+              // thumbs, so the cache holds two sizes per place.
+              expiration: { maxEntries: 400, maxAgeSeconds: 7 * 24 * 60 * 60 },
               cacheableResponse: { statuses: [0, 200] },
             },
           },
