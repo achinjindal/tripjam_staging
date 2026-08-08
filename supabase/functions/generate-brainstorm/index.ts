@@ -71,7 +71,7 @@ When the destination is a specific city rather than a country/region, STILL gene
 - All the same fields apply (tagline, bestFor, warning, recommended, points)
 - The "city" field must use neighbourhood/area names, NOT repeat the city name
 
-Return ONLY a raw JSON array. No markdown, no code fences. Start with [ and end with ]. The array MUST contain the 4 tier-1 routes FOLLOWED BY 15–20 tier-2 experiences — a response with only the routes and no tier-2 items is invalid.
+Return ONLY a raw JSON array, MINIFIED — no indentation, no newlines, no spaces between tokens (pretty-printing wastes the output budget and truncates the response). ABSOLUTELY NO prose, preamble, markdown, or code fences — the FIRST character of your response must be [ and the LAST must be ]. The array MUST contain the 4 tier-1 routes FOLLOWED BY 15–20 tier-2 experiences — a response with only the routes and no tier-2 items is invalid.
 
 Example (country-level, 5 days, Colombo to Colombo, traveler wants scuba):
 [{"title":"South Coast Loop","tagline":"Minimal travel, best beaches","tier":1,"category":"Route","icon":"🏖️","city":"Galle, Unawatuna, Hikkaduwa, Mirissa","days":["Colombo → Galle (2.5h drive)","Galle Fort walk and Unawatuna beach","Day trip to Hikkaduwa for scuba diving, back to Galle","Mirissa beach day and Coconut Tree Hill at sunset","Drive back to Colombo"],"bestFor":"Beach and diving lovers","warning":null,"recommended":true,"points":[{"text":"Hikkaduwa has excellent scuba sites for all levels","good":true},{"text":"Least time in transit of all routes","good":true},{"text":"No wildlife or hill country","good":false}]},{"title":"Hills + Beach","tagline":"Culture, tea country, then coast","tier":1,"category":"Route","icon":"🍃","city":"Kandy, Nuwara Eliya, Bentota","days":["Colombo → Kandy (3h)","Kandy: Temple of the Tooth + lake walk","Kandy → Nuwara Eliya, tea estates","Nuwara Eliya → Bentota (4.5h drive)","Bentota beach + back to Colombo"],"bestFor":"Variety seekers","warning":"Nuwara Eliya to Bentota is a long 4.5h drive","recommended":false,"points":[{"text":"No dedicated scuba — Bentota is calm, not a dive destination","good":false},{"text":"Best mix of culture and coast","good":true},{"text":"Long drive on day 4","good":false}]},{"title":"Mirissa Beach","city":"Mirissa","category":"Sightseeing","note":"Wide beach, whale watching from Nov to Apr","icon":"🐳","tier":2}]`;
@@ -167,7 +167,11 @@ serve(async (req) => {
 
     const requestBody = JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 4000,
+      // 4 routes + 15-20 tier-2 experiences runs ~3.8-4.4k tokens on 6-day
+      // multi-city trips — the old 4000 cap truncated mid-JSON on most runs
+      // (llm_usage showed output_tokens pinned at exactly 4000), which read
+      // as "RG randomly fails, re-run until it works".
+      max_tokens: 9000,
       temperature: 0.7,
       stream: true,
       // The system prompt is fully static, so cache it as a stable prefix.
@@ -341,6 +345,15 @@ serve(async (req) => {
                   encoder.encode(
                     "data: " + JSON.stringify(event.delta.text) + "\n\n",
                   ),
+                );
+              } else if (
+                event.type === "message_delta" &&
+                event.delta?.stop_reason === "max_tokens"
+              ) {
+                // Truncated output = unparseable JSON downstream. Make it
+                // loud in the logs instead of masquerading as a client bug.
+                console.error(
+                  `RG hit max_tokens — output truncated at ~${outputLength} chars`,
                 );
               }
             } catch {
