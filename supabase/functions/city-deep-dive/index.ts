@@ -24,7 +24,7 @@ Return ONLY a raw JSON object with these fields:
   "gettingAround": "2-3 sentences naming the specific local transport (tuk-tuk, Shinkansen, vaporetto, etc.), walking areas, and any useful practical tips",
   "etiquette": ["tip 1", "tip 2", "tip 3"],
   "didYouKnow": "2-3 sentences of interesting history, architecture, or cultural trivia about this specific place",
-  "moreSights": [{"title": "place name", "geocode": "exact name for map/Wikipedia lookup", "note": "max 8 words", "icon": "single emoji"}]
+  "moreSights": [{"title": "place name", "geocode": "exact name for map/Wikipedia lookup", "note": "max 8 words", "icon": "single emoji", "photo_query": "iconic photographed view of this exact place, 2-6 words, phrased as a Wikimedia Commons image search (e.g. 'Tawang Monastery valley view', 'Ita Fort brick ramparts'); name the place, no adjectives like 'beautiful'"}]
 }
 
 Rules:

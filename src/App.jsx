@@ -1958,6 +1958,34 @@ function BrainstormView({
   const [deepDiveCity, setDeepDiveCity] = useState(null); // city name when deep dive is open
   const [_localDeepDiveCache, _setLocalDeepDiveCache] = useState({}); // fallback when no external cache
   const deepDiveCache = externalDeepDiveCache || _localDeepDiveCache;
+
+  // Steady Magazine pre-load: without this, each city card only starts its
+  // 10-15s deep-dive when scrolled into view, so the shimmer follows the user
+  // down the page. Stagger-load every city's deep dive in the background once
+  // an itinerary exists (2.5s apart — cached cities skip instantly, and the
+  // per-trip DB cache makes this a one-time cost).
+  const magazinePrefetchRef = useRef(false);
+  useEffect(() => {
+    if (!days.length || magazinePrefetchRef.current) return;
+    magazinePrefetchRef.current = true;
+    const destinations = resolveDestinationsForMagazine({ trip });
+    const cityOrder = [];
+    for (const d of days) {
+      const c = d.city || "";
+      if (c && !cityOrder.includes(c)) cityOrder.push(c);
+    }
+    const neighborhoods = cityOrder.filter(
+      (c) => !destinations.some((dest) => cityMatchesDestination(c, dest)),
+    );
+    const queue = [...destinations, ...neighborhoods].filter(
+      (c) => c && !deepDiveCache[c],
+    );
+    const timers = queue.map((c, i) =>
+      setTimeout(() => loadCityDeepDive(c), i * 2500),
+    );
+    return () => timers.forEach(clearTimeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [days.length]);
   const setDeepDiveCache = externalDeepDiveCache
     ? () => {}
     : _setLocalDeepDiveCache; // no-op if using external

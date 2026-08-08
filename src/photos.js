@@ -605,7 +605,13 @@ export async function attachPhotosToMoreSights(data, city) {
     let photo_url = sight.photo_url || null;
     if (!photo_url && searchKey) {
       for (const candidate of _splitCombinedGeocode(searchKey)) {
-        const url = await _fetchPhoto(candidate, city, sight.type || "sight");
+        const url = await _fetchPhoto(
+          candidate,
+          city,
+          sight.type || "sight",
+          undefined,
+          { photoQuery: sight.photo_query },
+        );
         if (url) {
           photo_url = url;
           break;

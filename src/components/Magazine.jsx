@@ -735,7 +735,9 @@ export function MagazineHighlightCard({
     let cancelled = false;
     let retryTimer = null;
 
-    _fetchPhoto(searchKey, city, item.type || "sight").then((url) => {
+    _fetchPhoto(searchKey, city, item.type || "sight", undefined, {
+      photoQuery: item.photo_query,
+    }).then((url) => {
       if (cancelled) return;
       if (url) {
         setPhotoUrl(url);
@@ -752,6 +754,8 @@ export function MagazineHighlightCard({
             searchKey,
             city,
             item.type || "sight",
+            undefined,
+            { photoQuery: item.photo_query },
           );
           if (!cancelled) {
             if (retryUrl) setPhotoUrl(retryUrl);
