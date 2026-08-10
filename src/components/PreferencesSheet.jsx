@@ -15,11 +15,23 @@ export default function PreferencesSheet({
   onSaved,
 }) {
   const selfId = session?.user?.id;
-  const mine = preferences.find((p) => p.user_id === selfId)?.prefs_text || "";
+  // The trip owner already described their style in the setup form (trip
+  // notes) — seed their textarea with it and count them as having shared,
+  // until they save an explicit preference row of their own.
+  const ownerId = trip?.owner_id || trip?.created_by || null;
+  const ownerNotes = (trip?.notes || "").trim();
+  const mineRow =
+    preferences.find((p) => p.user_id === selfId)?.prefs_text || "";
+  const mine =
+    mineRow || (selfId && selfId === ownerId && ownerNotes ? ownerNotes : "");
   const [text, setText] = useState(mine);
   const [busy, setBusy] = useState(false);
 
-  const shared = preferences.filter((p) => p?.prefs_text?.trim()).length;
+  const sharedIds = new Set(
+    preferences.filter((p) => p?.prefs_text?.trim()).map((p) => p.user_id),
+  );
+  if (ownerId && ownerNotes) sharedIds.add(ownerId);
+  const shared = sharedIds.size;
   const total = members.length || 1;
 
   const save = async () => {
@@ -45,15 +57,16 @@ export default function PreferencesSheet({
         zIndex: 10001,
         background: "rgba(15,25,35,0.45)",
         display: "flex",
-        alignItems: "flex-end",
+        alignItems: "center",
         justifyContent: "center",
+        padding: 16,
       }}
     >
       <div
         style={{
           background: T.warm,
-          borderRadius: "22px 22px 0 0",
-          padding: "22px 18px 30px",
+          borderRadius: 22,
+          padding: "22px 18px 24px",
           width: "100%",
           maxWidth: 480,
           maxHeight: "88vh",
@@ -84,7 +97,7 @@ export default function PreferencesSheet({
             color: T.ink,
           }}
         >
-          Your travel style
+          Your kind of trip
         </div>
         <div style={{ fontSize: 12, color: T.mist, margin: "2px 0 16px" }}>
           Trippy plans for everyone on the trip.

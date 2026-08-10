@@ -577,7 +577,7 @@ export default function MembersSheet({
                   marginBottom: 14,
                 }}
               >
-                ✎ Your travel style
+                ✎ Your kind of trip
               </div>
             )}
             <div

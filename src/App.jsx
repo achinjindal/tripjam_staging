@@ -6918,9 +6918,13 @@ export default function App({
     let cancelled = false;
     fetchPreferences(trip.id).then((list) => {
       if (cancelled) return;
-      const hasMine = list.some(
-        (p) => p.user_id === session.user.id && p.prefs_text?.trim(),
-      );
+      const hasMine =
+        list.some(
+          (p) => p.user_id === session.user.id && p.prefs_text?.trim(),
+        ) ||
+        // The owner's setup-form notes already count as their shared style.
+        (session.user.id === (trip?.owner_id || trip?.created_by) &&
+          (trip?.notes || "").trim());
       if (!hasMine) {
         localStorage.setItem(key, "1");
         setShowPreferences(true);
