@@ -39,7 +39,11 @@ export default function PreferencesSheet({
     setBusy(true);
     try {
       await savePreferences(trip.id, selfId, text.trim() || null);
-      showToast("Travel style saved");
+      showToast(
+        total > 1
+          ? `Saved — Trippy now plans for ${total === 2 ? "both of you" : `all ${total} of you`}`
+          : "Travel style saved",
+      );
       onSaved?.();
       onClose?.();
     } catch {

@@ -1736,6 +1736,7 @@ function BrainstormView({
   onEditForm = null,
   onInvite = null,
   members = [],
+  preferences = [],
   onOpenChat = null,
   onDismissRoute = null,
   onModifyRoute = null,
@@ -1964,6 +1965,24 @@ function BrainstormView({
     setItems(flattened);
   }
 
+  // Rework-nudge bookkeeping: localStorage marker = ISO timestamp up to which
+  // co-travellers' style saves are considered incorporated into the routes.
+  // Keyed on the draft id too — `trip` is null in the pre-trip mount.
+  const styleNudgeKey = (() => {
+    const id = trip?.id || editTripId || null;
+    return id ? `tripjam_stylenudge_${id}` : null;
+  })();
+  const [styleNudgeTick, setStyleNudgeTick] = useState(0);
+  const markStylesIncorporated = (iso) => {
+    if (!styleNudgeKey) return;
+    try {
+      localStorage.setItem(styleNudgeKey, iso || new Date().toISOString());
+    } catch {
+      /* private mode */
+    }
+    setStyleNudgeTick((t) => t + 1);
+  };
+
   const isAddingMore = useRef(false);
   const rgInFlight = useRef(false);
   async function generate(addMore = false) {
@@ -1991,6 +2010,21 @@ function BrainstormView({
               ) + 1,
             )
           : null;
+      // Group trips: per-traveller styles ride along so routes are planned
+      // (and attributed) for everyone. Owner's setup-form notes already travel
+      // as `notes` — skip their row when it's the same text.
+      const travellerStyles =
+        (members || []).length > 1
+          ? (preferences || [])
+              .filter((p) => p?.prefs_text?.trim())
+              .filter((p) => p.prefs_text.trim() !== (igReq.notes || "").trim())
+              .map((p) => ({
+                name:
+                  members.find((m) => m.user_id === p.user_id)?.profiles
+                    ?.username || "Traveler",
+                text: p.prefs_text.trim().slice(0, 400),
+              }))
+          : [];
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-brainstorm`,
         {
@@ -2022,6 +2056,7 @@ function BrainstormView({
                       .length,
                 )
               : 4,
+            travellerStyles: travellerStyles.length ? travellerStyles : null,
             tripId: trip?.id || null,
           }),
         },
@@ -2167,6 +2202,10 @@ function BrainstormView({
       }
 
       if (!streamedItems.length) throw new Error("no_items");
+
+      // These routes now reflect every style saved up to this moment — retire
+      // any pending (or future stale) rework nudge for them.
+      markStylesIncorporated();
 
       // RG complete — log "time to all routes" (and first-route time) to
       // PostHog + rg_log, mirroring IG's ig_detailed_complete + generation_log.
@@ -2611,6 +2650,103 @@ function BrainstormView({
                 </button>
               </div>
             )}
+            {(() => {
+              // Rework nudge: a co-traveller saved a style AFTER these routes
+              // were drafted. One batched nudge; dismiss persists per trip.
+              void styleNudgeTick; // re-read localStorage after dismiss/rework
+              if ((members || []).length <= 1 || generating) return null;
+              if (!(items || []).some((it) => it.tier === 1 && !it.dismissed))
+                return null;
+              const selfIdHere = session?.user?.id;
+              const others = (preferences || []).filter(
+                (p) => p?.prefs_text?.trim() && p.user_id !== selfIdHere,
+              );
+              if (!others.length) return null;
+              const marker = styleNudgeKey
+                ? localStorage.getItem(styleNudgeKey)
+                : null;
+              const fresh = others.filter(
+                (p) => !marker || p.updated_at > marker,
+              );
+              if (!fresh.length) return null;
+              const latest = fresh.reduce(
+                (a, p) => (p.updated_at > a ? p.updated_at : a),
+                "",
+              );
+              const names = [
+                ...new Set(
+                  fresh.map(
+                    (p) =>
+                      members.find((m) => m.user_id === p.user_id)?.profiles
+                        ?.username || "A co-traveller",
+                  ),
+                ),
+              ];
+              return (
+                <div
+                  style={{
+                    margin: "12px 0",
+                    padding: "12px 16px",
+                    borderRadius: RADIUS.lg,
+                    background: T.skyLight,
+                    border: `1px solid ${T.skyBorder}`,
+                    fontFamily: "Georgia,serif",
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>
+                    {names.join(" and ")} shared their travel style
+                    {names.length > 1 ? "s" : ""}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: T.mist,
+                      margin: "3px 0 10px",
+                    }}
+                  >
+                    These plans were drafted before it. Rework them around{" "}
+                    {(members || []).length > 2
+                      ? "everyone"
+                      : "both travellers"}
+                    ? Current plans and votes will be replaced.
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => {
+                        markStylesIncorporated();
+                        generate(false);
+                      }}
+                      style={{
+                        background: T.ocean,
+                        color: "white",
+                        border: "none",
+                        borderRadius: RADIUS.full,
+                        padding: "6px 14px",
+                        fontFamily: "Georgia,serif",
+                        fontSize: 12,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Rework the plans
+                    </button>
+                    <button
+                      onClick={() => markStylesIncorporated(latest)}
+                      style={{
+                        background: "transparent",
+                        color: T.mist,
+                        border: "none",
+                        padding: "6px 10px",
+                        fontFamily: "Georgia,serif",
+                        fontSize: 12,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Keep as is
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
             {items?.length === 0 &&
               !generating &&
               !loadingItems &&
@@ -6881,9 +7017,22 @@ export default function App({
   // Phase 2.5 pooled credits: the Trip Credits sheet (pool balance + funding).
   // Ships dark behind INVITE_ENABLED + shared-trip gating (see isSharedTrip).
   const [showTripCredits, setShowTripCredits] = useState(false);
+  // Phase 5 follow-up: one-shot "Rebalance for everyone's style" chat chip,
+  // armed when the user saves their travel style. Session-only — cleared on
+  // tap or when a DIFFERENT trip opens. The null→uuid flip when IG creates
+  // the trip row keeps the chip (same trip, not a new open).
+  const [styleChipArmed, setStyleChipArmed] = useState(false);
+  const styleChipTripRef = useRef(null);
   useEffect(() => {
     if (!INVITE_ENABLED) return;
     const tripId = trip?.id;
+    if (
+      tripId &&
+      styleChipTripRef.current &&
+      styleChipTripRef.current !== tripId
+    )
+      setStyleChipArmed(false);
+    if (tripId) styleChipTripRef.current = tripId;
     if (!tripId) {
       setMembers([]);
       return;
@@ -8479,6 +8628,21 @@ export default function App({
       arrivalMode: form.arrivalMode || "flight",
       departureMode: form.departureMode || "flight",
       votedItems: votedItems || null,
+      // Group trips: per-traveller styles (owner's form notes already ride as
+      // `notes`; identical owner rows are skipped to avoid double-weighting).
+      travellerStyles: (() => {
+        if ((members || []).length <= 1) return null;
+        const list = (preferences || [])
+          .filter((p) => p?.prefs_text?.trim())
+          .filter((p) => p.prefs_text.trim() !== (form.notes || "").trim())
+          .map((p) => ({
+            name:
+              members.find((m) => m.user_id === p.user_id)?.profiles
+                ?.username || "Traveler",
+            text: p.prefs_text.trim().slice(0, 400),
+          }));
+        return list.length ? list : null;
+      })(),
       tripId: trip?.id || null,
     };
 
@@ -11374,6 +11538,7 @@ export default function App({
                   }
                   onInvite={editingTrip?.id ? () => setShowMembers(true) : null}
                   members={members}
+                  preferences={preferences}
                   onOpenChat={() => {
                     setChatOpen(true);
                     setChatUnread(false);
@@ -13131,6 +13296,7 @@ export default function App({
                         days={days}
                         onInvite={trip?.id ? () => setShowMembers(true) : null}
                         members={members}
+                        preferences={preferences}
                         externalRoutes={pretripRoutes}
                         onItemsChange={setPretripRoutes}
                         onGeneratingChange={setRoutesGenerating}
@@ -15659,6 +15825,38 @@ export default function App({
                         )}
                       </div>
                     )}
+                    {styleChipArmed && isSharedTrip && !chatLoading && (
+                      // Seeded one-shot suggestion after saving a travel style —
+                      // pinned here (not the empty-chat chips block) so it shows
+                      // on trips that already have chat history.
+                      <div style={{ padding: "0 0 8px" }}>
+                        <button
+                          onClick={() => {
+                            setStyleChipArmed(false);
+                            sendChatDirect(
+                              screen === "brainstorm"
+                                ? "Rebalance the plans for everyone's style"
+                                : "Rebalance the itinerary for everyone's style",
+                            );
+                          }}
+                          style={{
+                            border: `1.5px solid ${T.ocean}`,
+                            color: T.ocean,
+                            background: T.skyLight,
+                            borderRadius: RADIUS.full,
+                            padding: "7px 14px",
+                            fontSize: 12,
+                            fontFamily: "Georgia,serif",
+                            cursor: "pointer",
+                            boxShadow: `0 0 0 3px ${T.skyBorder}55`,
+                          }}
+                        >
+                          ✨ Rebalance the{" "}
+                          {screen === "brainstorm" ? "plans" : "itinerary"} for
+                          everyone's style
+                        </button>
+                      </div>
+                    )}
                     <div
                       style={{
                         display: "flex",
@@ -15897,9 +16095,10 @@ export default function App({
             members={members}
             preferences={preferences}
             onClose={() => setShowPreferences(false)}
-            onSaved={() =>
-              fetchPreferences(trip.id).then((list) => setPreferences(list))
-            }
+            onSaved={() => {
+              fetchPreferences(trip.id).then((list) => setPreferences(list));
+              setStyleChipArmed(true);
+            }}
           />
         )}
         {isSharedTrip && showTripCredits && trip?.id && (

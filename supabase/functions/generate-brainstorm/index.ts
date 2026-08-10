@@ -103,6 +103,7 @@ serve(async (req) => {
       existingPlans,
       baseLocation,
       numPlans: rawNumPlans,
+      travellerStyles,
       tripId,
       spend_personal,
     } = await req.json();
@@ -165,9 +166,28 @@ serve(async (req) => {
           : "") +
         `\n\nIf this is a country/region-level destination, generate exactly ${numPlans} realistic route options (tier 1). Do NOT generate tier 2 experiences — only routes.`;
 
+    // Group trips: per-traveller styles. Appended AFTER the ternary so both
+    // the help-me-decide and normal branches (and both model paths) get it.
+    // Kept out of the cached system prompt — this text varies per trip.
+    const stylesBlock =
+      Array.isArray(travellerStyles) && travellerStyles.length > 0
+        ? `\n\nPER-TRAVELER STYLES (this is a group trip — plan for everyone):\n` +
+          travellerStyles
+            .map(
+              (s: { name?: string; text?: string }) =>
+                `- ${String(s?.name || "Traveler").slice(0, 40)}: ${String(s?.text || "").slice(0, 400)}`,
+            )
+            .join("\n") +
+          `\nAcross each route's "points", cover the named travellers whose style this route strongly matches or conflicts with, attributing by name (e.g. "5 festival days — what Ravi asked for"). Stay within the normal points count; prioritise the sharpest per-traveller fits and conflicts.`
+        : "";
+    const finalUserMessage = userMessage + stylesBlock;
+
     const requestBody = JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 4000,
+      // 4000 truncated mid-JSON on 6-day multi-city trips (fixed on main
+      // 2026-08-08, commit 2362025) — carried here so a staging deploy of this
+      // branch doesn't regress RG.
+      max_tokens: 9000,
       temperature: 0.7,
       stream: true,
       // The system prompt is fully static, so cache it as a stable prefix.
@@ -178,7 +198,7 @@ serve(async (req) => {
           cache_control: { type: "ephemeral" },
         },
       ],
-      messages: [{ role: "user", content: userMessage }],
+      messages: [{ role: "user", content: finalUserMessage }],
     });
 
     // ── Provider switch: RG_MODEL env var selects the RG model per environment.
@@ -197,7 +217,7 @@ serve(async (req) => {
           },
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-            contents: [{ role: "user", parts: [{ text: userMessage }] }],
+            contents: [{ role: "user", parts: [{ text: finalUserMessage }] }],
             generationConfig: {
               maxOutputTokens: 8000,
               responseMimeType: "application/json",
