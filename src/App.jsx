@@ -2087,7 +2087,7 @@ function BrainstormView({
               budget: igReq.budget,
               notes: igReq.notes || trip?.notes || null,
               tripDays,
-              tripId: trip?.id || null,
+              tripId: trip?.id || editTripIdRef.current || null,
             }),
           },
         );
@@ -2241,7 +2241,9 @@ function BrainstormView({
                       .length,
                 )
               : 4,
-            tripId: trip?.id || null,
+            // trip is null in the pre-trip flow — fall back to the draft trip
+            // id so llm_usage/credit pooling attribute to the right trip
+            tripId: trip?.id || editTripIdRef.current || null,
           }),
         },
       );
@@ -3081,7 +3083,7 @@ function BrainstormView({
                       fontFamily: "Georgia,serif",
                     }}
                   >
-                    Dismiss some plans to generate new ones
+                    Dismiss some routes to generate new ones
                   </div>
                 </div>
               ) : (
@@ -3090,18 +3092,18 @@ function BrainstormView({
                   style={{
                     marginTop: 14,
                     width: "100%",
-                    padding: "11px 14px",
+                    padding: "16px 18px",
                     borderRadius: RADIUS.lg,
                     background: T.chalk,
                     border: `1.5px dashed ${T.sand}`,
                     color: T.ocean,
                     fontFamily: "Georgia,serif",
-                    fontSize: 13,
+                    fontSize: 15,
                     fontWeight: 600,
                     cursor: "pointer",
                   }}
                 >
-                  ✨ Show me more plans
+                  ✨ Show me more routes
                 </button>
               ))}
           </>
@@ -7575,7 +7577,7 @@ export default function App({
           body: JSON.stringify({
             notes: pendingForm?.notes || "",
             chatHistory: chatMessages.filter((m) => m.role !== "system-undo"),
-            tripId: trip?.id || null,
+            tripId: trip?.id || editingTrip?.id || null,
           }),
         },
       );

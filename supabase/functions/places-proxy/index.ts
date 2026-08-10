@@ -678,33 +678,41 @@ async function handleGeocode(req: Request): Promise<Response> {
     return Response.json(cached, { headers: corsHeaders });
   }
 
-  // 2. Resolve city bias from mainCity using Nominatim (more reliable for city/country names)
+  // 2. Resolve city bias using Nominatim (more reliable for city/country names).
+  // Prefer the FULL city string over mainCity: for "Bali, Indonesia" the last
+  // segment is a country whose centroid sits in Borneo, and that bias pulled
+  // "Kintamani" onto Kalimantan. "Bali, Indonesia" resolves to Bali itself.
   let biasLat: number | undefined;
   let biasLng: number | undefined;
-  if (mainCity) {
-    const biasCacheKey = `geocode-bias:${mainCity.toLowerCase()}`;
+  const fullCity = (city || "").trim();
+  const biasQueries =
+    fullCity && fullCity.toLowerCase() !== mainCity.toLowerCase()
+      ? [fullCity, mainCity]
+      : [mainCity];
+  for (const bq of biasQueries) {
+    if (!bq) continue;
+    const biasCacheKey = `geocode-bias:${bq.toLowerCase()}`;
     const biasCache = await cacheGet(biasCacheKey);
     if (biasCache?.lat) {
       biasLat = biasCache.lat;
       biasLng = biasCache.lng;
-    } else {
-      // Nominatim is reliable for city/country names (Photon returns wrong results from some datacenters)
-      const nomResult = await nominatimSearch(mainCity);
-      if (nomResult) {
-        biasLat = nomResult.lat;
-        biasLng = nomResult.lng;
-        cacheSet(biasCacheKey, "geocode", nomResult, "nominatim").catch(
-          () => {},
-        );
-      } else {
-        // Photon fallback
-        const coords = await photonSearch(mainCity);
-        if (coords) {
-          biasLat = coords.lat;
-          biasLng = coords.lng;
-          cacheSet(biasCacheKey, "geocode", coords, "photon").catch(() => {});
-        }
-      }
+      break;
+    }
+    // Nominatim is reliable for city/country names (Photon returns wrong results from some datacenters)
+    const nomResult = await nominatimSearch(bq);
+    if (nomResult) {
+      biasLat = nomResult.lat;
+      biasLng = nomResult.lng;
+      cacheSet(biasCacheKey, "geocode", nomResult, "nominatim").catch(() => {});
+      break;
+    }
+    // Photon fallback
+    const coords = await photonSearch(bq);
+    if (coords) {
+      biasLat = coords.lat;
+      biasLng = coords.lng;
+      cacheSet(biasCacheKey, "geocode", coords, "photon").catch(() => {});
+      break;
     }
   }
 
@@ -731,6 +739,11 @@ async function handleGeocode(req: Request): Promise<Response> {
     noSuffix = noSuffix.replace(SUFFIX_RE, "");
   } while (noSuffix !== prev);
   const photonQueries = [
+    // place + full context first ("Kintamani Bali Indonesia" ranks the real
+    // Kintamani above fuzzy Kalimantan matches; mainCity alone loses the island)
+    fullCity && fullCity.toLowerCase() !== mainCity.toLowerCase()
+      ? `${q} ${fullCity.replace(/,/g, " ")}`
+      : "",
     `${q} ${mainCity}`, // place + main city (best)
     q, // just the place name
     `${dehyphenated} ${mainCity}`, // dehyphenated + city
