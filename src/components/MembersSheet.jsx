@@ -43,6 +43,7 @@ export default function MembersSheet({
   const [handle, setHandle] = useState("");
   const [inviteBusy, setInviteBusy] = useState(false);
   const [notFound, setNotFound] = useState("");
+  const [inviteHint, setInviteHint] = useState("");
   // Email-invite capability (send-email fn configured?). Probed once on open.
   const [emailOk, setEmailOk] = useState(false);
   const [emailBusy, setEmailBusy] = useState(false);
@@ -74,6 +75,7 @@ export default function MembersSheet({
     if (!h || inviteBusy) return;
     setInviteBusy(true);
     setNotFound("");
+    setInviteHint("");
     try {
       const res = await inviteByHandle(trip.id, h);
       showToast(
@@ -97,7 +99,20 @@ export default function MembersSheet({
       if (msg.includes("user_not_found")) {
         setNotFound(h);
       } else if (msg.includes("already_member")) {
-        showToast("Already on this trip");
+        // Inline, not just a toast — a transient toast reads as a dead
+        // button and people retry (self-invites especially).
+        const isSelf =
+          h.toLowerCase() === (session?.user?.email || "").toLowerCase() ||
+          h.toLowerCase() ===
+            (
+              members.find((m) => m.user_id === selfId)?.profiles?.username ||
+              ""
+            ).toLowerCase();
+        setInviteHint(
+          isSelf
+            ? "That's you — you're already planning this trip 🙂"
+            : `${h} is already on this trip.`,
+        );
       } else if (msg.includes("trip_full")) {
         showToast("This trip is full");
       } else {
@@ -516,6 +531,13 @@ export default function MembersSheet({
                   {inviteBusy ? "…" : "Invite"}
                 </button>
               </div>
+              {inviteHint && (
+                <div
+                  style={{ fontSize: 11, color: T.mist, margin: "7px 2px 0" }}
+                >
+                  {inviteHint}
+                </div>
+              )}
               {notFound &&
                 (/.+@.+\..+/.test(notFound) ? (
                   <div style={{ margin: "8px 2px 0" }}>
