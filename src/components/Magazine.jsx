@@ -1402,11 +1402,16 @@ export function InspirationsSection({
   const [refinementInput, setRefinementInput] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [showRefinement, setShowRefinement] = useState(false);
+  // The digest is generated against the trip's interest tags + travel month —
+  // say so, so the picks read as chosen for THIS trip rather than generic.
+  const matchTags = (digest?.tags || []).slice(0, 3);
   const sub = loading
     ? "Looking up recent articles and vlogs…"
     : errored || items.length === 0
       ? "We couldn't find recent first-person travel content for this combo. Check back as more travellers post."
-      : "Real travellers, real recent trips — to help you imagine yours.";
+      : matchTags.length
+        ? `Real travellers, real recent trips — picked to match yours: ${matchTags.join(" · ")}.`
+        : "Real travellers, real recent trips — picked for your destination and travel dates.";
 
   return (
     <div
