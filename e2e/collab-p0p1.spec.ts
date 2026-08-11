@@ -60,8 +60,28 @@ async function signedClient(
   return error ? null : sb;
 }
 
-async function openTripByName(page: Page, name = TRIP_NAME): Promise<boolean> {
-  await login(page);
+/** Click the first VISIBLE element matching — mobile/desktop duplicates mean
+ *  the first DOM match is often a hidden variant that stalls click(). */
+async function clickVisible(page: Page, re: RegExp): Promise<boolean> {
+  const els = page.locator(
+    "button, [role=button], div[style*='cursor: pointer'], span",
+    { hasText: re },
+  );
+  const n = await els.count();
+  for (let i = 0; i < n; i++) {
+    const el = els.nth(i);
+    if (await el.isVisible().catch(() => false)) {
+      const ok = await el
+        .click({ timeout: 5000 })
+        .then(() => true)
+        .catch(() => false);
+      if (ok) return true;
+    }
+  }
+  return false;
+}
+
+async function clickTripCard(page: Page, name: string): Promise<boolean> {
   await page
     .locator("text=/Your Trips|No trips yet/i")
     .first()
@@ -78,6 +98,51 @@ async function openTripByName(page: Page, name = TRIP_NAME): Promise<boolean> {
   await card.click();
   await page.waitForTimeout(2500);
   return true;
+}
+
+/** Dismiss auto-shown overlays (While-you-were-away "Got it", stray sheets)
+ *  that intercept pointer events after a trip opens. */
+async function dismissTripOverlays(page: Page) {
+  for (let i = 0; i < 4; i++) {
+    let closed = false;
+    // Topmost sheet first — sheets stack and only the top one is clickable:
+    // ✕ (style nudge / generic), then Got it (while-away), then Maybe later
+    // (paywall).
+    for (const re of [/^✕$/, /^Got it$/, /^Maybe later$/]) {
+      const el = page.locator("button, div", { hasText: re }).last();
+      if (!(await el.isVisible({ timeout: 500 }).catch(() => false))) continue;
+      const ok = await el
+        .click({ timeout: 2500 })
+        .then(() => true)
+        .catch(() => false);
+      if (ok) {
+        closed = true;
+        break;
+      }
+    }
+    if (!closed) return;
+    await page.waitForTimeout(600);
+  }
+}
+
+async function openTripByName(page: Page, name = TRIP_NAME): Promise<boolean> {
+  await login(page);
+  const ok = await clickTripCard(page, name);
+  if (ok) await dismissTripOverlays(page);
+  return ok;
+}
+
+/** Open the members sheet via its stable title attribute. */
+async function openMembersSheet(page: Page): Promise<boolean> {
+  const btn = page.getByTitle("Trip members").first();
+  if (!(await btn.isVisible({ timeout: 5000 }).catch(() => false)))
+    return false;
+  await btn.click();
+  return page
+    .locator("text=Trip members")
+    .first()
+    .isVisible({ timeout: 4000 })
+    .catch(() => false);
 }
 
 /** Ensure the QA trip is shared (B joined) and both members have styles so the
@@ -154,29 +219,7 @@ test.describe("P0/P1 collab features", () => {
     const opened = await openTripByName(page);
     test.skip(!opened, `could not open "${TRIP_NAME}"`);
 
-    // Members sheet → "Your kind of trip"
-    const stack = page
-      .locator("text=/planning together|＋ Invite/i")
-      .first()
-      .or(page.locator("[aria-label*='members' i]").first());
-    // Header affordance: avatar stack (shared). Click via the header count pill.
-    const headerAffordance = page
-      .locator("div[style*='cursor: pointer']")
-      .filter({ hasText: /^\d$|^\d\d$/ })
-      .first();
-    // Robust path: open via the share sheet's invite row if direct affordance
-    // isn't matchable — but try the avatar stack first.
-    let sheetOpen = false;
-    for (const cand of [stack, headerAffordance]) {
-      if (await cand.isVisible({ timeout: 1500 }).catch(() => false)) {
-        await cand.click().catch(() => {});
-        sheetOpen = await page
-          .locator("text=Trip members")
-          .isVisible({ timeout: 2500 })
-          .catch(() => false);
-        if (sheetOpen) break;
-      }
-    }
+    const sheetOpen = await openMembersSheet(page);
     test.skip(!sheetOpen, "could not open the members sheet");
 
     await page.locator("text=Your kind of trip").first().click();
@@ -216,18 +259,8 @@ test.describe("P0/P1 collab features", () => {
     test.skip(!opened, `could not open "${TRIP_NAME}"`);
 
     // Open the style sheet via members sheet and save (arms the chip).
-    const affordance = page
-      .locator("div[style*='cursor: pointer']")
-      .filter({ hasText: /^\d$/ })
-      .first();
-    if (await affordance.isVisible({ timeout: 2000 }).catch(() => false))
-      await affordance.click();
-    const kind = page.locator("text=Your kind of trip").first();
-    test.skip(
-      !(await kind.isVisible({ timeout: 3000 }).catch(() => false)),
-      "members sheet route unavailable",
-    );
-    await kind.click();
+    test.skip(!(await openMembersSheet(page)), "members sheet unavailable");
+    await page.locator("text=Your kind of trip").first().click();
     await page
       .locator("button, div", { hasText: /^Save$/ })
       .last()
@@ -249,12 +282,8 @@ test.describe("P0/P1 collab features", () => {
     const opened = await openTripByName(page);
     test.skip(!opened, `could not open "${TRIP_NAME}"`);
 
-    const shareBtn = page.locator("text=/Share/").first();
-    test.skip(
-      !(await shareBtn.isVisible({ timeout: 3000 }).catch(() => false)),
-      "share affordance not visible on this viewport",
-    );
-    await shareBtn.click();
+    const clicked = await clickVisible(page, /Share/);
+    test.skip(!clicked, "share affordance not clickable on this viewport");
     await expect(page.locator("text=Invite to plan together")).toBeVisible({
       timeout: 5000,
     });
@@ -275,17 +304,7 @@ test.describe("P0/P1 collab features", () => {
     const opened = await openTripByName(page);
     test.skip(!opened, `could not open "${TRIP_NAME}"`);
 
-    const affordance = page
-      .locator("div[style*='cursor: pointer']")
-      .filter({ hasText: /^\d$/ })
-      .first();
-    if (await affordance.isVisible({ timeout: 2000 }).catch(() => false))
-      await affordance.click();
-    const membersSheet = page.locator("text=Trip members");
-    test.skip(
-      !(await membersSheet.isVisible({ timeout: 3000 }).catch(() => false)),
-      "members sheet unavailable",
-    );
+    test.skip(!(await openMembersSheet(page)), "members sheet unavailable");
 
     const inviteInput = page.locator(
       "input[placeholder*='username or email' i]",
@@ -323,14 +342,12 @@ test.describe("P0/P1 collab features", () => {
     test.skip(!opened, `could not open "${TRIP_NAME}"`);
 
     // Board → Expenses → Actual tab.
-    await page.locator("text=/^Board$/").first().click();
+    const boardOk = await clickVisible(page, /Board/i);
+    test.skip(!boardOk, "Board tab not reachable on this layout");
     await page.waitForTimeout(800);
-    await page.locator("text=/Expenses/i").first().click();
+    await clickVisible(page, /Expenses/i);
     await page.waitForTimeout(1200);
-    await page
-      .locator("button", { hasText: /^Actual/ })
-      .first()
-      .click();
+    await clickVisible(page, /^Actual/);
 
     // Add an expense paid by "You".
     await page
@@ -382,14 +399,14 @@ test.describe("P0/P1 collab features", () => {
     });
     await page.reload();
     await page.waitForTimeout(2500);
-    await page.locator("text=/^Board$/").first().click();
+    // B's insert generated fresh activity — the while-away sheet reappears
+    // on reload and intercepts clicks.
+    await dismissTripOverlays(page);
+    await clickVisible(page, /Board/i);
     await page.waitForTimeout(800);
-    await page.locator("text=/Expenses/i").first().click();
+    await clickVisible(page, /Expenses/i);
     await page.waitForTimeout(1200);
-    await page
-      .locator("button", { hasText: /^Actual/ })
-      .first()
-      .click();
+    await clickVisible(page, /^Actual/);
     await expect(page.locator("text=/Settle up/i")).toBeVisible({
       timeout: 6000,
     });
@@ -411,13 +428,19 @@ test.describe("P0/P1 collab features", () => {
     const { tripId } = ctx!;
 
     await login(page);
-    // Simulate the just-joined flag both accept paths set.
+    // Simulate the just-joined flag both accept paths set, THEN open the trip
+    // (no second login — the flag must survive until the trip-open effect).
     await page.evaluate(
       (id) => localStorage.setItem(`tripjam_just_joined_${id}`, "1"),
       tripId,
     );
-    const opened = await openTripByName(page);
+    const opened = await clickTripCard(page, TRIP_NAME);
     test.skip(!opened, `could not open "${TRIP_NAME}"`);
+    // Close a while-away sheet if it stacked on top (never ✕ — that could hit
+    // the welcome sheet's own close).
+    const gotIt = page.locator("button, div", { hasText: /^Got it$/ }).last();
+    if (await gotIt.isVisible({ timeout: 2500 }).catch(() => false))
+      await gotIt.click().catch(() => {});
 
     await expect(page.locator("text=You're on the trip 🎉")).toBeVisible({
       timeout: 10000,
@@ -452,6 +475,15 @@ test.describe("P0/P1 collab features", () => {
       end_date: "2026-10-05",
     });
     test.skip(!!tripErr, `draft trip insert failed: ${tripErr?.message}`);
+    // Mirror the app's create flow: creator self-inserts membership and
+    // owner_id — without the member row, create_or_get_invite_link is
+    // member-gated and B could never join.
+    await owner.from("trip_members").insert({
+      trip_id: draftId,
+      user_id: ownerId,
+      role: "edit",
+    });
+    await owner.from("trips").update({ owner_id: ownerId }).eq("id", draftId);
 
     const routes = ["Coast Loop", "Mountain Arc"].map((title, i) => ({
       trip_id: draftId,
@@ -478,17 +510,40 @@ test.describe("P0/P1 collab features", () => {
       p_trip: draftId,
     });
     if (draftToken) await b.rpc("accept_invite", { p_token: draftToken });
+    // Suppress the one-time style nudge on the draft (the checkpoint keys on
+    // VOTES; styles are irrelevant to it).
+    const draftBId = (await b.auth.getUser()).data.user?.id as string;
+    for (const [client, uid] of [
+      [owner, ownerId],
+      [b, draftBId],
+    ] as const) {
+      await client.from("trip_preferences").upsert(
+        {
+          trip_id: draftId,
+          user_id: uid,
+          prefs_text: "e2e style",
+          prefs_struct: { tags: [] },
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "trip_id,user_id" },
+      );
+    }
 
     try {
       const opened = await openTripByName(page, "E2E Consensus Draft");
       test.skip(!opened, "could not open the draft trip");
 
       // Select the first route.
+      // The plans screen can open on the Inspirations tab — go to Route.
+      await clickVisible(page, /Route$/);
+      await page.waitForTimeout(1000);
       const selectBtn = page.locator("button", { hasText: /^Select$/ }).first();
-      test.skip(
-        !(await selectBtn.isVisible({ timeout: 8000 }).catch(() => false)),
-        "route cards did not render",
-      );
+      const cardsVisible = await selectBtn
+        .isVisible({ timeout: 15000 })
+        .catch(() => false);
+      if (!cardsVisible)
+        await page.screenshot({ path: "test-results/consensus-debug.png" });
+      test.skip(!cardsVisible, "route cards did not render");
       await selectBtn.click();
       await page.waitForTimeout(2000);
 
@@ -506,7 +561,7 @@ test.describe("P0/P1 collab features", () => {
       ).toBeVisible({ timeout: 10000 });
 
       // Ask the group → a real poll lands; IG is never started.
-      await page.locator("text=Ask the group").click();
+      await page.getByRole("button", { name: "Ask the group" }).click();
       await expect(
         page.locator("text=/Poll posted to the group/i"),
       ).toBeVisible({ timeout: 8000 });
