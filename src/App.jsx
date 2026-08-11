@@ -38,6 +38,7 @@ import { fetchMembers, INVITE_ENABLED, memberName } from "./members.js";
 import { fetchPreferences, hasStyle, styleTextOf } from "./preferences.js";
 import { fetchPolls, closePoll, createPoll } from "./polls.js";
 import { sendTripEmail } from "./notify.js";
+import WelcomeSheet from "./components/WelcomeSheet.jsx";
 import { PollComposeSheet, OpenPollPin } from "./components/Polls.jsx";
 import {
   fetchActivity,
@@ -7004,6 +7005,7 @@ export default function App({
   // Phase 5: per-traveller preferences ("Your travel style").
   const [preferences, setPreferences] = useState([]);
   const [showPreferences, setShowPreferences] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(false); // WS6 join briefing
   const [showMembers, setShowMembers] = useState(false);
   // Phase 6: polls / group decisions.
   const [polls, setPolls] = useState([]);
@@ -7039,6 +7041,21 @@ export default function App({
     if (!tripId) {
       setMembers([]);
       return;
+    }
+    // WS6: first open after accepting an invite → one-time welcome briefing.
+    // Also pre-marks the style nudge so the two sheets don't stack.
+    try {
+      if (localStorage.getItem(`tripjam_just_joined_${tripId}`)) {
+        localStorage.removeItem(`tripjam_just_joined_${tripId}`);
+        if (session?.user?.id)
+          localStorage.setItem(
+            `tripjam_prefs_nudged_${tripId}_${session.user.id}`,
+            "1",
+          );
+        setShowWelcome(true);
+      }
+    } catch {
+      /* private mode */
     }
     let cancelled = false;
     // Timestamp of this trip-open. "While you were away" only surfaces changes
@@ -16290,6 +16307,21 @@ export default function App({
               </div>
             );
           })()}
+        {INVITE_ENABLED && showWelcome && trip?.id && (
+          <WelcomeSheet
+            trip={trip}
+            days={days}
+            routes={pretripRoutes}
+            polls={polls}
+            members={members}
+            selfId={session?.user?.id || null}
+            onShareStyle={() => {
+              setShowWelcome(false);
+              setShowPreferences(true);
+            }}
+            onClose={() => setShowWelcome(false)}
+          />
+        )}
         {INVITE_ENABLED && showPreferences && trip?.id && isSharedTrip && (
           <PreferencesSheet
             trip={trip}

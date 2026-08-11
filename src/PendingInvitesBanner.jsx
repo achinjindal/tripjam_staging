@@ -81,6 +81,14 @@ export default function PendingInvitesBanner({ session, onOpenTripById }) {
     try {
       const tripId = await respondInvite(inv.invite_id, true);
       showToast(`You joined "${tripLabel(inv)}"`);
+      // WS6: welcome briefing fires on first open, same as link joins.
+      if (tripId) {
+        try {
+          localStorage.setItem(`tripjam_just_joined_${tripId}`, "1");
+        } catch {
+          /* private mode */
+        }
+      }
       if (tripId) onOpenTripById?.(tripId);
       else
         setInvites((prev) => prev.filter((x) => x.invite_id !== inv.invite_id));
