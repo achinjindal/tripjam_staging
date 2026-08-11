@@ -35,7 +35,7 @@ import PreferencesSheet from "./components/PreferencesSheet.jsx";
 import { TripCreditsSheet } from "./CreditsOverlay.jsx";
 import { AvatarStack } from "./MemberAvatar.jsx";
 import { fetchMembers, INVITE_ENABLED, memberName } from "./members.js";
-import { fetchPreferences } from "./preferences.js";
+import { fetchPreferences, hasStyle, styleTextOf } from "./preferences.js";
 import { fetchPolls, closePoll, createPoll } from "./polls.js";
 import { sendTripEmail } from "./notify.js";
 import { PollComposeSheet, OpenPollPin } from "./components/Polls.jsx";
@@ -2019,13 +2019,13 @@ function BrainstormView({
           ? (preferences || [])
               // Removed members' rows survive removal — only current members steer
               .filter((p) => members.some((m) => m.user_id === p.user_id))
-              .filter((p) => p?.prefs_text?.trim())
-              .filter((p) => p.prefs_text.trim() !== (igReq.notes || "").trim())
+              .filter((p) => hasStyle(p))
+              .filter((p) => styleTextOf(p) !== (igReq.notes || "").trim())
               .map((p) => ({
                 name:
                   members.find((m) => m.user_id === p.user_id)?.profiles
                     ?.username || "Traveler",
-                text: p.prefs_text.trim().slice(0, 400),
+                text: styleTextOf(p).slice(0, 400),
               }))
           : [];
       const res = await fetch(
@@ -2662,7 +2662,7 @@ function BrainstormView({
                 return null;
               const selfIdHere = session?.user?.id;
               const others = (preferences || []).filter(
-                (p) => p?.prefs_text?.trim() && p.user_id !== selfIdHere,
+                (p) => hasStyle(p) && p.user_id !== selfIdHere,
               );
               if (!others.length) return null;
               const marker = styleNudgeKey
@@ -7071,9 +7071,7 @@ export default function App({
     fetchPreferences(trip.id).then((list) => {
       if (cancelled) return;
       const hasMine =
-        list.some(
-          (p) => p.user_id === session.user.id && p.prefs_text?.trim(),
-        ) ||
+        list.some((p) => p.user_id === session.user.id && hasStyle(p)) ||
         // The owner's setup-form notes already count as their shared style.
         (session.user.id === (trip?.owner_id || trip?.created_by) &&
           (trip?.notes || "").trim());
@@ -8710,13 +8708,13 @@ export default function App({
         if ((members || []).length <= 1) return null;
         const list = (preferences || [])
           .filter((p) => members.some((m) => m.user_id === p.user_id))
-          .filter((p) => p?.prefs_text?.trim())
-          .filter((p) => p.prefs_text.trim() !== (form.notes || "").trim())
+          .filter((p) => hasStyle(p))
+          .filter((p) => styleTextOf(p) !== (form.notes || "").trim())
           .map((p) => ({
             name:
               members.find((m) => m.user_id === p.user_id)?.profiles
                 ?.username || "Traveler",
-            text: p.prefs_text.trim().slice(0, 400),
+            text: styleTextOf(p).slice(0, 400),
           }));
         return list.length ? list : null;
       })(),
@@ -10199,10 +10197,10 @@ export default function App({
       isSharedTrip && Array.isArray(preferences)
         ? preferences
             .filter((p) => members.some((m) => m.user_id === p.user_id))
-            .filter((p) => p?.prefs_text && p.prefs_text.trim())
+            .filter((p) => hasStyle(p))
             .map((p) => ({
               name: nameOf(p.user_id) || "Traveler",
-              prefs_text: p.prefs_text,
+              prefs_text: styleTextOf(p),
             }))
         : null;
     // Response-time telemetry: full client round-trip (client is non-streaming,

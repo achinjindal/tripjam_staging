@@ -42,3 +42,36 @@ export async function savePreferences(
   );
   if (error) throw error;
 }
+
+// ── WS5: quick tags ─────────────────────────────────────────────────────────
+
+/** The fixed quick-tag set (label shown on the pill; stored as the label). */
+export const STYLE_TAGS = [
+  "🏖 Beaches",
+  "🥾 Hikes",
+  "🍜 Food",
+  "🎨 Culture",
+  "😌 Relaxed",
+  "🌙 Nightlife",
+];
+
+/** Tags array from a preference row (defensive). */
+export function styleTags(p) {
+  const t = p?.prefs_struct?.tags;
+  return Array.isArray(t) ? t.filter((x) => typeof x === "string") : [];
+}
+
+/** True when a row carries any style signal — free text OR tags. */
+export function hasStyle(p) {
+  return !!(p?.prefs_text?.trim() || styleTags(p).length);
+}
+
+/** Compose the LLM-facing style text: free text plus a tags suffix. */
+export function styleTextOf(p) {
+  const text = (p?.prefs_text || "").trim();
+  const tags = styleTags(p);
+  if (!text && !tags.length) return "";
+  return [text, tags.length ? `Tags: ${tags.join(", ")}` : ""]
+    .filter(Boolean)
+    .join(" ");
+}

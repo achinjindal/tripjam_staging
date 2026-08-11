@@ -1,10 +1,16 @@
-// Phase 5 — "Your travel style" sheet. Free-text only (no tags per product
-// decision). Each member writes their own style; Trippy reads all members'
-// styles via the group chat prompt. Shared trips only.
+// Phase 5 — "Your kind of trip" sheet: free text plus quick tags (WS5 — the
+// low-effort lane for passengers who won't type). Each member writes their
+// own style; Trippy reads all members' styles via the group chat prompt.
+// Shared trips only.
 import { useState } from "react";
 import { T, RADIUS, SHADOW, MOTION } from "../theme";
 import { showToast } from "../dialogs.jsx";
-import { savePreferences } from "../preferences.js";
+import {
+  savePreferences,
+  STYLE_TAGS,
+  styleTags,
+  hasStyle,
+} from "../preferences.js";
 
 export default function PreferencesSheet({
   trip,
@@ -20,15 +26,16 @@ export default function PreferencesSheet({
   // until they save an explicit preference row of their own.
   const ownerId = trip?.owner_id || trip?.created_by || null;
   const ownerNotes = (trip?.notes || "").trim();
-  const mineRow =
-    preferences.find((p) => p.user_id === selfId)?.prefs_text || "";
+  const myRow = preferences.find((p) => p.user_id === selfId) || null;
+  const mineRow = myRow?.prefs_text || "";
   const mine =
     mineRow || (selfId && selfId === ownerId && ownerNotes ? ownerNotes : "");
   const [text, setText] = useState(mine);
+  const [tags, setTags] = useState(() => styleTags(myRow));
   const [busy, setBusy] = useState(false);
 
   const sharedIds = new Set(
-    preferences.filter((p) => p?.prefs_text?.trim()).map((p) => p.user_id),
+    preferences.filter((p) => hasStyle(p)).map((p) => p.user_id),
   );
   if (ownerId && ownerNotes) sharedIds.add(ownerId);
   const shared = sharedIds.size;
@@ -38,7 +45,11 @@ export default function PreferencesSheet({
     if (busy) return;
     setBusy(true);
     try {
-      await savePreferences(trip.id, selfId, text.trim() || null);
+      // Always pass the struct — the upsert overwrites it, so omitting tags
+      // here would silently wipe them.
+      await savePreferences(trip.id, selfId, text.trim() || null, {
+        tags,
+      });
       showToast(
         total > 1
           ? `Saved — Trippy now plans for ${total === 2 ? "both of you" : `all ${total} of you`}`
@@ -107,6 +118,40 @@ export default function PreferencesSheet({
           Trippy plans for everyone on the trip.
         </div>
 
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 7,
+            marginBottom: 10,
+          }}
+        >
+          {STYLE_TAGS.map((tag) => {
+            const on = tags.includes(tag);
+            return (
+              <button
+                key={tag}
+                onClick={() =>
+                  setTags((prev) =>
+                    on ? prev.filter((t) => t !== tag) : [...prev, tag],
+                  )
+                }
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: RADIUS.full,
+                  border: `1.5px solid ${on ? "#2563A8" : "#E2DDD5"}`,
+                  background: on ? "#F0F7FF" : "#FFFFFF",
+                  color: on ? "#2563A8" : "#587284",
+                  fontSize: 12,
+                  fontFamily: "Georgia, serif",
+                  cursor: "pointer",
+                }}
+              >
+                {tag}
+              </button>
+            );
+          })}
+        </div>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
