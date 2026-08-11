@@ -17,6 +17,83 @@ export function getActiveTripId() {
   return _activeTripId;
 }
 
+/* ─── Story-mode photo helpers ──────────────────────────────────────── */
+// Wikimedia only serves bucketed thumb widths (1280/1920); arbitrary widths 400.
+const WIKIMEDIA_THUMB_RE =
+  /^(https:\/\/upload\.wikimedia\.org\/[^?#]*\/thumb\/[^?#]*\/)(\d+)px-([^/?#]+)$/;
+
+// Upgrade a stored Wikimedia thumb (typically 700px) to the 1280px bucket for
+// full-bleed hero use. Strict no-op for anything else (originalimage URLs
+// without /thumb/, Pexels, TripAdvisor…). Callers should keep the original as
+// an onError fallback.
+export function upgradePhotoUrl(url) {
+  if (typeof url !== "string") return url;
+  // TripAdvisor CDN serves size variants by path segment: photo-s (550px,
+  // what the API's images.large returns) → photo-w (~1200px). Heals every
+  // stored hotel photo without a refetch; onError falls back to the original.
+  if (url.includes("media-cdn.tripadvisor.com/media/photo-s/"))
+    return url.replace("/media/photo-s/", "/media/photo-w/");
+  const m = url.match(WIKIMEDIA_THUMB_RE);
+  if (!m || Number(m[2]) >= 1280) return url;
+  return `${m[1]}1280px-${m[3]}`;
+}
+
+// Commons file-description page for a stored Wikimedia thumb URL (the ⓘ photo
+// credit link). Returns null for non-Wikimedia/non-thumb URLs so the caller
+// hides the chip.
+export function commonsFilePageUrl(url) {
+  if (typeof url !== "string") return null;
+  const m = url.match(WIKIMEDIA_THUMB_RE);
+  if (!m) return null;
+  // /thumb/<a>/<ab>/<File.ext>/<w>px-<File.ext> — the file name is the
+  // second-to-last path segment of the prefix.
+  const segs = m[1].split("/").filter(Boolean);
+  const file = segs[segs.length - 1];
+  if (!file) return null;
+  try {
+    return `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(decodeURIComponent(file))}`;
+  } catch {
+    return `https://commons.wikimedia.org/wiki/File:${file}`;
+  }
+}
+
+// Photo credit line via Commons extmetadata (share card only; not called on
+// normal Story browsing). Returns e.g. "Photo: Basile Morin, CC BY-SA 4.0" or
+// null. Cached per file name.
+const _attributionCache = {};
+export async function fetchPhotoAttribution(url) {
+  const page = commonsFilePageUrl(url);
+  if (!page) return null;
+  const file = page.slice(page.indexOf("File:"));
+  if (file in _attributionCache) return _attributionCache[file];
+  try {
+    const res = await fetch(
+      `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(
+        file,
+      )}&prop=imageinfo&iiprop=extmetadata&format=json&origin=*`,
+    );
+    const data = await res.json();
+    const pages = data?.query?.pages || {};
+    const meta = Object.values(pages)[0]?.imageinfo?.[0]?.extmetadata || null;
+    const strip = (html) =>
+      html
+        ? String(html)
+            .replace(/<[^>]*>/g, "")
+            .trim()
+        : "";
+    const artist = strip(meta?.Artist?.value);
+    const license = strip(meta?.LicenseShortName?.value);
+    const credit =
+      artist || license
+        ? `Photo: ${[artist, license].filter(Boolean).join(", ")}`
+        : null;
+    _attributionCache[file] = credit;
+    return credit;
+  } catch {
+    return null;
+  }
+}
+
 // Returns true if the URL looks like a person portrait or otherwise unsuitable place photo
 export function _isPortrait(url) {
   const decoded = decodeURIComponent(url);
@@ -79,7 +156,9 @@ export function makeQueue(delayMs, concurrency = 1) {
     });
 }
 
-export const wikiQueuedFetch = makeQueue(400, 2); // Wikimedia — 2 concurrent, 400ms stagger (avoid 429s)
+// 3 concurrent / 250ms: still polite to Wikimedia, but a fresh multi-day trip
+// (~80 lookups × up to 4 tiers) fills the Story heroes in ~1min instead of ~3.
+export const wikiQueuedFetch = makeQueue(250, 3); // Wikimedia — 3 concurrent, 250ms stagger (still polite; fills Story heroes ~2.5x faster)
 
 /**
  * Fetch a representative photo for an activity/place using free Wikipedia/Commons sources.
@@ -118,9 +197,13 @@ export const wikiQueuedFetch = makeQueue(400, 2); // Wikimedia — 2 concurrent,
  *
  * Returns the photo URL or `null` if no acceptable photo was found.
  */
-export async function _fetchPhoto(geocode, city, type, hotelOpts) {
+// extras (all optional): { lat, lng, photoQuery }
+//  - lat/lng: verified activity coords → enables the Commons geosearch tier
+//    (photos taken AT the place, immune to naming mismatches)
+//  - photoQuery: LLM-authored "iconic view" search used by the text-search tiers
+export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
   const BAD_PATTERNS =
-    /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive/i;
+    /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive|painting|drawing|ukiyo|woodblock|engraving|lithograph|poster|artwork|sketch|illustration/i;
   const good = (url) =>
     url &&
     !_isPortrait(url) &&
@@ -160,6 +243,10 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
         body: JSON.stringify({
           q: geocodeQ,
           city,
+          // Verified coords bias TripAdvisor to the right property and arm
+          // the server's wrong-hotel name guard
+          lat: extras.lat || undefined,
+          lng: extras.lng || undefined,
           tripId: hotelOpts?.tripId || _activeTripId,
           context: hotelOpts?.context || "itinerary",
         }),
@@ -182,8 +269,14 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
   // appetising lead image. Then Commons, then a server-side stock fallback.
   // Skip the _usedPhotoUrls dedup: a dish photo isn't a unique-place photo.
   if (type === "food") {
+    // Same trip-wide dedup as the sight path: without the _usedPhotoUrls check
+    // several restaurants used to share one stock photo (the Pexels fallback
+    // returns the same image for similar dish queries).
     const foodGood = (url) =>
-      url && !_isPortrait(url) && !BAD_PATTERNS.test(url);
+      url &&
+      !_isPortrait(url) &&
+      !BAD_PATTERNS.test(url) &&
+      !_usedPhotoUrls.has(url);
     // Normalise: drop parentheticals and a leading protein word so
     // "Chicken Tagine (slow-cooked)" also tries "Tagine".
     const dishRaw = geocode.replace(/\([^)]*\)/g, "").trim();
@@ -212,6 +305,7 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
         !/may refer to/i.test(summary?.extract || "")
       ) {
         _photoCache[cacheKey] = img;
+        _usedPhotoUrls.add(img);
         return img;
       }
     }
@@ -233,6 +327,7 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
         const src4 = page4?.imageinfo?.[0]?.thumburl;
         if (foodGood(src4)) {
           _photoCache[cacheKey] = src4;
+          _usedPhotoUrls.add(src4);
           return src4;
         }
       }
@@ -248,6 +343,7 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
       const { url: stockUrl } = await res.json();
       if (stockUrl && foodGood(stockUrl)) {
         _photoCache[cacheKey] = stockUrl;
+        _usedPhotoUrls.add(stockUrl);
         return stockUrl;
       }
     } catch {
@@ -350,6 +446,22 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
     }
   }
 
+  // Hero-shape preference: landscape and reasonably large images crop well in
+  // full-bleed heroes; portrait/small ones become the last-resort fallback so
+  // coverage never regresses. Unknown dimensions are not rejected.
+  // Fallback floor: never keep a photo under 500px wide, even as last resort
+  const bigEnough = (dims) => (dims?.width ?? 1000) >= 500;
+  const heroShaped = (dims) => {
+    if (!dims?.width || !dims?.height) return true;
+    return dims.width > dims.height && dims.width >= 1000;
+  };
+  let shapeFallback = null;
+  const accept = (src) => {
+    _usedPhotoUrls.add(src);
+    _photoCache[cacheKey] = src;
+    return src;
+  };
+
   // Tier 1 + 2: Wikipedia exact title lookup across the candidate variants in order.
   // Trust the article's hero image when the page title is relevant — exact-title matches
   // with redirects are authoritative, and the filename check would reject valid hero
@@ -357,21 +469,59 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
   // Wat Phra Yai → Big_Buddha_Koh_Samui.jpg, Senso-ji → Sensoji_2023.jpg).
   for (const candidate of titleCandidates) {
     const data = await wikiQueuedFetch(
-      `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(candidate)}&prop=pageimages&format=json&pithumbsize=700&redirects=1&origin=*`,
+      `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(candidate)}&prop=pageimages&format=json&pithumbsize=700&piprop=thumbnail%7Coriginal&redirects=1&origin=*`,
     );
     const page = Object.values(data?.query?.pages || {})[0];
     const src = page?.thumbnail?.source;
     if (good(src) && pageRelevant(page?.title)) {
-      _usedPhotoUrls.add(src);
-      _photoCache[cacheKey] = src;
-      return src;
+      if (heroShaped(page?.original || page?.thumbnail)) return accept(src);
+      if (!shapeFallback && bigEnough(page?.original || page?.thumbnail))
+        shapeFallback = src;
     }
   }
 
-  // Tier 3: Wikipedia full-text search — finds the right article even when title doesn't match geocode exactly
-  const searchQ = city ? `${geocode} ${city}` : geocode;
+  // Tier 2.5: Commons geosearch — photos taken within 300m of the verified
+  // coordinates. A geotag proves WHERE the shot was taken, not WHAT it shows
+  // (tourist selfies and street snaps carry the same coords), so a hit is
+  // trusted immediately only when its file name mentions the place; anonymous
+  // geotagged hits are kept as a fallback behind the text-search tiers.
+  let geoFallback = null;
+  if (extras.lat && extras.lng) {
+    const geoData = await wikiQueuedFetch(
+      `https://commons.wikimedia.org/w/api.php?action=query&generator=geosearch&ggscoord=${extras.lat}%7C${extras.lng}&ggsradius=300&ggslimit=12&ggsnamespace=6&prop=imageinfo&iiprop=url%7Csize&iiurlwidth=700&format=json&origin=*`,
+    );
+    const geoPages = Object.values(geoData?.query?.pages || {}).sort(
+      (a, b) => (a.index ?? 999) - (b.index ?? 999),
+    );
+    const placeTokens = `${geocode} ${extras.photoQuery || ""}`
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length > 3);
+    for (const gp of geoPages) {
+      const info = gp?.imageinfo?.[0];
+      const gsrc = info?.thumburl;
+      if (
+        !good(gsrc) ||
+        /\.svg|logo|flag|icon|map|plan|diagram/i.test(gp?.title || "") ||
+        !heroShaped(info)
+      )
+        continue;
+      const fileTitle = (gp?.title || "").toLowerCase();
+      if (placeTokens.some((t) => fileTitle.includes(t))) return accept(gsrc);
+      if (!geoFallback) geoFallback = gsrc;
+    }
+  }
+
+  // Tier 3: Wikipedia full-text search — finds the right article even when
+  // title doesn't match geocode exactly. The LLM's photo_query ("Kinkaku-ji
+  // golden pavilion pond reflection") beats the raw geocode when present.
+  const searchQ = extras.photoQuery
+    ? `${extras.photoQuery}${city ? ` ${city}` : ""}`
+    : city
+      ? `${geocode} ${city}`
+      : geocode;
   const data3 = await wikiQueuedFetch(
-    `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages|description&pithumbsize=700&format=json&origin=*`,
+    `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(searchQ)}&gsrlimit=5&prop=pageimages|description&pithumbsize=700&piprop=thumbnail%7Coriginal&format=json&origin=*`,
   );
   // Sort search results by their "index" field so we evaluate in the actual search-rank
   // order (Object.values on the response is unordered — top results were being skipped).
@@ -395,14 +545,18 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
     if (!relaxed && !titleHit) continue;
     const src3 = page?.thumbnail?.source;
     if (good(src3) && (titleHit || photoFilenameRelevant(src3))) {
-      _usedPhotoUrls.add(src3);
-      _photoCache[cacheKey] = src3;
-      return src3;
+      if (heroShaped(page?.original || page?.thumbnail)) return accept(src3);
+      if (!shapeFallback && bigEnough(page?.original || page?.thumbnail))
+        shapeFallback = src3;
     }
   }
 
   // Tier 4: Wikimedia Commons file search — much larger photo pool than Wikipedia articles
-  const commonsSearchQ = city ? `${geocode} ${city}` : geocode;
+  const commonsSearchQ = extras.photoQuery
+    ? extras.photoQuery
+    : city
+      ? `${geocode} ${city}`
+      : geocode;
   const data4 = await wikiQueuedFetch(
     `https://commons.wikimedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(commonsSearchQ)}&srnamespace=6&srlimit=3&format=json&origin=*`,
   );
@@ -411,16 +565,22 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts) {
     const title = cr.title;
     if (!title || /\.svg|logo|flag|icon|map|category/i.test(title)) continue;
     const data4b = await wikiQueuedFetch(
-      `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=imageinfo&iiprop=url&iiurlwidth=700&format=json&origin=*`,
+      `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=imageinfo&iiprop=url%7Csize&iiurlwidth=700&format=json&origin=*`,
     );
     const page4 = Object.values(data4b?.query?.pages || {})[0];
-    const src4 = page4?.imageinfo?.[0]?.thumburl;
+    const info4 = page4?.imageinfo?.[0];
+    const src4 = info4?.thumburl;
     if (good(src4)) {
-      _usedPhotoUrls.add(src4);
-      _photoCache[cacheKey] = src4;
-      return src4;
+      if (heroShaped(info4)) return accept(src4);
+      if (!shapeFallback && bigEnough(info4)) shapeFallback = src4;
     }
   }
+
+  // All named tiers exhausted. An anonymous geotagged photo from the right
+  // spot beats a portrait/small one; either beats the editorial cover.
+  if (geoFallback && !_usedPhotoUrls.has(geoFallback))
+    return accept(geoFallback);
+  if (shapeFallback) return accept(shapeFallback);
 
   _photoCache[cacheKey] = null;
   return null;
@@ -445,7 +605,13 @@ export async function attachPhotosToMoreSights(data, city) {
     let photo_url = sight.photo_url || null;
     if (!photo_url && searchKey) {
       for (const candidate of _splitCombinedGeocode(searchKey)) {
-        const url = await _fetchPhoto(candidate, city, sight.type || "sight");
+        const url = await _fetchPhoto(
+          candidate,
+          city,
+          sight.type || "sight",
+          undefined,
+          { photoQuery: sight.photo_query },
+        );
         if (url) {
           photo_url = url;
           break;

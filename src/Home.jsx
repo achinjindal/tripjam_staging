@@ -129,7 +129,12 @@ export default function Home({
   return (
     <div
       style={{
-        minHeight: "100vh",
+        // The app body is position:fixed/overflow:hidden (index.html), so
+        // Home must own its scrolling — minHeight alone left the trip list
+        // unscrollable past the first viewport.
+        height: "100dvh",
+        overflowY: "auto",
+        WebkitOverflowScrolling: "touch",
         background: T.bgPage,
         fontFamily: "Georgia, serif",
       }}

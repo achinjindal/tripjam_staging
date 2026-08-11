@@ -34,6 +34,10 @@ const corsHeaders = {
 };
 
 const CACHE_TTL_DAYS = 30;
+// A digest that violates the required article+video mix (zero videos even
+// after Sonnet escalation) is served but only cached briefly — a full 30-day
+// TTL poisons the destination with a below-standard edition (Bali 2026-08).
+const VIDEOLESS_TTL_DAYS = 2;
 const MODEL = "claude-haiku-4-5-20251001";
 // Rescue model. Haiku sometimes over-refuses this strict task and returns an
 // empty digest even for content-rich destinations (e.g. Morocco). When the
@@ -110,11 +114,11 @@ OUTPUT FORMAT — return ONLY a single raw JSON object, no prose, no markdown fe
 }
 
 Rules:
-- 5–10 inspirations TOTAL.
-- AIM for a mix of articles and videos where possible:
-    • Search explicitly for YouTube vlogs (site:youtube.com "<destination>" vlog, "<destination>" travel vlog YouTube) as well as blog/Substack posts.
-    • If you find quality vlogs, include them. If web_search only surfaces strong articles, return those — quality over format balance.
-    • Never return fewer good results just to satisfy a format ratio. Better 8 great articles than 4 articles + 4 fabricated or low-quality videos.
+- MINIMUM 5 inspirations, target 6–10. If your first searches come back thin, spend your REMAINING searches on different angles — the region's alternate names, its best-known towns or festivals, umbrella terms (e.g. "Northeast India" for Arunachal), "<destination> travel vlog" — rather than returning fewer than 5. Returning 3 results is a failure unless the destination genuinely has almost no first-person coverage.
+- REQUIRED mix of articles and videos:
+    • Dedicate at least ONE search explicitly to YouTube vlogs (site:youtube.com "<destination>" vlog, "<destination>" travel vlog YouTube) as well as blog/Substack posts.
+    • Target at least 2 videos when the destination has any vlog coverage — most destinations do.
+    • Never fabricate a video to satisfy the mix. If web_search truly surfaces no quality vlogs, strong articles alone are acceptable.
   Prefer videos posted to a named YouTube channel (not auto-generated topic channels).
 - Mix well-known and less-known creators. STRICT: only ONE entry per author/creator — if you find multiple videos or articles from the same person, include only the single best one. Never list the same creator twice regardless of how many pieces they have published.
 - Every inspirations entry MUST also appear in sources (same URL, dedup by url; sources[].id is 1-indexed).
@@ -516,10 +520,23 @@ serve(async (req) => {
     let webSearchCount = haiku.webSearchCount;
     let sonnet: Awaited<ReturnType<typeof callResearchLLM>> | null = null;
 
+    // Escalate not just on EMPTY but on WEAK results — thin destinations had
+    // Haiku return 3 items all from one blogger (which the author cap then
+    // collapsed to a single card). Weak = under 5 items, fewer than 3 distinct
+    // authors, or no videos at all.
+    const items = Array.isArray(parsed?.inspirations)
+      ? parsed.inspirations
+      : [];
+    const distinctAuthors = new Set(
+      items.map((i: { author?: string }) =>
+        (i.author || "").toLowerCase().trim(),
+      ),
+    ).size;
+    const videoCount = items.filter(
+      (i: { type?: string }) => i.type === "video",
+    ).length;
     const haikuEmpty =
-      !parsed ||
-      !Array.isArray(parsed.inspirations) ||
-      parsed.inspirations.length === 0;
+      !parsed || items.length < 5 || distinctAuthors < 3 || videoCount === 0;
 
     if (haikuEmpty) {
       sonnet = await callResearchLLM(
@@ -531,13 +548,26 @@ serve(async (req) => {
       );
       if (sonnet.ok) {
         const sonnetParsed = tryParseJson(sonnet.text);
-        const sonnetHasResults =
-          sonnetParsed &&
-          Array.isArray(sonnetParsed.inspirations) &&
-          sonnetParsed.inspirations.length > 0;
-        // Prefer Sonnet if it found anything, or if Haiku was unparseable and
-        // Sonnet at least parsed (even to empty).
-        if (sonnetHasResults || (!parsed && sonnetParsed)) {
+        const sonnetItems = Array.isArray(sonnetParsed?.inspirations)
+          ? sonnetParsed.inspirations
+          : [];
+        if (sonnetItems.length > 0) {
+          // Merge both models' finds (Sonnet first, dedupe by URL) — on thin
+          // destinations the union is how we reach a usable minimum.
+          const seenUrls = new Set<string>();
+          sonnetParsed.inspirations = [...sonnetItems, ...items].filter(
+            (i: { url?: string }) => {
+              const u = (i.url || "").trim();
+              if (!u || seenUrls.has(u)) return false;
+              seenUrls.add(u);
+              return true;
+            },
+          );
+          parsed = sonnetParsed;
+          usedModel = ESCALATION_MODEL;
+          webSearchCount = sonnet.webSearchCount;
+        } else if (!parsed && sonnetParsed) {
+          // Haiku unparseable and Sonnet at least parsed (even to empty).
           parsed = sonnetParsed;
           usedModel = ESCALATION_MODEL;
           webSearchCount = sonnet.webSearchCount;
@@ -572,8 +602,13 @@ serve(async (req) => {
     // zero-result run for 30 days poisons the destination after a single bad
     // generation. Skipping the write lets the next open retry (and re-escalate).
     if (digest.inspirations.length > 0) {
+      const finalVideoCount = digest.inspirations.filter(
+        (i: { type?: string }) => i.type === "video",
+      ).length;
+      const ttlDays =
+        finalVideoCount === 0 ? VIDEOLESS_TTL_DAYS : CACHE_TTL_DAYS;
       const expiresAt = new Date(
-        Date.now() + CACHE_TTL_DAYS * 24 * 60 * 60 * 1000,
+        Date.now() + ttlDays * 24 * 60 * 60 * 1000,
       ).toISOString();
       fetch(
         `${supabaseUrl}/rest/v1/destination_research?on_conflict=cache_key`,

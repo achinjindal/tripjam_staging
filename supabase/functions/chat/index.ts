@@ -15,7 +15,7 @@ import {
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+    "authorization, x-client-info, apikey, content-type, x-chat-stream",
 };
 
 serve(async (req) => {
@@ -186,12 +186,22 @@ ${
    - Use real specific place names — never generic "Lunch" or "Dinner"
    - Geography: meals must be in same neighbourhood as surrounding activities
    - Recalculate ALL times when changing activities — no gaps or overlaps
-   - Include "wishlist" array: 3-5 local gems near that day's area
+   - "wishlist": OMIT this field entirely when the day's gems are unchanged (the app keeps the existing ones). Only include it (3-5 local gems) when the day's area actually changed.
    - Only include days that actually changed
    - DEPARTURE CONSTRAINT: last day activities must finish before departure time
 
 2. suggest — Show alternatives without changing the itinerary
-   {"type":"suggest","suggestions":[{title, geocode, note, icon, type},...]}
+   {"type":"suggest","context":"hotel"|"activity"|"food","city":"...","suggestions":[{title, geocode, note, icon, type, description, duration, distance_hint, cost_hint},...]}
+   MANDATORY whenever you propose alternative places (hotels, activities, restaurants): 2-3 suggestions as this action, NEVER as prose descriptions. Keep "message" to 1-2 sentences that name each suggested place once.
+   Per-item fields:
+   - type: REQUIRED — "hotel" for hotel alternatives (this routes photos + booking links), else "sight"/"food"/"activity"
+   - title + geocode: real, well-established places ONLY — fully-qualified geocode ("[Place], [area], [city], [country]"). If unsure a place exists under that exact name, pick a better-known one instead.
+   - LOCATION SANITY: alternatives MUST be in the same town/area as the place they replace (walkable or a few minutes away). Never suggest a venue in a different town — e.g. an Oia restaurant is NOT an alternative to a Fira dinner.
+   - note: what it IS, max 8 words
+   - description: 1-2 sentences a traveler needs to DECIDE — what's there, why it fits their ask
+   - duration: rough time needed (e.g. "~1.5h") — activities/food only
+   - distance_hint: from the day's base or the place being replaced (e.g. "10 min walk from hotel")
+   - cost_hint: e.g. "Free", "~€2 bus", "€€"
    For hotel suggestions add: area, price ("$"/"$$"/"$$$"/"$$$$"), bullets (3 phrases)
 `
     : ""
@@ -304,9 +314,21 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
       groupContext && sender ? `${sender}: ${message}` : message;
     const messages = [...recent, { role: "user", content: currentContent }];
 
+    // ── Provider switch: CHAT_MODEL env var selects the chat model per env.
+    // Unset → Sonnet 4.6. A "claude-*" id routes the Anthropic path below with
+    // that model (threaded through the request AND billing — it was hardcoded
+    // before, which would have billed a Haiku A/B at Sonnet rates). A
+    // "gemini-*" id → Gemini non-streaming path (returns full JSON).
+    const chatModel = Deno.env.get("CHAT_MODEL") || "claude-sonnet-4-6";
+
     const requestBody = JSON.stringify({
-      model: "claude-sonnet-4-6",
+      model: chatModel,
       max_tokens: 8192,
+      // Claude 5 family: thinking is on by default and its tokens count
+      // against max_tokens (see generate-itinerary) — disable for chat.
+      ...(chatModel.startsWith("claude-sonnet-5")
+        ? { thinking: { type: "disabled" } }
+        : {}),
       stream: true,
       // Static instructions are cached; per-call context is not.
       system: [
@@ -319,13 +341,6 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
       ],
       messages,
     });
-
-    // ── Provider switch: CHAT_MODEL env var selects the chat model per env.
-    // Unset (prod) → Sonnet 4.6 (the Anthropic path below, unchanged). Set to a
-    // "gemini-*" id (staging) → Gemini non-streaming path (chat returns full
-    // JSON, so no client streaming). Same code ships to both; behaviour differs
-    // only by the env var.
-    const chatModel = Deno.env.get("CHAT_MODEL") || "claude-sonnet-4-6";
     if (chatModel.startsWith("gemini")) {
       const gResp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${chatModel}:generateContent`,
@@ -446,126 +461,230 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
       throw new Error(`Anthropic error: ${err}`);
     }
 
-    // Stream-accumulate text + real token usage (message_start / message_delta).
-    const usage = newStreamUsage();
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let accumulated = "";
-    let lineBuffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      lineBuffer += decoder.decode(value, { stream: true });
-      const lines = lineBuffer.split("\n");
-      lineBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const raw = line.slice(6).trim();
-        if (raw === "[DONE]") continue;
-        try {
-          const event = JSON.parse(raw);
-          accumulateStreamUsage(usage, event);
-          if (
-            event.type === "content_block_delta" &&
-            event.delta?.type === "text_delta"
-          ) {
-            accumulated += event.delta.text;
-          }
-        } catch {
-          /* skip */
+    // ── True streaming to the client (opt-in via the x-chat-stream header so
+    // OLD deployed clients — which res.json() the body — keep getting buffered
+    // JSON from this same handler). The model's reply is raw JSON with the
+    // "message" field FIRST; we extract that string incrementally server-side
+    // (escape-safe across chunk boundaries) and re-emit clean SSE events:
+    //   data: {"type":"delta","text":"..."}   — conversational text, as written
+    //   data: {"type":"final","data":{...}}   — full parsed {message, actions}
+    //   data: [DONE]
+    // The client renders deltas into the bubble immediately and applies
+    // actions on "final". Non-streaming responses (Gemini path, 402s, errors)
+    // stay application/json — the client branches on Content-Type.
+    const wantsStream = req.headers.get("x-chat-stream") === "1";
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const encoder = new TextEncoder();
+    const sendEvent = (obj: unknown) => {
+      if (!wantsStream) return Promise.resolve();
+      return writer
+        .write(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`))
+        .catch(() => {});
+    };
+
+    // Incremental extractor for the "message" string in streaming JSON. Holds
+    // partial escape sequences (\", \n, \uXXXX) across chunk boundaries.
+    const extractor = {
+      raw: "",
+      inStr: false,
+      strDone: false,
+      scanPos: 0,
+      esc: "",
+      decoded: "",
+      push(chunk: string): string {
+        this.raw += chunk;
+        if (this.strDone) return "";
+        if (!this.inStr) {
+          const m = this.raw.match(/"message"\s*:\s*"/);
+          if (!m) return "";
+          this.inStr = true;
+          this.scanPos = (m.index ?? 0) + m[0].length;
         }
+        let out = "";
+        while (this.scanPos < this.raw.length) {
+          const ch = this.raw[this.scanPos];
+          if (this.esc) {
+            this.esc += ch;
+            const complete =
+              this.esc[1] === "u"
+                ? this.esc.length === 6
+                : this.esc.length === 2;
+            if (complete) {
+              try {
+                out += JSON.parse(`"${this.esc}"`);
+              } catch {
+                /* drop malformed escape */
+              }
+              this.esc = "";
+            }
+            this.scanPos++;
+            continue;
+          }
+          if (ch === "\\") {
+            this.esc = "\\";
+            this.scanPos++;
+            continue;
+          }
+          if (ch === '"') {
+            this.strDone = true;
+            this.scanPos++;
+            break;
+          }
+          out += ch;
+          this.scanPos++;
+        }
+        this.decoded += out;
+        return out;
+      },
+    };
+
+    const pump = (async () => {
+      const usage = newStreamUsage();
+      let accumulated = "";
+      try {
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let lineBuffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          lineBuffer += decoder.decode(value, { stream: true });
+          const lines = lineBuffer.split("\n");
+          lineBuffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const raw = line.slice(6).trim();
+            if (raw === "[DONE]") continue;
+            try {
+              const event = JSON.parse(raw);
+              accumulateStreamUsage(usage, event);
+              if (
+                event.type === "content_block_delta" &&
+                event.delta?.type === "text_delta"
+              ) {
+                accumulated += event.delta.text;
+                const fresh = extractor.push(event.delta.text);
+                if (fresh) await sendEvent({ type: "delta", text: fresh });
+              }
+            } catch {
+              /* skip */
+            }
+          }
+        }
+      } catch (e) {
+        console.error("chat stream error:", (e as Error).message);
       }
-    }
 
-    // Prefer the API's real token counts; fall back to a length estimate only
-    // if the usage events never arrived (so billing never silently zeroes out).
-    const durationMs = Date.now() - __anthropicStart;
-    const inputTokens = hasStreamUsage(usage)
-      ? usage.inputTokens
-      : Math.round(requestBody.length / 4);
-    const outputTokens =
-      usage.outputTokens || Math.round(accumulated.length / 4);
-    const cacheCreationTokens = usage.cacheCreationTokens;
-    const cacheReadTokens = usage.cacheReadTokens;
-
-    // Log LLM usage + deduct credits. Wrapped in runInBackground so the
-    // isolate stays alive until both complete (see runInBackground docs).
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    runInBackground(
-      (async () => {
-        await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-          },
-          body: JSON.stringify({
-            trip_id: trip?.id || null,
-            function_name: "chat",
-            model: "claude-sonnet-4-6",
-            input_tokens: inputTokens,
-            output_tokens: outputTokens,
-            cache_creation_tokens: cacheCreationTokens,
-            cache_read_tokens: cacheReadTokens,
-            duration_ms: durationMs,
-          }),
-        }).catch(() => {});
-
-        await deductCredits({
-          userId: user.id,
-          model: "claude-sonnet-4-6",
-          inputTokens,
-          outputTokens,
-          cacheCreationTokens,
-          cacheReadTokens,
-          functionName: "chat",
-          tripId: trip?.id || null,
-          source,
-        });
-      })(),
-    );
-
-    const start = accumulated.indexOf("{");
-    const end = accumulated.lastIndexOf("}");
-    let data: any = { message: "Done." };
-    try {
-      data = JSON.parse(accumulated.slice(start, end + 1));
-      if (!data.message) data.message = "Done.";
-    } catch {
-      data = { message: accumulated };
-    }
-
-    // Backwards compat: convert old-style updatedRoutes/updatedDays to actions format
-    if (data.updatedRoutes && !data.actions) {
-      data.actions = data.updatedRoutes.map((r: any) => ({
-        type: "update_route",
-        route: r,
-      }));
-      if (data.pendingRoutes) {
-        data.actions.push({
-          type: "pending_routes",
-          routeIds: data.pendingRoutes,
-        });
+      // Parse the complete reply. If parsing fails, prefer the cleanly
+      // extracted message (already streamed) over dumping raw JSON-ish text.
+      const start = accumulated.indexOf("{");
+      const end = accumulated.lastIndexOf("}");
+      let data: any = { message: "Done." };
+      try {
+        data = JSON.parse(accumulated.slice(start, end + 1));
+        if (!data.message) data.message = "Done.";
+      } catch {
+        data = { message: extractor.decoded || accumulated };
       }
-      delete data.updatedRoutes;
-      delete data.pendingRoutes;
-    }
-    if (data.updatedDays && !data.actions) {
-      data.actions = data.updatedDays.map((d: any) => ({
-        type: "update_day",
-        day: d,
-      }));
-      if (data.suggestions) {
-        data.actions.push({ type: "suggest", suggestions: data.suggestions });
-      }
-      delete data.updatedDays;
-      delete data.suggestions;
-    }
 
-    return new Response(JSON.stringify(data), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      // Backwards compat: convert old-style updatedRoutes/updatedDays to actions format
+      if (data.updatedRoutes && !data.actions) {
+        data.actions = data.updatedRoutes.map((r: any) => ({
+          type: "update_route",
+          route: r,
+        }));
+        if (data.pendingRoutes) {
+          data.actions.push({
+            type: "pending_routes",
+            routeIds: data.pendingRoutes,
+          });
+        }
+        delete data.updatedRoutes;
+        delete data.pendingRoutes;
+      }
+      if (data.updatedDays && !data.actions) {
+        data.actions = data.updatedDays.map((d: any) => ({
+          type: "update_day",
+          day: d,
+        }));
+        if (data.suggestions) {
+          data.actions.push({ type: "suggest", suggestions: data.suggestions });
+        }
+        delete data.updatedDays;
+        delete data.suggestions;
+      }
+
+      await sendEvent({ type: "final", data });
+      if (wantsStream) {
+        await writer.write(encoder.encode("data: [DONE]\n\n")).catch(() => {});
+        await writer.close().catch(() => {});
+      }
+
+      // Prefer the API's real token counts; fall back to a length estimate only
+      // if the usage events never arrived (so billing never silently zeroes out).
+      const durationMs = Date.now() - __anthropicStart;
+      const inputTokens = hasStreamUsage(usage)
+        ? usage.inputTokens
+        : Math.round(requestBody.length / 4);
+      const outputTokens =
+        usage.outputTokens || Math.round(accumulated.length / 4);
+      const cacheCreationTokens = usage.cacheCreationTokens;
+      const cacheReadTokens = usage.cacheReadTokens;
+
+      // Log LLM usage + deduct credits. Wrapped in runInBackground so the
+      // isolate stays alive until both complete (see runInBackground docs).
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      runInBackground(
+        (async () => {
+          await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              apikey: supabaseKey,
+              Authorization: `Bearer ${supabaseKey}`,
+            },
+            body: JSON.stringify({
+              trip_id: trip?.id || null,
+              function_name: "chat",
+              model: chatModel,
+              input_tokens: inputTokens,
+              output_tokens: outputTokens,
+              cache_creation_tokens: cacheCreationTokens,
+              cache_read_tokens: cacheReadTokens,
+              duration_ms: durationMs,
+            }),
+          }).catch(() => {});
+
+          await deductCredits({
+            userId: user.id,
+            model: chatModel,
+            inputTokens,
+            outputTokens,
+            cacheCreationTokens,
+            cacheReadTokens,
+            functionName: "chat",
+            tripId: trip?.id || null,
+            source,
+          });
+        })(),
+      );
+      return data;
+    })();
+
+    if (!wantsStream) {
+      const data = await pump;
+      return new Response(JSON.stringify(data), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    return new Response(readable, {
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+      },
     });
   } catch (err) {
     console.error("chat error:", err.message);

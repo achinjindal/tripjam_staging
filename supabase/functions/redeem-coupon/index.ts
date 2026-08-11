@@ -16,9 +16,12 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-// code → credits granted
-const VALID_COUPONS: Record<string, number> = {
-  IKNOWACHIN: 300,
+// code → { credits granted, reusable }. reusable:true = no per-user cap —
+// every redemption grants again (unique ledger key per redemption). Only the
+// per-user rate limit (5/min) brakes it; treat reusable codes as
+// founder/insider codes, not public promos.
+const VALID_COUPONS: Record<string, { credits: number; reusable?: boolean }> = {
+  IKNOWACHIN: { credits: 300, reusable: true },
 };
 
 serve(async (req) => {
@@ -66,27 +69,59 @@ serve(async (req) => {
     }
 
     const normalised = code.trim().toUpperCase();
-    const credits = VALID_COUPONS[normalised];
+    const coupon = VALID_COUPONS[normalised];
 
-    if (!credits) {
+    if (!coupon) {
       return new Response(JSON.stringify({ error: "Invalid coupon code" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    const credits = coupon.credits;
 
-    // provider_session_id is UNIQUE — second redemption will throw and be caught below
+    // Ledger key: single-use codes get one key per (code, user) — reusable
+    // codes get a fresh key per redemption so every grant goes through.
+    const sessionId = coupon.reusable
+      ? `coupon_${normalised}_${user.id}_${Date.now()}`
+      : `coupon_${normalised}_${user.id}`;
+
+    // Duplicate check MUST be explicit: grant_credits treats a repeated
+    // provider_session_id as a silent no-op returning the current balance
+    // (webhook-replay semantics) — it does NOT throw. Relying on the UNIQUE
+    // constraint here made every repeat redemption a fake 200 success.
+    if (!coupon.reusable) {
+      const ledger = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        { auth: { persistSession: false, autoRefreshToken: false } },
+      );
+      const { data: prior } = await ledger
+        .from("credit_transactions")
+        .select("id")
+        .eq("provider_session_id", sessionId)
+        .limit(1);
+      if (prior?.length) {
+        return new Response(
+          JSON.stringify({ error: "Coupon already redeemed" }),
+          {
+            status: 409,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
+      }
+    }
+
     const newBalance = await grantCredits({
       userId: user.id,
       amount: credits,
       reason: "coupon",
-      providerSessionId: `coupon_${normalised}_${user.id}`,
+      providerSessionId: sessionId,
       tripId,
       metadata: { code: normalised, ...(tripId ? { trip_id: tripId } : {}) },
     });
 
     if (newBalance === null) {
-      // grantCredits returns null if the RPC threw — most likely a duplicate
+      // RPC threw (race on the UNIQUE constraint, or a genuine failure)
       return new Response(
         JSON.stringify({ error: "Coupon already redeemed" }),
         {

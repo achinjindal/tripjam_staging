@@ -15,14 +15,24 @@ const subscribe = (l) => {
 const getSnapshot = () => state;
 
 let toastTimer = null;
-export function showToast(message) {
+// opts.action: { label, onClick } renders a tappable CTA inside the toast
+// (e.g. "View itinerary"); CTA toasts linger longer by default.
+export function showToast(message, opts = {}) {
   clearTimeout(toastTimer);
-  state = { ...state, toast: { message, key: Date.now() } };
+  const action = opts.action || null;
+  const duration = opts.duration || (action ? 7000 : 2600);
+  state = { ...state, toast: { message, action, key: Date.now() } };
   emit();
   toastTimer = setTimeout(() => {
     state = { ...state, toast: null };
     emit();
-  }, 2600);
+  }, duration);
+}
+
+function dismissToast() {
+  clearTimeout(toastTimer);
+  state = { ...state, toast: null };
+  emit();
 }
 
 // Drop-in async replacement for window.confirm — resolves true/false.
@@ -86,10 +96,34 @@ export default function DialogHost() {
             maxWidth: "85vw",
             textAlign: "center",
             animation: "dlgToastUp 0.2s ease",
-            pointerEvents: "none",
+            pointerEvents: toast.action ? "auto" : "none",
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
           }}
         >
-          {toast.message}
+          <span>{toast.message}</span>
+          {toast.action && (
+            <button
+              onClick={() => {
+                dismissToast();
+                toast.action.onClick?.();
+              }}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#8BC1F7",
+                fontFamily: "Georgia,serif",
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: "pointer",
+                padding: 0,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
         </div>
       )}
 

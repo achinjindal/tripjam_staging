@@ -33,6 +33,7 @@ export function runInBackground(work: Promise<unknown>): void {
 
 const RATES: Record<string, { input: number; output: number }> = {
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
+  "claude-sonnet-5": { input: 3.0, output: 15.0 },
   "claude-haiku-4-5": { input: 0.8, output: 4.0 },
   "claude-haiku-4-5-20251001": { input: 0.8, output: 4.0 },
 };
