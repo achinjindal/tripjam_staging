@@ -235,7 +235,7 @@ serve(async (req) => {
           `${esc(senderName)} invited you to a trip`,
           `You've been invited to <b>${esc(tripName)}</b>. Open TripJam to accept — the invite is waiting on your trips screen.`,
           "Open TripJam",
-          tripUrl || "https://tripjam.vercel.app",
+          tripUrl || "https://tripjam.co",
         ),
       );
       if (ok) await logSend(type, tripId, user.id, email);
@@ -253,7 +253,7 @@ serve(async (req) => {
       }
       const emails = await memberEmails(tripId, user.id);
       if (!emails.length) return json({ sent: 0 });
-      const tripUrl = safeUrl(body?.tripUrl) || "https://tripjam.vercel.app";
+      const tripUrl = safeUrl(body?.tripUrl) || "https://tripjam.co";
       const subject =
         type === "poll_opened"
           ? `New poll on "${tripName}": ${String(body?.pollTitle || "").slice(0, 80)}`
