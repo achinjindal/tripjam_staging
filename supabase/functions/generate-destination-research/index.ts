@@ -34,6 +34,10 @@ const corsHeaders = {
 };
 
 const CACHE_TTL_DAYS = 30;
+// A digest that violates the required article+video mix (zero videos even
+// after Sonnet escalation) is served but only cached briefly — a full 30-day
+// TTL poisons the destination with a below-standard edition (Bali 2026-08).
+const VIDEOLESS_TTL_DAYS = 2;
 const MODEL = "claude-haiku-4-5-20251001";
 // Rescue model. Haiku sometimes over-refuses this strict task and returns an
 // empty digest even for content-rich destinations (e.g. Morocco). When the
@@ -598,8 +602,13 @@ serve(async (req) => {
     // zero-result run for 30 days poisons the destination after a single bad
     // generation. Skipping the write lets the next open retry (and re-escalate).
     if (digest.inspirations.length > 0) {
+      const finalVideoCount = digest.inspirations.filter(
+        (i: { type?: string }) => i.type === "video",
+      ).length;
+      const ttlDays =
+        finalVideoCount === 0 ? VIDEOLESS_TTL_DAYS : CACHE_TTL_DAYS;
       const expiresAt = new Date(
-        Date.now() + CACHE_TTL_DAYS * 24 * 60 * 60 * 1000,
+        Date.now() + ttlDays * 24 * 60 * 60 * 1000,
       ).toISOString();
       fetch(
         `${supabaseUrl}/rest/v1/destination_research?on_conflict=cache_key`,
