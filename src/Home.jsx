@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
 import { confirmSheet } from "./dialogs.jsx";
 import { T, RADIUS, SHADOW, MOTION } from "./theme";
+import PendingInvitesBanner from "./PendingInvitesBanner.jsx";
 
 function tripStatus(startDate, endDate, igResponse) {
   // Draft = RG done but no IG yet (ig_response is null)
@@ -44,6 +45,7 @@ function fmtTs(iso) {
 export default function Home({
   session,
   onOpenTrip,
+  onOpenTripById,
   onCreateTrip,
   onEditTrip,
 }) {
@@ -175,6 +177,13 @@ export default function Home({
 
       {/* Main content */}
       <div style={{ maxWidth: 720, margin: "0 auto", padding: "32px 24px" }}>
+        {/* Pending co-traveller invites (behind INVITE_ENABLED). Persistent
+            until Accept/Decline. */}
+        <PendingInvitesBanner
+          session={session}
+          onOpenTripById={onOpenTripById}
+        />
+
         {/* Page title + new trip button (hidden in empty state — CTA is in the empty card) */}
         <div
           style={{

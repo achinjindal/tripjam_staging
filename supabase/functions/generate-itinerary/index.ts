@@ -223,6 +223,7 @@ serve(async (req) => {
       departureTime,
       departureMode,
       votedItems,
+      travellerStyles,
       tripId,
       spend_personal,
     } = body;
@@ -328,6 +329,18 @@ serve(async (req) => {
     const notesNote = notes
       ? `TRAVELER NOTES: ${notes}. Factor this into every day of the itinerary.`
       : "";
+    // Group trips: per-traveller styles (uncached — varies per trip).
+    const stylesNote =
+      Array.isArray(travellerStyles) && travellerStyles.length > 0
+        ? `PER-TRAVELER STYLES (group trip — plan for everyone): ` +
+          travellerStyles
+            .map(
+              (s: { name?: string; text?: string }) =>
+                `${String(s?.name || "Traveler").slice(0, 40)}: ${String(s?.text || "").slice(0, 400)}`,
+            )
+            .join("; ") +
+          `. Balance every day across these travellers, and attribute standout choices by name in day descriptions where natural (e.g. "quiet morning — Achin's pace").`
+        : "";
     const travelMonth = startDate
       ? new Date(startDate).toLocaleString("en-US", { month: "long" })
       : null;
@@ -440,7 +453,7 @@ ${
 Trip: ${travelers} travelers, ${stylesText} style, ${budgetLabel} budget.${travelMonth ? ` Travel dates: ${travelMonth}.` : ""}
 
 ${paceNote}
-${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDayNote}` : ""}${notesNote ? `\n${notesNote}` : ""}${extraPrefs}`;
+${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDayNote}` : ""}${notesNote ? `\n${notesNote}` : ""}${stylesNote ? `\n${stylesNote}` : ""}${extraPrefs}`;
 
     // ── Provider/arch switch: IG_MODEL picks the model ("gemini-*" → the
     // single-shot Gemini streaming path; anything else → Anthropic). On the

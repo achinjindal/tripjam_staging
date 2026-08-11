@@ -10,6 +10,7 @@ import {
 import { supabase } from "../supabase";
 import { handleGatedResponse, refreshCredits } from "../credits";
 import { logActivity } from "../activity";
+import { DecisionsView } from "./Polls.jsx";
 
 /* ─── BOARD VIEW ─────────────────────────────────────────────────────── */
 
@@ -160,7 +161,7 @@ const CATEGORY_ORDER = [
   "Day of travel",
 ];
 
-function TodoView({ trip, onBack }) {
+function TodoView({ trip, onBack, boardTick = 0 }) {
   const [todos, setTodos] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
   const [generating, setGenerating] = useState(false);
@@ -185,7 +186,7 @@ function TodoView({ trip, onBack }) {
         }
       })
       .catch(() => setLoading(false));
-  }, [trip.id]);
+  }, [trip.id, boardTick]); // boardTick: reconcile on live co-member changes
 
   const generateTodos = async (existing) => {
     setGenerating(true);
@@ -308,6 +309,7 @@ function TodoView({ trip, onBack }) {
         entityType: "todo",
         entityId: data.id,
         summary: `Added to-do: ${text}`,
+        undoPayload: { id: data.id },
       });
     }
   };
@@ -840,7 +842,7 @@ function TodoView({ trip, onBack }) {
 }
 
 /* ─── BOOKMARKS VIEW ─────────────────────────────────────────────────── */
-function BookmarksView({ trip, onBack }) {
+function BookmarksView({ trip, onBack, boardTick = 0 }) {
   const [bookmarks, setBookmarks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState("");
@@ -859,7 +861,7 @@ function BookmarksView({ trip, onBack }) {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [trip.id]);
+  }, [trip.id, boardTick]); // boardTick: reconcile on live co-member changes
 
   const iconForUrl = (u) => {
     if (/booking\.com/i.test(u)) return "🏨";
@@ -913,7 +915,17 @@ function BookmarksView({ trip, onBack }) {
       })
       .select()
       .single();
-    if (data) setBookmarks((prev) => [...prev, data]);
+    if (data) {
+      setBookmarks((prev) => [...prev, data]);
+      logActivity({
+        tripId: trip.id,
+        action: "add_bookmark",
+        entityType: "bookmark",
+        entityId: data.id,
+        summary: `Added bookmark: ${t}`,
+        undoPayload: { id: data.id },
+      });
+    }
   };
 
   const deleteBookmark = async (bm) => {
@@ -1267,7 +1279,21 @@ const EXPENSE_COLORS = {
   Other: "#6B7280",
 };
 
-function ExpensesView({ trip, onBack, onUpdateTrip }) {
+function ExpensesView({
+  trip,
+  onBack,
+  onUpdateTrip,
+  boardTick = 0,
+  members = [],
+  session = null,
+}) {
+  // WS4: splitting is a shared-trip feature — solo trips see today's widget.
+  const isShared = (members || []).length > 1;
+  const selfId = session?.user?.id || null;
+  const [addPaidBy, setAddPaidBy] = useState(null); // null = not split
+  const memberOf = (uid) => (members || []).find((m) => m.user_id === uid);
+  const nameOf = (uid) =>
+    memberOf(uid)?.profiles?.username || (uid === selfId ? "You" : "Someone");
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -1296,7 +1322,7 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [trip.id]);
+  }, [trip.id, boardTick]); // boardTick: reconcile on live co-member changes
 
   const addExpense = async () => {
     const t = addTitle.trim();
@@ -1336,6 +1362,7 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
         entityType: "expense",
         entityId: editingExpense.id,
         summary: `Edited expense: ${t}`,
+        undoPayload: { expense: editingExpense },
       });
     } else {
       setAddTitle("");
@@ -1351,6 +1378,15 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
           category: addCategory,
           is_planned: addIsPlanned,
           position: expenses.length,
+          // WS4: payer + even split across the group (member count frozen at
+          // entry so later joins/leaves don't rewrite old splits)
+          ...(isShared && addPaidBy
+            ? {
+                paid_by: addPaidBy,
+                split_mode: "even",
+                split_count: members.length,
+              }
+            : {}),
         })
         .select()
         .single();
@@ -1362,6 +1398,7 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
           entityType: "expense",
           entityId: data.id,
           summary: `Added expense: ${t}`,
+          undoPayload: { id: data.id },
         });
       }
     }
@@ -1399,6 +1436,7 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
   const saveBudget = async () => {
     const amt = parseFloat(budgetInput);
     if (isNaN(amt) || amt <= 0) return;
+    const priorBudget = trip.budget_amount ?? null; // for Phase-3 undo
     setBudget(amt);
     setEditingBudget(false);
     await supabase
@@ -1412,6 +1450,7 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
       entityType: "trip",
       entityId: trip.id,
       summary: `Set budget to ${amt}`,
+      undoPayload: { budget_amount: priorBudget },
     });
   };
 
@@ -1809,6 +1848,91 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
           ))}
         </div>
 
+        {/* WS4: who-owes-whom (split actual expenses only), grouped per currency */}
+        {isShared &&
+          tab === "actual" &&
+          (() => {
+            const split = expenses.filter(
+              (e) =>
+                !e.is_planned &&
+                e.paid_by &&
+                e.split_mode === "even" &&
+                Number(e.amount) > 0,
+            );
+            if (!split.length) return null;
+            // Per currency: net = paid − fair share. Settle via greedy netting.
+            const byCurrency = {};
+            for (const e of split) {
+              const cur = e.currency || "USD";
+              const net = (byCurrency[cur] ||= {});
+              const n = e.split_count || members.length || 1;
+              const share = Number(e.amount) / n;
+              net[e.paid_by] = (net[e.paid_by] || 0) + Number(e.amount);
+              for (const m of members)
+                net[m.user_id] = (net[m.user_id] || 0) - share;
+            }
+            const lines = [];
+            for (const [cur, net] of Object.entries(byCurrency)) {
+              const creditors = Object.entries(net)
+                .filter(([, v]) => v > 0.5)
+                .sort((a, b) => b[1] - a[1]);
+              const debtors = Object.entries(net)
+                .filter(([, v]) => v < -0.5)
+                .sort((a, b) => a[1] - b[1]);
+              let ci = 0;
+              for (const [duid, dv] of debtors) {
+                let owe = -dv;
+                while (owe > 0.5 && ci < creditors.length) {
+                  const [cuid, cv] = creditors[ci];
+                  const pay = Math.min(owe, cv);
+                  lines.push(
+                    `${nameOf(duid)} → ${nameOf(cuid)}: ${cur} ${Math.round(pay).toLocaleString()}`,
+                  );
+                  creditors[ci][1] -= pay;
+                  owe -= pay;
+                  if (creditors[ci][1] <= 0.5) ci++;
+                }
+              }
+            }
+            if (!lines.length) return null;
+            return (
+              <div
+                style={{
+                  margin: "0 16px 12px",
+                  padding: "12px 14px",
+                  background: T.chalk,
+                  border: `1px solid ${T.border}`,
+                  borderRadius: RADIUS.lg,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: T.ink,
+                    fontFamily: "Georgia,serif",
+                    marginBottom: 6,
+                  }}
+                >
+                  ⚖️ Settle up
+                </div>
+                {lines.map((l, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      fontSize: 12,
+                      color: T.mist,
+                      fontFamily: "Georgia,serif",
+                      marginTop: 2,
+                    }}
+                  >
+                    {l}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
         {/* Expense list */}
         {loading ? (
           <div
@@ -1915,6 +2039,21 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
                         >
                           {exp.title}
                         </div>
+                        {isShared && exp.paid_by && (
+                          <div
+                            style={{
+                              fontSize: 10.5,
+                              color: T.mist,
+                              fontFamily: "Georgia,serif",
+                            }}
+                          >
+                            paid by{" "}
+                            {exp.paid_by === selfId
+                              ? "you"
+                              : nameOf(exp.paid_by)}{" "}
+                            · split {exp.split_count || members.length} ways
+                          </div>
+                        )}
                       </div>
                       <div
                         style={{
@@ -2147,6 +2286,60 @@ function ExpensesView({ trip, onBack, onUpdateTrip }) {
               </button>
             ))}
           </div>
+          {isShared && (
+            <div style={{ marginBottom: 10 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: T.mist,
+                  fontFamily: "Georgia,serif",
+                  marginBottom: 5,
+                }}
+              >
+                Paid by (splits evenly across {members.length} travellers)
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => setAddPaidBy(null)}
+                  style={{
+                    padding: "5px 10px",
+                    borderRadius: RADIUS.md,
+                    border: `1.5px solid ${addPaidBy === null ? T.ink : T.sand}`,
+                    background: addPaidBy === null ? T.sand : "transparent",
+                    color: addPaidBy === null ? T.ink : T.mist,
+                    fontSize: 11,
+                    fontFamily: "Georgia,serif",
+                    cursor: "pointer",
+                  }}
+                >
+                  Not split
+                </button>
+                {(members || []).map((m) => (
+                  <button
+                    key={m.user_id}
+                    onClick={() => setAddPaidBy(m.user_id)}
+                    style={{
+                      padding: "5px 10px",
+                      borderRadius: RADIUS.md,
+                      border: `1.5px solid ${addPaidBy === m.user_id ? T.ocean : T.sand}`,
+                      background:
+                        addPaidBy === m.user_id
+                          ? T.ocean + "15"
+                          : "transparent",
+                      color: addPaidBy === m.user_id ? T.ocean : T.mist,
+                      fontSize: 11,
+                      fontFamily: "Georgia,serif",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {m.user_id === selfId
+                      ? "You"
+                      : m.profiles?.username || "Traveler"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8 }}>
             <button
               onClick={cancelAdd}
@@ -2809,6 +3002,14 @@ function BoardView({
   onApplyHotels,
   initialSection = null,
   onInitialSectionConsumed,
+  isSharedTrip = false,
+  session = null,
+  members = [],
+  polls = [],
+  onPollChanged,
+  onClosePoll,
+  onComposePoll,
+  boardTick = 0,
 }) {
   const [activeSection, setActiveSection] = useState(null);
   const [todoItems, setTodoItems] = useState(null);
@@ -2858,16 +3059,30 @@ function BoardView({
       .eq("trip_id", trip.id)
       .then(({ count }) => setBookmarkCount(count || 0))
       .catch(() => setBookmarkCount(0));
-  }, [trip?.id, activeSection]); // re-fetch when returning from sub-view
+  }, [trip?.id, activeSection, boardTick]); // re-fetch on return + on live board changes
 
   if (activeSection === "notes") {
     return <NotesView trip={trip} onSaveNotes={onSaveNotes} onBack={goBack} />;
   }
   if (activeSection === "todo") {
-    return <TodoView trip={trip} onBack={goBack} />;
+    return <TodoView trip={trip} onBack={goBack} boardTick={boardTick} />;
   }
   if (activeSection === "bookmarks") {
-    return <BookmarksView trip={trip} onBack={goBack} />;
+    return <BookmarksView trip={trip} onBack={goBack} boardTick={boardTick} />;
+  }
+  if (activeSection === "decisions") {
+    return (
+      <DecisionsView
+        trip={trip}
+        session={session}
+        members={members}
+        polls={polls}
+        onChanged={onPollChanged}
+        onClosePoll={onClosePoll}
+        onCompose={onComposePoll}
+        onBack={goBack}
+      />
+    );
   }
   if (activeSection === "expenses") {
     return (
@@ -2875,6 +3090,9 @@ function BoardView({
         trip={trip}
         onBack={goBack}
         onUpdateTrip={(updates) => Object.assign(trip, updates)}
+        boardTick={boardTick}
+        members={members}
+        session={session}
       />
     );
   }
@@ -2941,6 +3159,56 @@ function BoardView({
         gap: 12,
       }}
     >
+      {/* ── DECISIONS (shared trips only) ── */}
+      {isSharedTrip && (
+        <div
+          onClick={() => openSection("decisions")}
+          style={{
+            background: T.chalk,
+            borderRadius: RADIUS.lg,
+            border: `1px solid ${T.sand}`,
+            cursor: "pointer",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "14px 16px 10px",
+            }}
+          >
+            <div style={{ fontSize: 24, flexShrink: 0 }}>🗳️</div>
+            <div style={{ flex: 1 }}>
+              <div
+                style={{
+                  fontFamily: "'DM Serif Display',serif",
+                  fontSize: 15,
+                  color: T.ink,
+                }}
+              >
+                Decisions
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: T.mist,
+                  fontFamily: "Georgia,serif",
+                }}
+              >
+                {(() => {
+                  const open = polls.filter((p) => p.status === "open").length;
+                  return open > 0
+                    ? `${open} open ${open === 1 ? "poll" : "polls"} — cast your vote`
+                    : "Start a poll when the group can't agree";
+                })()}
+              </div>
+            </div>
+            <div style={{ fontSize: 16, color: T.mist, flexShrink: 0 }}>›</div>
+          </div>
+        </div>
+      )}
+
       {/* ── TRAVEL & HOTELS ── */}
       <div
         onClick={() => openSection("logistics")}

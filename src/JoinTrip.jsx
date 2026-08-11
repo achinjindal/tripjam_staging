@@ -65,6 +65,12 @@ export default function JoinTrip({
     setJoining(true);
     try {
       const tripId = await acceptInvite(token);
+      // WS6: one-time welcome briefing on first open of the joined trip.
+      try {
+        localStorage.setItem(`tripjam_just_joined_${tripId}`, "1");
+      } catch {
+        /* private mode */
+      }
       onOpenTripById(tripId);
     } catch (e) {
       const msg = e?.message || "";

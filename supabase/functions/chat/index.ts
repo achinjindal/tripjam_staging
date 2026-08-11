@@ -44,6 +44,7 @@ serve(async (req) => {
       spend_personal,
       members,
       sender,
+      preferences,
     } = await req.json();
 
     // Pre-flight (Phase 2.5): resolve which wallet pays — personal for a solo
@@ -258,12 +259,28 @@ Example (multi-action):
             )}. Messages below are prefixed with the speaker's name. When travelers want different things, don't just pick one — name the tension, propose a compromise that respects everyone, and attribute who wanted what. Address people by name.`
         : "";
 
+    // Per-traveller preferences (shared trips) — NOT cached. The free-text
+    // "travel style" each member shared, so Trippy plans for everyone and
+    // attributes by name. Empty for solo or when nobody has shared.
+    const prefsContext =
+      Array.isArray(preferences) &&
+      preferences.length > 0 &&
+      Array.isArray(members) &&
+      members.length > 1
+        ? `\n\nPER-TRAVELER PREFERENCES (plan for everyone; attribute by name):\n${preferences
+            .map((p: any) =>
+              p?.name && p?.prefs_text ? `- ${p.name}: ${p.prefs_text}` : "",
+            )
+            .filter(Boolean)
+            .join("\n")}`
+        : "";
+
     // Per-call context — NOT cached (changes every request).
     const dynamicContext = `TRIP CONTEXT (specific to this request)
 ${trip ? `Trip: ${trip.name} (${trip.destination})${logisticsNote}` : ""}
 ${formInfo}
 ${isBrainstorm && routeSummary ? `\nCURRENT PLAN OPTIONS:\n${routeSummary}` : ""}
-${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${groupContext}`;
+${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${groupContext}${prefsContext}`;
 
     // Clean history. On group trips, prefix each human turn with its author so
     // Trippy can attribute across speakers; assistant turns are left bare.

@@ -8,13 +8,21 @@ import { T, RADIUS, SHADOW, MOTION } from "../theme";
 import { showToast, confirmSheet } from "../dialogs.jsx";
 import MemberAvatar from "../MemberAvatar.jsx";
 import {
+  emailEnabled,
+  sendTripEmail,
+  sendTripEmailWithResult,
+} from "../notify.js";
+import {
   fetchMembers,
+  fetchTripInvites,
   getInviteUrl,
   revokeInvite,
   removeMember,
   transferOwnership,
   leaveTrip,
   memberName,
+  inviteByHandle,
+  cancelInvite,
 } from "../members.js";
 
 export default function MembersSheet({
@@ -22,18 +30,33 @@ export default function MembersSheet({
   session,
   onClose,
   onMembersChanged,
+  onEditPreferences,
   onLeftTrip,
 }) {
   const selfId = session?.user?.id;
   const isOwner = trip?.owner_id === selfId;
   const [members, setMembers] = useState([]);
+  const [pending, setPending] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [transferMode, setTransferMode] = useState(false);
+  const [handle, setHandle] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [notFound, setNotFound] = useState("");
+  const [inviteHint, setInviteHint] = useState("");
+  // Email-invite capability (send-email fn configured?). Probed once on open.
+  const [emailOk, setEmailOk] = useState(false);
+  const [emailBusy, setEmailBusy] = useState(false);
+  useEffect(() => {
+    emailEnabled().then(setEmailOk);
+  }, []);
 
   const reload = async () => {
     setLoading(true);
-    const list = await fetchMembers(trip.id);
+    const [list, invites] = await Promise.all([
+      fetchMembers(trip.id),
+      fetchTripInvites(trip.id),
+    ]);
     // Owner first, then by join time.
     list.sort((a, b) => {
       if (a.user_id === trip.owner_id) return -1;
@@ -41,8 +64,82 @@ export default function MembersSheet({
       return new Date(a.joined_at) - new Date(b.joined_at);
     });
     setMembers(list);
+    setPending(invites);
     setLoading(false);
     onMembersChanged?.(list);
+    return invites;
+  };
+
+  const doInvite = async () => {
+    const h = handle.trim().replace(/^@/, "");
+    if (!h || inviteBusy) return;
+    setInviteBusy(true);
+    setNotFound("");
+    setInviteHint("");
+    try {
+      const res = await inviteByHandle(trip.id, h);
+      showToast(
+        res?.already_invited
+          ? `Already invited @${res.username}`
+          : `Invited @${res?.username || h}`,
+      );
+      setHandle("");
+      const invites = await reload();
+      // Email nudge to the invited account (fire-and-forget; skipped for
+      // legacy @tripjam.app shim addresses server-side).
+      const inv = (invites || []).find((i) => i.id === res?.invite_id);
+      if (inv?.invitee_user_id)
+        sendTripEmail("invite_member", trip.id, {
+          targetUserId: inv.invitee_user_id,
+          tripName: trip.name || trip.destination || "your trip",
+          tripUrl: window.location.origin,
+        });
+    } catch (e) {
+      const msg = e?.message || "";
+      if (msg.includes("user_not_found")) {
+        setNotFound(h);
+      } else if (msg.includes("already_member")) {
+        // Inline, not just a toast — a transient toast reads as a dead
+        // button and people retry (self-invites especially).
+        const isSelf =
+          h.toLowerCase() === (session?.user?.email || "").toLowerCase() ||
+          h.toLowerCase() ===
+            (
+              members.find((m) => m.user_id === selfId)?.profiles?.username ||
+              ""
+            ).toLowerCase();
+        setInviteHint(
+          isSelf
+            ? "That's you — you're already planning this trip 🙂"
+            : `${h} is already on this trip.`,
+        );
+      } else if (msg.includes("trip_full")) {
+        showToast("This trip is full");
+      } else {
+        showToast("Couldn't send invite");
+      }
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
+  const doCancelInvite = async (inv) => {
+    const name = inv.profiles?.username || "this traveler";
+    const ok = await confirmSheet({
+      title: `Cancel invite to @${name}?`,
+      message: "They'll no longer see this trip in their invitations.",
+      confirmLabel: "Cancel invite",
+      cancelLabel: "Keep",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await cancelInvite(inv.id);
+      showToast("Invite cancelled");
+      reload();
+    } catch {
+      showToast("Couldn't cancel invite");
+    }
   };
 
   useEffect(() => {
@@ -54,14 +151,10 @@ export default function MembersSheet({
     setBusy(true);
     try {
       const url = await getInviteUrl(trip.id);
-      if (navigator.share) {
-        await navigator.share({ title: trip.name, url });
-      } else {
-        await navigator.clipboard.writeText(url);
-        showToast("Invite link copied");
-      }
+      await navigator.clipboard.writeText(url);
+      showToast("Invite link copied");
     } catch (e) {
-      if (e?.name !== "AbortError") showToast("Couldn't create invite link");
+      if (e?.name !== "AbortError") showToast("Couldn't copy invite link");
     } finally {
       setBusy(false);
     }
@@ -330,6 +423,221 @@ export default function MembersSheet({
               );
             })}
 
+            {/* Pending invites (account-targeted) */}
+            {pending.map((inv) => {
+              const name = inv.profiles?.username || "traveler";
+              return (
+                <div
+                  key={inv.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 11,
+                    background: T.chalk,
+                    border: `1px solid ${T.border}`,
+                    borderRadius: RADIUS.lg,
+                    padding: "12px 14px",
+                    marginBottom: 8,
+                    opacity: 0.75,
+                  }}
+                >
+                  <MemberAvatar name={name} size={34} />
+                  <div style={{ flex: 1 }}>
+                    <div
+                      style={{ fontSize: 14, color: T.ink, fontWeight: 700 }}
+                    >
+                      {name}
+                    </div>
+                    <div style={{ fontSize: 11, color: T.mist }}>
+                      Invited · pending
+                    </div>
+                  </div>
+                  {isOwner && (
+                    <div
+                      onClick={() => doCancelInvite(inv)}
+                      style={{
+                        color: T.mist,
+                        fontSize: 18,
+                        cursor: "pointer",
+                        padding: "0 4px",
+                      }}
+                      title="Cancel invite"
+                    >
+                      ⋯
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Add a co-traveller (account-targeted invite) */}
+            <div style={{ marginTop: 14 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 14,
+                  color: T.ink,
+                  fontWeight: 700,
+                }}
+              >
+                👥 Add a co-traveller
+              </div>
+              <div
+                style={{ fontSize: 11, color: T.mist, margin: "3px 0 10px" }}
+              >
+                Invite by username or email — they'll see it on their trips.
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={handle}
+                  onChange={(e) => {
+                    setHandle(e.target.value);
+                    if (notFound) setNotFound("");
+                  }}
+                  onKeyDown={(e) => e.key === "Enter" && doInvite()}
+                  placeholder="@username or email"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    border: `1px solid ${T.border}`,
+                    borderRadius: RADIUS.md,
+                    padding: "10px 12px",
+                    fontFamily: "Georgia, serif",
+                    fontSize: 13,
+                    color: T.ink,
+                    background: T.chalk,
+                  }}
+                />
+                <button
+                  onClick={doInvite}
+                  disabled={inviteBusy || !handle.trim()}
+                  style={{
+                    background: T.ocean,
+                    color: T.chalk,
+                    border: "none",
+                    borderRadius: RADIUS.md,
+                    padding: "10px 16px",
+                    fontFamily: "Georgia, serif",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor:
+                      inviteBusy || !handle.trim() ? "default" : "pointer",
+                    opacity: inviteBusy || !handle.trim() ? 0.6 : 1,
+                    flexShrink: 0,
+                  }}
+                >
+                  {inviteBusy ? "…" : "Invite"}
+                </button>
+              </div>
+              {inviteHint && (
+                <div
+                  style={{ fontSize: 11, color: T.mist, margin: "7px 2px 0" }}
+                >
+                  {inviteHint}
+                </div>
+              )}
+              {notFound &&
+                (/.+@.+\..+/.test(notFound) ? (
+                  <div style={{ margin: "8px 2px 0" }}>
+                    <div style={{ fontSize: 11, color: T.terra }}>
+                      No TripJam account for that email yet.
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 7 }}>
+                      {emailOk && (
+                        <button
+                          disabled={emailBusy}
+                          onClick={async () => {
+                            if (emailBusy) return;
+                            setEmailBusy(true);
+                            try {
+                              const joinUrl = await getInviteUrl(trip.id);
+                              const r = await sendTripEmailWithResult(
+                                "invite_external",
+                                trip.id,
+                                {
+                                  toEmail: notFound,
+                                  joinUrl,
+                                  tripName:
+                                    trip.name ||
+                                    trip.destination ||
+                                    "your trip",
+                                },
+                              );
+                              if (r?.sent) {
+                                showToast(`Invite emailed to ${notFound}`);
+                                setNotFound("");
+                              } else if (r?.error === "daily_limit") {
+                                showToast(
+                                  "Daily email-invite limit reached — copy the link instead",
+                                );
+                              } else {
+                                showToast(
+                                  "Couldn't email — copy the link instead",
+                                );
+                              }
+                            } catch {
+                              showToast(
+                                "Couldn't email — copy the link instead",
+                              );
+                            }
+                            setEmailBusy(false);
+                          }}
+                          style={{
+                            background: T.ocean,
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: RADIUS.full,
+                            padding: "6px 13px",
+                            fontFamily: "Georgia,serif",
+                            fontSize: 11.5,
+                            cursor: emailBusy ? "default" : "pointer",
+                            opacity: emailBusy ? 0.6 : 1,
+                          }}
+                        >
+                          {emailBusy ? "Sending…" : "✉️ Email them an invite"}
+                        </button>
+                      )}
+                      <button
+                        onClick={async () => {
+                          try {
+                            const url = await getInviteUrl(trip.id);
+                            await navigator.clipboard.writeText(url);
+                            showToast("Invite link copied — send it to them");
+                            setNotFound("");
+                          } catch {
+                            showToast("Couldn't create the link");
+                          }
+                        }}
+                        style={{
+                          background: "transparent",
+                          color: T.ocean,
+                          border: `1.5px solid ${T.ocean}`,
+                          borderRadius: RADIUS.full,
+                          padding: "6px 13px",
+                          fontFamily: "Georgia,serif",
+                          fontSize: 11.5,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Copy invite link
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: T.terra,
+                      margin: "7px 2px 0",
+                    }}
+                  >
+                    No traveller found for "@{notFound}". Share a link instead ↓
+                  </div>
+                ))}
+            </div>
+
             {/* Invite block */}
             <div style={{ marginTop: 14 }}>
               <div
@@ -389,6 +697,23 @@ export default function MembersSheet({
                 margin: "18px 0 14px",
               }}
             />
+            {onEditPreferences && (
+              <div
+                onClick={onEditPreferences}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 9,
+                  color: T.ink,
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  marginBottom: 14,
+                }}
+              >
+                ✎ Your kind of trip
+              </div>
+            )}
             <div
               onClick={doLeave}
               style={{

@@ -79,8 +79,10 @@ function parseUrl(path = window.location.pathname) {
   // Public share view — separate namespace from trip
   const publicMatch = path.match(/^\/share\/([a-f0-9-]{36})$/);
   if (publicMatch) return { page: "public", token: publicMatch[1] };
-  // Collaboration invite link — /join/:token (token is a uuid)
-  const joinMatch = path.match(/^\/join\/([a-f0-9-]{36})$/);
+  // Collaboration invite link — /join/:token. Real tokens are uuids, but
+  // malformed/truncated links must still reach JoinTrip so the visitor gets
+  // "invite no longer valid" instead of silently landing on Home.
+  const joinMatch = path.match(/^\/join\/([^/]+)$/);
   if (joinMatch) return { page: "join", token: joinMatch[1] };
   if (path === "/signin" || path === "/login") return { page: "signin" };
   if (path === "/signup") return { page: "signup" };
@@ -321,6 +323,10 @@ function Root() {
         <Home
           session={session}
           onOpenTrip={openTrip}
+          onOpenTripById={async (tripId) => {
+            const trip = await loadTrip(tripId);
+            if (trip) openTrip(trip);
+          }}
           onCreateTrip={() => {
             setActiveTrip(null);
             setScreen("create");

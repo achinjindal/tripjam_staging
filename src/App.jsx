@@ -2,6 +2,7 @@ import {
   useState,
   useRef,
   useEffect,
+  useMemo,
   useCallback,
   useContext,
   Fragment,
@@ -35,9 +36,23 @@ import { showToast, confirmSheet } from "./dialogs.jsx";
 import { logActivity } from "./activity";
 import { subscribeTrip } from "./realtime";
 import MembersSheet from "./components/MembersSheet.jsx";
+import PreferencesSheet from "./components/PreferencesSheet.jsx";
 import { TripCreditsSheet } from "./CreditsOverlay.jsx";
 import { AvatarStack } from "./MemberAvatar.jsx";
 import { fetchMembers, INVITE_ENABLED, memberName } from "./members.js";
+import { fetchPreferences, hasStyle, styleTextOf } from "./preferences.js";
+import { fetchPolls, closePoll, createPoll } from "./polls.js";
+import { sendTripEmail } from "./notify.js";
+import WelcomeSheet from "./components/WelcomeSheet.jsx";
+import { PollComposeSheet, OpenPollPin } from "./components/Polls.jsx";
+import {
+  fetchActivity,
+  fetchReadState,
+  markSeen,
+  undoActivity,
+} from "./feed.js";
+import ActivityFeed from "./components/ActivityFeed.jsx";
+import WhileAwaySheet from "./components/WhileAwaySheet.jsx";
 import {
   _photoCache,
   _usedPhotoUrls,
@@ -1936,6 +1951,9 @@ function BrainstormView({
   onBuild,
   onBack,
   onEditForm = null,
+  onInvite = null,
+  members = [],
+  preferences = [],
   onOpenChat = null,
   onDismissRoute = null,
   onModifyRoute = null,
@@ -2192,6 +2210,24 @@ function BrainstormView({
     setItems(flattened);
   }
 
+  // Rework-nudge bookkeeping: localStorage marker = ISO timestamp up to which
+  // co-travellers' style saves are considered incorporated into the routes.
+  // Keyed on the draft id too — `trip` is null in the pre-trip mount.
+  const styleNudgeKey = (() => {
+    const id = trip?.id || editTripId || null;
+    return id ? `tripjam_stylenudge_${id}` : null;
+  })();
+  const [styleNudgeTick, setStyleNudgeTick] = useState(0);
+  const markStylesIncorporated = (iso) => {
+    if (!styleNudgeKey) return;
+    try {
+      localStorage.setItem(styleNudgeKey, iso || new Date().toISOString());
+    } catch {
+      /* private mode */
+    }
+    setStyleNudgeTick((t) => t + 1);
+  };
+
   const isAddingMore = useRef(false);
   const rgInFlight = useRef(false);
   async function generate(addMore = false) {
@@ -2219,6 +2255,23 @@ function BrainstormView({
               ) + 1,
             )
           : null;
+      // Group trips: per-traveller styles ride along so routes are planned
+      // (and attributed) for everyone. Owner's setup-form notes already travel
+      // as `notes` — skip their row when it's the same text.
+      const travellerStyles =
+        (members || []).length > 1
+          ? (preferences || [])
+              // Removed members' rows survive removal — only current members steer
+              .filter((p) => members.some((m) => m.user_id === p.user_id))
+              .filter((p) => hasStyle(p))
+              .filter((p) => styleTextOf(p) !== (igReq.notes || "").trim())
+              .map((p) => ({
+                name:
+                  members.find((m) => m.user_id === p.user_id)?.profiles
+                    ?.username || "Traveler",
+                text: styleTextOf(p).slice(0, 400),
+              }))
+          : [];
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-brainstorm`,
         {
@@ -2250,6 +2303,7 @@ function BrainstormView({
                       .length,
                 )
               : 4,
+            travellerStyles: travellerStyles.length ? travellerStyles : null,
             // trip is null in the pre-trip flow — fall back to the draft trip
             // id so llm_usage/credit pooling attribute to the right trip
             tripId: trip?.id || editTripIdRef.current || null,
@@ -2397,6 +2451,10 @@ function BrainstormView({
       }
 
       if (!streamedItems.length) throw new Error("no_items");
+
+      // These routes now reflect every style saved up to this moment — retire
+      // any pending (or future stale) rework nudge for them.
+      markStylesIncorporated();
 
       // RG complete — log "time to all routes" (and first-route time) to
       // PostHog + rg_log, mirroring IG's ig_detailed_complete + generation_log.
@@ -2711,24 +2769,61 @@ function BrainstormView({
                 )}
               </div>
             </div>
-            {onEditForm && (
-              <button
-                onClick={onEditForm}
-                style={{
-                  background: T.sand,
-                  border: "none",
-                  borderRadius: RADIUS.full,
-                  padding: "5px 11px",
-                  color: T.ink,
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontFamily: "Georgia,serif",
-                  fontWeight: 600,
-                }}
-              >
-                ✏️ Edit details
-              </button>
-            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {INVITE_ENABLED && onInvite && (
+                <button
+                  onClick={onInvite}
+                  title="Trip members"
+                  style={{
+                    background: T.sand,
+                    border: "none",
+                    borderRadius: RADIUS.full,
+                    padding: "5px 11px",
+                    color: T.ink,
+                    fontSize: 12,
+                    cursor: "pointer",
+                    fontFamily: "Georgia,serif",
+                    fontWeight: 600,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  {members.length > 1 ? (
+                    <>
+                      <AvatarStack
+                        names={members.map((m) =>
+                          memberName(m, session?.user?.id),
+                        )}
+                        size={18}
+                        ring={T.chalk}
+                      />
+                      {members.length}
+                    </>
+                  ) : (
+                    "👥 Invite"
+                  )}
+                </button>
+              )}
+              {onEditForm && (
+                <button
+                  onClick={onEditForm}
+                  style={{
+                    background: T.sand,
+                    border: "none",
+                    borderRadius: RADIUS.full,
+                    padding: "5px 11px",
+                    color: T.ink,
+                    fontSize: 12,
+                    cursor: "pointer",
+                    fontFamily: "Georgia,serif",
+                    fontWeight: 600,
+                  }}
+                >
+                  ✏️ Edit details
+                </button>
+              )}
+            </div>
           </div>
 
           {!isPretripMode && (
@@ -2804,6 +2899,103 @@ function BrainstormView({
                 </button>
               </div>
             )}
+            {(() => {
+              // Rework nudge: a co-traveller saved a style AFTER these routes
+              // were drafted. One batched nudge; dismiss persists per trip.
+              void styleNudgeTick; // re-read localStorage after dismiss/rework
+              if ((members || []).length <= 1 || generating) return null;
+              if (!(items || []).some((it) => it.tier === 1 && !it.dismissed))
+                return null;
+              const selfIdHere = session?.user?.id;
+              const others = (preferences || []).filter(
+                (p) => hasStyle(p) && p.user_id !== selfIdHere,
+              );
+              if (!others.length) return null;
+              const marker = styleNudgeKey
+                ? localStorage.getItem(styleNudgeKey)
+                : null;
+              const fresh = others.filter(
+                (p) => !marker || p.updated_at > marker,
+              );
+              if (!fresh.length) return null;
+              const latest = fresh.reduce(
+                (a, p) => (p.updated_at > a ? p.updated_at : a),
+                "",
+              );
+              const names = [
+                ...new Set(
+                  fresh.map(
+                    (p) =>
+                      members.find((m) => m.user_id === p.user_id)?.profiles
+                        ?.username || "A co-traveller",
+                  ),
+                ),
+              ];
+              return (
+                <div
+                  style={{
+                    margin: "12px 0",
+                    padding: "12px 16px",
+                    borderRadius: RADIUS.lg,
+                    background: T.skyLight,
+                    border: `1px solid ${T.skyBorder}`,
+                    fontFamily: "Georgia,serif",
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>
+                    {names.join(" and ")} shared their travel style
+                    {names.length > 1 ? "s" : ""}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: T.mist,
+                      margin: "3px 0 10px",
+                    }}
+                  >
+                    These plans were drafted before it. Rework them around{" "}
+                    {(members || []).length > 2
+                      ? "everyone"
+                      : "both travellers"}
+                    ? Current plans and votes will be replaced.
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => {
+                        markStylesIncorporated();
+                        generate(false);
+                      }}
+                      style={{
+                        background: T.ocean,
+                        color: "white",
+                        border: "none",
+                        borderRadius: RADIUS.full,
+                        padding: "6px 14px",
+                        fontFamily: "Georgia,serif",
+                        fontSize: 12,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Rework the plans
+                    </button>
+                    <button
+                      onClick={() => markStylesIncorporated(latest)}
+                      style={{
+                        background: "transparent",
+                        color: T.mist,
+                        border: "none",
+                        padding: "6px 10px",
+                        fontFamily: "Georgia,serif",
+                        fontSize: 12,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Keep as is
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
             {items?.length === 0 &&
               !generating &&
               !loadingItems &&
@@ -6989,69 +7181,269 @@ export default function App({
       } catch {}
     }
   }, [days, trip?.id]);
-  // Phase 0b: per-trip realtime subscription (ships dark behind VITE_REALTIME_ENABLED).
-  // Handlers are placeholders until the phases that consume them; RLS scopes events
-  // to trips the user is a member of. Subscribe on trip open, unsubscribe on change.
+  // Phase 2: per-trip realtime live sync (behind VITE_REALTIME_ENABLED).
+  // Reconcile-from-DB (debounced) rather than patch-from-payload — sidesteps the
+  // clobber traps (nested activities / wishlist) and the unusable REPLICA
+  // IDENTITY payload.old. Days/routes reconcile only when the trip is shared
+  // (members > 1) so solo trips carry zero self-echo overhead; trip_members
+  // always reconciles so the owner sees the first joiner live. postgres_changes
+  // doesn't replay on reconnect → onSubscribed backfills. See
+  // realtime-implementation-plan.md.
   useEffect(() => {
     const tripId = trip?.id;
     if (!tripId) return;
-    const unsubscribe = subscribeTrip(tripId, {
-      days: (payload) => {
-        // TODO(Phase 2): merge remote day change into local state (last-write-wins).
-        if (import.meta.env.DEV)
-          console.debug("[realtime] days", payload.eventType);
+    const timers = {};
+    const debounce = (key, fn, ms = 400) => {
+      clearTimeout(timers[key]);
+      timers[key] = setTimeout(fn, ms);
+    };
+    const dedupDays = (data) => {
+      const seenPhotos = new Set();
+      const out = (data || []).map((d) => ({
+        ...d,
+        activities: (d.activities || [])
+          .sort((a, b) => a.position - b.position)
+          .map((a) => {
+            if (a.photo_url) {
+              if (seenPhotos.has(a.photo_url)) return { ...a, photo_url: null };
+              seenPhotos.add(a.photo_url);
+              _usedPhotoUrls.add(a.photo_url);
+            }
+            return a;
+          }),
+      }));
+      const seen = new Set();
+      return out.filter((d) => {
+        if (seen.has(d.label)) return false;
+        seen.add(d.label);
+        return true;
+      });
+    };
+    const reconcileDays = async () => {
+      const { data } = await supabase
+        .from("days")
+        .select("*, activities(*)")
+        .eq("trip_id", tripId)
+        .order("position");
+      if (data) setDays(dedupDays(data));
+    };
+    const reconcileRoutes = async () => {
+      const { data } = await supabase
+        .from("brainstorm_items")
+        .select("*")
+        .eq("trip_id", tripId)
+        .order("position");
+      const flattened = (data || []).map((row) => {
+        const merged = { ...row, ...(row.data || {}) };
+        if (Array.isArray(merged.days))
+          merged.days = merged.days
+            .map((d) =>
+              typeof d === "string"
+                ? d
+                : d?.description || d?.text || d?.day || "",
+            )
+            .filter(Boolean);
+        if (Array.isArray(merged.points))
+          merged.points = merged.points
+            .map((p) => ({
+              text:
+                typeof p === "string"
+                  ? p
+                  : typeof p?.text === "string"
+                    ? p.text
+                    : "",
+              good: typeof p === "object" ? p.good : true,
+            }))
+            .filter((p) => p.text);
+        return merged;
+      });
+      setPretripRoutes(flattened);
+    };
+    const reconcileMembers = async () => {
+      if (!INVITE_ENABLED) return;
+      const list = await fetchMembers(tripId);
+      setMembers(list);
+    };
+    const reconcilePreferences = async () => {
+      if (!INVITE_ENABLED) return;
+      const list = await fetchPreferences(tripId);
+      setPreferences(list);
+    };
+    const reconcilePolls = async () => {
+      if (!INVITE_ENABLED) return;
+      const list = await fetchPolls(tripId);
+      setPolls(list);
+    };
+    const reconcileActivity = async () => {
+      if (!INVITE_ENABLED) return;
+      const list = await fetchActivity(tripId);
+      setActivity(list);
+    };
+    // Tier 2: board tables (todos/expenses/bookmarks) are owned by BoardView's
+    // sub-views, so App can't hold their lists — bump a tick they refetch on.
+    const bumpBoard = () => setBoardTick((t) => t + 1);
+    // Reconnect / initial backfill (postgres_changes doesn't replay).
+    const backfill = () => {
+      reconcileMembers();
+      if (membersRef.current.length > 1) {
+        reconcileDays();
+        reconcileRoutes();
+        reconcilePreferences();
+        reconcilePolls();
+        reconcileActivity();
+        bumpBoard();
+      }
+    };
+    const unsubscribe = subscribeTrip(
+      tripId,
+      {
+        days: () => {
+          if (membersRef.current.length > 1) debounce("days", reconcileDays);
+        },
+        brainstorm_items: (payload) => {
+          if (membersRef.current.length <= 1) return;
+          // author-suppress our own route edits (id-based echo isn't available
+          // here; last_modified_by is set by the route-edit path).
+          if (payload.new?.last_modified_by === session?.user?.id) return;
+          debounce("routes", reconcileRoutes);
+        },
+        trip_members: () => debounce("members", reconcileMembers, 200),
+        trip_preferences: () => {
+          if (membersRef.current.length > 1)
+            debounce("prefs", reconcilePreferences, 300);
+        },
+        trip_messages: (payload) => {
+          // Echo-safe append: dedup by the client-supplied id (our optimistic
+          // bubble already carries it), so our own echoes are skipped and remote
+          // members' rows append once.
+          if (payload.eventType !== "INSERT" || !payload.new) return;
+          const row = payload.new;
+          const mapped = {
+            id: row.id,
+            role: row.role,
+            content: row.content,
+            user_id: row.user_id,
+            audience: row.audience,
+            directed_user_id: row.directed_user_id,
+          };
+          setChatMessages((prev) =>
+            prev.some((m) => m.id === row.id) ? prev : [...prev, mapped],
+          );
+        },
+        activity_log: (payload) => {
+          // Phase 3: prepend new change rows live. Only INSERT is consumed (NEW is
+          // always complete). Dedup by id so our own echo appears once.
+          if (membersRef.current.length <= 1) return;
+          if (payload.eventType !== "INSERT" || !payload.new) return;
+          const row = payload.new;
+          setActivity((prev) =>
+            prev.some((r) => r.id === row.id) ? prev : [row, ...prev],
+          );
+        },
+        polls: () => {
+          // Live tallies: poll_votes / comments writes touch polls.updated_at
+          // (trigger) → this fires → reconcile all polls (votes + notes) from DB.
+          if (membersRef.current.length > 1)
+            debounce("polls", reconcilePolls, 200);
+        },
+        // Tier 2 board live-sync. Any todo/expense/bookmark change (incl. filtered
+        // DELETEs, thanks to REPLICA IDENTITY FULL) bumps a single tick that
+        // BoardView + its sub-views refetch on. Debounced together; self-echo is
+        // harmless (refetch yields identical data).
+        trip_todos: () => {
+          if (membersRef.current.length > 1) debounce("board", bumpBoard, 250);
+        },
+        trip_expenses: () => {
+          if (membersRef.current.length > 1) debounce("board", bumpBoard, 250);
+        },
+        trip_bookmarks: () => {
+          if (membersRef.current.length > 1) debounce("board", bumpBoard, 250);
+        },
       },
-      trip_messages: (payload) => {
-        if (import.meta.env.DEV)
-          console.debug("[realtime] message", payload.eventType);
-        // Echo-safe append: co-travelers' messages (and our own INSERT echoes)
-        // arrive here. Dedup by the client-supplied id — our optimistic bubble
-        // already carries it, so our own echoes are skipped and remote members'
-        // rows are appended once. Observers see the finished assistant bubble as
-        // a single INSERT (no token streaming — that's expected).
-        if (payload.eventType !== "INSERT" || !payload.new) return;
-        const row = payload.new;
-        const mapped = {
-          id: row.id,
-          role: row.role,
-          content: row.content,
-          user_id: row.user_id,
-          audience: row.audience,
-          directed_user_id: row.directed_user_id,
-        };
-        setChatMessages((prev) =>
-          prev.some((m) => m.id === row.id) ? prev : [...prev, mapped],
-        );
-      },
-      activity_log: (payload) => {
-        // TODO(Phase 3): push into the activity feed / "while you were away".
-        if (import.meta.env.DEV)
-          console.debug("[realtime] activity", payload.eventType);
-      },
-      polls: (payload) => {
-        // TODO(Phase 6): update Decisions hub / open-poll pin.
-        if (import.meta.env.DEV)
-          console.debug("[realtime] poll", payload.eventType);
-      },
-    });
-    return unsubscribe;
+      backfill,
+    );
+    return () => {
+      Object.values(timers).forEach(clearTimeout);
+      unsubscribe();
+    };
   }, [trip?.id]);
   // Phase 1: trip members (behind VITE_INVITE_ENABLED). Drives the header
   // affordance (＋ Invite when solo → avatar stack when shared) + the sheet.
   const [members, setMembers] = useState([]);
+  // Mirror members into a ref so the realtime handlers (subscribed per trip.id,
+  // not per members) can read the current count without re-subscribing.
+  const membersRef = useRef(members);
+  useEffect(() => {
+    membersRef.current = members;
+  }, [members]);
+  // Phase 5: per-traveller preferences ("Your travel style").
+  const [preferences, setPreferences] = useState([]);
+  const [showPreferences, setShowPreferences] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(false); // WS6 join briefing
   const [showMembers, setShowMembers] = useState(false);
+  // Phase 6: polls / group decisions.
+  const [polls, setPolls] = useState([]);
+  const [showPollCompose, setShowPollCompose] = useState(false);
+  // Phase 3: activity feed / "while you were away".
+  const [activity, setActivity] = useState([]);
+  const [lastSeenAt, setLastSeenAt] = useState(null);
+  const [showFeed, setShowFeed] = useState(false);
+  const [showWhileAway, setShowWhileAway] = useState(false);
+  const tripOpenedAtRef = useRef(0);
+  // Tier 2: bumped by realtime board-table events; BoardView + its sub-views add
+  // it to their fetch deps to reconcile-from-DB when a co-member edits the board.
+  const [boardTick, setBoardTick] = useState(0);
   // Phase 2.5 pooled credits: the Trip Credits sheet (pool balance + funding).
   // Ships dark behind INVITE_ENABLED + shared-trip gating (see isSharedTrip).
   const [showTripCredits, setShowTripCredits] = useState(false);
+  // Phase 5 follow-up: one-shot "Rebalance for everyone's style" chat chip,
+  // armed when the user saves their travel style. Session-only — cleared on
+  // tap or when a DIFFERENT trip opens. The null→uuid flip when IG creates
+  // the trip row keeps the chip (same trip, not a new open).
+  const [styleChipArmed, setStyleChipArmed] = useState(false);
+  const styleChipTripRef = useRef(null);
   useEffect(() => {
     if (!INVITE_ENABLED) return;
     const tripId = trip?.id;
+    if (
+      tripId &&
+      styleChipTripRef.current &&
+      styleChipTripRef.current !== tripId
+    )
+      setStyleChipArmed(false);
+    if (tripId) styleChipTripRef.current = tripId;
     if (!tripId) {
       setMembers([]);
       return;
     }
+    // WS6: first open after accepting an invite → one-time welcome briefing.
+    // Also pre-marks the style nudge so the two sheets don't stack.
+    try {
+      if (localStorage.getItem(`tripjam_just_joined_${tripId}`)) {
+        localStorage.removeItem(`tripjam_just_joined_${tripId}`);
+        if (session?.user?.id)
+          localStorage.setItem(
+            `tripjam_prefs_nudged_${tripId}_${session.user.id}`,
+            "1",
+          );
+        setShowWelcome(true);
+      }
+    } catch {
+      /* private mode */
+    }
     let cancelled = false;
+    // Timestamp of this trip-open. "While you were away" only surfaces changes
+    // from BEFORE this moment; changes that arrive live afterwards just bump the
+    // bell badge (they didn't happen "while away").
+    tripOpenedAtRef.current = Date.now();
     fetchMembers(tripId).then((list) => !cancelled && setMembers(list));
+    fetchPreferences(tripId).then((list) => !cancelled && setPreferences(list));
+    fetchPolls(tripId).then((list) => !cancelled && setPolls(list));
+    fetchActivity(tripId).then((list) => !cancelled && setActivity(list));
+    if (session?.user?.id)
+      fetchReadState(tripId, session.user.id).then(
+        (ts) => !cancelled && setLastSeenAt(ts),
+      );
     return () => {
       cancelled = true;
     };
@@ -7059,6 +7451,82 @@ export default function App({
   // A trip is "shared" once it has more than one member. Only then do we show
   // the pool pill / Trip Credits sheet — solo trips behave exactly as before.
   const isSharedTrip = INVITE_ENABLED && members.length > 1;
+  // Phase 5: gentle one-time nudge to share your travel style once a trip is
+  // shared and you haven't set yours. Guarded by localStorage so it shows once
+  // per (trip, user); the sheet is skippable (close = decline).
+  useEffect(() => {
+    if (!isSharedTrip || !trip?.id || !session?.user?.id) return;
+    const key = `tripjam_prefs_nudged_${trip.id}_${session.user.id}`;
+    if (localStorage.getItem(key)) return;
+    let cancelled = false;
+    fetchPreferences(trip.id).then((list) => {
+      if (cancelled) return;
+      const hasMine =
+        list.some((p) => p.user_id === session.user.id && hasStyle(p)) ||
+        // The owner's setup-form notes already count as their shared style.
+        (session.user.id === (trip?.owner_id || trip?.created_by) &&
+          (trip?.notes || "").trim());
+      if (!hasMine) {
+        localStorage.setItem(key, "1");
+        setShowPreferences(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isSharedTrip, trip?.id]);
+  // Phase 3: unseen changes by others (drives the bell badge + while-away sheet).
+  const selfId = session?.user?.id;
+  const unseen = useMemo(
+    () =>
+      (activity || []).filter(
+        (r) =>
+          r.user_id !== selfId &&
+          r.action !== "undo" &&
+          new Date(r.created_at).getTime() >
+            (lastSeenAt ? new Date(lastSeenAt).getTime() : 0),
+      ),
+    [activity, lastSeenAt, selfId],
+  );
+  const unseenN = unseen.length;
+  const unseenBadge = unseenN > 9 ? "9+" : String(unseenN);
+  // Only changes from BEFORE this trip-open count as "while you were away";
+  // live arrivals bump the badge but never pop the sheet mid-session.
+  const awayUnseen = useMemo(
+    () =>
+      unseen.filter(
+        (r) => new Date(r.created_at).getTime() <= tripOpenedAtRef.current,
+      ),
+    [unseen],
+  );
+  const feedBadgeStyle = {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    minWidth: 15,
+    height: 15,
+    padding: "0 3px",
+    borderRadius: 8,
+    background: T.clay || "#C4553B",
+    color: "#fff",
+    fontSize: 9,
+    fontWeight: 700,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    lineHeight: 1,
+  };
+  // "While you were away" — fire once per trip-open (guarded by a ref keyed on
+  // trip.id) when there are unseen changes from BEFORE the trip was opened.
+  const whileAwayShownFor = useRef(null);
+  useEffect(() => {
+    if (!isSharedTrip || !trip?.id) return;
+    if (whileAwayShownFor.current === trip.id) return;
+    if (awayUnseen.length > 0) {
+      whileAwayShownFor.current = trip.id;
+      setShowWhileAway(true);
+    }
+  }, [isSharedTrip, trip?.id, awayUnseen.length]);
   // Pool balance lives on trips.credit_balance. Clamp to >= 0 for display —
   // the pool can dip slightly negative server-side but users never see it.
   const poolBalance = Math.max(
@@ -7567,7 +8035,50 @@ export default function App({
   // Extracted so the same handler can drive both the mobile sticky CTA bar
   // and the desktop CTA bar without duplicating ~50 lines of auth + LLM
   // pref-extraction logic.
-  const openPreIgSheet = async () => {
+  const openPreIgSheet = async (opts = {}) => {
+    // WS3 consensus checkpoint: on shared trips, building from a route the
+    // other travellers haven't voted on gets one interception — ask the group
+    // (poll) or build anyway. Best-effort: any error falls through to build.
+    if (
+      !opts.skipConsensus &&
+      INVITE_ENABLED &&
+      (members || []).length > 1 &&
+      pretripSelectedRouteId &&
+      !String(pretripSelectedRouteId).startsWith("temp_")
+    ) {
+      try {
+        const tier1Ids = (pretripRoutes || [])
+          .map((r) => r.id)
+          .filter((x) => x && !String(x).startsWith("temp_"));
+        if (tier1Ids.length) {
+          const { data: votes } = await supabase
+            .from("brainstorm_votes")
+            .select("item_id,user_id")
+            .in("item_id", tier1Ids);
+          const others = members.filter((m) => m.user_id !== session?.user?.id);
+          const missing = others.filter(
+            (m) =>
+              !(votes || []).some(
+                (v) =>
+                  v.user_id === m.user_id &&
+                  v.item_id === pretripSelectedRouteId,
+              ),
+          );
+          if (missing.length) {
+            setConsensusPrompt({
+              routeId: pretripSelectedRouteId,
+              missing: missing.map(
+                (m) => m.profiles?.username || "A co-traveller",
+              ),
+              total: members.length,
+            });
+            return;
+          }
+        }
+      } catch {
+        /* checkpoint must never block building */
+      }
+    }
     const defaults = {
       budget: "mid",
       morningStart: "early",
@@ -7622,6 +8133,36 @@ export default function App({
   });
   const [pretripRoutes, setPretripRoutes] = useState([]); // tier 1 routes for pre-trip map
   const [pretripSelectedRouteId, setPretripSelectedRouteId] = useState(null);
+  // WS3: consensus checkpoint state — set when building with co-travellers
+  // who haven't weighed in on the chosen route. {missing: [names], routeId}
+  const [consensusPrompt, setConsensusPrompt] = useState(null);
+  // Persist the viewer's route choice as a vote (single-select: replace own
+  // rows). Best-effort — votes power the consensus checkpoint, never block.
+  useEffect(() => {
+    if (!INVITE_ENABLED || !session?.user?.id) return;
+    const id = pretripSelectedRouteId;
+    if (!id || String(id).startsWith("temp_")) return;
+    const tier1Ids = (pretripRoutes || [])
+      .map((r) => r.id)
+      .filter((x) => x && !String(x).startsWith("temp_"));
+    if (!tier1Ids.includes(id)) return;
+    (async () => {
+      try {
+        await supabase
+          .from("brainstorm_votes")
+          .delete()
+          .eq("user_id", session.user.id)
+          .in("item_id", tier1Ids);
+        const { error } = await supabase
+          .from("brainstorm_votes")
+          .insert({ item_id: id, user_id: session.user.id, vote: 1 });
+        if (error && import.meta.env.DEV)
+          console.warn("route vote persist failed:", error.message);
+      } catch {
+        /* best-effort */
+      }
+    })();
+  }, [pretripSelectedRouteId]);
   const [deepDiveCacheApp, setDeepDiveCacheApp] = useState(() => {
     const saved = initialTrip?.magazine_digest;
     return saved && typeof saved === "object" ? saved : {};
@@ -8754,6 +9295,22 @@ export default function App({
       arrivalMode: form.arrivalMode || "flight",
       departureMode: form.departureMode || "flight",
       votedItems: votedItems || null,
+      // Group trips: per-traveller styles (owner's form notes already ride as
+      // `notes`; identical owner rows are skipped to avoid double-weighting).
+      travellerStyles: (() => {
+        if ((members || []).length <= 1) return null;
+        const list = (preferences || [])
+          .filter((p) => members.some((m) => m.user_id === p.user_id))
+          .filter((p) => hasStyle(p))
+          .filter((p) => styleTextOf(p) !== (form.notes || "").trim())
+          .map((p) => ({
+            name:
+              members.find((m) => m.user_id === p.user_id)?.profiles
+                ?.username || "Traveler",
+            text: styleTextOf(p).slice(0, 400),
+          }));
+        return list.length ? list : null;
+      })(),
       tripId: trip?.id || null,
     };
 
@@ -9286,6 +9843,14 @@ export default function App({
     setDetailedReady(true);
     setIgGenerating(false);
     playDoneChime();
+    // Shared trips: email the rest of the group that the plan is ready
+    // (server dedupes to one per trip per 24h, so regenerations don't spam).
+    // Uses the local tripId — the `trip` state is stale-null for new trips.
+    if (isSharedTrip && tripId)
+      sendTripEmail("itinerary_ready", tripId, {
+        tripName: tripName || "your trip",
+        tripUrl: `${window.location.origin}/trip/${tripId}`,
+      });
     // Pulse the chat mascot to draw attention
     setChatAttention(true);
     setTimeout(() => setChatAttention(false), 3000);
@@ -9632,6 +10197,118 @@ export default function App({
       });
   };
 
+  // ── Phase 6: polls ──
+  const refreshPolls = () => {
+    if (trip?.id) fetchPolls(trip.id).then(setPolls);
+  };
+
+  // ── Phase 3: feed / undo ──
+  const refreshActivity = () => {
+    if (trip?.id) fetchActivity(trip.id).then(setActivity);
+  };
+  // Opening the feed clears the badge (stamp last_seen_at = now()).
+  const openFeed = () => {
+    setShowFeed(true);
+    setShowWhileAway(false);
+    if (trip?.id && session?.user?.id) {
+      markSeen(trip.id, session.user.id);
+      setLastSeenAt(new Date().toISOString());
+    }
+  };
+  const dismissWhileAway = () => {
+    setShowWhileAway(false);
+    if (trip?.id && session?.user?.id) {
+      markSeen(trip.id, session.user.id);
+      setLastSeenAt(new Date().toISOString());
+    }
+  };
+  // Reverse a change from its undo_payload. Cross-user allowed; best-effort +
+  // warn when the entity was changed since (R5). The "Reverted" toast must not
+  // depend on the action='undo' log write (fire-and-forget). Day/activity undos
+  // refresh live via the activities→days.updated_at trigger + days channel.
+  const handleUndo = async (row) => {
+    let res = await undoActivity(row);
+    if (res.conflict) {
+      const go = await confirmSheet({
+        title: "Undo this change?",
+        message:
+          "This was built on since — undoing may revert newer edits. Undo anyway?",
+        confirmLabel: "Undo anyway",
+        cancelLabel: "Keep",
+        danger: true,
+      });
+      if (!go) return;
+      res = await undoActivity(row, { force: true });
+    }
+    if (!res.ok) {
+      showToast(
+        res.error === "not undoable" ? "Can't undo this" : "Undo failed",
+      );
+      return;
+    }
+    const actorName =
+      members.find((m) => m.user_id === row.user_id)?.profiles?.username ||
+      "someone";
+    const actor = row.user_id === session?.user?.id ? "your" : `${actorName}'s`;
+    logActivity({
+      tripId: trip?.id,
+      userId: session?.user?.id,
+      action: "undo",
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      summary: `undid ${actor} change${row.summary ? ` — ${row.summary}` : ""}`,
+      undoPayload: { undid: row.id },
+    });
+    showToast("Reverted");
+    refreshActivity();
+  };
+
+  // Close a poll (creator/owner, enforced server-side) and — for anchored day
+  // polls (D-P8 auto-apply) — hand the winning option to Trippy through the
+  // normal chat path so it regenerates the day (reuses actions + pool credits +
+  // realtime). Freeform polls just record the result. Idempotent: only the caller
+  // that actually flips open→resolved (closed_now) applies, so no double-apply.
+  const applyPollClose = async (poll) => {
+    try {
+      const res = await closePoll(poll.id);
+      refreshPolls();
+      if (!res?.closed_now) {
+        if (res) showToast("This poll was already closed");
+        return;
+      }
+      const winnerId = res.winner;
+      if (!winnerId) {
+        showToast("Poll closed — no clear winner, nothing changed");
+        return;
+      }
+      const winnerLabel =
+        poll.options?.find((o) => o.id === winnerId)?.label || "the winner";
+      if (res.entity_type === "day" && res.entity_id) {
+        const idx = (days || []).findIndex((d) => d.id === res.entity_id);
+        const dayName =
+          idx >= 0
+            ? `Day ${idx + 1}${days[idx].city ? ` (${days[idx].city})` : ""}`
+            : "the chosen day";
+        const noteCtx = (poll.notes || []).length
+          ? " Notes from the group: " +
+            poll.notes.map((n) => `"${n.content}"`).join("; ") +
+            "."
+          : "";
+        showToast(`Applying “${winnerLabel}” to ${dayName}…`);
+        setActiveBottomTab("itinerary");
+        await sendChatDirect(
+          `The group voted on "${poll.question}" and chose "${winnerLabel}". ` +
+            `Please update ${dayName} to reflect this group decision.${noteCtx}`,
+        );
+      } else {
+        showToast(`Decided: ${winnerLabel}`);
+      }
+    } catch (e) {
+      refreshPolls();
+      showToast(e?.message || "Couldn't close the poll");
+    }
+  };
+
   // ── Action dispatcher: executes actions returned by unified chat ──
   const dispatchActions = async (actions, userMsg, history) => {
     if (!actions?.length) return;
@@ -9940,7 +10617,8 @@ export default function App({
           case "add_todo": {
             const tripId = trip?.id || editingTrip?.id;
             if (!tripId || !action.text) break;
-            const { error: todoErr } = await supabase
+            // .select() the inserted id so Phase-3 undo can delete this exact row.
+            const { data: todoRow, error: todoErr } = await supabase
               .from("trip_todos")
               .insert({
                 trip_id: tripId,
@@ -9949,7 +10627,9 @@ export default function App({
                 category: action.category || null,
                 due_date: action.due_date || null,
                 position: 0,
-              });
+              })
+              .select("id")
+              .single();
             if (todoErr) console.warn("add_todo failed:", todoErr);
             else
               logActivity({
@@ -9957,14 +10637,16 @@ export default function App({
                 userId: session?.user?.id,
                 action: "add_todo",
                 entityType: "todo",
+                entityId: todoRow?.id || null,
                 summary: `Added to-do: ${action.text}`,
+                undoPayload: todoRow?.id ? { id: todoRow.id } : null,
               });
             break;
           }
           case "add_expense": {
             const tripId = trip?.id || editingTrip?.id;
             if (!tripId || !action.title || !action.amount) break;
-            const { error: expErr } = await supabase
+            const { data: expRow, error: expErr } = await supabase
               .from("trip_expenses")
               .insert({
                 trip_id: tripId,
@@ -9974,7 +10656,9 @@ export default function App({
                 category: action.category || "Other",
                 is_planned: action.is_planned !== false,
                 position: 0,
-              });
+              })
+              .select("id")
+              .single();
             if (expErr) console.warn("add_expense failed:", expErr);
             else
               logActivity({
@@ -9982,14 +10666,16 @@ export default function App({
                 userId: session?.user?.id,
                 action: "add_expense",
                 entityType: "expense",
+                entityId: expRow?.id || null,
                 summary: `Added expense: ${action.title}`,
+                undoPayload: expRow?.id ? { id: expRow.id } : null,
               });
             break;
           }
           case "add_bookmark": {
             const tripId = trip?.id || editingTrip?.id;
             if (!tripId || !action.title || !action.url) break;
-            const { error: bmErr } = await supabase
+            const { data: bmRow, error: bmErr } = await supabase
               .from("trip_bookmarks")
               .insert({
                 trip_id: tripId,
@@ -9997,7 +10683,9 @@ export default function App({
                 url: action.url,
                 icon: "🔗",
                 position: 0,
-              });
+              })
+              .select("id")
+              .single();
             if (bmErr) console.warn("add_bookmark failed:", bmErr);
             else
               logActivity({
@@ -10005,13 +10693,17 @@ export default function App({
                 userId: session?.user?.id,
                 action: "add_bookmark",
                 entityType: "bookmark",
+                entityId: bmRow?.id || null,
                 summary: `Added bookmark: ${action.title}`,
+                undoPayload: bmRow?.id ? { id: bmRow.id } : null,
               });
             break;
           }
           case "set_budget": {
             const tripId = trip?.id || editingTrip?.id;
             if (!tripId || !action.amount) break;
+            // Capture the prior budget so Phase-3 undo can restore it.
+            const priorBudget = trip?.budget_amount ?? null;
             const { error: budgetErr } = await supabase
               .from("trips")
               .update({ budget_amount: action.amount })
@@ -10025,6 +10717,7 @@ export default function App({
                 entityType: "trip",
                 entityId: tripId,
                 summary: `Set budget to ${action.amount}`,
+                undoPayload: { budget_amount: priorBudget },
               });
             break;
           }
@@ -10045,10 +10738,11 @@ export default function App({
             break;
           }
           case "create_poll": {
-            // Phase 6 wires this to the polls table + Board→Decisions UI. Until
-            // then it's a deliberate no-op so an early/hallucinated create_poll is
-            // inert rather than a broken action. Not yet advertised in the chat
-            // function's action vocabulary.
+            // Phase 6 polls are manual-only in v1 (product decision D-P4): polls are
+            // created from the ＋Poll compose sheet, not by Trippy, so create_poll is
+            // deliberately NOT in the chat function's action vocabulary. This stays a
+            // no-op so any early/hallucinated create_poll is inert. Trippy-suggested
+            // polls are a planned fast-follow.
             break;
           }
         }
@@ -10089,6 +10783,18 @@ export default function App({
           name: m.profiles?.username || "Traveler",
         }))
       : null;
+    // Phase 5: attach each member's free-text travel style (shared trips only)
+    // so Trippy plans for everyone and attributes by name.
+    const preferencesList =
+      isSharedTrip && Array.isArray(preferences)
+        ? preferences
+            .filter((p) => members.some((m) => m.user_id === p.user_id))
+            .filter((p) => hasStyle(p))
+            .map((p) => ({
+              name: nameOf(p.user_id) || "Traveler",
+              prefs_text: styleTextOf(p),
+            }))
+        : null;
     // Response-time telemetry: ms = full round-trip to complete reply;
     // ms_first_token = send → first streamed words visible in the bubble.
     const __chatT0 = Date.now();
@@ -10113,6 +10819,9 @@ export default function App({
           ...(spendPersonal ? { spend_personal: true } : {}),
           ...(memberList
             ? { members: memberList, sender: nameOf(session.user.id) }
+            : {}),
+          ...(preferencesList && preferencesList.length
+            ? { preferences: preferencesList }
             : {}),
           history: history.map((m) => ({
             role: m.role === "assistant" ? "assistant" : "user",
@@ -11206,6 +11915,13 @@ export default function App({
             )}
             <button
               onClick={async () => {
+                // WS7: with collab on, one share surface — the sheet offers
+                // invite-to-edit AND view-only, so editors don't get the
+                // read-only link by accident.
+                if (INVITE_ENABLED) {
+                  setShowShare(true);
+                  return;
+                }
                 let token = trip?.share_token;
                 if (!token && trip?.id) {
                   const { data } = await supabase
@@ -11426,6 +12142,19 @@ export default function App({
               )}
               {isSharedTrip && (
                 <button
+                  onClick={openFeed}
+                  style={{ ...tripContextBtnStyle, position: "relative" }}
+                  aria-label="Activity"
+                  title="Activity"
+                >
+                  🔔
+                  {unseenN > 0 && (
+                    <span style={feedBadgeStyle}>{unseenBadge}</span>
+                  )}
+                </button>
+              )}
+              {isSharedTrip && (
+                <button
                   onClick={() => setShowTripCredits(true)}
                   style={tripContextBtnStyle}
                   title="Trip credits"
@@ -11553,6 +12282,9 @@ export default function App({
                         }
                       : null
                   }
+                  onInvite={editingTrip?.id ? () => setShowMembers(true) : null}
+                  members={members}
+                  preferences={preferences}
                   onOpenChat={() => {
                     setChatOpen(true);
                     setChatUnread(false);
@@ -12201,6 +12933,9 @@ export default function App({
                               const dests = resolveDestinationsForMagazine({
                                 pendingForm,
                                 editingTrip,
+                                // IG completion nulls pendingForm/editingTrip —
+                                // trip carries the destination from then on
+                                trip,
                               });
                               if (dests.length > 0) return dests.join(" · ");
                               if (magazineFilterCities)
@@ -12287,6 +13022,9 @@ export default function App({
                           const destinations = resolveDestinationsForMagazine({
                             pendingForm,
                             editingTrip,
+                            // IG completion nulls pendingForm/editingTrip — the
+                            // destination card must survive via trip.destination
+                            trip,
                           });
                           const countrySet = new Set(
                             destinations.map((c) => c.toLowerCase()),
@@ -12750,6 +13488,30 @@ export default function App({
                             </>
                           ) : (
                             "＋ Invite"
+                          )}
+                        </button>
+                      )}
+                      {isSharedTrip && !useDesktopShell && (
+                        <button
+                          onClick={openFeed}
+                          aria-label="Activity"
+                          title="Activity"
+                          style={{
+                            position: "relative",
+                            background: "rgba(255,255,255,0.15)",
+                            border: "none",
+                            borderRadius: RADIUS.full,
+                            padding: "4px 11px",
+                            color: "white",
+                            fontSize: 12,
+                            cursor: "pointer",
+                            flexShrink: 0,
+                            marginLeft: 8,
+                          }}
+                        >
+                          🔔
+                          {unseenN > 0 && (
+                            <span style={feedBadgeStyle}>{unseenBadge}</span>
                           )}
                         </button>
                       )}
@@ -13500,6 +14262,11 @@ export default function App({
                         trip={trip}
                         session={session}
                         days={days}
+                        onInvite={trip?.id ? () => setShowMembers(true) : null}
+                        members={members}
+                        preferences={preferences}
+                        externalRoutes={pretripRoutes}
+                        onItemsChange={setPretripRoutes}
                         onGeneratingChange={setRoutesGenerating}
                         deepDiveCache={deepDiveCacheApp}
                         loadCityDeepDive={loadCityDeepDiveApp}
@@ -13588,9 +14355,29 @@ export default function App({
                             .update({ board_notes: text })
                             .eq("id", trip.id);
                         }}
+                        isSharedTrip={isSharedTrip}
+                        session={session}
+                        members={members}
+                        polls={polls}
+                        onPollChanged={refreshPolls}
+                        onClosePoll={applyPollClose}
+                        onComposePoll={() => setShowPollCompose(true)}
+                        boardTick={boardTick}
                       />
                     </div>
                   ))}
+
+                {/* Phase 6: open-poll pin — slim cross-tab bar so live decisions
+                    don't get buried. Shared trips only; taps into Board → Decisions. */}
+                {isSharedTrip && (
+                  <OpenPollPin
+                    polls={polls}
+                    onOpen={() => {
+                      setBoardInitialSection("decisions");
+                      setActiveBottomTab("board");
+                    }}
+                  />
+                )}
 
                 {/* ── BOTTOM NAV ──
                   Hidden on desktop (D22): Map tab is redundant because the map
@@ -13830,6 +14617,42 @@ export default function App({
                           gap: 10,
                         }}
                       >
+                        {INVITE_ENABLED && (
+                          <button
+                            onClick={() => {
+                              setShowShare(false);
+                              setShowMembers(true);
+                            }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 14,
+                              padding: "14px 16px",
+                              borderRadius: RADIUS.lg,
+                              border: `1.5px solid ${T.ocean}`,
+                              background: T.skyLight,
+                              cursor: "pointer",
+                              fontFamily: "Georgia,serif",
+                              fontSize: 14,
+                              color: T.ink,
+                              fontWeight: 600,
+                            }}
+                          >
+                            <span style={{ fontSize: 24 }}>👥</span>
+                            <div style={{ textAlign: "left" }}>
+                              <div>Invite to plan together</div>
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: T.mist,
+                                  fontWeight: 400,
+                                }}
+                              >
+                                They join the trip and can edit
+                              </div>
+                            </div>
+                          </button>
+                        )}
                         <button
                           onClick={async () => {
                             setShowShare(false);
@@ -13989,7 +14812,11 @@ export default function App({
                         >
                           <span style={{ fontSize: 24 }}>🔗</span>
                           <div style={{ textAlign: "left" }}>
-                            <div>Share link</div>
+                            <div>
+                              {INVITE_ENABLED
+                                ? "Share a view-only link"
+                                : "Share link"}
+                            </div>
                             <div
                               style={{
                                 fontSize: 11,
@@ -16043,6 +16870,38 @@ export default function App({
                         )}
                       </div>
                     )}
+                    {styleChipArmed && isSharedTrip && !chatLoading && (
+                      // Seeded one-shot suggestion after saving a travel style —
+                      // pinned here (not the empty-chat chips block) so it shows
+                      // on trips that already have chat history.
+                      <div style={{ padding: "0 0 8px" }}>
+                        <button
+                          onClick={() => {
+                            setStyleChipArmed(false);
+                            sendChatDirect(
+                              screen === "brainstorm"
+                                ? "Rebalance the plans for everyone's style"
+                                : "Rebalance the itinerary for everyone's style",
+                            );
+                          }}
+                          style={{
+                            border: `1.5px solid ${T.ocean}`,
+                            color: T.ocean,
+                            background: T.skyLight,
+                            borderRadius: RADIUS.full,
+                            padding: "7px 14px",
+                            fontSize: 12,
+                            fontFamily: "Georgia,serif",
+                            cursor: "pointer",
+                            boxShadow: `0 0 0 3px ${T.skyBorder}55`,
+                          }}
+                        >
+                          ✨ Rebalance the{" "}
+                          {screen === "brainstorm" ? "plans" : "itinerary"} for
+                          everyone's style
+                        </button>
+                      </div>
+                    )}
                     <div
                       style={{
                         display: "flex",
@@ -16260,9 +17119,163 @@ export default function App({
             session={session}
             onClose={() => setShowMembers(false)}
             onMembersChanged={(list) => setMembers(list)}
+            onEditPreferences={
+              isSharedTrip
+                ? () => {
+                    setShowMembers(false);
+                    setShowPreferences(true);
+                  }
+                : null
+            }
             onLeftTrip={() => {
               setShowMembers(false);
               onHome?.();
+            }}
+          />
+        )}
+        {consensusPrompt &&
+          (() => {
+            const route = (pretripRoutes || []).find(
+              (r) => r.id === consensusPrompt.routeId,
+            );
+            const routeName = route
+              ? `${route.routeLabel ? route.routeLabel + " · " : ""}${route.title}`
+              : "this route";
+            const names = consensusPrompt.missing;
+            return (
+              <div
+                onClick={(e) =>
+                  e.target === e.currentTarget && setConsensusPrompt(null)
+                }
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  zIndex: 10001,
+                  background: "rgba(15,25,35,0.45)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 16,
+                }}
+              >
+                <div
+                  style={{
+                    background: T.warm,
+                    borderRadius: 22,
+                    padding: "22px 20px",
+                    width: "100%",
+                    maxWidth: 440,
+                    boxShadow: SHADOW.lg,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontFamily: "'DM Serif Display', serif",
+                      fontSize: 19,
+                      color: T.ink,
+                    }}
+                  >
+                    {names.length} of {consensusPrompt.total} travellers{" "}
+                    {names.length === 1 ? "hasn't" : "haven't"} weighed in
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      color: T.mist,
+                      fontFamily: "Georgia,serif",
+                      margin: "8px 0 16px",
+                      lineHeight: 1.55,
+                    }}
+                  >
+                    {names.join(" and ")}{" "}
+                    {names.length === 1 ? "hasn't" : "haven't"} picked a route
+                    yet. Build from <b style={{ color: T.ink }}>{routeName}</b>{" "}
+                    anyway, or ask the group first?
+                  </div>
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: 9 }}
+                  >
+                    <button
+                      onClick={async () => {
+                        try {
+                          await createPoll({
+                            tripId: trip?.id,
+                            createdBy: session?.user?.id,
+                            question: `Build the itinerary from ${routeName}?`,
+                            options: [
+                              { id: "yes", label: "Yes, build it" },
+                              { id: "discuss", label: "Let's discuss first" },
+                            ],
+                            mode: "single",
+                          });
+                          fetchPolls(trip.id).then((list) => setPolls(list));
+                          showToast("Poll posted to the group");
+                        } catch {
+                          showToast("Couldn't create the poll");
+                        }
+                        setConsensusPrompt(null);
+                      }}
+                      style={{
+                        padding: 13,
+                        borderRadius: RADIUS.lg,
+                        border: "none",
+                        background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
+                        color: T.chalk,
+                        fontFamily: "'DM Serif Display', serif",
+                        fontSize: 15,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Ask the group
+                    </button>
+                    <button
+                      onClick={() => {
+                        setConsensusPrompt(null);
+                        openPreIgSheet({ skipConsensus: true });
+                      }}
+                      style={{
+                        padding: 11,
+                        borderRadius: RADIUS.lg,
+                        border: `1.5px solid ${T.border}`,
+                        background: "transparent",
+                        color: T.mist,
+                        fontFamily: "Georgia,serif",
+                        fontSize: 13,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Build anyway
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        {INVITE_ENABLED && showWelcome && trip?.id && (
+          <WelcomeSheet
+            trip={trip}
+            days={days}
+            routes={pretripRoutes}
+            polls={polls}
+            members={members}
+            selfId={session?.user?.id || null}
+            onShareStyle={() => {
+              setShowWelcome(false);
+              setShowPreferences(true);
+            }}
+            onClose={() => setShowWelcome(false)}
+          />
+        )}
+        {INVITE_ENABLED && showPreferences && trip?.id && isSharedTrip && (
+          <PreferencesSheet
+            trip={trip}
+            session={session}
+            members={members}
+            preferences={preferences}
+            onClose={() => setShowPreferences(false)}
+            onSaved={() => {
+              fetchPreferences(trip.id).then((list) => setPreferences(list));
+              setStyleChipArmed(true);
             }}
           />
         )}
@@ -16272,6 +17285,40 @@ export default function App({
             members={members}
             session={session}
             onClose={() => setShowTripCredits(false)}
+          />
+        )}
+        {INVITE_ENABLED && showPollCompose && trip?.id && isSharedTrip && (
+          <PollComposeSheet
+            trip={trip}
+            session={session}
+            days={days}
+            onClose={() => setShowPollCompose(false)}
+            onCreated={refreshPolls}
+          />
+        )}
+        {INVITE_ENABLED && showFeed && trip?.id && isSharedTrip && (
+          <ActivityFeed
+            members={members}
+            session={session}
+            activity={activity}
+            onUndo={handleUndo}
+            onClose={() => setShowFeed(false)}
+          />
+        )}
+        {INVITE_ENABLED && showWhileAway && trip?.id && isSharedTrip && (
+          <WhileAwaySheet
+            members={members}
+            session={session}
+            unseen={awayUnseen}
+            sinceLabel={
+              lastSeenAt
+                ? new Date(lastSeenAt).toLocaleDateString(undefined, {
+                    weekday: "short",
+                  })
+                : null
+            }
+            onReview={openFeed}
+            onDismiss={dismissWhileAway}
           />
         )}
       </div>

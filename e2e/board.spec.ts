@@ -165,12 +165,22 @@ test.describe.serial("Board tab", () => {
       return;
     }
 
-    await expect(page.locator("text=/Expenses/i").first()).toBeVisible();
-    await expect(page.locator("text=/Notes/i").first()).toBeVisible();
-    await expect(page.locator("text=/To-do/i").first()).toBeVisible();
-    await expect(page.locator("text=/Bookmarks/i").first()).toBeVisible();
+    await expect(
+      page.locator("text=/Expenses/i >> visible=true").first(),
+    ).toBeVisible();
+    await expect(
+      page.locator("text=/Notes/i >> visible=true").first(),
+    ).toBeVisible();
+    await expect(
+      page.locator("text=/To-do/i >> visible=true").first(),
+    ).toBeVisible();
+    await expect(
+      page.locator("text=/Bookmarks/i >> visible=true").first(),
+    ).toBeVisible();
     // Travel & Hotels widget
-    await expect(page.locator("text=/Travel & Hotels/i").first()).toBeVisible();
+    await expect(
+      page.locator("text=/Travel & Hotels/i >> visible=true").first(),
+    ).toBeVisible();
 
     await snap(page, "06-board-overview");
   });
@@ -182,7 +192,7 @@ test.describe.serial("Board tab", () => {
       return;
     }
 
-    page.locator("text=/Notes/i").first().click();
+    page.locator("text=/Notes/i >> visible=true").first().click();
     await page.waitForTimeout(500);
 
     const textarea = page.locator("textarea").first();
@@ -211,7 +221,7 @@ test.describe.serial("Board tab", () => {
       return;
     }
 
-    page.locator("text=/To-do/i").first().click();
+    page.locator("text=/To-do/i >> visible=true").first().click();
     await page.waitForTimeout(1000);
 
     const hasItems = await page
@@ -240,7 +250,7 @@ test.describe.serial("Board tab", () => {
       return;
     }
 
-    page.locator("text=/To-do/i").first().click();
+    page.locator("text=/To-do/i >> visible=true").first().click();
     await page.waitForTimeout(1000);
 
     const input = page.locator("input[placeholder*='Add an item']").first();
@@ -261,7 +271,7 @@ test.describe.serial("Board tab", () => {
       return;
     }
 
-    page.locator("text=/Bookmarks/i").first().click();
+    page.locator("text=/Bookmarks/i >> visible=true").first().click();
     await page.waitForTimeout(500);
 
     const titleInput = page.locator("input[placeholder*='Title']").first();
@@ -292,7 +302,7 @@ test.describe.serial("Board tab", () => {
       return;
     }
 
-    page.locator("text=/Bookmarks/i").first().click();
+    page.locator("text=/Bookmarks/i >> visible=true").first().click();
     await page.waitForTimeout(500);
 
     const urlInput = page.locator("input[placeholder*='URL']").first();
@@ -313,7 +323,7 @@ test.describe.serial("Board tab", () => {
       return;
     }
 
-    page.locator("text=/Expenses/i").first().click();
+    page.locator("text=/Expenses/i >> visible=true").first().click();
     await page.waitForTimeout(500);
 
     await expect(
@@ -341,15 +351,19 @@ test.describe.serial("Board tab", () => {
       return;
     }
 
-    page.locator("text=/Notes/i").first().click();
+    page.locator("text=/Notes/i >> visible=true").first().click();
     await page.waitForTimeout(500);
     await expect(page.locator("textarea").first()).toBeVisible();
 
     await page.goBack();
     await page.waitForTimeout(500);
 
-    await expect(page.locator("text=/Expenses/i").first()).toBeVisible();
-    await expect(page.locator("text=/Notes/i").first()).toBeVisible();
+    await expect(
+      page.locator("text=/Expenses/i >> visible=true").first(),
+    ).toBeVisible();
+    await expect(
+      page.locator("text=/Notes/i >> visible=true").first(),
+    ).toBeVisible();
 
     await snap(page, "15-board-back");
   });
