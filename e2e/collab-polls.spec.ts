@@ -3,7 +3,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { login } from "./helpers";
+import { login, dismissTripOverlays } from "./helpers";
 
 // Phase-6 collaboration: polls / group decisions.
 //
@@ -112,6 +112,9 @@ async function openDecisions(page: Page, tripId: string): Promise<boolean> {
   // style" nudge on first open of a shared trip; its backdrop blocks clicks.
   // Dismiss it by clicking the dimmed backdrop above the bottom sheet.
   await dismissPrefsNudge(page);
+  // The while-away sheet lands late (async activity fetch) and intercepts the
+  // Board/Decisions clicks — settle it out BEFORE navigating.
+  await dismissTripOverlays(page, 5000);
   // Board tab → Decisions card → Decisions view. The bottom-nav "Board" also
   // exists in the DOM (hidden on desktop), so target the *visible* tab button.
   await page.locator("button:has-text('Board'):visible").first().click();
@@ -123,6 +126,8 @@ async function openDecisions(page: Page, tripId: string): Promise<boolean> {
     .catch(() => false);
   if (!hasCard) return false;
   await card.click();
+  await page.waitForTimeout(1000);
+  await dismissTripOverlays(page);
   return page
     .getByRole("button", { name: /Poll/ })
     .first()

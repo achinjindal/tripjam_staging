@@ -98,3 +98,32 @@ export async function snap(page: Page, name: string) {
     fullPage: false,
   });
 }
+
+/** Close stacked auto-sheets on trip open (style nudge ✕ → while-away
+ *  "Got it" → paywall "Maybe later"). Shared trips can stack all three. */
+export async function dismissTripOverlays(page: Page, settleMs = 0) {
+  // settleMs > 0: keep watching for LATE-appearing sheets (while-away fires
+  // after the async activity fetch) until the window elapses quietly.
+  const deadline = Date.now() + settleMs;
+  for (let i = 0; i < 15; i++) {
+    let closed = false;
+    for (const re of [/^✕$/, /^Got it$/, /^Maybe later$/]) {
+      const el = page.locator("button, div", { hasText: re }).last();
+      if (!(await el.isVisible({ timeout: 500 }).catch(() => false))) continue;
+      const ok = await el
+        .click({ timeout: 2500 })
+        .then(() => true)
+        .catch(() => false);
+      if (ok) {
+        closed = true;
+        break;
+      }
+    }
+    if (closed) {
+      await page.waitForTimeout(600);
+      continue;
+    }
+    if (Date.now() >= deadline) return;
+    await page.waitForTimeout(800);
+  }
+}

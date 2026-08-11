@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { login } from "./helpers";
+import { login, dismissTripOverlays } from "./helpers";
 
 // Chat v2 streaming contract, verified against a MOCKED SSE endpoint so the
 // assertion "text renders before the stream completes" is deterministic
@@ -58,8 +58,10 @@ test.describe("Chat streaming", () => {
       .first();
     await tripCard.click();
     await page.waitForTimeout(4000);
+    // Shared trips auto-open sheets (style nudge et al.) over the chat input.
+    await dismissTripOverlays(page, 4000);
 
-    const ask = page.getByPlaceholder(/Ask Trippy/i).first();
+    const ask = page.getByPlaceholder(/Ask Trippy|Ask about plans/i).first();
     await ask.waitFor({ timeout: 15000 });
     await ask.click();
     await ask.fill("mock streaming question");

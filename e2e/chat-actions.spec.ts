@@ -308,6 +308,14 @@ test.describe("Pre-IG Bottom Sheet", () => {
     await buildBtn.click();
     await page.waitForTimeout(500);
 
+    // Shared trips (QA trips often are, via the collab specs): the consensus
+    // checkpoint intercepts before the pre-IG sheet — proceed past it.
+    const checkpoint = page.locator("text=/weighed in/i").first();
+    if (await checkpoint.isVisible({ timeout: 2500 }).catch(() => false)) {
+      await page.getByRole("button", { name: "Build anyway" }).click();
+      await page.waitForTimeout(500);
+    }
+
     // Pre-IG sheet should appear
     await expect(
       page.locator("text=/Fine-tune your itinerary/i").first(),
