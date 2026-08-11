@@ -155,6 +155,15 @@ function PhotoStrip({ activity, city }) {
   const [visible, setVisible] = useState(false);
   const ref = useRef(null);
 
+  // Register stored photos in the cross-activity dedup set. Without this,
+  // reloaded itineraries start with an EMPTY set — live fetches for the
+  // photo-less activities can then legally pick an image that's already on
+  // screen from a stored photo_url (the "duplicate photos" bug).
+  useEffect(() => {
+    if (stored && !broken && activity?.type !== "hotel")
+      _usedPhotoUrls.add(stored);
+  }, [stored, broken]);
+
   // Only fetch when the card scrolls into view
   useEffect(() => {
     if (stored && !broken) return;
