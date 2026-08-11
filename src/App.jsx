@@ -2016,6 +2016,8 @@ function BrainstormView({
       const travellerStyles =
         (members || []).length > 1
           ? (preferences || [])
+              // Removed members' rows survive removal — only current members steer
+              .filter((p) => members.some((m) => m.user_id === p.user_id))
               .filter((p) => p?.prefs_text?.trim())
               .filter((p) => p.prefs_text.trim() !== (igReq.notes || "").trim())
               .map((p) => ({
@@ -8633,6 +8635,7 @@ export default function App({
       travellerStyles: (() => {
         if ((members || []).length <= 1) return null;
         const list = (preferences || [])
+          .filter((p) => members.some((m) => m.user_id === p.user_id))
           .filter((p) => p?.prefs_text?.trim())
           .filter((p) => p.prefs_text.trim() !== (form.notes || "").trim())
           .map((p) => ({
@@ -10113,6 +10116,7 @@ export default function App({
     const preferencesList =
       isSharedTrip && Array.isArray(preferences)
         ? preferences
+            .filter((p) => members.some((m) => m.user_id === p.user_id))
             .filter((p) => p?.prefs_text && p.prefs_text.trim())
             .map((p) => ({
               name: nameOf(p.user_id) || "Traveler",
