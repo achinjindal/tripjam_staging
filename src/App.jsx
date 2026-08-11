@@ -12271,6 +12271,9 @@ export default function App({
                               const dests = resolveDestinationsForMagazine({
                                 pendingForm,
                                 editingTrip,
+                                // IG completion nulls pendingForm/editingTrip —
+                                // trip carries the destination from then on
+                                trip,
                               });
                               if (dests.length > 0) return dests.join(" · ");
                               if (magazineFilterCities)
@@ -12357,6 +12360,9 @@ export default function App({
                           const destinations = resolveDestinationsForMagazine({
                             pendingForm,
                             editingTrip,
+                            // IG completion nulls pendingForm/editingTrip — the
+                            // destination card must survive via trip.destination
+                            trip,
                           });
                           const countrySet = new Set(
                             destinations.map((c) => c.toLowerCase()),
