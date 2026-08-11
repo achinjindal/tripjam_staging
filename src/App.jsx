@@ -7456,11 +7456,16 @@ export default function App({
   // per (trip, user); the sheet is skippable (close = decline).
   useEffect(() => {
     if (!isSharedTrip || !trip?.id || !session?.user?.id) return;
+    // One auto-sheet at a time: welcome briefing and while-away outrank the
+    // style nudge. Deferring WITHOUT consuming the localStorage guard means
+    // the nudge simply retries when the higher-priority sheet closes.
+    if (showWelcome || showWhileAway) return;
     const key = `tripjam_prefs_nudged_${trip.id}_${session.user.id}`;
     if (localStorage.getItem(key)) return;
     let cancelled = false;
     fetchPreferences(trip.id).then((list) => {
       if (cancelled) return;
+      if (showWelcome || showWhileAway) return; // re-check after async fetch
       const hasMine =
         list.some((p) => p.user_id === session.user.id && hasStyle(p)) ||
         // The owner's setup-form notes already count as their shared style.
@@ -7474,7 +7479,7 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [isSharedTrip, trip?.id]);
+  }, [isSharedTrip, trip?.id, showWelcome, showWhileAway]);
   // Phase 3: unseen changes by others (drives the bell badge + while-away sheet).
   const selfId = session?.user?.id;
   const unseen = useMemo(
@@ -7492,13 +7497,21 @@ export default function App({
   const unseenBadge = unseenN > 9 ? "9+" : String(unseenN);
   // Only changes from BEFORE this trip-open count as "while you were away";
   // live arrivals bump the badge but never pop the sheet mid-session.
-  const awayUnseen = useMemo(
-    () =>
-      unseen.filter(
-        (r) => new Date(r.created_at).getTime() <= tripOpenedAtRef.current,
-      ),
-    [unseen],
-  );
+  const awayUnseen = useMemo(() => {
+    const rows = unseen.filter(
+      (r) => new Date(r.created_at).getTime() <= tripOpenedAtRef.current,
+    );
+    // Collapse repeat member_join rows per user (remove → re-join via invite
+    // link produces an honest but noisy join per cycle) — keep the newest.
+    const seenJoin = new Set();
+    return rows.filter((r) => {
+      if (r.action !== "member_join") return true;
+      const k = r.user_id || r.entity_id;
+      if (seenJoin.has(k)) return false;
+      seenJoin.add(k);
+      return true;
+    });
+  }, [unseen]);
   const feedBadgeStyle = {
     position: "absolute",
     top: -4,
@@ -7522,11 +7535,15 @@ export default function App({
   useEffect(() => {
     if (!isSharedTrip || !trip?.id) return;
     if (whileAwayShownFor.current === trip.id) return;
+    // One auto-sheet at a time: the welcome briefing outranks while-away (it
+    // already summarizes trip state for a fresh joiner). Deferring instead of
+    // consuming the ref lets this fire when the welcome sheet closes.
+    if (showWelcome) return;
     if (awayUnseen.length > 0) {
       whileAwayShownFor.current = trip.id;
       setShowWhileAway(true);
     }
-  }, [isSharedTrip, trip?.id, awayUnseen.length]);
+  }, [isSharedTrip, trip?.id, awayUnseen.length, showWelcome]);
   // Pool balance lives on trips.credit_balance. Clamp to >= 0 for display —
   // the pool can dip slightly negative server-side but users never see it.
   const poolBalance = Math.max(
@@ -8331,8 +8348,12 @@ export default function App({
           // ignore body read failure
         }
         if (res.status === 402) {
-          // Out of credits — surface the standard paywall (CreditsOverlay).
-          openPaywall("Inspirations couldn't load");
+          // Empty SHARED pool: stay silent — the personal wallet may be full,
+          // and "You're out of credits" over a background preload reads as a
+          // contradiction. The tab's own errored state offers Try again.
+          // Genuine personal 402 keeps the standard paywall.
+          if (!detail.includes("empty_trip_pool"))
+            openPaywall("Inspirations couldn't load");
         }
         throw new Error(`HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
       }
