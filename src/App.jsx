@@ -9244,6 +9244,14 @@ export default function App({
     setDetailedReady(true);
     setIgGenerating(false);
     playDoneChime();
+    // Shared trips: email the rest of the group that the plan is ready
+    // (server dedupes to one per trip per 24h, so regenerations don't spam).
+    // Uses the local tripId — the `trip` state is stale-null for new trips.
+    if (isSharedTrip && tripId)
+      sendTripEmail("itinerary_ready", tripId, {
+        tripName: tripName || "your trip",
+        tripUrl: `${window.location.origin}/trip/${tripId}`,
+      });
     // Pulse the chat mascot to draw attention
     setChatAttention(true);
     setTimeout(() => setChatAttention(false), 3000);

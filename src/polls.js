@@ -18,6 +18,7 @@
 // shared-trip checks at the call sites.
 
 import { supabase } from "./supabase";
+import { sendTripEmail } from "./notify.js";
 
 /**
  * All polls for a trip, each hydrated with its votes and vote-notes.
@@ -113,6 +114,14 @@ export async function createPoll({
     .select()
     .single();
   if (error) throw error;
+  // Email the rest of the group (fire-and-forget; no-op while email ships
+  // dark). Lives here — not in the compose sheet — so every creation path
+  // (compose sheet, consensus checkpoint) notifies.
+  sendTripEmail("poll_opened", tripId, {
+    pollTitle: question,
+    tripName: undefined,
+    tripUrl: `${window.location.origin}/trip/${tripId}`,
+  });
   return data;
 }
 

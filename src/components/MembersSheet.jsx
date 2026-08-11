@@ -8,6 +8,11 @@ import { T, RADIUS, SHADOW, MOTION } from "../theme";
 import { showToast, confirmSheet } from "../dialogs.jsx";
 import MemberAvatar from "../MemberAvatar.jsx";
 import {
+  emailEnabled,
+  sendTripEmail,
+  sendTripEmailWithResult,
+} from "../notify.js";
+import {
   fetchMembers,
   fetchTripInvites,
   getInviteUrl,
@@ -38,6 +43,12 @@ export default function MembersSheet({
   const [handle, setHandle] = useState("");
   const [inviteBusy, setInviteBusy] = useState(false);
   const [notFound, setNotFound] = useState("");
+  // Email-invite capability (send-email fn configured?). Probed once on open.
+  const [emailOk, setEmailOk] = useState(false);
+  const [emailBusy, setEmailBusy] = useState(false);
+  useEffect(() => {
+    emailEnabled().then(setEmailOk);
+  }, []);
 
   const reload = async () => {
     setLoading(true);
@@ -55,6 +66,7 @@ export default function MembersSheet({
     setPending(invites);
     setLoading(false);
     onMembersChanged?.(list);
+    return invites;
   };
 
   const doInvite = async () => {
@@ -70,7 +82,16 @@ export default function MembersSheet({
           : `Invited @${res?.username || h}`,
       );
       setHandle("");
-      reload();
+      const invites = await reload();
+      // Email nudge to the invited account (fire-and-forget; skipped for
+      // legacy @tripjam.app shim addresses server-side).
+      const inv = (invites || []).find((i) => i.id === res?.invite_id);
+      if (inv?.invitee_user_id)
+        sendTripEmail("invite_member", trip.id, {
+          targetUserId: inv.invitee_user_id,
+          tripName: trip.name || trip.destination || "your trip",
+          tripUrl: window.location.origin,
+        });
     } catch (e) {
       const msg = e?.message || "";
       if (msg.includes("user_not_found")) {
@@ -495,13 +516,104 @@ export default function MembersSheet({
                   {inviteBusy ? "…" : "Invite"}
                 </button>
               </div>
-              {notFound && (
-                <div
-                  style={{ fontSize: 11, color: T.terra, margin: "7px 2px 0" }}
-                >
-                  No traveller found for "@{notFound}". Share a link instead ↓
-                </div>
-              )}
+              {notFound &&
+                (/.+@.+\..+/.test(notFound) ? (
+                  <div style={{ margin: "8px 2px 0" }}>
+                    <div style={{ fontSize: 11, color: T.terra }}>
+                      No TripJam account for that email yet.
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 7 }}>
+                      {emailOk && (
+                        <button
+                          disabled={emailBusy}
+                          onClick={async () => {
+                            if (emailBusy) return;
+                            setEmailBusy(true);
+                            try {
+                              const joinUrl = await getInviteUrl(trip.id);
+                              const r = await sendTripEmailWithResult(
+                                "invite_external",
+                                trip.id,
+                                {
+                                  toEmail: notFound,
+                                  joinUrl,
+                                  tripName:
+                                    trip.name ||
+                                    trip.destination ||
+                                    "your trip",
+                                },
+                              );
+                              if (r?.sent) {
+                                showToast(`Invite emailed to ${notFound}`);
+                                setNotFound("");
+                              } else if (r?.error === "daily_limit") {
+                                showToast(
+                                  "Daily email-invite limit reached — copy the link instead",
+                                );
+                              } else {
+                                showToast(
+                                  "Couldn't email — copy the link instead",
+                                );
+                              }
+                            } catch {
+                              showToast(
+                                "Couldn't email — copy the link instead",
+                              );
+                            }
+                            setEmailBusy(false);
+                          }}
+                          style={{
+                            background: T.ocean,
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: RADIUS.full,
+                            padding: "6px 13px",
+                            fontFamily: "Georgia,serif",
+                            fontSize: 11.5,
+                            cursor: emailBusy ? "default" : "pointer",
+                            opacity: emailBusy ? 0.6 : 1,
+                          }}
+                        >
+                          {emailBusy ? "Sending…" : "✉️ Email them an invite"}
+                        </button>
+                      )}
+                      <button
+                        onClick={async () => {
+                          try {
+                            const url = await getInviteUrl(trip.id);
+                            await navigator.clipboard.writeText(url);
+                            showToast("Invite link copied — send it to them");
+                            setNotFound("");
+                          } catch {
+                            showToast("Couldn't create the link");
+                          }
+                        }}
+                        style={{
+                          background: "transparent",
+                          color: T.ocean,
+                          border: `1.5px solid ${T.ocean}`,
+                          borderRadius: RADIUS.full,
+                          padding: "6px 13px",
+                          fontFamily: "Georgia,serif",
+                          fontSize: 11.5,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Copy invite link
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: T.terra,
+                      margin: "7px 2px 0",
+                    }}
+                  >
+                    No traveller found for "@{notFound}". Share a link instead ↓
+                  </div>
+                ))}
             </div>
 
             {/* Invite block */}
