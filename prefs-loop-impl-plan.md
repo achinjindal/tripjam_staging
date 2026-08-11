@@ -7,6 +7,7 @@ Reference design: prefs-loop-design.html artifact (approved by founder).
 ## Phase A — acknowledge + seeded chip (frontend only)
 
 ### A1. Toast copy (PreferencesSheet.jsx)
+
 - In `save()`, replace `showToast("Travel style saved")` with:
   - `total > 1` → `Saved — Trippy now plans for ${total === 2 ? "both of you" : \`all ${total} of you\`}`
   - else keep "Travel style saved" (sheet currently only mounts on shared trips —
@@ -14,6 +15,7 @@ Reference design: prefs-loop-design.html artifact (approved by founder).
 - `total` already computed in the component.
 
 ### A2. Seeded suggestion chip (App.jsx)
+
 - New App state: `const [styleChipArmed, setStyleChipArmed] = useState(false)`.
   Session-only (per approved spec: dismiss on tap or next trip open — NO localStorage).
   Reset to false in the trip-open effect (keyed on `trip?.id`).
@@ -33,6 +35,7 @@ Reference design: prefs-loop-design.html artifact (approved by founder).
 ## Phase B — styles reach RG + IG, rework nudge
 
 ### B1. Thread preferences into RG
+
 - `BrainstormView` gains prop `preferences = []` (already receives `members`).
   Pass `preferences={preferences}` at both mounts (App.jsx ~11356 and ~13128).
 - In `generate()` (BrainstormView, ~1969), build:
@@ -42,7 +45,9 @@ Reference design: prefs-loop-design.html artifact (approved by founder).
       ? (preferences || [])
           .filter((p) => p?.prefs_text?.trim())
           .map((p) => ({
-            name: members.find((m) => m.user_id === p.user_id)?.profiles?.username || "Traveler",
+            name:
+              members.find((m) => m.user_id === p.user_id)?.profiles
+                ?.username || "Traveler",
             text: p.prefs_text.trim().slice(0, 400),
           }))
       : [];
@@ -64,6 +69,7 @@ Reference design: prefs-loop-design.html artifact (approved by founder).
   - Applies to both the anthropic and gemini paths automatically (single userMessage).
 
 ### B2. Thread preferences into IG
+
 - In `handleGenerate` (App.jsx ~8410), App scope already has `preferences` + `members`:
   build the same `stylesForLLM` list and add `travellerStyles` to `igBody`.
 - `supabase/functions/generate-itinerary/index.ts`:
@@ -77,6 +83,7 @@ Reference design: prefs-loop-design.html artifact (approved by founder).
   - Single userMessage feeds all model paths — one insertion point.
 
 ### B3. Rework nudge (BrainstormView)
+
 - Trigger data: `preferences` prop (live via existing realtime `trip_preferences` reconcile).
 - Show condition (computed in BrainstormView):
   - `members.length > 1`
@@ -98,11 +105,13 @@ Reference design: prefs-loop-design.html artifact (approved by founder).
 - Dismiss marker value = the `latestOtherStyle` ISO string (re-arms only on a NEWER save).
 
 ### B4. Out of scope (explicit)
+
 - No proactive Trippy messages on save.
 - No IG-side nudge (post-IG rebalance flows through the Phase A chip / chat).
 - prefs_struct unused (free-text only, per product decision).
 
 ## Verification & rollout
+
 1. `npx prettier --check` on touched files, `npm run lint`, `npm run typecheck` (web + functions), `npm run build`.
 2. Deploy `generate-brainstorm` + `generate-itinerary` to STAGING only (previews use staging).
 3. Manual staging pass on the Ziro trip: save style as member B → toast copy, chip appears,
@@ -110,6 +119,7 @@ Reference design: prefs-loop-design.html artifact (approved by founder).
 4. Commit on `collab-tier2`; push after founder approval (updates the preview).
 
 ## Risks / notes for reviewer
+
 - Verify the default-chips block visibility with non-empty chat history (A2).
 - Verify `profiles.username` shape on `members` rows (used for name resolution).
 - Verify `generate(false)` is safe to call from the nudge (it clears + regenerates and

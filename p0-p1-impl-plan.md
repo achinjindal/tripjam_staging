@@ -36,7 +36,7 @@ account; MembersSheet sets `setNotFound(h)` (VERIFY what that renders).
      the send-email response, see WS2; hide button on `disabled:true`)
    - **Copy invite link** — calls the existing `createInviteLink(tripId)` and
      copies the /join URL (same code path as the link row).
-   For a non-email handle, keep today's hint.
+     For a non-email handle, keep today's hint.
 2. **Email path**: on "Email them an invite":
    `createInviteLink(tripId)` → POST `send-email`
    `{ type: "invite_external", tripId, toEmail, joinUrl, tripName, inviterName }`
@@ -117,16 +117,19 @@ Deploy `send-email` to staging; note in RUNBOOKS-style comment that prod needs
 ## WS4 — Gap 9: expense splitting (P1)
 
 **Migration `20260811000002_expense_split.sql`:**
+
 ```sql
 ALTER TABLE trip_expenses
   ADD COLUMN IF NOT EXISTS paid_by uuid REFERENCES auth.users(id),
   ADD COLUMN IF NOT EXISTS split_mode text NOT NULL DEFAULT 'none';
 -- 'none' (solo/default, today's behavior) | 'even' (split across members)
 ```
+
 (RLS already member-scoped via existing policies — VERIFY trip_expenses
 policies cover members, not just owner, on this branch.)
 
 **UI (BoardView Expenses widget, shared trips only):**
+
 - Add-expense row gains a payer picker: member avatar chips, default = self;
   choosing a payer sets `paid_by` + `split_mode: 'even'` on insert.
 - Existing expense rows: show payer initial chip when `paid_by` set.

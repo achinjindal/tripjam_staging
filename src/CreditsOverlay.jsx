@@ -10,6 +10,8 @@ import {
   displayCredits,
 } from "./credits";
 import { isAndroidApp, purchaseCredits } from "./billing";
+import { supabase } from "./supabase";
+import { showToast } from "./dialogs.jsx";
 
 // Two credit packs offered everywhere (personal + pool funding).
 const PACKS = [
@@ -498,6 +500,28 @@ export function ForkPaywallSheet({ session }) {
     closeForkPaywall();
   }
 
+  // WS8: free group-chat request instead of paying personally — the message
+  // is attributed to the requester by the chat's normal author rendering.
+  // (Without VITE_REALTIME_ENABLED others see it on their next load.)
+  async function handleRequestTopUp() {
+    try {
+      const { error } = await supabase.from("trip_messages").insert({
+        id: crypto.randomUUID(),
+        trip_id: tripId,
+        user_id: session?.user?.id,
+        role: "user",
+        audience: "everyone",
+        content:
+          "I'm out of trip credits — can someone top up? (Members → Trip Credits keeps Trippy going for all of us.)",
+      });
+      if (error) throw error;
+      showToast("Asked the group to top up");
+    } catch {
+      showToast("Couldn't post the request — try again");
+    }
+    closeForkPaywall();
+  }
+
   const rowStyle = (primary) => ({
     width: "100%",
     textAlign: "left",
@@ -617,6 +641,22 @@ export function ForkPaywallSheet({ session }) {
             Just for this action. We'll ask again next visit.
           </div>
         </button>
+
+        {tripId && (
+          <button
+            onClick={handleRequestTopUp}
+            disabled={!!funding}
+            style={{
+              ...rowStyle(false),
+              padding: "10px 16px",
+              textAlign: "center",
+              color: T.ocean,
+              fontSize: 13,
+            }}
+          >
+            💬 Ask the group to top up
+          </button>
+        )}
 
         {fundError && (
           <div

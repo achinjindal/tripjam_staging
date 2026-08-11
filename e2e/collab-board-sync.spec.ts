@@ -144,16 +144,14 @@ test.describe("Collaboration — board live-sync (Tier 2)", () => {
           { onConflict: "trip_id,user_id" },
         );
     }
-    await bClient
-      .from("trip_read_state")
-      .upsert(
-        {
-          trip_id: tripId,
-          user_id: bId,
-          last_seen_at: new Date().toISOString(),
-        },
-        { onConflict: "trip_id,user_id" },
-      );
+    await bClient.from("trip_read_state").upsert(
+      {
+        trip_id: tripId,
+        user_id: bId,
+        last_seen_at: new Date().toISOString(),
+      },
+      { onConflict: "trip_id,user_id" },
+    );
 
     const b = await (await browser.newContext()).newPage();
     const waitB = trackChannel(b);
