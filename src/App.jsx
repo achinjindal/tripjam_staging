@@ -36,7 +36,8 @@ import { TripCreditsSheet } from "./CreditsOverlay.jsx";
 import { AvatarStack } from "./MemberAvatar.jsx";
 import { fetchMembers, INVITE_ENABLED, memberName } from "./members.js";
 import { fetchPreferences } from "./preferences.js";
-import { fetchPolls, closePoll } from "./polls.js";
+import { fetchPolls, closePoll, createPoll } from "./polls.js";
+import { sendTripEmail } from "./notify.js";
 import { PollComposeSheet, OpenPollPin } from "./components/Polls.jsx";
 import {
   fetchActivity,
@@ -7446,7 +7447,50 @@ export default function App({
   // Extracted so the same handler can drive both the mobile sticky CTA bar
   // and the desktop CTA bar without duplicating ~50 lines of auth + LLM
   // pref-extraction logic.
-  const openPreIgSheet = async () => {
+  const openPreIgSheet = async (opts = {}) => {
+    // WS3 consensus checkpoint: on shared trips, building from a route the
+    // other travellers haven't voted on gets one interception — ask the group
+    // (poll) or build anyway. Best-effort: any error falls through to build.
+    if (
+      !opts.skipConsensus &&
+      INVITE_ENABLED &&
+      (members || []).length > 1 &&
+      pretripSelectedRouteId &&
+      !String(pretripSelectedRouteId).startsWith("temp_")
+    ) {
+      try {
+        const tier1Ids = (pretripRoutes || [])
+          .map((r) => r.id)
+          .filter((x) => x && !String(x).startsWith("temp_"));
+        if (tier1Ids.length) {
+          const { data: votes } = await supabase
+            .from("brainstorm_votes")
+            .select("item_id,user_id")
+            .in("item_id", tier1Ids);
+          const others = members.filter((m) => m.user_id !== session?.user?.id);
+          const missing = others.filter(
+            (m) =>
+              !(votes || []).some(
+                (v) =>
+                  v.user_id === m.user_id &&
+                  v.item_id === pretripSelectedRouteId,
+              ),
+          );
+          if (missing.length) {
+            setConsensusPrompt({
+              routeId: pretripSelectedRouteId,
+              missing: missing.map(
+                (m) => m.profiles?.username || "A co-traveller",
+              ),
+              total: members.length,
+            });
+            return;
+          }
+        }
+      } catch {
+        /* checkpoint must never block building */
+      }
+    }
     const defaults = {
       budget: "mid",
       morningStart: "early",
@@ -7501,6 +7545,36 @@ export default function App({
   });
   const [pretripRoutes, setPretripRoutes] = useState([]); // tier 1 routes for pre-trip map
   const [pretripSelectedRouteId, setPretripSelectedRouteId] = useState(null);
+  // WS3: consensus checkpoint state — set when building with co-travellers
+  // who haven't weighed in on the chosen route. {missing: [names], routeId}
+  const [consensusPrompt, setConsensusPrompt] = useState(null);
+  // Persist the viewer's route choice as a vote (single-select: replace own
+  // rows). Best-effort — votes power the consensus checkpoint, never block.
+  useEffect(() => {
+    if (!INVITE_ENABLED || !session?.user?.id) return;
+    const id = pretripSelectedRouteId;
+    if (!id || String(id).startsWith("temp_")) return;
+    const tier1Ids = (pretripRoutes || [])
+      .map((r) => r.id)
+      .filter((x) => x && !String(x).startsWith("temp_"));
+    if (!tier1Ids.includes(id)) return;
+    (async () => {
+      try {
+        await supabase
+          .from("brainstorm_votes")
+          .delete()
+          .eq("user_id", session.user.id)
+          .in("item_id", tier1Ids);
+        const { error } = await supabase
+          .from("brainstorm_votes")
+          .insert({ item_id: id, user_id: session.user.id, vote: 1 });
+        if (error && import.meta.env.DEV)
+          console.warn("route vote persist failed:", error.message);
+      } catch {
+        /* best-effort */
+      }
+    })();
+  }, [pretripSelectedRouteId]);
   const [deepDiveCacheApp, setDeepDiveCacheApp] = useState(() => {
     const saved = initialTrip?.magazine_digest;
     return saved && typeof saved === "object" ? saved : {};
@@ -16100,6 +16174,124 @@ export default function App({
             }}
           />
         )}
+        {consensusPrompt &&
+          (() => {
+            const route = (pretripRoutes || []).find(
+              (r) => r.id === consensusPrompt.routeId,
+            );
+            const routeName = route
+              ? `${route.routeLabel ? route.routeLabel + " · " : ""}${route.title}`
+              : "this route";
+            const names = consensusPrompt.missing;
+            return (
+              <div
+                onClick={(e) =>
+                  e.target === e.currentTarget && setConsensusPrompt(null)
+                }
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  zIndex: 10001,
+                  background: "rgba(15,25,35,0.45)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 16,
+                }}
+              >
+                <div
+                  style={{
+                    background: T.warm,
+                    borderRadius: 22,
+                    padding: "22px 20px",
+                    width: "100%",
+                    maxWidth: 440,
+                    boxShadow: SHADOW.lg,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontFamily: "'DM Serif Display', serif",
+                      fontSize: 19,
+                      color: T.ink,
+                    }}
+                  >
+                    {names.length} of {consensusPrompt.total} travellers{" "}
+                    {names.length === 1 ? "hasn't" : "haven't"} weighed in
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      color: T.mist,
+                      fontFamily: "Georgia,serif",
+                      margin: "8px 0 16px",
+                      lineHeight: 1.55,
+                    }}
+                  >
+                    {names.join(" and ")}{" "}
+                    {names.length === 1 ? "hasn't" : "haven't"} picked a route
+                    yet. Build from <b style={{ color: T.ink }}>{routeName}</b>{" "}
+                    anyway, or ask the group first?
+                  </div>
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: 9 }}
+                  >
+                    <button
+                      onClick={async () => {
+                        try {
+                          await createPoll({
+                            tripId: trip?.id,
+                            createdBy: session?.user?.id,
+                            question: `Build the itinerary from ${routeName}?`,
+                            options: [
+                              { id: "yes", label: "Yes, build it" },
+                              { id: "discuss", label: "Let's discuss first" },
+                            ],
+                            mode: "single",
+                          });
+                          fetchPolls(trip.id).then((list) => setPolls(list));
+                          showToast("Poll posted to the group");
+                        } catch {
+                          showToast("Couldn't create the poll");
+                        }
+                        setConsensusPrompt(null);
+                      }}
+                      style={{
+                        padding: 13,
+                        borderRadius: RADIUS.lg,
+                        border: "none",
+                        background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
+                        color: T.chalk,
+                        fontFamily: "'DM Serif Display', serif",
+                        fontSize: 15,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Ask the group
+                    </button>
+                    <button
+                      onClick={() => {
+                        setConsensusPrompt(null);
+                        openPreIgSheet({ skipConsensus: true });
+                      }}
+                      style={{
+                        padding: 11,
+                        borderRadius: RADIUS.lg,
+                        border: `1.5px solid ${T.border}`,
+                        background: "transparent",
+                        color: T.mist,
+                        fontFamily: "Georgia,serif",
+                        fontSize: 13,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Build anyway
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         {INVITE_ENABLED && showPreferences && trip?.id && isSharedTrip && (
           <PreferencesSheet
             trip={trip}
