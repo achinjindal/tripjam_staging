@@ -11277,6 +11277,13 @@ export default function App({
             )}
             <button
               onClick={async () => {
+                // WS7: with collab on, one share surface — the sheet offers
+                // invite-to-edit AND view-only, so editors don't get the
+                // read-only link by accident.
+                if (INVITE_ENABLED) {
+                  setShowShare(true);
+                  return;
+                }
                 let token = trip?.share_token;
                 if (!token && trip?.id) {
                   const { data } = await supabase
@@ -13750,6 +13757,42 @@ export default function App({
                           gap: 10,
                         }}
                       >
+                        {INVITE_ENABLED && (
+                          <button
+                            onClick={() => {
+                              setShowShare(false);
+                              setShowMembers(true);
+                            }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 14,
+                              padding: "14px 16px",
+                              borderRadius: RADIUS.lg,
+                              border: `1.5px solid ${T.ocean}`,
+                              background: T.skyLight,
+                              cursor: "pointer",
+                              fontFamily: "Georgia,serif",
+                              fontSize: 14,
+                              color: T.ink,
+                              fontWeight: 600,
+                            }}
+                          >
+                            <span style={{ fontSize: 24 }}>👥</span>
+                            <div style={{ textAlign: "left" }}>
+                              <div>Invite to plan together</div>
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: T.mist,
+                                  fontWeight: 400,
+                                }}
+                              >
+                                They join the trip and can edit
+                              </div>
+                            </div>
+                          </button>
+                        )}
                         <button
                           onClick={async () => {
                             setShowShare(false);
@@ -13909,7 +13952,11 @@ export default function App({
                         >
                           <span style={{ fontSize: 24 }}>🔗</span>
                           <div style={{ textAlign: "left" }}>
-                            <div>Share link</div>
+                            <div>
+                              {INVITE_ENABLED
+                                ? "Share a view-only link"
+                                : "Share link"}
+                            </div>
                             <div
                               style={{
                                 fontSize: 11,
