@@ -224,46 +224,18 @@ export default function Avatar({ session }) {
                   </span>
                 )}
               </div>
-              {/* Account details: signed-in email (legacy username-only shim
-                  accounts get a hint instead), auth provider, member since. */}
-              <div
-                style={{
-                  marginTop: 8,
-                  fontSize: 11.5,
-                  color: T.mist || "#587284",
-                  lineHeight: 1.6,
-                }}
-              >
-                {profile?.display_name && <div>@{username}</div>}
-                {session.user.email?.endsWith("@tripjam.app") ? (
-                  <div>Username-only account — no email on file</div>
-                ) : (
-                  <div
-                    style={{
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      maxWidth: 210,
-                    }}
-                    title={session.user.email}
-                  >
-                    {session.user.email}
-                  </div>
-                )}
-                <div>
-                  {session.user.app_metadata?.provider === "google"
-                    ? "Signed in with Google"
-                    : "Email & password"}
-                  {profile?.created_at
-                    ? ` · joined ${new Date(
-                        profile.created_at,
-                      ).toLocaleDateString("en-US", {
-                        month: "short",
-                        year: "numeric",
-                      })}`
-                    : ""}
+              {/* Kept minimal — full account details live in Edit profile. */}
+              {profile?.display_name && (
+                <div
+                  style={{
+                    marginTop: 4,
+                    fontSize: 11.5,
+                    color: T.mist || "#587284",
+                  }}
+                >
+                  @{username}
                 </div>
-              </div>
+              )}
             </div>
 
             {CREDITS_UI_ENABLED && (
@@ -403,6 +375,14 @@ export default function Avatar({ session }) {
         onClose={() => setShowPicker(false)}
         session={session}
       />
+      {showProfile && (
+        <ProfileSheet
+          session={session}
+          profile={profile}
+          onClose={() => setShowProfile(false)}
+          onSaved={(p) => setProfile((prev) => ({ ...prev, ...p }))}
+        />
+      )}
     </>
   );
 }

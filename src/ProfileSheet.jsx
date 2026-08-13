@@ -123,6 +123,17 @@ export default function ProfileSheet({ session, profile, onClose, onSaved }) {
             <div style={{ fontSize: 12, color: T.mist }}>
               {isShimAccount ? "Username-only account" : email}
             </div>
+            <div style={{ fontSize: 11, color: T.mist }}>
+              {session?.user?.app_metadata?.provider === "google"
+                ? "Signed in with Google"
+                : "Email & password"}
+              {profile?.created_at
+                ? ` · joined ${new Date(profile.created_at).toLocaleDateString(
+                    "en-US",
+                    { month: "short", year: "numeric" },
+                  )}`
+                : ""}
+            </div>
           </div>
         </div>
 
