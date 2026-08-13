@@ -9,6 +9,7 @@ import {
   getCredits,
 } from "./credits";
 import { CouponModal } from "./CreditsOverlay";
+import ProfileSheet from "./ProfileSheet";
 
 // Modest fixed palette for username-hashed avatar circles. Each username
 // deterministically maps to one of these so the avatar is stable across
@@ -60,6 +61,7 @@ export default function Avatar({ session }) {
   const [profile, setProfile] = useState(null);
   const [open, setOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
   const credits = useCredits();
   const ref = useRef(null);
 
@@ -67,7 +69,7 @@ export default function Avatar({ session }) {
     if (!session?.user?.id) return;
     supabase
       .from("profiles")
-      .select("username, is_admin, created_at")
+      .select("username, display_name, is_admin, created_at")
       .eq("id", session.user.id)
       .maybeSingle()
       .then(({ data }) => setProfile(data));
@@ -205,7 +207,7 @@ export default function Avatar({ session }) {
                 >
                   {initial}
                 </span>
-                <span>@{username}</span>
+                <span>{profile?.display_name || `@${username}`}</span>
                 {isAdmin && (
                   <span
                     style={{
@@ -232,6 +234,7 @@ export default function Avatar({ session }) {
                   lineHeight: 1.6,
                 }}
               >
+                {profile?.display_name && <div>@{username}</div>}
                 {session.user.email?.endsWith("@tripjam.app") ? (
                   <div>Username-only account — no email on file</div>
                 ) : (
@@ -349,6 +352,22 @@ export default function Avatar({ session }) {
                 </div>
               </div>
             )}
+
+            <button
+              onClick={() => {
+                setOpen(false);
+                setShowProfile(true);
+              }}
+              style={menuItemStyle(T)}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.background = T.warm || "#FAF6F0")
+              }
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.background = "transparent")
+              }
+            >
+              Edit profile
+            </button>
 
             {!onTripsList && (
               <button
