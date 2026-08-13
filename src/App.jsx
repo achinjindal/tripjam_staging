@@ -17138,6 +17138,7 @@ export default function App({
           <MembersSheet
             trip={trip}
             session={session}
+            preferences={preferences}
             onClose={() => setShowMembers(false)}
             onMembersChanged={(list) => setMembers(list)}
             onEditPreferences={
