@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { T, RADIUS, SHADOW, MOTION } from "../theme";
 import { showToast, confirmSheet } from "../dialogs.jsx";
 import MemberAvatar from "../MemberAvatar.jsx";
+import { styleTextOf } from "../preferences.js";
 import {
   emailEnabled,
   sendTripEmail,
@@ -32,7 +33,22 @@ export default function MembersSheet({
   onMembersChanged,
   onEditPreferences,
   onLeftTrip,
+  preferences = [],
 }) {
+  // A member's stated priorities: explicit style row (text + tags), falling
+  // back to the owner's setup-form notes (they count as the owner's style).
+  const styleForMember = (userId) => {
+    const row = (preferences || []).find((p) => p.user_id === userId);
+    const text = styleTextOf(row);
+    if (text) return text;
+    if (
+      userId === (trip?.owner_id || trip?.created_by) &&
+      (trip?.notes || "").trim()
+    )
+      return trip.notes.trim();
+    return "";
+  };
+
   const selfId = session?.user?.id;
   const isOwner = trip?.owner_id === selfId;
   const [members, setMembers] = useState([]);
@@ -406,7 +422,7 @@ export default function MembersSheet({
                     size={34}
                     allNames={avatarUniverse}
                   />
-                  <div style={{ flex: 1 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <div
                       style={{ fontSize: 14, color: T.ink, fontWeight: 700 }}
                     >
@@ -416,6 +432,52 @@ export default function MembersSheet({
                       {owner ? "Owner" : "Editor"}
                       {m.user_id === selfId ? " · you" : ""}
                     </div>
+                    {/* What this traveller wants from the trip — everyone's
+                        priorities visible in one place; your own is editable. */}
+                    {(() => {
+                      const style = styleForMember(m.user_id);
+                      const isSelf = m.user_id === selfId;
+                      if (!style && !isSelf) return null;
+                      return (
+                        <div
+                          style={{
+                            marginTop: 5,
+                            fontSize: 11.5,
+                            lineHeight: 1.45,
+                            color: T.mist,
+                          }}
+                        >
+                          {style ? (
+                            <span
+                              style={{
+                                display: "-webkit-box",
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: "vertical",
+                                overflow: "hidden",
+                                fontStyle: "italic",
+                              }}
+                            >
+                              “{style}”
+                            </span>
+                          ) : null}
+                          {isSelf && onEditPreferences && (
+                            <span
+                              onClick={onEditPreferences}
+                              style={{
+                                color: T.ocean,
+                                cursor: "pointer",
+                                fontStyle: "normal",
+                                fontWeight: 600,
+                              }}
+                            >
+                              {style
+                                ? "✎ Edit"
+                                : "＋ Share what you want from this trip"}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                   {isOwner && !owner && m.user_id !== selfId && (
                     <div
