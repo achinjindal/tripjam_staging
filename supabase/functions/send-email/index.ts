@@ -228,14 +228,49 @@ serve(async (req) => {
       const email = (await profileField(targetUserId, "email")) || "";
       if (!email || email.toLowerCase().endsWith("@tripjam.app"))
         return json({ sent: 0, skipped: "no_real_email" });
+      // CTA lands on the /join preview (trip name + one-tap join, survives
+      // sign-in) — NOT the marketing homepage. Reuse the trip's active invite
+      // link or mint one; accept_invite retires the pending targeted invite,
+      // so the two accept paths never leave stale state.
+      let joinToken: string | null = null;
+      const linkRes = await fetch(
+        `${REST}/invite_links?trip_id=eq.${tripId}&select=token,expires_at&order=created_at.desc&limit=1`,
+        { headers: svcHeaders },
+      );
+      if (linkRes.ok) {
+        const rows = (await linkRes.json()) as {
+          token: string;
+          expires_at: string | null;
+        }[];
+        const live = rows.find(
+          (r) => !r.expires_at || new Date(r.expires_at) > new Date(),
+        );
+        if (live) joinToken = live.token;
+      }
+      if (!joinToken) {
+        joinToken = crypto.randomUUID();
+        const mk = await fetch(`${REST}/invite_links`, {
+          method: "POST",
+          headers: { ...svcHeaders, Prefer: "return=minimal" },
+          body: JSON.stringify({
+            trip_id: tripId,
+            created_by: user.id,
+            role: "edit",
+            token: joinToken,
+          }),
+        });
+        if (!mk.ok) joinToken = null;
+      }
+      const origin = (tripUrl || "https://tripjam.co").replace(/\/+$/, "");
+      const cta = joinToken ? `${origin}/join/${joinToken}` : origin;
       const ok = await sendViaResend(
         [email],
         `${senderName} invited you to "${tripName}" on TripJam`,
         template(
           `${esc(senderName)} invited you to a trip`,
-          `You've been invited to <b>${esc(tripName)}</b>. Open TripJam to accept — the invite is waiting on your trips screen.`,
-          "Open TripJam",
-          tripUrl || "https://tripjam.vercel.app",
+          `You've been invited to <b>${esc(tripName)}</b> — one tap below to join and start planning together.`,
+          "Join the trip",
+          cta,
         ),
       );
       if (ok) await logSend(type, tripId, user.id, email);
@@ -253,7 +288,7 @@ serve(async (req) => {
       }
       const emails = await memberEmails(tripId, user.id);
       if (!emails.length) return json({ sent: 0 });
-      const tripUrl = safeUrl(body?.tripUrl) || "https://tripjam.vercel.app";
+      const tripUrl = safeUrl(body?.tripUrl) || "https://tripjam.co";
       const subject =
         type === "poll_opened"
           ? `New poll on "${tripName}": ${String(body?.pollTitle || "").slice(0, 80)}`
