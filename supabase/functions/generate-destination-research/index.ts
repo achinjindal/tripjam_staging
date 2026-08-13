@@ -79,6 +79,7 @@ REQUIREMENTS for each inspirations entry:
 - Must have a named human author (personal blogger, named YouTuber, named Substack/newsletter writer, named journalist with a recognisable voice)
 - Must be published within the last 24 months (prefer last 12)
 - Author must have a track record — a single-post blog or new channel with very low reach is too risky
+- The hosting DOMAIN must plausibly match the outlet and the content. Search results often surface expired-domain content farms — e.g. a "Coorg in July" article hosted on statueofunity.in. If the domain has nothing to do with the creator or the destination, REJECT the result no matter how relevant the title looks
 - Skip these source types:
   • Listicle sites (BuzzFeed, TimeOut "Best of" pages, generic Conde Nast roundups by staff)
   • Aggregators (City Unscripted, TourScanner, Trip.com guides, GetYourGuide content)
@@ -585,6 +586,16 @@ serve(async (req) => {
       throw new Error("model returned unparseable digest");
     }
     if (!Array.isArray(parsed.inspirations)) parsed.inspirations = [];
+    // Enforce the named-author rule deterministically — the model sometimes
+    // lets "unnamed blogger" through, which correlates strongly with
+    // content-farm/spam results (the statueofunity.in Coorg incident).
+    parsed.inspirations = parsed.inspirations.filter(
+      (i: { author?: string }) =>
+        i?.author &&
+        !/unnamed|unknown|anonymous|staff writer|editorial team/i.test(
+          String(i.author),
+        ),
+    );
     parsed.place_insights = parsed.place_insights || [];
     parsed.sources = parsed.sources || [];
 
