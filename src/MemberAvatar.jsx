@@ -1,10 +1,16 @@
 // Reusable member avatar circle (initials on a username-hashed color).
 // Shares the deterministic color/initial helpers with the global Avatar.
 
-import { avatarColorFor, avatarInitial } from "./Avatar";
+import { avatarColorFor, avatarInitials } from "./Avatar";
 import { T } from "./theme";
 
-export default function MemberAvatar({ name, size = 34, ring = null }) {
+export default function MemberAvatar({
+  name,
+  size = 34,
+  ring = null,
+  allNames = [],
+}) {
+  const initials = avatarInitials(name, allNames);
   return (
     <div
       style={{
@@ -18,14 +24,14 @@ export default function MemberAvatar({ name, size = 34, ring = null }) {
         justifyContent: "center",
         fontFamily: "Georgia, serif",
         fontWeight: 700,
-        fontSize: size * 0.4,
+        fontSize: size * (initials.length > 1 ? 0.32 : 0.4),
         flexShrink: 0,
         ...(ring
           ? { border: `${Math.max(1.5, size * 0.05)}px solid ${ring}` }
           : {}),
       }}
     >
-      {avatarInitial(name)}
+      {initials}
     </div>
   );
 }
@@ -42,7 +48,7 @@ export function AvatarStack({
     <div style={{ display: "inline-flex", alignItems: "center" }}>
       {shown.map((n, i) => (
         <div key={i} style={{ marginLeft: i === 0 ? 0 : -size * 0.32 }}>
-          <MemberAvatar name={n} size={size} ring={ring} />
+          <MemberAvatar name={n} size={size} ring={ring} allNames={names} />
         </div>
       ))}
     </div>

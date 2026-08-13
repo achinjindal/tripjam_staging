@@ -38,6 +38,22 @@ export function avatarInitial(name) {
   return (m ? m[0] : "?").toUpperCase();
 }
 
+/** Collision-aware initials: single letter normally, but when another name in
+ *  the group shares the same first initial, expand to two characters —
+ *  word initials for multi-word names ("qa-tester" → QT), first two letters
+ *  otherwise ("tripman" → TR). */
+export function avatarInitials(name, allNames = []) {
+  const single = avatarInitial(name);
+  const collides = allNames.some(
+    (n) => n && n !== name && avatarInitial(n) === single,
+  );
+  if (!collides) return single;
+  const tokens = (name || "").split(/[^A-Za-z0-9]+/).filter(Boolean);
+  if (tokens.length >= 2) return (tokens[0][0] + tokens[1][0]).toUpperCase();
+  const word = tokens[0] || "";
+  return word.length >= 2 ? word.slice(0, 2).toUpperCase() : single;
+}
+
 // D20: top-right avatar is the single entry point for balance + top up + sign out.
 // Mounted globally in main.jsx for every authenticated view.
 export default function Avatar({ session }) {
