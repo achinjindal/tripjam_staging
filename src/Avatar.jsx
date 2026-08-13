@@ -51,7 +51,7 @@ export default function Avatar({ session }) {
     if (!session?.user?.id) return;
     supabase
       .from("profiles")
-      .select("username, is_admin")
+      .select("username, is_admin, created_at")
       .eq("id", session.user.id)
       .maybeSingle()
       .then(({ data }) => setProfile(data));
@@ -205,6 +205,45 @@ export default function Avatar({ session }) {
                     Admin
                   </span>
                 )}
+              </div>
+              {/* Account details: signed-in email (legacy username-only shim
+                  accounts get a hint instead), auth provider, member since. */}
+              <div
+                style={{
+                  marginTop: 8,
+                  fontSize: 11.5,
+                  color: T.mist || "#587284",
+                  lineHeight: 1.6,
+                }}
+              >
+                {session.user.email?.endsWith("@tripjam.app") ? (
+                  <div>Username-only account — no email on file</div>
+                ) : (
+                  <div
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      maxWidth: 210,
+                    }}
+                    title={session.user.email}
+                  >
+                    {session.user.email}
+                  </div>
+                )}
+                <div>
+                  {session.user.app_metadata?.provider === "google"
+                    ? "Signed in with Google"
+                    : "Email & password"}
+                  {profile?.created_at
+                    ? ` · joined ${new Date(
+                        profile.created_at,
+                      ).toLocaleDateString("en-US", {
+                        month: "short",
+                        year: "numeric",
+                      })}`
+                    : ""}
+                </div>
               </div>
             </div>
 
