@@ -256,6 +256,10 @@ export default function MembersSheet({
     }
   };
 
+  const avatarUniverse = [
+    ...members.map((m) => m.profiles?.username || "Traveler"),
+    ...pending.map((i) => i.profiles?.username || "traveler"),
+  ];
   const count = members.length;
 
   return (
@@ -332,7 +336,11 @@ export default function MembersSheet({
                     opacity: busy ? 0.6 : 1,
                   }}
                 >
-                  <MemberAvatar name={memberName(m, selfId)} size={34} />
+                  <MemberAvatar
+                    name={m.profiles?.username || "Traveler"}
+                    size={34}
+                    allNames={avatarUniverse}
+                  />
                   <div style={{ flex: 1 }}>
                     <div
                       style={{ fontSize: 14, color: T.ink, fontWeight: 700 }}
@@ -393,7 +401,11 @@ export default function MembersSheet({
                     marginBottom: 8,
                   }}
                 >
-                  <MemberAvatar name={memberName(m, selfId)} size={34} />
+                  <MemberAvatar
+                    name={m.profiles?.username || "Traveler"}
+                    size={34}
+                    allNames={avatarUniverse}
+                  />
                   <div style={{ flex: 1 }}>
                     <div
                       style={{ fontSize: 14, color: T.ink, fontWeight: 700 }}
@@ -441,7 +453,11 @@ export default function MembersSheet({
                     opacity: 0.75,
                   }}
                 >
-                  <MemberAvatar name={name} size={34} />
+                  <MemberAvatar
+                    name={name}
+                    size={34}
+                    allNames={avatarUniverse}
+                  />
                   <div style={{ flex: 1 }}>
                     <div
                       style={{ fontSize: 14, color: T.ink, fontWeight: 700 }}

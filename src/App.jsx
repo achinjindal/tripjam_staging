@@ -2792,8 +2792,8 @@ function BrainstormView({
                   {members.length > 1 ? (
                     <>
                       <AvatarStack
-                        names={members.map((m) =>
-                          memberName(m, session?.user?.id),
+                        names={members.map(
+                          (m) => m.profiles?.username || "Traveler",
                         )}
                         size={18}
                         ring={T.chalk}
@@ -12148,8 +12148,8 @@ export default function App({
                       }}
                     >
                       <AvatarStack
-                        names={members.map((m) =>
-                          memberName(m, session?.user?.id),
+                        names={members.map(
+                          (m) => m.profiles?.username || "Traveler",
                         )}
                         size={18}
                         ring={T.chalk}
