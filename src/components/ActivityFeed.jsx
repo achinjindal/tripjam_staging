@@ -45,7 +45,15 @@ function dayBucket(iso) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-const INFO_ACTIONS = new Set(["member_join", "credits_topup", "undo"]);
+const INFO_ACTIONS = new Set([
+  "member_join",
+  "credits_topup",
+  "undo",
+  "trip_created",
+  "routes_generated",
+  "routes_added",
+  "itinerary_generated",
+]);
 
 export default function ActivityFeed({
   members = [],
