@@ -2456,6 +2456,16 @@ function BrainstormView({
       // any pending (or future stale) rework nudge for them.
       markStylesIncorporated();
 
+      // Milestone row for the activity feed (visible to later joiners too).
+      logActivity({
+        tripId: trip?.id || editTripIdRef.current,
+        action: isAddingMore.current ? "routes_added" : "routes_generated",
+        entityType: "trip",
+        summary: isAddingMore.current
+          ? `asked for ${streamedItems.filter((s) => s.tier === 1).length} more route options`
+          : `generated ${streamedItems.filter((s) => s.tier === 1).length} route options`,
+      });
+
       // RG complete — log "time to all routes" (and first-route time) to
       // PostHog + rg_log, mirroring IG's ig_detailed_complete + generation_log.
       const rgAllRoutesAt = new Date().toISOString();
@@ -9864,6 +9874,13 @@ export default function App({
     setDetailedReady(true);
     setIgGenerating(false);
     playDoneChime();
+    // Milestone row for the activity feed.
+    logActivity({
+      tripId,
+      action: "itinerary_generated",
+      entityType: "trip",
+      summary: `generated the day-by-day itinerary`,
+    });
     // Shared trips: email the rest of the group that the plan is ready
     // (server dedupes to one per trip per 24h, so regenerations don't spam).
     // Uses the local tripId — the `trip` state is stale-null for new trips.
