@@ -596,6 +596,17 @@ serve(async (req) => {
           String(i.author),
         ),
     );
+    // Deterministic link validation before anything reaches the 30-day cache
+    // (statueofunity.in incident: expired-domain content farm served a
+    // plausible Coorg article). Two layers, both fail-open on infra errors:
+    //   1. Liveness — drop dead/parked URLs (HEAD-ish GET, 5s timeout).
+    //   2. Haiku spam-screen for NON-platform domains — is this domain
+    //      plausibly the named creator's own site, or a content farm?
+    parsed.inspirations = await validateInspirationLinks(
+      parsed.inspirations,
+      destinations,
+      apiKey,
+    );
     parsed.place_insights = parsed.place_insights || [];
     parsed.sources = parsed.sources || [];
 
@@ -713,3 +724,117 @@ serve(async (req) => {
     });
   }
 });
+
+// ── Link validation ladder (permanent spam/dead-link defense) ────────────────
+
+// Platform domains where the creator≠domain relationship is inherent — no
+// spam-screen needed (liveness still applies).
+const TRUSTED_PLATFORM_RE =
+  /(^|\.)(youtube\.com|youtu\.be|substack\.com|medium\.com|wordpress\.com|blogspot\.com|instagram\.com|vimeo\.com|tumblr\.com)$/i;
+
+function registrableHost(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "");
+  } catch {
+    return null;
+  }
+}
+
+/** True when the URL responds 2xx/3xx within the timeout. Fail-open on
+ *  network-layer errors is deliberately NOT done here — an unreachable link
+ *  is worthless to the user regardless of why. */
+async function urlAlive(url: string): Promise<boolean> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    // GET (not HEAD — many blogs 405 HEAD); body is never read.
+    const res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: ctrl.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; TripJamBot/1.0)" },
+    });
+    clearTimeout(t);
+    try {
+      await res.body?.cancel();
+    } catch {
+      /* body already consumed/closed */
+    }
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+type InspirationItem = {
+  url?: string;
+  title?: string;
+  author?: string;
+  outlet?: string;
+  type?: string;
+};
+
+async function validateInspirationLinks(
+  items: InspirationItem[],
+  destinations: string[],
+  apiKey: string,
+): Promise<InspirationItem[]> {
+  if (!items?.length) return [];
+  // 1. Liveness — parallel, bounded by the 5s per-request timeout.
+  const liveFlags = await Promise.all(
+    items.map((i) => (i?.url ? urlAlive(i.url) : Promise.resolve(false))),
+  );
+  const live = items.filter((_, idx) => liveFlags[idx]);
+  const dropped = items.length - live.length;
+  if (dropped > 0)
+    console.warn(`inspirations: dropped ${dropped} dead/unreachable links`);
+
+  // 2. Spam-screen the independent-domain items with one cheap Haiku call.
+  const suspects = live.filter(
+    (i) => !TRUSTED_PLATFORM_RE.test(registrableHost(i.url || "") || ""),
+  );
+  if (!suspects.length) return live;
+  try {
+    const list = suspects
+      .map(
+        (i, n) =>
+          `${n}. domain=${registrableHost(i.url || "")} outlet="${i.outlet}" author="${i.author}" title="${i.title}"`,
+      )
+      .join("\n");
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 200,
+        messages: [
+          {
+            role: "user",
+            content: `These are travel-blog links about ${destinations.join(", ")}. For each, judge ONLY whether the DOMAIN is plausibly the named creator's/outlet's own website. Reject expired-domain content farms — domains whose name is about a completely unrelated topic (e.g. a monuments site hosting a coffee-country travel blog), keyword-stuffed spam domains, or domains contradicting the outlet name.\n\n${list}\n\nReply with ONLY a JSON array of the numbers to REJECT, e.g. [1,3]. Reply [] if all are fine.`,
+          },
+        ],
+      }),
+    });
+    if (!res.ok) return live; // fail-open: screening is best-effort
+    const data = await res.json();
+    const text: string = data?.content?.[0]?.text || "[]";
+    const rejected: number[] = JSON.parse(
+      (text.match(/\[[\d,\s]*\]/) || ["[]"])[0],
+    );
+    if (!rejected.length) return live;
+    const rejectedUrls = new Set(
+      rejected.map((n) => suspects[n]?.url).filter(Boolean),
+    );
+    console.warn(
+      `inspirations: spam-screen rejected ${rejectedUrls.size}:`,
+      [...rejectedUrls].join(", "),
+    );
+    return live.filter((i) => !rejectedUrls.has(i.url));
+  } catch {
+    return live; // fail-open
+  }
+}
