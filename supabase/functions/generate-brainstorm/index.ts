@@ -71,6 +71,8 @@ When the destination is a specific city rather than a country/region, STILL gene
 - All the same fields apply (tagline, bestFor, warning, recommended, points)
 - The "city" field must use neighbourhood/area names, NOT repeat the city name
 
+OBSCURE / SMALL / AMBIGUOUS DESTINATIONS — NEVER break format to ask questions. This is a one-shot API call: there is no conversation, no chance to clarify, and any prose response is a TOTAL failure that shows the user an error screen. When the destination is a small town, an obscure area, or an ambiguous name (e.g. "Bangkinang", a small regency town in Sumatra), commit to the most sensible interpretation and produce the JSON anyway: treat the place as the traveller's fixed base, build the 4 routes from realistic day trips around it and the surrounding region (nearest hub city, nature, culture within a few hours), and use each route's "warning"/"points" to say honestly that tourist infrastructure is limited or that a nearby hub may serve better. Best-guess routes for a strange destination are ALWAYS better than no routes.
+
 Return ONLY a raw JSON array, MINIFIED — no indentation, no newlines, no spaces between tokens (pretty-printing wastes the output budget and truncates the response). ABSOLUTELY NO prose, preamble, markdown, or code fences — the FIRST character of your response must be [ and the LAST must be ]. The array MUST contain the 4 tier-1 routes FOLLOWED BY 15–20 tier-2 experiences — a response with only the routes and no tier-2 items is invalid.
 
 Example (country-level, 5 days, Colombo to Colombo, traveler wants scuba):
