@@ -150,7 +150,9 @@ export function dRanges(stops, days) {
     (stops || []).forEach((s, i) => {
       const lastStop = i === stops.length - 1;
       const first = d;
-      const lastDay = lastStop ? Math.max(first, n || first + s.nights) : d + s.nights - 1;
+      const lastDay = lastStop
+        ? Math.max(first, n || first + s.nights)
+        : d + s.nights - 1;
       out.push({ first, last: lastDay });
       d = lastDay + 1;
     });
@@ -180,7 +182,8 @@ export function dRanges(stops, days) {
     cursor = last + 1;
   }
   // the final day always belongs to the last stop's range
-  if (out.length) out[out.length - 1].last = Math.max(out[out.length - 1].last, n);
+  if (out.length)
+    out[out.length - 1].last = Math.max(out[out.length - 1].last, n);
   return out;
 }
 

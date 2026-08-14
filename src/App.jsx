@@ -44,6 +44,18 @@ import { fetchPreferences, hasStyle, styleTextOf } from "./preferences.js";
 import { fetchPolls, closePoll, createPoll } from "./polls.js";
 import { sendTripEmail } from "./notify.js";
 import WelcomeSheet from "./components/WelcomeSheet.jsx";
+import RouteOverview from "./components/RouteOverview.jsx";
+import { ROUTES_LENS_ENABLED } from "./flags.js";
+import {
+  deriveStops,
+  dRanges,
+  tripNightsOf,
+  ledger as stopsLedger,
+  cityChain,
+  outlineDays,
+  editSummary,
+  stopsEqual,
+} from "./routeStops.js";
 import { PollComposeSheet, OpenPollPin } from "./components/Polls.jsx";
 import {
   fetchActivity,
@@ -7798,6 +7810,81 @@ export default function App({
   const storyAvailable = detailedReady && !detailedLoading && days.length > 0;
   const storyActive = itineraryMode === "story" && storyAvailable;
 
+  /* ── ROUTES LENS: chosen-route overview + editor (VITE_ROUTES_LENS_ENABLED,
+     ships dark). All persistence lives here; RouteOverview/RouteEditorSheet
+     are presentational. The overview hides silently whenever the chosen route
+     can't be resolved (legacy trips, offline, mid-stream). ───────────────── */
+  const [routeLens, setRouteLens] = useState(null); // {row, stops, source, pLabel}
+  const [routeLensNonce, setRouteLensNonce] = useState(0); // bump to refetch
+  const [showRouteEditor, setShowRouteEditor] = useState(false);
+  const [pendingRouteEdit, setPendingRouteEdit] = useState(null); // {stops, summary, snapshot, votedItems}
+  const routeLensSeenRef = useRef(null); // trip id already counted in analytics
+  const tripDayCount =
+    days.length ||
+    (trip?.start_date && trip?.end_date
+      ? Math.round(
+          (new Date(trip.end_date + "T12:00:00") -
+            new Date(trip.start_date + "T12:00:00")) /
+            86400000,
+        ) + 1
+      : 0);
+  useEffect(() => {
+    if (!ROUTES_LENS_ENABLED || !trip?.id || !trip?.ig_response) {
+      setRouteLens(null);
+      return undefined;
+    }
+    if (igGenerating || detailedLoading || tripDayCount < 2) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from("brainstorm_items")
+          .select("*")
+          .eq("trip_id", trip.id)
+          .eq("tier", 1)
+          .order("position");
+        if (cancelled) return;
+        const tier1 = (data || []).map((row) => ({
+          ...row,
+          ...(row.data || {}),
+        }));
+        const sel = tier1.find((it) => it.selected && !it.dismissed);
+        if (!sel) {
+          setRouteLens(null);
+          return;
+        }
+        const { stops, source } = deriveStops(sel, tripNightsOf(tripDayCount));
+        if (!stops) {
+          setRouteLens(null);
+          return;
+        }
+        // P-label mirrors loadSavedBrainstorm: stored routeLabel, else
+        // position order among tier-1 rows
+        const pLabel = sel.routeLabel || `P${tier1.indexOf(sel) + 1}`;
+        setRouteLens({ row: sel, stops, source, pLabel });
+        if (routeLensSeenRef.current !== trip.id) {
+          routeLensSeenRef.current = trip.id;
+          posthog.capture("route_overview_seen", {
+            trip_id: trip.id,
+            source,
+          });
+        }
+      } catch {
+        if (!cancelled) setRouteLens(null); // silent — the overview just hides
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    trip?.id,
+    !!trip?.ig_response,
+    igGenerating,
+    detailedLoading,
+    tripDayCount,
+    routeLensNonce,
+  ]);
+
   const setItineraryMode = (mode, scrollToDayIndex) => {
     setItineraryModeRaw(mode);
     try {
@@ -13745,6 +13832,83 @@ export default function App({
                       </div>
                     </div>
                   )}
+
+                  {/* Route Overview — the chosen route as the itinerary's
+                      table of contents (Routes Lens, ships dark). Hidden
+                      while IG streams; re-renders when days land. */}
+                  {ROUTES_LENS_ENABLED &&
+                    !storyActive &&
+                    routeLens &&
+                    days.length > 0 &&
+                    !igGenerating &&
+                    !detailedLoading && (
+                      <RouteOverview
+                        pLabel={routeLens.pLabel}
+                        title={routeLens.row.title}
+                        stops={routeLens.stops}
+                        ranges={dRanges(routeLens.stops, days)}
+                        initialCollapsed={(() => {
+                          // Active-trip window: open at today's plan, not the map
+                          const today = new Date().toISOString().slice(0, 10);
+                          return !!(
+                            trip?.start_date &&
+                            trip?.end_date &&
+                            today >= trip.start_date &&
+                            today <= trip.end_date
+                          );
+                        })()}
+                        scrollRootRef={scrollRef}
+                        onSegTap={(idx0) => {
+                          scrollToDay(idx0);
+                          posthog.capture("route_seg_to_day", {
+                            trip_id: trip?.id,
+                          });
+                        }}
+                        onEdit={() => {
+                          setShowRouteEditor(true);
+                          posthog.capture("route_editor_open", {
+                            trip_id: trip?.id,
+                          });
+                        }}
+                        onExplore={() => {
+                          // Same init as the Edit Details path — BrainstormView
+                          // needs editingTrip + pendingForm for context
+                          if (igAbortRef.current) {
+                            igAbortRef.current.abort();
+                            igAbortRef.current = null;
+                          }
+                          _igInFlight = false;
+                          setDetailedLoading(false);
+                          setEditingTrip(trip);
+                          const igReq = trip.ig_request || {};
+                          setPendingForm({
+                            destinations: igReq.destinations?.length
+                              ? igReq.destinations
+                              : (trip.destination || "")
+                                  .split(" → ")
+                                  .map((s) => s.trim())
+                                  .filter(Boolean),
+                            startDate: trip.start_date || "",
+                            endDate: trip.end_date || "",
+                            travelers: String(igReq.travelers || "2"),
+                            styles: igReq.styles || [],
+                            budget: igReq.budget || "mid",
+                            pace: igReq.pace || "active",
+                            morningStart: igReq.morningStart || "early",
+                            notes: trip.notes || igReq.notes || "",
+                            arrivalCity: trip.arrival_city || "",
+                            departureCity: trip.departure_city || "",
+                            baseLocation:
+                              trip.base_location || igReq.baseLocation || "",
+                          });
+                          setFormEdited(false);
+                          setPretripTab("brainstorm");
+                          setScreen("brainstorm");
+                          if (onUrlChange)
+                            onUrlChange(`/trip/${trip.id}/plans`);
+                        }}
+                      />
+                    )}
 
                   {/* City-pill strip — only in detailed view */}
                   {!storyActive &&
