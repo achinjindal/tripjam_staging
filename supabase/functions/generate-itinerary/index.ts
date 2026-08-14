@@ -360,13 +360,76 @@ serve(async (req) => {
       );
       if (upvotedRegions.length) {
         const r = upvotedRegions[0]; // usually exactly one
-        const routeCities = (r.city || "")
+        const listedCities = (r.city || "")
           .split(",")
           .map((c: string) => c.trim())
           .filter(Boolean);
         const routeDays = (r.days || []).map((d: any) =>
           typeof d === "string" ? d : d?.description || d?.day || "",
         );
+        // Routes Lens: a structured stops array [{city, nights}] on the voted
+        // item is the authoritative night-by-night plan (written by the route
+        // editor, and by newer RG responses). Validated hard — malformed or
+        // wrong-sum arrays fall through to the legacy regex parsing below.
+        const tripNights = Math.max(1, numDays - 1);
+        const rStops: any[] | null = Array.isArray((r as any).stops)
+          ? (r as any).stops
+          : null;
+        const stopsValid =
+          !!rStops &&
+          rStops.length >= 1 &&
+          rStops.length <= 8 &&
+          rStops.every(
+            (s: any) =>
+              s &&
+              typeof s.city === "string" &&
+              s.city.trim() &&
+              Number.isInteger(s.nights) &&
+              s.nights >= 1,
+          ) &&
+          rStops.reduce((a: number, s: any) => a + s.nights, 0) === tripNights;
+
+        let routeCities: string[];
+        let nightsSummary = "";
+        let templateLines = "";
+        if (stopsValid) {
+          const stopCities = rStops!.map((s: any) => s.city.trim());
+          // Bases first, then any extra listed cities (day-trip mentions)
+          routeCities = [
+            ...stopCities,
+            ...listedCities.filter(
+              (c: string) =>
+                !stopCities.some(
+                  (b: string) => b.toLowerCase() === c.toLowerCase(),
+                ),
+            ),
+          ];
+          const nightLines: string[] = [];
+          const dayLines: string[] = [];
+          let day = 1;
+          let prev: string | null = null;
+          for (const s of rStops!) {
+            const c = s.city.trim();
+            for (let k = 0; k < s.nights; k++) {
+              dayLines.push(
+                `  Day ${day}: ${
+                  k === 0 && prev
+                    ? `travel ${prev} → ${c}, then explore ${c}`
+                    : `explore ${c} and around`
+                }`,
+              );
+              nightLines.push(
+                `  Night ${day} (after Day ${day}): sleep in ${c}`,
+              );
+              day++;
+            }
+            prev = c;
+          }
+          dayLines.push(`  Day ${day}: final morning in ${prev}, then departure`);
+          nightsSummary = nightLines.join("\n");
+          templateLines = dayLines.join("\n");
+        } else {
+          routeCities = listedCities;
         // Infer overnight bases from the day template: per day, find which city the traveler SLEEPS in.
         // Look for explicit "return to X", "overnight in X", "back to X for overnight" phrasing; else assume
         // the day's primary city is the overnight base.
@@ -399,10 +462,14 @@ serve(async (req) => {
           bases.push(base || routeCities[0] || "");
         }
         // Compute night-by-night summary — nights = days - 1 (last day usually ends in departure, no overnight)
-        const nightsSummary = bases
+        nightsSummary = bases
           .slice(0, Math.max(0, bases.length - 1))
           .map((b, i) => `  Night ${i + 1} (after Day ${i + 1}): sleep in ${b}`)
           .join("\n");
+        templateLines = routeDays
+          .map((d: string, i: number) => `  Day ${i + 1}: ${d}`)
+          .join("\n");
+        }
 
         routeConstraint = `SELECTED ROUTE (ABSOLUTE HARD CONSTRAINT — highest priority):
 The traveler explicitly chose the "${r.title}" route. The itinerary MUST follow this route exactly:
@@ -422,7 +489,7 @@ Interpretation rules (VERY IMPORTANT — read carefully):
 - If the day template says "day trip to X, back to Y for overnight", the base stays Y — do NOT move the base to X.
 
 DAY-BY-DAY TEMPLATE (the traveler agreed to this flow — refine activities, keep the place/theme/base structure):
-${routeDays.map((d: string, i: number) => `  Day ${i + 1}: ${d}`).join("\n")}
+${templateLines}
 ${
   r.points?.length
     ? `\nKey characteristics of this route the traveler values:\n${(

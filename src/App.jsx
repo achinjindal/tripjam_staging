@@ -2520,6 +2520,7 @@ function BrainstormView({
           data: {
             tagline: item.tagline,
             days: item.days,
+            stops: item.stops || null,
             bestFor: item.bestFor,
             warning: item.warning,
             recommended: !!item.recommended,
@@ -9748,6 +9749,7 @@ export default function App({
           data: {
             tagline: it.tagline || null,
             days: it.days || null,
+            stops: it.stops || null,
             bestFor: it.bestFor || null,
             warning: it.warning || null,
             recommended: !!it.recommended,
