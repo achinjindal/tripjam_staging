@@ -66,9 +66,15 @@ export default function RouteEditorSheet({
   );
   const led = ledger(pending, tripNights);
 
+  // Latest-value refs so the history/ESC effect can depend on [open] alone —
+  // re-running it on dirty changes would pop our history entry mid-edit.
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty && !readOnly;
+  const requestCloseRef = useRef(null);
+
   const requestClose = async () => {
     if (closingRef.current) return;
-    if (dirty && !readOnly) {
+    if (dirtyRef.current) {
       const discard = await confirmSheet({
         title: "Discard route edits?",
         message: "Your itinerary hasn't changed.",
@@ -81,19 +87,21 @@ export default function RouteEditorSheet({
     closingRef.current = true;
     onClose?.();
   };
+  requestCloseRef.current = requestClose;
 
-  // ESC + Android back (one history entry per open)
+  // ESC + Android back (one history entry per open — [open] dep ONLY)
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        requestClose();
+        requestCloseRef.current?.();
       }
     };
     const onPop = () => {
-      // back press: route through the same discard guard; re-push if kept
-      requestClose().then?.(() => {});
+      // back press: route through the same discard guard; re-push so the
+      // entry survives while the confirm is pending / kept
+      requestCloseRef.current?.();
       if (!closingRef.current) window.history.pushState({ re: 1 }, "");
     };
     window.history.pushState({ re: 1 }, "");
@@ -105,7 +113,7 @@ export default function RouteEditorSheet({
       // consume our history entry when closed by ✕/scrim/apply
       if (window.history.state?.re) window.history.back();
     };
-  }, [open, dirty, readOnly]);
+  }, [open]);
 
   if (!open) return null;
 

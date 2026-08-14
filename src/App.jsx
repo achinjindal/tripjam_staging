@@ -170,7 +170,7 @@ import html2canvas from "html2canvas";
 // DebugContext is now imported from ./context.js (was duplicated here).
 
 // _rgInFlight removed — generate() is now called imperatively, not via useEffect
-let _igInFlight = false; // same for IG // prevent same photo showing on multiple activities
+const _igInFlight = { current: false }; // same for IG (property mutation — react-hooks/globals forbids reassigning module lets from component scope) // prevent same photo showing on multiple activities
 
 function PhotoStrip({ activity, city }) {
   const debugMode = useContext(DebugContext);
@@ -2024,7 +2024,6 @@ function BrainstormView({
       setTimeout(() => loadCityDeepDive(c), i * 2500),
     );
     return () => timers.forEach(clearTimeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days.length]);
   const setDeepDiveCache = externalDeepDiveCache
     ? () => {}
@@ -8739,7 +8738,6 @@ export default function App({
         }
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pretripRoutes.length]);
 
   // Lazy fallback: fire Inspirations load if the user navigates to the tab
@@ -8759,7 +8757,6 @@ export default function App({
     if (!inspirationsVisible) return;
     if (destResearch.hasLoaded || destResearch.loading) return;
     loadDestinationResearch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     screen,
     pretripTab,
@@ -9545,8 +9542,8 @@ export default function App({
   };
 
   const handleGenerate = async (form, votedItems = null) => {
-    if (_igInFlight) return;
-    _igInFlight = true;
+    if (_igInFlight.current) return;
+    _igInFlight.current = true;
     const capturedTripId = editingTrip?.id || null;
     let genLogId = null; // track this generation's log row
     // Day 6: IG timing instrumentation. Anchor timestamp for compact/detailed deltas.
@@ -9870,14 +9867,14 @@ export default function App({
       // If user navigated away (abort), silently stop — don't redirect
       if (e.name === "AbortError") {
         console.log("IG generation aborted by user navigation");
-        _igInFlight = false;
+        _igInFlight.current = false;
         return;
       }
       // Out of credits — paywall is already open; return to setup silently
       if (e.message === "Out of credits") {
         setIgGenerating(false);
         setScreen("setup");
-        _igInFlight = false;
+        _igInFlight.current = false;
         return;
       }
       console.error("AI generation failed:", e.message);
@@ -9886,7 +9883,7 @@ export default function App({
       setGenerateError(`Generation failed: ${e.message}. Please try again.`);
       setIgGenerating(false);
       setScreen("setup");
-      _igInFlight = false;
+      _igInFlight.current = false;
       return;
     }
     const generationCompletedAt = new Date().toISOString();
@@ -10192,7 +10189,7 @@ export default function App({
     // Pulse the chat mascot to draw attention
     setChatAttention(true);
     setTimeout(() => setChatAttention(false), 3000);
-    _igInFlight = false;
+    _igInFlight.current = false;
     if (session?.user?.id) refreshCredits(session.user.id);
     // Log generation timing — update by trip_id as fallback since genLogId may
     // not be set yet. NOTE: supabase-js v2 only sends a query when it's
@@ -11820,7 +11817,7 @@ export default function App({
                           if (igAbortRef.current) {
                             igAbortRef.current.abort();
                             igAbortRef.current = null;
-                            _igInFlight = false;
+                            _igInFlight.current = false;
                           }
                           onHome();
                         }}
@@ -12067,7 +12064,7 @@ export default function App({
                           if (igAbortRef.current) {
                             igAbortRef.current.abort();
                             igAbortRef.current = null;
-                            _igInFlight = false;
+                            _igInFlight.current = false;
                           }
                           onHome();
                         }}
@@ -12192,7 +12189,7 @@ export default function App({
                 if (igAbortRef.current) {
                   igAbortRef.current.abort();
                   igAbortRef.current = null;
-                  _igInFlight = false;
+                  _igInFlight.current = false;
                 }
                 if (onHome) onHome();
               }}
@@ -13707,7 +13704,7 @@ export default function App({
                               if (igAbortRef.current) {
                                 igAbortRef.current.abort();
                                 igAbortRef.current = null;
-                                _igInFlight = false;
+                                _igInFlight.current = false;
                               }
                               onHome();
                             }}
@@ -13734,7 +13731,7 @@ export default function App({
                               igAbortRef.current.abort();
                               igAbortRef.current = null;
                             }
-                            _igInFlight = false;
+                            _igInFlight.current = false;
                             setDetailedLoading(false);
                             setEditingTrip(trip);
                             // Prefill pendingForm from the trip so BrainstormView has context
@@ -14106,7 +14103,7 @@ export default function App({
                             igAbortRef.current.abort();
                             igAbortRef.current = null;
                           }
-                          _igInFlight = false;
+                          _igInFlight.current = false;
                           setDetailedLoading(false);
                           setEditingTrip(trip);
                           const igReq = trip.ig_request || {};
