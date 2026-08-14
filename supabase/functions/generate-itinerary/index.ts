@@ -425,50 +425,54 @@ serve(async (req) => {
             }
             prev = c;
           }
-          dayLines.push(`  Day ${day}: final morning in ${prev}, then departure`);
+          dayLines.push(
+            `  Day ${day}: final morning in ${prev}, then departure`,
+          );
           nightsSummary = nightLines.join("\n");
           templateLines = dayLines.join("\n");
         } else {
           routeCities = listedCities;
-        // Infer overnight bases from the day template: per day, find which city the traveler SLEEPS in.
-        // Look for explicit "return to X", "overnight in X", "back to X for overnight" phrasing; else assume
-        // the day's primary city is the overnight base.
-        const bases: string[] = [];
-        for (let i = 0; i < routeDays.length; i++) {
-          const dayText = routeDays[i].toLowerCase();
-          let base = "";
-          // Pattern 1: explicit return/overnight
-          const m = dayText.match(
-            /(?:return to|overnight in|back to|based in|stay in|sleep in)\s+([a-z][a-z\s\-]+?)(?:$|[,.]|\s+for\s+overnight)/i,
-          );
-          if (m) base = m[1].trim();
-          // Pattern 2: day trip pattern implies return to previous base
-          else if (dayText.includes("day trip") && bases[i - 1])
-            base = bases[i - 1];
-          // Pattern 3: transit pattern "X → Y" → base is Y (destination)
-          else {
-            const transit = routeDays[i].match(/→\s*([A-Z][a-z\-]+)/);
-            if (transit) base = transit[1];
-          }
-          // Fallback: use first city mentioned in the line
-          if (!base) {
-            const cityHit = routeCities.find((c: string) =>
-              dayText.includes(c.toLowerCase()),
+          // Infer overnight bases from the day template: per day, find which city the traveler SLEEPS in.
+          // Look for explicit "return to X", "overnight in X", "back to X for overnight" phrasing; else assume
+          // the day's primary city is the overnight base.
+          const bases: string[] = [];
+          for (let i = 0; i < routeDays.length; i++) {
+            const dayText = routeDays[i].toLowerCase();
+            let base = "";
+            // Pattern 1: explicit return/overnight
+            const m = dayText.match(
+              /(?:return to|overnight in|back to|based in|stay in|sleep in)\s+([a-z][a-z\s\-]+?)(?:$|[,.]|\s+for\s+overnight)/i,
             );
-            if (cityHit) base = cityHit;
+            if (m) base = m[1].trim();
+            // Pattern 2: day trip pattern implies return to previous base
+            else if (dayText.includes("day trip") && bases[i - 1])
+              base = bases[i - 1];
+            // Pattern 3: transit pattern "X → Y" → base is Y (destination)
+            else {
+              const transit = routeDays[i].match(/→\s*([A-Z][a-z\-]+)/);
+              if (transit) base = transit[1];
+            }
+            // Fallback: use first city mentioned in the line
+            if (!base) {
+              const cityHit = routeCities.find((c: string) =>
+                dayText.includes(c.toLowerCase()),
+              );
+              if (cityHit) base = cityHit;
+            }
+            // Final fallback: previous base (if any)
+            if (!base && bases[i - 1]) base = bases[i - 1];
+            bases.push(base || routeCities[0] || "");
           }
-          // Final fallback: previous base (if any)
-          if (!base && bases[i - 1]) base = bases[i - 1];
-          bases.push(base || routeCities[0] || "");
-        }
-        // Compute night-by-night summary — nights = days - 1 (last day usually ends in departure, no overnight)
-        nightsSummary = bases
-          .slice(0, Math.max(0, bases.length - 1))
-          .map((b, i) => `  Night ${i + 1} (after Day ${i + 1}): sleep in ${b}`)
-          .join("\n");
-        templateLines = routeDays
-          .map((d: string, i: number) => `  Day ${i + 1}: ${d}`)
-          .join("\n");
+          // Compute night-by-night summary — nights = days - 1 (last day usually ends in departure, no overnight)
+          nightsSummary = bases
+            .slice(0, Math.max(0, bases.length - 1))
+            .map(
+              (b, i) => `  Night ${i + 1} (after Day ${i + 1}): sleep in ${b}`,
+            )
+            .join("\n");
+          templateLines = routeDays
+            .map((d: string, i: number) => `  Day ${i + 1}: ${d}`)
+            .join("\n");
         }
 
         routeConstraint = `SELECTED ROUTE (ABSOLUTE HARD CONSTRAINT — highest priority):
