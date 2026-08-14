@@ -305,6 +305,9 @@ export default function RouteOverview({
         <div
           style={{
             opacity: stuck ? 1 : 0,
+            // visibility (not just opacity) so the inert strip is truly
+            // hidden from a11y trees and hit-testing
+            visibility: stuck ? "visible" : "hidden",
             pointerEvents: stuck ? "auto" : "none",
             transition: `opacity ${MOTION.normal}`,
           }}
