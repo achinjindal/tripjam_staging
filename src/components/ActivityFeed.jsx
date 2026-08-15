@@ -53,6 +53,7 @@ const INFO_ACTIONS = new Set([
   "routes_generated",
   "routes_added",
   "itinerary_generated",
+  "route_edited",
 ]);
 
 export default function ActivityFeed({

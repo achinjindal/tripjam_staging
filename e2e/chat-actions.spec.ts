@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { login, snap } from "./helpers";
+import { login, snap, dismissTripOverlays } from "./helpers";
 
 /**
  * Tests for unified chat actions — verifies that chat can perform
@@ -22,6 +22,7 @@ async function openTrip(page: import("@playwright/test").Page) {
     if (text && /Day|Tokyo|Japan|\d+ days?/i.test(text)) {
       await card.click();
       await page.waitForTimeout(2000);
+      await dismissTripOverlays(page, 2000);
       // Check if we landed on itinerary (has bottom nav with Itinerary tab)
       const itinTab = page.locator("button", { hasText: /Itinerary/i }).first();
       if (await itinTab.isVisible({ timeout: 3000 }).catch(() => false)) {

@@ -290,7 +290,11 @@ test.describe("Collaboration — polls / group decisions (Phase 6)", () => {
 
       // Owner's card shows the live tally (the freshly-open poll is the only one
       // showing "N voted"; resolved history shows "Closed").
-      await expect(a.getByText(/1 voted/)).toBeVisible({ timeout: 25000 });
+      // .first(): open polls accumulate on the shared trip across runs, and
+      // several cards can show a "1 voted" tally simultaneously
+      await expect(a.getByText(/1 voted/).first()).toBeVisible({
+        timeout: 25000,
+      });
 
       // ---- Owner closes the poll → it resolves to the voted option ----
       await a

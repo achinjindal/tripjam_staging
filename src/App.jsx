@@ -44,6 +44,19 @@ import { fetchPreferences, hasStyle, styleTextOf } from "./preferences.js";
 import { fetchPolls, closePoll, createPoll } from "./polls.js";
 import { sendTripEmail } from "./notify.js";
 import WelcomeSheet from "./components/WelcomeSheet.jsx";
+import RouteOverview from "./components/RouteOverview.jsx";
+import RouteEditorSheet from "./components/RouteEditorSheet.jsx";
+import { ROUTES_LENS_ENABLED } from "./flags.js";
+import {
+  deriveStops,
+  dRanges,
+  tripNightsOf,
+  ledger as stopsLedger,
+  cityChain,
+  outlineDays,
+  editSummary,
+  stopsEqual,
+} from "./routeStops.js";
 import { PollComposeSheet, OpenPollPin } from "./components/Polls.jsx";
 import {
   fetchActivity,
@@ -157,7 +170,7 @@ import html2canvas from "html2canvas";
 // DebugContext is now imported from ./context.js (was duplicated here).
 
 // _rgInFlight removed — generate() is now called imperatively, not via useEffect
-let _igInFlight = false; // same for IG // prevent same photo showing on multiple activities
+const _igInFlight = { current: false }; // same for IG (property mutation — react-hooks/globals forbids reassigning module lets from component scope) // prevent same photo showing on multiple activities
 
 function PhotoStrip({ activity, city }) {
   const debugMode = useContext(DebugContext);
@@ -2011,7 +2024,6 @@ function BrainstormView({
       setTimeout(() => loadCityDeepDive(c), i * 2500),
     );
     return () => timers.forEach(clearTimeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days.length]);
   const setDeepDiveCache = externalDeepDiveCache
     ? () => {}
@@ -2520,6 +2532,7 @@ function BrainstormView({
           data: {
             tagline: item.tagline,
             days: item.days,
+            stops: item.stops || null,
             bestFor: item.bestFor,
             warning: item.warning,
             recommended: !!item.recommended,
@@ -7797,6 +7810,283 @@ export default function App({
   const storyAvailable = detailedReady && !detailedLoading && days.length > 0;
   const storyActive = itineraryMode === "story" && storyAvailable;
 
+  /* ── ROUTES LENS: chosen-route overview + editor (VITE_ROUTES_LENS_ENABLED,
+     ships dark). All persistence lives here; RouteOverview/RouteEditorSheet
+     are presentational. The overview hides silently whenever the chosen route
+     can't be resolved (legacy trips, offline, mid-stream). ───────────────── */
+  const [routeLens, setRouteLens] = useState(null); // {row, stops, source, pLabel}
+  const [routeLensNonce, setRouteLensNonce] = useState(0); // bump to refetch
+  const [showRouteEditor, setShowRouteEditor] = useState(false);
+  const [pendingRouteEdit, setPendingRouteEdit] = useState(null); // {stops, summary, snapshot, votedItems}
+  const routeLensSeenRef = useRef(null); // trip id already counted in analytics
+  const tripDayCount =
+    days.length ||
+    (trip?.start_date && trip?.end_date
+      ? Math.round(
+          (new Date(trip.end_date + "T12:00:00") -
+            new Date(trip.start_date + "T12:00:00")) /
+            86400000,
+        ) + 1
+      : 0);
+  useEffect(() => {
+    if (!ROUTES_LENS_ENABLED || !trip?.id || !trip?.ig_response) {
+      setRouteLens(null);
+      return undefined;
+    }
+    if (igGenerating || detailedLoading || tripDayCount < 2) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from("brainstorm_items")
+          .select("*")
+          .eq("trip_id", trip.id)
+          .eq("tier", 1)
+          .order("position");
+        if (cancelled) return;
+        const tier1 = (data || []).map((row) => ({
+          ...row,
+          ...(row.data || {}),
+        }));
+        const sel = tier1.find((it) => it.selected && !it.dismissed);
+        if (!sel) {
+          setRouteLens(null);
+          return;
+        }
+        const { stops, source } = deriveStops(sel, tripNightsOf(tripDayCount));
+        if (!stops) {
+          setRouteLens(null);
+          return;
+        }
+        // P-label mirrors loadSavedBrainstorm: stored routeLabel, else
+        // position order among tier-1 rows
+        const pLabel = sel.routeLabel || `P${tier1.indexOf(sel) + 1}`;
+        setRouteLens({ row: sel, stops, source, pLabel });
+        if (routeLensSeenRef.current !== trip.id) {
+          routeLensSeenRef.current = trip.id;
+          posthog.capture("route_overview_seen", {
+            trip_id: trip.id,
+            source,
+          });
+        }
+      } catch {
+        if (!cancelled) setRouteLens(null); // silent — the overview just hides
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    trip?.id,
+    !!trip?.ig_response,
+    igGenerating,
+    detailedLoading,
+    tripDayCount,
+    routeLensNonce,
+  ]);
+  // Ref mirror — the IG completion closure is created long before this state
+  const pendingRouteEditRef = useRef(null);
+  useEffect(() => {
+    pendingRouteEditRef.current = pendingRouteEdit;
+  }, [pendingRouteEdit]);
+
+  // A plain trip open has editingTrip/pendingForm null and pretripRoutes
+  // empty — the rebuild funnel needs real context (same init as Edit Details)
+  const initRouteFunnelContext = () => {
+    if (igAbortRef.current) {
+      igAbortRef.current.abort();
+      igAbortRef.current = null;
+    }
+    // (no _igInFlight reset here — the abort above lands in handleGenerate's
+    // catch, which resets it; reassigning the module flag from this scope
+    // also trips react-hooks/globals)
+    setDetailedLoading(false);
+    setEditingTrip(trip);
+    const igReq = trip.ig_request || {};
+    setPendingForm({
+      destinations: igReq.destinations?.length
+        ? igReq.destinations
+        : (trip.destination || "")
+            .split(" → ")
+            .map((s) => s.trim())
+            .filter(Boolean),
+      startDate: trip.start_date || "",
+      endDate: trip.end_date || "",
+      travelers: String(igReq.travelers || "2"),
+      styles: igReq.styles || [],
+      budget: igReq.budget || "mid",
+      pace: igReq.pace || "active",
+      morningStart: igReq.morningStart || "early",
+      notes: trip.notes || igReq.notes || "",
+      arrivalCity: trip.arrival_city || "",
+      departureCity: trip.departure_city || "",
+      baseLocation: trip.base_location || igReq.baseLocation || "",
+    });
+    setFormEdited(false);
+  };
+
+  // Editor Apply → the one costed exit: checkpoint (shared trips) → Pre-IG →
+  // replace-confirm → write-back + IG. Nothing persists before replace-accept.
+  const startRouteRebuild = async (stops, summary) => {
+    if (!routeLens?.row || !trip?.id) return;
+    setShowRouteEditor(false);
+    posthog.capture("route_rebuild_started", { trip_id: trip.id });
+    initRouteFunnelContext();
+    const row = routeLens.row;
+    // FLATTENED voted item — every consumer reads top-level city/days/stops;
+    // _routeEdit guards it from the stale-pretripRoutes freshen pass
+    const votedItems = [
+      {
+        ...row,
+        city: cityChain(stops),
+        days: outlineDays(stops),
+        stops,
+        tier: 1,
+        vote: 1,
+        selected: true,
+        _routeEdit: true,
+      },
+    ];
+    setPendingRouteEdit({
+      stops,
+      summary,
+      snapshot: routeLens.stops,
+      votedItems,
+      rowId: row.id,
+      confirmed: false,
+    });
+    // Shared trips, v1: notify-don't-poll — pending edits live only in this
+    // session, so a group poll would reference a route no one else can see
+    if (INVITE_ENABLED && (members || []).length > 1) {
+      const go = await confirmSheet({
+        title: "Rebuild the itinerary around the edited route?",
+        message:
+          "Your group's plan will be replaced — everyone will see the change.",
+        confirmLabel: "Rebuild now",
+        cancelLabel: "Cancel",
+      });
+      if (!go) {
+        setEditingTrip(null);
+        setPendingForm(null);
+        setShowRouteEditor(true); // edits stay pending (resumeStops)
+        return;
+      }
+    }
+    openPreIgSheet({ skipConsensus: true });
+  };
+
+  // Funnel cancelled pre-write-back (Pre-IG ✕, replace-confirm Keep current):
+  // clear the Edit-Details-style residue and reopen the editor with the
+  // pending edits intact. Returns false when no route funnel is active.
+  const cancelRouteFunnel = () => {
+    const pre = pendingRouteEditRef.current;
+    if (!pre || pre.confirmed) return false;
+    setShowPreIgSheet(false);
+    setShowReplaceConfirm(false);
+    setEditingTrip(null);
+    setPendingForm(null);
+    setShowRouteEditor(true);
+    return true;
+  };
+
+  // Atomic write-back — fires ONLY at replace-accept, in the same action that
+  // starts the rebuild. .select() + row-count check: a silently no-oping bare
+  // write here would burn credits against a route that never changed.
+  const routeEditWriteBack = async () => {
+    const pre = pendingRouteEditRef.current;
+    if (!pre) return false;
+    try {
+      const { data: upd, error } = await supabase
+        .from("brainstorm_items")
+        .update({
+          city: cityChain(pre.stops),
+          data: {
+            ...(routeLens?.row?.data || {}),
+            stops: pre.stops,
+            days: outlineDays(pre.stops),
+          },
+          last_modified_by: session?.user?.id || null,
+          last_modified_at: new Date().toISOString(),
+        })
+        .eq("id", pre.rowId)
+        .select("id");
+      if (error || !upd?.length) return false;
+    } catch {
+      return false;
+    }
+    logActivity({
+      tripId: trip?.id || editingTrip?.id,
+      userId: session?.user?.id,
+      action: "route_edited",
+      entityType: "trip",
+      entityId: pre.rowId,
+      summary: `edited the route — ${pre.summary}`,
+    });
+    // Keep any hydrated local route state consistent with the DB
+    setPretripRoutes((prev) =>
+      prev.map((r) =>
+        r.id === pre.rowId
+          ? {
+              ...r,
+              city: cityChain(pre.stops),
+              days: outlineDays(pre.stops),
+              stops: pre.stops,
+            }
+          : r,
+      ),
+    );
+    setPendingRouteEdit((p) => (p ? { ...p, confirmed: true } : p));
+    setRouteLensNonce((n) => n + 1);
+    posthog.capture("route_rebuild_confirmed", { trip_id: trip?.id });
+    return true;
+  };
+
+  // Replace-accept branch for an edited route: persist, then build from the
+  // explicitly-constructed voted item (never from pretripRoutes hydration)
+  const routeRebuildGo = async (mergedForm) => {
+    const pre = pendingRouteEditRef.current;
+    if (!pre) return;
+    const ok = await routeEditWriteBack();
+    if (!ok) {
+      showToast("Couldn't save the route — please try again");
+      setEditingTrip(null);
+      setPendingForm(null);
+      setShowRouteEditor(true);
+      return;
+    }
+    setPendingRouteEdit((p) => (p ? { ...p, mergedForm } : p));
+    handleBuildFromBrainstorm(pre.votedItems, mergedForm);
+  };
+
+  // "Try again" from the overview after a failed/interrupted rebuild — same
+  // params, no re-confirm (the route row already carries the new shape)
+  const retryRouteRebuild = () => {
+    const pre = pendingRouteEditRef.current;
+    if (!pre?.confirmed) return;
+    initRouteFunnelContext();
+    const igReq = trip?.ig_request || {};
+    const mergedForm = pre.mergedForm || {
+      destinations: igReq.destinations?.length
+        ? igReq.destinations
+        : (trip?.destination || "")
+            .split(" → ")
+            .map((s) => s.trim())
+            .filter(Boolean),
+      startDate: trip?.start_date || "",
+      endDate: trip?.end_date || "",
+      travelers: String(igReq.travelers || "2"),
+      styles: igReq.styles || [],
+      budget: igReq.budget || "mid",
+      pace: igReq.pace || "active",
+      morningStart: igReq.morningStart || "early",
+      notes: trip?.notes || igReq.notes || "",
+      arrivalCity: trip?.arrival_city || "",
+      departureCity: trip?.departure_city || "",
+      baseLocation: trip?.base_location || igReq.baseLocation || "",
+    };
+    setTimeout(() => handleBuildFromBrainstorm(pre.votedItems, mergedForm), 50);
+  };
+
   const setItineraryMode = (mode, scrollToDayIndex) => {
     setItineraryModeRaw(mode);
     try {
@@ -8448,7 +8738,6 @@ export default function App({
         }
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pretripRoutes.length]);
 
   // Lazy fallback: fire Inspirations load if the user navigates to the tab
@@ -8468,7 +8757,6 @@ export default function App({
     if (!inspirationsVisible) return;
     if (destResearch.hasLoaded || destResearch.loading) return;
     loadDestinationResearch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     screen,
     pretripTab,
@@ -9238,7 +9526,9 @@ export default function App({
     setFormEdited(false);
     if (formOverride) setPendingForm(formOverride);
     const freshenedItems = (votedItems || []).map((item) => {
-      if (item.tier !== 1) return item;
+      // _routeEdit items carry deliberately-edited shape (Routes Lens) — a
+      // stale pretripRoutes hydration must never clobber them
+      if (item.tier !== 1 || item._routeEdit) return item;
       const latest = pretripRoutes.find((r) => r.id === item.id);
       return latest ? { ...item, ...latest, vote: item.vote } : item;
     });
@@ -9252,8 +9542,8 @@ export default function App({
   };
 
   const handleGenerate = async (form, votedItems = null) => {
-    if (_igInFlight) return;
-    _igInFlight = true;
+    if (_igInFlight.current) return;
+    _igInFlight.current = true;
     const capturedTripId = editingTrip?.id || null;
     let genLogId = null; // track this generation's log row
     // Day 6: IG timing instrumentation. Anchor timestamp for compact/detailed deltas.
@@ -9577,14 +9867,14 @@ export default function App({
       // If user navigated away (abort), silently stop — don't redirect
       if (e.name === "AbortError") {
         console.log("IG generation aborted by user navigation");
-        _igInFlight = false;
+        _igInFlight.current = false;
         return;
       }
       // Out of credits — paywall is already open; return to setup silently
       if (e.message === "Out of credits") {
         setIgGenerating(false);
         setScreen("setup");
-        _igInFlight = false;
+        _igInFlight.current = false;
         return;
       }
       console.error("AI generation failed:", e.message);
@@ -9593,7 +9883,7 @@ export default function App({
       setGenerateError(`Generation failed: ${e.message}. Please try again.`);
       setIgGenerating(false);
       setScreen("setup");
-      _igInFlight = false;
+      _igInFlight.current = false;
       return;
     }
     const generationCompletedAt = new Date().toISOString();
@@ -9703,9 +9993,12 @@ export default function App({
       if (delDayErr) console.error("Failed to delete days:", delDayErr);
       // Keep brainstorm_items — user can go back to "Explore Other Plans"
     } else {
+      // owner_id on CREATE only (updates must never reassign ownership).
+      // Without it every post-launch trip had owner_id NULL, and the invite
+      // RPCs check owner_id strictly — owners couldn't mint invite links.
       const { error: tripErr } = await supabase
         .from("trips")
-        .insert(tripPayload);
+        .insert({ ...tripPayload, owner_id: session.user.id });
       if (tripErr) {
         abort("Failed to save trip", tripErr);
         return;
@@ -9748,6 +10041,7 @@ export default function App({
           data: {
             tagline: it.tagline || null,
             days: it.days || null,
+            stops: it.stops || null,
             bestFor: it.bestFor || null,
             warning: it.warning || null,
             recommended: !!it.recommended,
@@ -9873,6 +10167,12 @@ export default function App({
     setDetailedLoading(false);
     setDetailedReady(true);
     setIgGenerating(false);
+    // Routes Lens: a rebuild from an edited route just completed
+    if (pendingRouteEditRef.current) {
+      posthog.capture("route_rebuild_completed", { trip_id: capturedTripId });
+      setPendingRouteEdit(null);
+      setRouteLensNonce((n) => n + 1);
+    }
     playDoneChime();
     // Milestone row for the activity feed.
     logActivity({
@@ -9892,7 +10192,7 @@ export default function App({
     // Pulse the chat mascot to draw attention
     setChatAttention(true);
     setTimeout(() => setChatAttention(false), 3000);
-    _igInFlight = false;
+    _igInFlight.current = false;
     if (session?.user?.id) refreshCredits(session.user.id);
     // Log generation timing — update by trip_id as fallback since genLogId may
     // not be set yet. NOTE: supabase-js v2 only sends a query when it's
@@ -10380,6 +10680,10 @@ export default function App({
                     ? "Route title is missing"
                     : "Day descriptions are incomplete";
                 else delete result._error;
+                // Chat edits that rewrite days invalidate the structured
+                // stops — stale stops disagreeing with the edited days are
+                // worse than absent (the derivation ladder re-derives)
+                if (upd.days) result.stops = null;
                 return result;
               });
               // Persist ONLY the changed route (non-destructive). upd.id ===
@@ -10401,9 +10705,14 @@ export default function App({
                     geocode: changed.geocode || null,
                     tier: changed.tier || 2,
                     selected: !!changed.selected,
+                    last_modified_by: session?.user?.id || null,
+                    last_modified_at: new Date().toISOString(),
                     data: {
+                      ...(changed.data || {}),
                       tagline: changed.tagline,
                       days: changed.days,
+                      // days rewritten → stops invalidated (see merge above)
+                      stops: changed.stops ?? null,
                       bestFor: changed.bestFor,
                       warning: changed.warning,
                       recommended: !!changed.recommended,
@@ -11511,7 +11820,7 @@ export default function App({
                           if (igAbortRef.current) {
                             igAbortRef.current.abort();
                             igAbortRef.current = null;
-                            _igInFlight = false;
+                            _igInFlight.current = false;
                           }
                           onHome();
                         }}
@@ -11758,7 +12067,7 @@ export default function App({
                           if (igAbortRef.current) {
                             igAbortRef.current.abort();
                             igAbortRef.current = null;
-                            _igInFlight = false;
+                            _igInFlight.current = false;
                           }
                           onHome();
                         }}
@@ -11883,7 +12192,7 @@ export default function App({
                 if (igAbortRef.current) {
                   igAbortRef.current.abort();
                   igAbortRef.current = null;
-                  _igInFlight = false;
+                  _igInFlight.current = false;
                 }
                 if (onHome) onHome();
               }}
@@ -13398,7 +13707,7 @@ export default function App({
                               if (igAbortRef.current) {
                                 igAbortRef.current.abort();
                                 igAbortRef.current = null;
-                                _igInFlight = false;
+                                _igInFlight.current = false;
                               }
                               onHome();
                             }}
@@ -13425,7 +13734,7 @@ export default function App({
                               igAbortRef.current.abort();
                               igAbortRef.current = null;
                             }
-                            _igInFlight = false;
+                            _igInFlight.current = false;
                             setDetailedLoading(false);
                             setEditingTrip(trip);
                             // Prefill pendingForm from the trip so BrainstormView has context
@@ -13743,6 +14052,92 @@ export default function App({
                       </div>
                     </div>
                   )}
+
+                  {/* Route Overview — the chosen route as the itinerary's
+                      table of contents (Routes Lens, ships dark). Hidden
+                      while IG streams; re-renders when days land. */}
+                  {ROUTES_LENS_ENABLED &&
+                    !storyActive &&
+                    routeLens &&
+                    days.length > 0 &&
+                    !igGenerating &&
+                    !detailedLoading && (
+                      <RouteOverview
+                        pLabel={routeLens.pLabel}
+                        title={routeLens.row.title}
+                        stops={routeLens.stops}
+                        ranges={dRanges(routeLens.stops, days)}
+                        initialCollapsed={(() => {
+                          // Active-trip window: open at today's plan, not the map
+                          const today = new Date().toISOString().slice(0, 10);
+                          return !!(
+                            trip?.start_date &&
+                            trip?.end_date &&
+                            today >= trip.start_date &&
+                            today <= trip.end_date
+                          );
+                        })()}
+                        scrollRootRef={scrollRef}
+                        onSegTap={(idx0) => {
+                          scrollToDay(idx0);
+                          posthog.capture("route_seg_to_day", {
+                            trip_id: trip?.id,
+                          });
+                        }}
+                        onEdit={() => {
+                          setShowRouteEditor(true);
+                          posthog.capture("route_editor_open", {
+                            trip_id: trip?.id,
+                          });
+                        }}
+                        notice={
+                          pendingRouteEdit?.confirmed
+                            ? {
+                                text: "Rebuild didn't finish —",
+                                actionLabel: "Try again",
+                                onAction: retryRouteRebuild,
+                              }
+                            : null
+                        }
+                        onExplore={() => {
+                          // Same init as the Edit Details path — BrainstormView
+                          // needs editingTrip + pendingForm for context
+                          if (igAbortRef.current) {
+                            igAbortRef.current.abort();
+                            igAbortRef.current = null;
+                          }
+                          _igInFlight.current = false;
+                          setDetailedLoading(false);
+                          setEditingTrip(trip);
+                          const igReq = trip.ig_request || {};
+                          setPendingForm({
+                            destinations: igReq.destinations?.length
+                              ? igReq.destinations
+                              : (trip.destination || "")
+                                  .split(" → ")
+                                  .map((s) => s.trim())
+                                  .filter(Boolean),
+                            startDate: trip.start_date || "",
+                            endDate: trip.end_date || "",
+                            travelers: String(igReq.travelers || "2"),
+                            styles: igReq.styles || [],
+                            budget: igReq.budget || "mid",
+                            pace: igReq.pace || "active",
+                            morningStart: igReq.morningStart || "early",
+                            notes: trip.notes || igReq.notes || "",
+                            arrivalCity: trip.arrival_city || "",
+                            departureCity: trip.departure_city || "",
+                            baseLocation:
+                              trip.base_location || igReq.baseLocation || "",
+                          });
+                          setFormEdited(false);
+                          setPretripTab("brainstorm");
+                          setScreen("brainstorm");
+                          if (onUrlChange)
+                            onUrlChange(`/trip/${trip.id}/plans`);
+                        }}
+                      />
+                    )}
 
                   {/* City-pill strip — only in detailed view */}
                   {!storyActive &&
@@ -15097,7 +15492,10 @@ export default function App({
           >
             {/* Scrim */}
             <div
-              onClick={() => setShowPreIgSheet(false)}
+              onClick={() => {
+                if (cancelRouteFunnel()) return;
+                setShowPreIgSheet(false);
+              }}
               style={{
                 position: "absolute",
                 inset: 0,
@@ -15411,6 +15809,10 @@ export default function App({
                     ).trim();
                   }
                   setPendingForm(mergedForm);
+                  if (pendingRouteEdit) {
+                    routeRebuildGo(mergedForm);
+                    return;
+                  }
                   const voted = (pretripRoutes || []).map((r) => ({
                     ...r,
                     tier: 1,
@@ -15743,6 +16145,14 @@ export default function App({
                 old: String(igReq.travelers || "2"),
                 new: String(pendingForm?.travelers),
               });
+            // Routes Lens: an edited route always leads the diff
+            if (pendingRouteEdit?.summary) {
+              changes.unshift({
+                label: "Route",
+                old: `${(pendingRouteEdit.snapshot || []).length} stops`,
+                new: `${pendingRouteEdit.stops.length} stops · ${pendingRouteEdit.summary}`,
+              });
+            }
             const isRefresh = changes.length === 0;
             return (
               <div
@@ -15756,7 +16166,10 @@ export default function App({
                 }}
               >
                 <div
-                  onClick={() => setShowReplaceConfirm(false)}
+                  onClick={() => {
+                    if (cancelRouteFunnel()) return;
+                    setShowReplaceConfirm(false);
+                  }}
                   style={{
                     position: "absolute",
                     inset: 0,
@@ -15905,6 +16318,10 @@ export default function App({
                         ).trim();
                       }
                       setPendingForm(mergedForm);
+                      if (pendingRouteEdit) {
+                        routeRebuildGo(mergedForm);
+                        return;
+                      }
                       const voted = (pretripRoutes || []).map((r) => ({
                         ...r,
                         tier: 1,
@@ -15943,6 +16360,11 @@ export default function App({
                   </div>
                   <button
                     onClick={() => {
+                      if (cancelRouteFunnel()) {
+                        setScreen("itinerary");
+                        setActiveBottomTab("itinerary");
+                        return;
+                      }
                       setShowReplaceConfirm(false);
                       setShowPreIgSheet(false);
                       setScreen("itinerary");
@@ -17150,6 +17572,48 @@ export default function App({
               )}
             </div>
           </div>
+        )}
+        {ROUTES_LENS_ENABLED && routeLens && (
+          <RouteEditorSheet
+            open={showRouteEditor}
+            stops={routeLens.stops}
+            resumeStops={
+              pendingRouteEdit && !pendingRouteEdit.confirmed
+                ? pendingRouteEdit.stops
+                : null
+            }
+            tripNights={tripNightsOf(tripDayCount)}
+            destinationHint={trip?.destination || ""}
+            stopCoords={(() => {
+              // First geocoded activity per stop — real coords for the
+              // geo-sanity warning without any extra requests
+              if (!days.length) return [];
+              return dRanges(routeLens.stops, days)
+                .map((r) => {
+                  for (
+                    let d = r.first - 1;
+                    d < Math.min(r.last, days.length);
+                    d++
+                  ) {
+                    const act = (days[d]?.activities || []).find(
+                      (a) => Number.isFinite(a?.lat) && Number.isFinite(a?.lng),
+                    );
+                    if (act) return { lat: act.lat, lng: act.lng };
+                  }
+                  return null;
+                })
+                .filter(Boolean);
+            })()}
+            onClose={() => {
+              setShowRouteEditor(false);
+              // discarding the editor abandons un-confirmed pending edits
+              setPendingRouteEdit((p) => (p && !p.confirmed ? null : p));
+            }}
+            onApply={startRouteRebuild}
+            onEditEvent={(op) =>
+              posthog.capture("route_edit", { trip_id: trip?.id, op })
+            }
+          />
         )}
         {INVITE_ENABLED && showMembers && trip?.id && (
           <MembersSheet

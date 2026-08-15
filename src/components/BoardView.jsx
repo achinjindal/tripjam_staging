@@ -2455,6 +2455,8 @@ function CityInput({
   inputStyle,
   airportOnly = false,
   hotelCity = null,
+  contextHint = null, // region bias appended to the query (no type filter)
+  onPick = null, // called with the picked text when a suggestion is chosen
   openUpward = false,
 }) {
   const [suggs, setSuggs] = useState([]);
@@ -2472,7 +2474,11 @@ function CityInput({
       return;
     }
     const types = airportOnly ? "airport" : hotelCity ? "lodging" : "";
-    const q = hotelCity ? `${val} ${hotelCity}` : val;
+    const q = hotelCity
+      ? `${val} ${hotelCity}`
+      : contextHint
+        ? `${val} ${contextHint}`
+        : val;
     const cacheKey = `${q.trim().toLowerCase()}|${types}`;
     const cached = _cityAutocompleteCache.get(cacheKey);
     if (cached) {
@@ -2514,10 +2520,12 @@ function CityInput({
 
   const pick = (s) => {
     const fmt = s.placePrediction?.structuredFormat;
-    onChange(fmt?.mainText?.text || s.placePrediction?.text?.text || "");
+    const picked = fmt?.mainText?.text || s.placePrediction?.text?.text || "";
+    onChange(picked);
     setSuggs([]);
     setShow(false);
     setLoading(false);
+    onPick?.(picked);
   };
 
   return (

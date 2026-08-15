@@ -246,6 +246,7 @@ export function FoodSpotlightCard({ item, city }) {
   }, [item.name, city]);
   return (
     <div
+      data-testid="food-spotlight-card"
       style={{
         flexShrink: 0,
         width: 140,
