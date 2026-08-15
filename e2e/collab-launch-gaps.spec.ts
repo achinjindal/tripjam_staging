@@ -93,10 +93,16 @@ async function setup(): Promise<Ctx | null> {
   const owner = await signedClient(OWNER, PASSWORD);
   const b = await signedClient(SECOND_USER, PASSWORD);
   if (!owner || !b) return null;
+  const ownId = (await owner.auth.getUser()).data.user?.id as string;
+  // Scope to trips qa-tester actually CREATED — test runs mint sibling
+  // "Tokyo to Kyoto Classic · <dates>" trips (rebuilds by other QA users,
+  // freshly built copies), and an unscoped ilike can pick one of those
   const { data: trips } = await owner
     .from("trips")
     .select("id")
     .ilike("name", `${TRIP_NAME}%`)
+    .eq("created_by", ownId)
+    .order("created_at", { ascending: true })
     .limit(1);
   const tripId = trips?.[0]?.id as string | undefined;
   if (!tripId) return null;

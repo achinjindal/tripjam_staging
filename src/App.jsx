@@ -9993,9 +9993,12 @@ export default function App({
       if (delDayErr) console.error("Failed to delete days:", delDayErr);
       // Keep brainstorm_items — user can go back to "Explore Other Plans"
     } else {
+      // owner_id on CREATE only (updates must never reassign ownership).
+      // Without it every post-launch trip had owner_id NULL, and the invite
+      // RPCs check owner_id strictly — owners couldn't mint invite links.
       const { error: tripErr } = await supabase
         .from("trips")
-        .insert(tripPayload);
+        .insert({ ...tripPayload, owner_id: session.user.id });
       if (tripErr) {
         abort("Failed to save trip", tripErr);
         return;
