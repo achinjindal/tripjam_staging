@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { login, snap } from "./helpers";
+import { login, snap, dismissTripOverlays } from "./helpers";
 
 /**
  * Interaction tests — real user behavior patterns that catch state sync bugs.
@@ -107,6 +107,15 @@ async function openDraftTrip(page: import("@playwright/test").Page) {
   // back to any Planning card. Trip cards are the row <div> whose status badge
   // reads "Planning".
   const candidates = [
+    // Actual clickable trip cards (cursor: pointer root) — the bare div
+    // locators below match ancestor wrappers whose "click" hits nothing
+    page
+      .locator("[style*='cursor: pointer']")
+      .filter({ hasText: /Japan ·/ })
+      .filter({ has: page.locator("text=/Planning/") }),
+    page
+      .locator("[style*='cursor: pointer']")
+      .filter({ has: page.locator("text=/Planning/") }),
     page
       .locator("div", { hasText: /Japan ·/ })
       .filter({ has: page.locator("text=/Planning/") }),
@@ -121,6 +130,7 @@ async function openDraftTrip(page: import("@playwright/test").Page) {
         continue;
       await card.click();
       await page.waitForTimeout(1500);
+      await dismissTripOverlays(page, 1500);
 
       // Switch to the Route sub-tab so the Select cards render.
       const routeTab = page.locator("button", { hasText: /Route/i }).first();
@@ -383,7 +393,12 @@ test.describe("Pre-IG sheet", () => {
       .locator("button", { hasText: /Build My Itinerary/i })
       .first();
     await buildBtn.click();
-    await page.waitForTimeout(500);
+    // The sheet opens only AFTER the extract-preferences fetch resolves — a
+    // fixed 500ms wait raced it (scrim tap landed pre-open, then the sheet
+    // appeared and the assertion saw it). Wait for the sheet itself.
+    await expect(page.locator("text=/Fine-tune/i").first()).toBeVisible({
+      timeout: 15000,
+    });
 
     // Tap scrim (top area above sheet)
     await page.mouse.click(200, 50);
@@ -402,7 +417,9 @@ test.describe("Pre-IG sheet", () => {
 });
 
 test.describe("Board tab navigation", () => {
-  test.setTimeout(300000);
+  // Staging IG for a 7-day trip now runs ~5 min server-side (llm_usage
+  // confirms completion); the old 300s budget expired mid-stream.
+  test.setTimeout(600000);
 
   test("Board tab hides chat bar", async ({ page }) => {
     const opened = await openDraftTrip(page);
@@ -429,13 +446,22 @@ test.describe("Board tab navigation", () => {
       .first()
       .click();
 
+    // The post-IG UX completes on the brainstorm screen with a ready banner
+    // ("Your itinerary is ready · View itinerary →") rather than
+    // auto-navigating — click through when it appears.
+    const viewBtn = page
+      .locator("button", { hasText: /View itinerary/i })
+      .first();
+    await viewBtn.click({ timeout: 480000 });
+    await page.waitForTimeout(1500);
+
     // Wait for itinerary
     await page.waitForFunction(
       () =>
         [...document.querySelectorAll("button")].some((b) =>
           /Board/i.test(b.textContent || ""),
         ),
-      { timeout: 240000 },
+      { timeout: 60000 },
     );
     await page.waitForTimeout(2000);
 

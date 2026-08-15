@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { login, snap } from "./helpers";
+import { login, snap, dismissTripOverlays } from "./helpers";
 
 /**
  * Open an existing built trip and navigate to the Magazine sub-tab.
@@ -34,6 +34,7 @@ async function openMagazine(page: import("@playwright/test").Page) {
   }
   await tripCard.click();
   await page.waitForTimeout(2000);
+  await dismissTripOverlays(page, 2000);
 
   // Switch to the Inspirations top tab (which hosts the Magazine sub-tab).
   const inspTab = page.locator("button", { hasText: /Inspirations/i }).first();
@@ -157,8 +158,10 @@ test.describe("Magazine & Photos", () => {
     console.log(`Food section visible: ${hasFoodSection}`);
 
     if (hasFoodSection) {
-      // Food cards should have warm orange background
-      const foodCards = page.locator("[style*='#FFF7ED']");
+      // Count real cards — the old [style*='#FFF7ED'] selector never matched
+      // (browsers serialize style attrs to rgb(), and the card now uses the
+      // T.warningLight token)
+      const foodCards = page.getByTestId("food-spotlight-card");
       const foodCount = await foodCards.count();
       console.log(`Food spotlight cards: ${foodCount}`);
       expect(foodCount).toBeGreaterThan(0);

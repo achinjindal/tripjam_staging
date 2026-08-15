@@ -1,5 +1,5 @@
 import { test, expect, Page } from "@playwright/test";
-import { login, snap } from "./helpers";
+import { login, snap, dismissTripOverlays } from "./helpers";
 
 /**
  * Story mode (Design A swipe gallery) — read-only magazine view + full-screen
@@ -16,6 +16,7 @@ async function openStory(page: Page): Promise<boolean> {
     return false;
   await card.click();
   await page.waitForTimeout(2500);
+  await dismissTripOverlays(page, 2000);
   // Desktop shell may need the Itinerary tab selected explicitly
   const itinTab = page.locator("button", { hasText: /^\s*Itinerary\s*$/ });
   if (
