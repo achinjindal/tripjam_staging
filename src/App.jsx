@@ -9349,6 +9349,7 @@ export default function App({
         start_date: form.startDate,
         end_date: form.endDate,
         created_by: session.user.id,
+        owner_id: session.user.id,
         ig_request: igRequest,
         base_location: form.baseLocation || null,
         ...(form.notes && { notes: form.notes }),
@@ -9511,6 +9512,47 @@ export default function App({
       baseChanged;
 
     setShowEditConfirm({ changes, isStructural, form });
+  };
+
+  // Itinerary → "Explore plans": the single transition for every entry point.
+  // IG completion clears editingTrip + pendingForm, and the pretrip
+  // BrainstormView loads saved routes only from editingTrip?.id — so a bare
+  // setScreen("brainstorm") mounts it with no trip id and it sits in the
+  // empty "Generating your plans…" state forever.
+  const openExplorePlans = () => {
+    // Abort any in-flight IG generation
+    if (igAbortRef.current) {
+      igAbortRef.current.abort();
+      igAbortRef.current = null;
+    }
+    _igInFlight.current = false;
+    setDetailedLoading(false);
+    setEditingTrip(trip);
+    // Prefill pendingForm from the trip so BrainstormView has context
+    const igReq = trip.ig_request || {};
+    setPendingForm({
+      destinations: igReq.destinations?.length
+        ? igReq.destinations
+        : (trip.destination || "")
+            .split(" → ")
+            .map((s) => s.trim())
+            .filter(Boolean),
+      startDate: trip.start_date || "",
+      endDate: trip.end_date || "",
+      travelers: String(igReq.travelers || "2"),
+      styles: igReq.styles || [],
+      budget: igReq.budget || "mid",
+      pace: igReq.pace || "active",
+      morningStart: igReq.morningStart || "early",
+      notes: trip.notes || igReq.notes || "",
+      arrivalCity: trip.arrival_city || "",
+      departureCity: trip.departure_city || "",
+      baseLocation: trip.base_location || igReq.baseLocation || "",
+    });
+    setFormEdited(false);
+    setPretripTab("brainstorm");
+    setScreen("brainstorm");
+    if (onUrlChange) onUrlChange(`/trip/${trip.id}/plans`);
   };
 
   const handleBuildFromBrainstorm = (votedItems, formOverride = null) => {
@@ -12249,10 +12291,7 @@ export default function App({
             )}
             {screen === "itinerary" && (
               <button
-                onClick={() => {
-                  setScreen("brainstorm");
-                  if (onUrlChange) onUrlChange(`/trip/${trip.id}/plans`);
-                }}
+                onClick={openExplorePlans}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -12454,13 +12493,7 @@ export default function App({
                 )}
               </div>
               {screen === "itinerary" && (
-                <button
-                  onClick={() => {
-                    setScreen("brainstorm");
-                    if (onUrlChange) onUrlChange(`/trip/${trip.id}/plans`);
-                  }}
-                  style={tripContextBtnStyle}
-                >
+                <button onClick={openExplorePlans} style={tripContextBtnStyle}>
                   🛣 Explore plans
                 </button>
               )}
@@ -13739,41 +13772,7 @@ export default function App({
                           </button>
                         )}
                         <button
-                          onClick={() => {
-                            // Abort any in-flight IG generation
-                            if (igAbortRef.current) {
-                              igAbortRef.current.abort();
-                              igAbortRef.current = null;
-                            }
-                            _igInFlight.current = false;
-                            setDetailedLoading(false);
-                            setEditingTrip(trip);
-                            // Prefill pendingForm from the trip so BrainstormView has context
-                            const igReq = trip.ig_request || {};
-                            setPendingForm({
-                              destinations: igReq.destinations?.length
-                                ? igReq.destinations
-                                : (trip.destination || "")
-                                    .split(" → ")
-                                    .map((s) => s.trim())
-                                    .filter(Boolean),
-                              startDate: trip.start_date || "",
-                              endDate: trip.end_date || "",
-                              travelers: String(igReq.travelers || "2"),
-                              styles: igReq.styles || [],
-                              budget: igReq.budget || "mid",
-                              pace: igReq.pace || "active",
-                              morningStart: igReq.morningStart || "early",
-                              notes: trip.notes || igReq.notes || "",
-                              arrivalCity: trip.arrival_city || "",
-                              departureCity: trip.departure_city || "",
-                              baseLocation:
-                                trip.base_location || igReq.baseLocation || "",
-                            });
-                            setFormEdited(false);
-                            setPretripTab("brainstorm");
-                            setScreen("brainstorm");
-                          }}
+                          onClick={openExplorePlans}
                           style={{
                             background: "rgba(255,255,255,0.15)",
                             border: "none",
@@ -14110,43 +14109,7 @@ export default function App({
                               }
                             : null
                         }
-                        onExplore={() => {
-                          // Same init as the Edit Details path — BrainstormView
-                          // needs editingTrip + pendingForm for context
-                          if (igAbortRef.current) {
-                            igAbortRef.current.abort();
-                            igAbortRef.current = null;
-                          }
-                          _igInFlight.current = false;
-                          setDetailedLoading(false);
-                          setEditingTrip(trip);
-                          const igReq = trip.ig_request || {};
-                          setPendingForm({
-                            destinations: igReq.destinations?.length
-                              ? igReq.destinations
-                              : (trip.destination || "")
-                                  .split(" → ")
-                                  .map((s) => s.trim())
-                                  .filter(Boolean),
-                            startDate: trip.start_date || "",
-                            endDate: trip.end_date || "",
-                            travelers: String(igReq.travelers || "2"),
-                            styles: igReq.styles || [],
-                            budget: igReq.budget || "mid",
-                            pace: igReq.pace || "active",
-                            morningStart: igReq.morningStart || "early",
-                            notes: trip.notes || igReq.notes || "",
-                            arrivalCity: trip.arrival_city || "",
-                            departureCity: trip.departure_city || "",
-                            baseLocation:
-                              trip.base_location || igReq.baseLocation || "",
-                          });
-                          setFormEdited(false);
-                          setPretripTab("brainstorm");
-                          setScreen("brainstorm");
-                          if (onUrlChange)
-                            onUrlChange(`/trip/${trip.id}/plans`);
-                        }}
+                        onExplore={openExplorePlans}
                       />
                     )}
 
@@ -14299,11 +14262,7 @@ export default function App({
                           only takes a minute.
                         </div>
                         <button
-                          onClick={() => {
-                            setScreen("brainstorm");
-                            if (onUrlChange)
-                              onUrlChange(`/trip/${trip.id}/plans`);
-                          }}
+                          onClick={openExplorePlans}
                           style={{
                             background: T.ink,
                             color: T.warm,
