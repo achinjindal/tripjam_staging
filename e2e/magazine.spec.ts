@@ -174,6 +174,213 @@ test.describe("Magazine & Photos", () => {
     await snap(page, "33-food-spotlight");
   });
 
+  test("Pre-trip magazine survives IG start — no reload from scratch", async ({
+    page,
+  }) => {
+    // THE recurring bug (reported multiple times): magazine content loaded
+    // during RG must show instantly when IG starts (handleGenerate flips
+    // pretripTab to "magazine", remounting the tree). Root causes fixed:
+    // _fetchPhoto rejecting its own cached URL as a duplicate, and the
+    // digest never persisting pre-trip. Zero LLM spend: deep dives are
+    // seeded via magazine_digest, IG is a hung request.
+    test.setTimeout(120000);
+    const env: Record<string, string> = {};
+    try {
+      const raw = readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), "..", ".env"),
+        "utf8",
+      );
+      for (const line of raw.split("\n")) {
+        const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*)\s*$/);
+        if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+      }
+    } catch {
+      /* skip below */
+    }
+    const sb = env.VITE_SUPABASE_URL
+      ? createClient(env.VITE_SUPABASE_URL, env.VITE_SUPABASE_ANON_KEY, {
+          auth: { persistSession: false, autoRefreshToken: false },
+        })
+      : null;
+    test.skip(!sb, "no supabase env");
+    const { error: aerr } = await sb!.auth.signInWithPassword({
+      email: "qa-tester@tripjam.app",
+      password: "qaTest123!",
+    });
+    test.skip(!!aerr, "auth failed");
+    const uid = (await sb!.auth.getUser()).data.user?.id as string;
+
+    // ── Seed: a Planning draft with routes + a pre-baked Japan deep dive
+    const tripId = crypto.randomUUID();
+    const start = new Date();
+    start.setDate(start.getDate() + 50);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 4);
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    const WRITEUP_MARK = "Seeded-for-E2E: a country of quiet contrasts.";
+    const { error: tErr } = await sb!.from("trips").insert({
+      id: tripId,
+      name: "Japan · Magazine IG Fixture",
+      destination: "Japan",
+      start_date: iso(start),
+      end_date: iso(end),
+      created_by: uid,
+      owner_id: uid,
+      ig_request: {
+        destinations: ["Japan"],
+        travelers: "2",
+        numDays: 5,
+        startDate: iso(start),
+        endDate: iso(end),
+      },
+      magazine_digest: {
+        Japan: {
+          writeup: WRITEUP_MARK,
+          foodSpecialties: [
+            { name: "Ramen", note: "rich pork broth noodles", icon: "🍜" },
+          ],
+          weather: "Mild and clear in this season.",
+          gettingAround: "Shinkansen between cities; IC cards in town.",
+          etiquette: ["Remove shoes indoors"],
+          didYouKnow: "Japan has over 3,000 onsen towns.",
+          moreSights: [
+            {
+              title: "Senso-ji",
+              geocode: "Senso-ji",
+              note: "Tokyo's oldest temple",
+              icon: "⛩️",
+              photo_query: "Senso-ji Kaminarimon gate",
+            },
+            {
+              title: "Fushimi Inari-taisha",
+              geocode: "Fushimi Inari-taisha",
+              note: "thousand torii gates",
+              icon: "🦊",
+              photo_query: "Fushimi Inari torii path",
+            },
+          ],
+        },
+      },
+    });
+    test.skip(!!tErr, `trip seed failed: ${tErr?.message}`);
+    await sb!
+      .from("trip_members")
+      .insert({ trip_id: tripId, user_id: uid, role: "edit" });
+    const { error: rErr } = await sb!.from("brainstorm_items").insert(
+      [0, 1].map((i) => ({
+        trip_id: tripId,
+        title: i === 0 ? "Classic Golden Route" : "Kansai Focus",
+        city: i === 0 ? "Tokyo, Hakone, Kyoto" : "Osaka, Nara, Kyoto",
+        category: "Route",
+        tier: 1,
+        position: i,
+        selected: false,
+        icon: "🗾",
+        data: {
+          tagline: "seeded",
+          recommended: i === 0,
+          bestFor: "e2e",
+          warning: null,
+          points: [{ text: "seeded route", good: true }],
+          days: [
+            "**Tokyo** — arrive and explore",
+            "**Tokyo** — city day",
+            "**Hakone** — onsen, overnight in Hakone",
+            "**Kyoto** — temples",
+            "**Kyoto** — departure",
+          ],
+          stops: [
+            { city: "Tokyo", nights: 2 },
+            { city: "Hakone", nights: 1 },
+            { city: "Kyoto", nights: 1 },
+          ],
+        },
+      })),
+    );
+    test.skip(!!rErr, `route seed failed: ${rErr?.message}`);
+
+    try {
+      // Block every LLM endpoint; IG HANGS (never resolves) so the
+      // during-IG magazine state persists for assertion
+      for (const fn of [
+        "extract-preferences",
+        "generate-brainstorm",
+        "city-deep-dive",
+        "generate-destination-research",
+      ]) {
+        await page.route(`**/functions/v1/${fn}`, (route) =>
+          route.fulfill({ status: 500, body: "{}" }),
+        );
+      }
+      await page.route("**/functions/v1/generate-itinerary", () => {
+        /* hang — keeps igGenerating true with zero spend */
+      });
+
+      await login(page);
+      await page.goto(`/trip/${tripId}/plans`);
+      await page.waitForTimeout(2500);
+      await dismissTripOverlays(page, 2000);
+
+      // ── RG phase: open the Magazine sub-tab, let it load
+      const magTab = page
+        .locator("button:visible", { hasText: /Magazine/i })
+        .first();
+      await magTab.click();
+      await expect(page.getByText(WRITEUP_MARK)).toBeVisible({
+        timeout: 10000,
+      });
+      const photo = page
+        .locator("img:visible[src*='wikimedia'], img:visible[src*='upload.']")
+        .first();
+      const photoLoaded = await photo
+        .waitFor({ state: "visible", timeout: 25000 })
+        .then(() => true)
+        .catch(() => false);
+      test.skip(!photoLoaded, "no magazine photo loaded during RG phase");
+      const src1 = await photo.getAttribute("src");
+
+      // ── Select a route and start IG
+      const routeTab = page
+        .locator("button:visible", { hasText: /Route/ })
+        .first();
+      await routeTab.click();
+      await page.waitForTimeout(800);
+      await page
+        .locator("button:visible", { hasText: /^Select$/ })
+        .first()
+        .click();
+      await page.waitForTimeout(500);
+      await page
+        .locator("button:visible", { hasText: /Build My Itinerary/i })
+        .first()
+        .click();
+      await expect(page.getByText("Fine-tune your itinerary")).toBeVisible({
+        timeout: 10000,
+      });
+      await page
+        .locator("button:visible", { hasText: /Generate Itinerary/i })
+        .first()
+        .click();
+
+      // ── IG start flips to the magazine: EVERYTHING must be there at once.
+      // The writeup (seeded digest) and the SAME photo — not a skeleton, not
+      // a refetched alternative.
+      await expect(page.getByText(WRITEUP_MARK)).toBeVisible({
+        timeout: 5000,
+      });
+      await expect(
+        page
+          .locator(`img:visible[src="${src1!.replace(/"/g, '\\"')}"]`)
+          .first(),
+      ).toBeVisible({ timeout: 3000 });
+    } finally {
+      await sb!.from("brainstorm_items").delete().eq("trip_id", tripId);
+      await sb!.from("trip_members").delete().eq("trip_id", tripId);
+      await sb!.from("activity_log").delete().eq("trip_id", tripId);
+      await sb!.from("trips").delete().eq("id", tripId);
+    }
+  });
+
   test("Magazine photos survive a tab flip — no reload from scratch", async ({
     page,
   }) => {
