@@ -9961,6 +9961,17 @@ export default function App({
       }),
       ...(form.arrivalMode && { arrival_mode: form.arrivalMode }),
       ...(form.departureMode && { departure_mode: form.departureMode }),
+      // Carry the RG-phase Magazine work onto the trip row. Pre-trip there is
+      // no trip id, so persistMagazineDigest() no-ops and every deep dive
+      // loaded during brainstorm was lost to future sessions.
+      ...(() => {
+        const pruned = Object.fromEntries(
+          Object.entries(deepDiveCacheRef.current || {}).filter(
+            ([, v]) => v && typeof v === "object",
+          ),
+        );
+        return Object.keys(pruned).length ? { magazine_digest: pruned } : {};
+      })(),
     };
 
     if (isEditing) {

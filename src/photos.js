@@ -210,12 +210,19 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
     !_usedPhotoUrls.has(url) &&
     !BAD_PATTERNS.test(url);
 
-  // Deduplicate: return cached result immediately if already fetched
+  // Deduplicate: return cached result immediately if already fetched.
+  // NOTE: a cache hit is returned even when the URL is in _usedPhotoUrls —
+  // the cache entry means THIS subject legitimately chose that photo (the
+  // used-set mark came from its own first render). Rejecting it made every
+  // remount (e.g. the Magazine tab re-opening when IG starts) treat its own
+  // photos as duplicates and reload the whole tree through fallback ladders.
+  // Cross-subject dedup is unaffected: different subjects have different
+  // cache keys and their candidate walks still skip used URLs via good().
   const cacheKey = `${geocode}||${city || ""}`;
   if (_photoCache[cacheKey] !== undefined) {
     const cached = _photoCache[cacheKey];
     if (cached === _PHOTO_IN_FLIGHT) return null;
-    return cached && _usedPhotoUrls.has(cached) ? null : cached;
+    return cached;
   }
   // Mark in-flight to prevent concurrent duplicate fetches
   _photoCache[cacheKey] = _PHOTO_IN_FLIGHT;
