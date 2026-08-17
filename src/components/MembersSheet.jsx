@@ -429,7 +429,7 @@ export default function MembersSheet({
                       {memberName(m, selfId)}
                     </div>
                     <div style={{ fontSize: 11, color: T.mist }}>
-                      {owner ? "Owner" : "Editor"}
+                      {owner ? "Owner" : "Co-traveller"}
                       {m.user_id === selfId ? " · you" : ""}
                     </div>
                     {/* What this traveller wants from the trip — everyone's
