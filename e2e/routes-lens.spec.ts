@@ -108,6 +108,7 @@ async function seedTrip(
     .insert({ trip_id: id, user_id: userId, role: "edit" });
   if (memErr && !/duplicate/i.test(memErr.message)) {
     console.warn(`seed ${name}: membership failed:`, memErr.message);
+    await sb.from("trips").delete().eq("id", id);
     return null;
   }
   const { data: dayRows, error: daysErr } = await sb
@@ -124,6 +125,8 @@ async function seedTrip(
     .select("id, position");
   if (daysErr || !dayRows?.length) {
     console.warn(`seed ${name}: days insert failed:`, daysErr?.message);
+    await sb.from("trip_members").delete().eq("trip_id", id);
+    await sb.from("trips").delete().eq("id", id);
     return null;
   }
   // 3 activities per day — realistic card heights so the itinerary actually
@@ -143,6 +146,9 @@ async function seedTrip(
   const { error: actErr } = await sb.from("activities").insert(acts);
   if (actErr) {
     console.warn(`seed ${name}: activities insert failed:`, actErr.message);
+    await sb.from("days").delete().eq("trip_id", id);
+    await sb.from("trip_members").delete().eq("trip_id", id);
+    await sb.from("trips").delete().eq("id", id);
     return null;
   }
   if (routeData) {
@@ -158,6 +164,21 @@ async function seedTrip(
     });
     if (routeErr) {
       console.warn(`seed ${name}: route insert failed:`, routeErr.message);
+      const { data: dIds } = await sb
+        .from("days")
+        .select("id")
+        .eq("trip_id", id);
+      if (dIds?.length)
+        await sb
+          .from("activities")
+          .delete()
+          .in(
+            "day_id",
+            dIds.map((d) => d.id),
+          );
+      await sb.from("days").delete().eq("trip_id", id);
+      await sb.from("trip_members").delete().eq("trip_id", id);
+      await sb.from("trips").delete().eq("id", id);
       return null;
     }
   }
