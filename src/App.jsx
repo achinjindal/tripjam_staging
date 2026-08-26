@@ -8614,8 +8614,8 @@ export default function App({
     });
     if (destinations.length === 0) return;
     setDestResearch((s) => ({ ...s, loading: true, errored: false }));
-    try {
-      const res = await fetch(
+    const fireResearch = async (quickPass) =>
+      fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-destination-research`,
         {
           method: "POST",
@@ -8634,9 +8634,37 @@ export default function App({
             tripId: trip?.id || editingTrip?.id || null,
             refinement,
             bypass_cache: bypassCache,
+            ...(quickPass ? { quick: true } : {}),
           }),
         },
       );
+    // Fast-first pass (cold loads only): 2 web searches, 4 best finds, same
+    // validation ladder — paints the first cards in ~15s while the full hunt
+    // (60-90s cold) continues. Best-effort: failures are silently ignored,
+    // and it never overrides a landed full digest.
+    let fullLanded = false;
+    if (!refinement && !append && !bypassCache) {
+      fireResearch(true)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((quickData) => {
+          if (fullLanded || !quickData || quickData.cached) return;
+          const qd = quickData.digest;
+          if (!qd?.inspirations?.length) return;
+          setDestResearch((prev) =>
+            prev.hasLoaded || prev.digest?.inspirations?.length
+              ? prev
+              : {
+                  ...prev,
+                  digest: { ...qd, partial: true },
+                  loading: true,
+                  errored: false,
+                },
+          );
+        })
+        .catch(() => {});
+    }
+    try {
+      const res = await fireResearch(false);
       if (!res.ok) {
         // Read the body so the actual server error surfaces in the console
         // (previously we threw "HTTP 500" with zero context — useless).
@@ -8658,6 +8686,7 @@ export default function App({
         throw new Error(`HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
       }
       const data = await res.json();
+      fullLanded = true;
       setDestResearch((prev) => {
         const newDigest = data?.digest || null;
         let finalDigest;
@@ -8696,10 +8725,13 @@ export default function App({
       });
     } catch (e) {
       console.warn("destination-research failed:", e.message);
+      fullLanded = true;
+      // Keep any quick-pass cards on a failed full pass — errored state only
+      // when there is truly nothing to show
       setDestResearch((s) => ({
         ...s,
         loading: false,
-        errored: true,
+        errored: !s.digest?.inspirations?.length,
         hasLoaded: true,
       }));
     }

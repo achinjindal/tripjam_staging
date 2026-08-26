@@ -400,6 +400,10 @@ serve(async (req) => {
     // Empty string = default load with no specific focus.
     const refinement: string =
       typeof body.refinement === "string" ? body.refinement.trim() : "";
+    // quick: fast-first pass — 2 web searches, 4 best finds, no escalation,
+    // never cached. The client fires it alongside the full call so the first
+    // cards paint in ~15s instead of 60-90s; the full digest replaces it.
+    const quick: boolean = !!body.quick;
     // bypass_cache: when true, skip the 30-day cache so the user gets a fresh
     // batch instead of the same cached result. Used when Load more is clicked
     // with no refinement (user explicitly wants something new).
@@ -498,7 +502,10 @@ serve(async (req) => {
       (refinement
         ? `\n\nAdditional focus for this batch: "${refinement}". Prioritise content that specifically addresses this angle. The person has already seen general inspiration for this destination — find something they haven't seen yet.`
         : "") +
-      `\n\nUse web_search to find recent (≤ 24 months) first-person articles and YouTube videos by named individual creators. Return the JSON object only.`;
+      `\n\nUse web_search to find recent (≤ 24 months) first-person articles and YouTube videos by named individual creators. Return the JSON object only.` +
+      (quick
+        ? `\n\nTIME-CRITICAL FIRST PASS: you have only 2 web searches. Return the 4 single strongest finds you can locate fast (include at least 1 video if possible). Quality over quantity — a small, excellent batch beats a padded one. All other rules still apply.`
+        : "");
 
     // Haiku first (cheap, 6 web searches). If it returns an empty digest
     // (over-refusal), escalate once to Sonnet 4.6 (8 web searches).
@@ -507,7 +514,7 @@ serve(async (req) => {
 
     const haiku = await callResearchLLM(
       MODEL,
-      HAIKU_MAX_USES,
+      quick ? 2 : HAIKU_MAX_USES,
       apiKey,
       SYSTEM_PROMPT,
       userMessage,
@@ -539,7 +546,7 @@ serve(async (req) => {
     const haikuEmpty =
       !parsed || items.length < 5 || distinctAuthors < 3 || videoCount === 0;
 
-    if (haikuEmpty) {
+    if (haikuEmpty && !quick) {
       sonnet = await callResearchLLM(
         ESCALATION_MODEL,
         SONNET_MAX_USES,
@@ -623,7 +630,7 @@ serve(async (req) => {
     // Persist — upsert by cache_key. NEVER cache an empty digest: caching a
     // zero-result run for 30 days poisons the destination after a single bad
     // generation. Skipping the write lets the next open retry (and re-escalate).
-    if (digest.inspirations.length > 0) {
+    if (digest.inspirations.length > 0 && !quick) {
       const finalVideoCount = digest.inspirations.filter(
         (i: { type?: string }) => i.type === "video",
       ).length;
@@ -706,6 +713,7 @@ serve(async (req) => {
       JSON.stringify({
         digest,
         cached: false,
+        quick,
         tags: tagResult.tags,
         model: usedModel,
       }),
