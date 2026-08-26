@@ -203,7 +203,7 @@ export const wikiQueuedFetch = makeQueue(250, 3); // Wikimedia — 3 concurrent,
 //  - photoQuery: LLM-authored "iconic view" search used by the text-search tiers
 export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
   const BAD_PATTERNS =
-    /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive|painting|drawing|ukiyo|woodblock|engraving|lithograph|poster|artwork|sketch|illustration/i;
+    /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive|painting|drawing|ukiyo|woodblock|engraving|lithograph|poster|artwork|sketch|illustration|video.?game|gameplay|screenshot|cover.?art|box.?art/i;
   const good = (url) =>
     url &&
     !_isPortrait(url) &&

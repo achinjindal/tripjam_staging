@@ -35,20 +35,24 @@ export function DestinationHero({ dest, isLoading, data, children }) {
     // Resolved heroes are cached per destination — a transient Wikimedia 429
     // must never cost us the hero on later opens.
     const cacheKey = `tj_hero_${dest.toLowerCase()}`;
+    // Filename blocklist — ALSO applied to cached heroes so a previously
+    // cached bad pick (e.g. the FEZ video-game art matching the city "Fez")
+    // self-heals after the pattern list grows.
+    const BAD =
+      /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|panorama|blank|in_Indonesia|location|special_marker|video.?game|gameplay|screenshot|cover.?art|box.?art/i;
     try {
       const cached = localStorage.getItem(cacheKey);
-      if (cached) {
+      if (cached && !BAD.test(cached)) {
         setPhotoUrl(cached);
         setPhotoLoaded(true);
         return;
       }
+      if (cached) localStorage.removeItem(cacheKey);
     } catch {
       /* private mode */
     }
     let cancelled = false;
     const lookup = async () => {
-      const BAD =
-        /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|panorama|blank|in_Indonesia|location|special_marker/i;
       // Try Wikipedia exact (queued so we share the global Wikimedia rate-limit cooldown)
       const d = await wikiQueuedFetch(
         `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(dest)}&prop=pageimages&format=json&pithumbsize=900&redirects=1&origin=*`,
@@ -1469,13 +1473,16 @@ export function InspirationsSection({
   // The digest is generated against the trip's interest tags + travel month —
   // say so, so the picks read as chosen for THIS trip rather than generic.
   const matchTags = (digest?.tags || []).slice(0, 3);
-  const sub = loading
-    ? "Looking up recent articles and vlogs…"
-    : errored || items.length === 0
-      ? "We couldn't find recent first-person travel content for this combo. Check back as more travellers post."
-      : matchTags.length
-        ? `Real travellers, real recent trips — picked to match yours: ${matchTags.join(" · ")}.`
-        : "Real travellers, real recent trips — picked for your destination and travel dates.";
+  const sub =
+    loading && items.length > 0
+      ? "First finds below — still looking for more…"
+      : loading
+        ? "Looking up recent articles and vlogs…"
+        : errored || items.length === 0
+          ? "We couldn't find recent first-person travel content for this combo. Check back as more travellers post."
+          : matchTags.length
+            ? `Real travellers, real recent trips — picked to match yours: ${matchTags.join(" · ")}.`
+            : "Real travellers, real recent trips — picked for your destination and travel dates.";
 
   return (
     <div
@@ -1557,7 +1564,7 @@ export function InspirationsSection({
           ↻ Try again
         </button>
       )}
-      {loading && (
+      {loading && items.length === 0 && (
         <div
           style={{
             display: "flex",
@@ -1603,12 +1610,24 @@ export function InspirationsSection({
           ))}
         </div>
       )}
-      {!loading &&
-        items.map((it, i) => (
-          <div key={it.url || i}>
-            <InspirationCard item={it} />
-          </div>
-        ))}
+      {items.map((it, i) => (
+        <div key={it.url || i}>
+          <InspirationCard item={it} />
+        </div>
+      ))}
+      {/* Quick-first pass painted early cards; a slim shimmer says more are
+          on the way without hiding what's already here */}
+      {loading && items.length > 0 && (
+        <div
+          style={{
+            height: 16,
+            background: T.sand,
+            borderRadius: 6,
+            animation: "shimmer 1.5s ease-in-out infinite",
+            marginTop: 12,
+          }}
+        />
+      )}
       {!loading && items.length > 0 && (
         <div
           style={{
