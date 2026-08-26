@@ -308,6 +308,37 @@ function frameDuration(frame) {
   return Math.min(15000, 4000 + words * 280);
 }
 
+/* Staged-fallback story image: 1280px upgrade (CORS) -> stored URL (CORS)
+ * -> stored URL without crossOrigin (TripAdvisor CDN sends no ACAO header,
+ * so CORS-mode loads hard-fail even when the image is fine; share-card
+ * export skips tainted canvases) -> null, never a broken-image glyph. */
+function StoryImg({ className, url, alt = "", eager = false, onDead }) {
+  const [stage, setStage] = useState(0);
+  useEffect(() => setStage(0), [url]);
+  if (!url) return null;
+  const upgraded = upgradePhotoUrl(url);
+  if (stage >= 3) return null;
+  const srcNow = stage === 0 ? upgraded : url;
+  const noCors = stage >= 2;
+  return (
+    <img
+      key={`${noCors ? "nc" : "c"}:${srcNow}`}
+      className={className}
+      src={srcNow}
+      alt={alt}
+      loading={eager ? "eager" : "lazy"}
+      {...(noCors ? {} : { crossOrigin: "anonymous" })}
+      onError={() =>
+        setStage((s) => {
+          const next = s === 0 && upgraded === url ? 2 : s + 1;
+          if (next >= 3) onDead?.();
+          return next;
+        })
+      }
+    />
+  );
+}
+
 /* One story frame. `variant`: "player" (full info, no credit) or "card"
  * (share export: truncated narrative, wordmark + Commons credit). */
 function StoryFrameContent({ frame, trip, days, variant, credit }) {
@@ -398,18 +429,7 @@ function StoryFrameContent({ frame, trip, days, variant, credit }) {
     <div
       className={`sv-frame${editorial ? " sv-frame-editorial" : ""}${isCard ? " sv-frame-card" : ""}`}
     >
-      {src && (
-        <img
-          className="sv-frame-photo"
-          src={src}
-          alt=""
-          crossOrigin="anonymous"
-          onError={(e) => {
-            if (frame.photoUrl && e.target.src !== frame.photoUrl)
-              e.target.src = frame.photoUrl;
-          }}
-        />
-      )}
+      {src && <StoryImg className="sv-frame-photo" url={frame.photoUrl} />}
       <div className="sv-frame-scrim" />
       {editorial && frame.type === "day" && (
         <div className="sv-frame-ghost">
@@ -483,7 +503,6 @@ function StoryPlayer({ trip, days, startIndex = 0, onClose, onShareFrame }) {
       if (closedRef.current && window.history.state?.svPlayer)
         window.history.back();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Chapter = frames sharing this frame's day (cover/end stand alone)
@@ -718,7 +737,6 @@ function useDayPhotos(day, active, photoOwner, claimRef) {
       alive = false;
       timers.forEach(clearTimeout);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, stops, day.city, photoOwner]);
 
   let slides = stops
@@ -741,19 +759,28 @@ function useDayPhotos(day, active, photoOwner, claimRef) {
 /* A single hero slide with 1280px upgrade + graceful fallback to the stored
  * (usually 700px) URL if the upgraded bucket 404s. */
 function HeroSlide({ url, alt, eager }) {
-  const [src, setSrc] = useState(() => upgradePhotoUrl(url));
-  useEffect(() => setSrc(upgradePhotoUrl(url)), [url]);
+  const [dead, setDead] = useState(false);
+  useEffect(() => setDead(false), [url]);
   return (
-    <div className="sv-slide">
-      <img
-        src={src}
-        alt={alt}
-        loading={eager ? "eager" : "lazy"}
-        crossOrigin="anonymous"
-        onError={() => {
-          if (src !== url) setSrc(url);
-        }}
-      />
+    <div
+      className="sv-slide"
+      style={
+        dead
+          ? {
+              background:
+                "linear-gradient(160deg,#1E2D3D 0%,#172331 60%,#2563A8 130%)",
+            }
+          : undefined
+      }
+    >
+      {!dead && (
+        <StoryImg
+          url={url}
+          alt={alt}
+          eager={eager}
+          onDead={() => setDead(true)}
+        />
+      )}
     </div>
   );
 }
@@ -969,7 +996,15 @@ function StoryTimeline({ day, slides, activeIdx, onRowTap }) {
             }
           >
             {thumbSrc ? (
-              <img className="sv-thumb" src={thumbSrc} alt="" loading="lazy" />
+              <img
+                className="sv-thumb"
+                src={thumbSrc}
+                alt=""
+                loading="lazy"
+                onError={(e) => {
+                  e.target.style.visibility = "hidden";
+                }}
+              />
             ) : (
               <div className="sv-thumb-f" aria-hidden="true">
                 {(act.title || "?").charAt(0)}
@@ -1312,7 +1347,6 @@ export default function StoryView({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareJob]);
 
   const { title: curtainTitle } = deriveMasthead(trip, days);
