@@ -532,7 +532,7 @@ test.describe("18 · Routes Lens", () => {
     await expect(page.getByText(chain)).toBeHidden();
   });
 
-  test("18.10 active trip auto-collapses to the strip; tap expands", async ({
+  test("18.10 active trip auto-collapses to the strip; tap expands; opens at today", async ({
     page,
   }) => {
     test.skip(!active, "fixture seeding failed");
@@ -542,6 +542,14 @@ test.describe("18 · Routes Lens", () => {
     const chain = "Ziro Town → Hapoli → Kile Pakho";
     await expect(page.getByText(chain)).toBeVisible({ timeout: 15000 });
     await expect(page.getByText("✎ Edit route")).toBeHidden();
+    // Active-trip Plan view jumps to TODAY (fixture started 2 days ago →
+    // today is Day 3): after the jump settles, Day 3 sits in the upper
+    // viewport and Day 1 has scrolled above it.
+    await page.waitForTimeout(2500);
+    const day3 = await page.getByText(/Day 3/).first().boundingBox();
+    const day1 = await page.getByText(/Day 1/).first().boundingBox();
+    expect(day3?.y ?? 9999).toBeLessThan(600);
+    expect(day1?.y ?? 9999).toBeLessThan(day3?.y ?? 9999);
     await page.getByText(chain).click();
     await expect(page.getByText("✎ Edit route")).toBeVisible();
   });

@@ -7797,10 +7797,10 @@ export default function App({
       mode = localStorage.getItem(`tripjam_itin_mode_${trip.id}`);
     } catch {}
     if (mode !== "story" && mode !== "plan") {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      mode =
-        trip.start_date && new Date(trip.start_date) > today ? "story" : "plan";
+      // Story-first everywhere (was upcoming-trips-only). storyAvailable
+      // still gates the render, so trips without a detailed itinerary fall
+      // back to Plan automatically.
+      mode = "story";
     }
     setItineraryModeRaw(mode);
   }, [trip?.id]);
@@ -7809,6 +7809,39 @@ export default function App({
   // streaming (or with no days) the Plan timeline stays in charge.
   const storyAvailable = detailedReady && !detailedLoading && days.length > 0;
   const storyActive = itineraryMode === "story" && storyAvailable;
+
+  // Active-trip window: the Plan view opens at TODAY, not Day 1 (a mid-trip
+  // traveller shouldn't scroll past finished days on every open). Fires once
+  // per trip whenever the Plan timeline first becomes visible — covers both
+  // opening straight into Plan and the first Story→Plan switch.
+  const jumpedToTodayRef = useRef(null);
+  useEffect(() => {
+    if (jumpedToTodayRef.current === trip?.id) return;
+    if (screen !== "itinerary" || storyActive) return;
+    if (igGenerating || detailedLoading || days.length === 0) return;
+    if (!trip?.start_date || !trip?.end_date) return;
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    const start = new Date(trip.start_date + "T12:00:00");
+    const end = new Date(trip.end_date + "T12:00:00");
+    if (today < start || today > end) return;
+    jumpedToTodayRef.current = trip.id;
+    const idx = Math.min(
+      days.length - 1,
+      Math.max(0, Math.round((today - start) / 86400000)),
+    );
+    if (idx <= 0) return;
+    // Let the day cards mount and dayRefs attach before jumping
+    const t = setTimeout(() => scrollToDay(idx), 400);
+    return () => clearTimeout(t);
+  }, [
+    screen,
+    storyActive,
+    days.length,
+    trip?.id,
+    igGenerating,
+    detailedLoading,
+  ]);
 
   /* ── ROUTES LENS: chosen-route overview + editor (VITE_ROUTES_LENS_ENABLED,
      ships dark). All persistence lives here; RouteOverview/RouteEditorSheet
