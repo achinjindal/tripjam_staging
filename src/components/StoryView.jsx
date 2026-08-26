@@ -820,15 +820,7 @@ function StoryHeroGallery({
           <span className="sv-chip sv-chip-loading" aria-hidden="true">
             ✦&nbsp;finding photos…
           </span>
-        ) : (
-          <button
-            className="sv-chip sv-chip-share"
-            onClick={() => onShare(null)}
-            title="Share this day"
-          >
-            ↗&nbsp;Share day
-          </button>
-        )}
+        ) : null}
         <div className="sv-hero-text">
           <div className="sv-eyebrow">{eyebrow}</div>
           <h2 style={{ color: T.warm, textShadow: "none" }}>{title}</h2>
@@ -922,13 +914,6 @@ function StoryHeroGallery({
           i
         </a>
       )}
-      <button
-        className="sv-chip sv-chip-share"
-        onClick={() => onShare(cur)}
-        title="Share this day"
-      >
-        ↗&nbsp;Share day
-      </button>
       <div className="sv-hero-text">
         <div className="sv-eyebrow">{eyebrow}</div>
         <h2>{title}</h2>
@@ -1136,15 +1121,6 @@ function StoryDayCard({
           <div className="sv-dayfoot">
             <button onClick={() => onOpenPlan(index)}>
               Open this day in Plan →
-            </button>
-            <button
-              className="sv-chip"
-              style={{ background: T.sand, boxShadow: "none", color: T.dusk }}
-              onClick={() =>
-                onShareDay(day, dayNumber, slides[clampedIdx] || null)
-              }
-            >
-              ↗&nbsp;Share day
             </button>
           </div>
         </div>

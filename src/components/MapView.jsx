@@ -79,11 +79,27 @@ function FitBounds({ pins, fallback }) {
   return null;
 }
 
-export function MapView({ days, session = null, tripId = null }) {
+export function MapView({
+  days,
+  session = null,
+  tripId = null,
+  focusDay = null,
+}) {
   const [pins, setPins] = useState(null);
   const [resolving, setResolving] = useState(true);
   const [selectedDays, setSelectedDays] = useState(new Set()); // empty = show all
   const [multiSelect, setMultiSelect] = useState(false);
+
+  // Follow the itinerary scroll: the parent reports the day currently in
+  // view (scroll-spy activeDay) and the map focuses it. A manual
+  // multi-select wins while active; single-day pill taps are simply the
+  // same state, so the next scroll re-syncs.
+  useEffect(() => {
+    if (focusDay == null || multiSelect) return;
+    setSelectedDays((prev) =>
+      prev.size === 1 && prev.has(focusDay) ? prev : new Set([focusDay]),
+    );
+  }, [focusDay, multiSelect]);
 
   useEffect(() => {
     let cancelled = false;
