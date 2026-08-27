@@ -3,7 +3,12 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { T } from "../theme";
-import { geocodePlace, verifyActivity, needsVerification } from "../photos";
+import {
+  geocodePlace,
+  verifyActivity,
+  needsVerification,
+  _fetchPhoto,
+} from "../photos";
 import { supabase } from "../supabase";
 
 /* ─── DAY COLOURS (map + board) ─────────────────────────────────────── */
@@ -27,6 +32,35 @@ function makeDayIcon(color) {
     iconSize: [14, 14],
     iconAnchor: [7, 7],
     popupAnchor: [0, -10],
+  });
+}
+
+// Numbered photo-card marker (Odessia-style polaroid): thumbnail + "N. Label"
+// caption + pointer. Falls back to a caption-only chip when no photo exists;
+// a broken thumbnail hides itself rather than showing the broken-image glyph.
+const escHtml = (s) =>
+  String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/"/g, "&quot;");
+
+function makePolaroidIcon({ photoUrl, label, number, color = "#2563A8" }) {
+  const cap = `${number != null ? `${number}. ` : ""}${escHtml(label)}`;
+  const img = photoUrl
+    ? `<img src="${escHtml(photoUrl)}" style="width:100%;height:44px;object-fit:cover;border-radius:3px;display:block" onerror="this.style.display='none'"/>`
+    : "";
+  const W = 74;
+  const H = photoUrl ? 68 : 24;
+  return L.divIcon({
+    className: "",
+    html: `<div style="position:relative;background:white;padding:3px;border-radius:6px;box-shadow:0 2px 8px rgba(15,25,35,0.35);width:${W}px;border:1px solid rgba(0,0,0,0.08);box-sizing:border-box">
+      ${img}
+      <div style="font-family:Georgia,serif;font-size:10px;font-weight:700;color:#0F1923;padding:2px 2px 1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="color:${color}">${cap}</span></div>
+      <div style="position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid white;filter:drop-shadow(0 2px 1px rgba(15,25,35,0.2))"></div>
+    </div>`,
+    iconSize: [W, H],
+    iconAnchor: [W / 2, H + 6],
+    popupAnchor: [0, -H],
   });
 }
 
@@ -221,9 +255,25 @@ export function MapView({
     setMultiSelect((prev) => !prev);
   };
 
-  const visiblePins = (pins || []).filter(
-    (p) => selectedDays.size === 0 || selectedDays.has(p.dayIndex),
-  );
+  const visiblePins = (() => {
+    const flat = (pins || []).filter(
+      (p) => selectedDays.size === 0 || selectedDays.has(p.dayIndex),
+    );
+    // Visit-order number within each day (pins arrive day-grouped, in order)
+    let seq = 0;
+    let lastDay = -1;
+    return flat.map((p) => {
+      if (p.dayIndex !== lastDay) {
+        seq = 0;
+        lastDay = p.dayIndex;
+      }
+      seq += 1;
+      return { ...p, seq };
+    });
+  })();
+  // Single-day focus (the scroll-synced default) renders rich polaroid
+  // markers; multi-day/all views keep the light dots to avoid clutter.
+  const singleDayFocus = selectedDays.size === 1;
   // Only fall back to a "world" centre when we actually have pins (we always do if we render
   // the map below). The empty/loading states render a placeholder instead, so Leaflet never
   // boots at [20,0] (open ocean → grey-blue tiles → the "map is broken" perception).
@@ -425,9 +475,18 @@ export function MapView({
           <FitBounds pins={visiblePins} fallback={center} />
           {visiblePins.map((pin, i) => (
             <Marker
-              key={i}
+              key={`${singleDayFocus ? "p" : "d"}-${i}`}
               position={[pin.lat, pin.lng]}
-              icon={makeDayIcon(DAY_COLORS[pin.dayIndex % DAY_COLORS.length])}
+              icon={
+                singleDayFocus
+                  ? makePolaroidIcon({
+                      photoUrl: pin.photo_url || null,
+                      label: pin.title,
+                      number: pin.seq,
+                      color: DAY_COLORS[pin.dayIndex % DAY_COLORS.length],
+                    })
+                  : makeDayIcon(DAY_COLORS[pin.dayIndex % DAY_COLORS.length])
+              }
             >
               <Popup>
                 <div
@@ -546,6 +605,40 @@ export function RouteMapView({
     : routes || [];
 
   const allVisiblePins = visibleRoutes.flatMap((r) => pinsByRoute[r.id] || []);
+
+  // Focused route (exactly one visible) gets polaroid stop markers — fetch a
+  // photo per city (same cacheKey convention as the Magazine's city photos,
+  // so warm trips resolve instantly). Multi-route view keeps colour dots.
+  const focusRouteId = visibleRoutes.length === 1 ? visibleRoutes[0].id : null;
+  const [cityPhotos, setCityPhotos] = useState({});
+  useEffect(() => {
+    if (!focusRouteId) return undefined;
+    const pins = pinsByRoute[focusRouteId] || [];
+    let cancelled = false;
+    pins.forEach((pin) => {
+      if (cityPhotos[pin.city] !== undefined) return;
+      _fetchPhoto(pin.city, null, "sight")
+        .then((url) => {
+          if (!cancelled)
+            setCityPhotos((prev) =>
+              prev[pin.city] !== undefined
+                ? prev
+                : { ...prev, [pin.city]: url },
+            );
+        })
+        .catch(() => {
+          if (!cancelled)
+            setCityPhotos((prev) =>
+              prev[pin.city] !== undefined
+                ? prev
+                : { ...prev, [pin.city]: null },
+            );
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [focusRouteId, pinsByRoute]);
   const center = allVisiblePins.length
     ? [allVisiblePins[0].lat, allVisiblePins[0].lng]
     : (destCoords ?? [20, 0]);
@@ -765,9 +858,18 @@ export function RouteMapView({
                     cities; the markers are enough to convey route geography). */}
                 {pins.map((pin, j) => (
                   <Marker
-                    key={j}
+                    key={`${route.id === focusRouteId ? "p" : "d"}-${j}`}
                     position={[pin.lat, pin.lng]}
-                    icon={makeDayIcon(color)}
+                    icon={
+                      route.id === focusRouteId
+                        ? makePolaroidIcon({
+                            photoUrl: cityPhotos[pin.city] || null,
+                            label: pin.city,
+                            number: j + 1,
+                            color,
+                          })
+                        : makeDayIcon(color)
+                    }
                   >
                     <Popup>
                       <div
