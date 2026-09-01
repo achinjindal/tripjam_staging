@@ -21,6 +21,7 @@ import {
   _PHOTO_IN_FLIGHT,
   _usedPhotoUrls,
   extractPlace,
+  fetchCityVideo,
   upgradePhotoUrl,
   commonsFilePageUrl,
   fetchPhotoAttribution,
@@ -640,6 +641,28 @@ function StoryPlayer({ trip, days, startIndex = 0, onClose, onShareFrame }) {
  * chronological) that carries it — later duplicates lose the slide and try to
  * fetch a distinct photo instead (which also heals the stored duplicate). */
 function useDayPhotos(day, active, photoOwner, claimRef) {
+  // City b-roll for the lead slide. Data discipline: skipped entirely on
+  // data-saver connections and for reduced-motion users.
+  const [cityVideo, setCityVideo] = useState(undefined);
+  useEffect(() => {
+    let alive = true;
+    if (!active || !day.city) return undefined;
+    const conn = navigator.connection;
+    if (
+      conn?.saveData ||
+      window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
+    ) {
+      setCityVideo(null);
+      return undefined;
+    }
+    fetchCityVideo(day.city).then((v) => {
+      if (alive) setCityVideo(v || null);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [active, day.city]);
+
   const stops = useMemo(
     () => (day.activities || []).filter(isStoryStop),
     [day.activities],
@@ -752,12 +775,76 @@ function useDayPhotos(day, active, photoOwner, claimRef) {
   } else if (slides.length === 1 && slides[0].act.type === "hotel") {
     slides = [];
   }
+  // The day opens on motion when we have it — muted looping b-roll of the
+  // base city, with the photo gallery behind it.
+  if (cityVideo?.videoUrl) {
+    slides = [
+      {
+        video: true,
+        url: cityVideo.videoUrl,
+        poster: cityVideo.posterUrl,
+        act: { id: `__video_${day.id}`, title: day.city, type: "video" },
+      },
+      ...slides,
+    ];
+  }
   const pending = active && stops.some((a) => urls[a.id] === undefined);
   return { stops, slides, pending };
 }
 
 /* A single hero slide with 1280px upgrade + graceful fallback to the stored
  * (usually 700px) URL if the upgraded bucket 404s. */
+/* Muted looping b-roll slide. Only the visible slide plays; a load failure
+ * falls back to the poster image, then to the editorial gradient. */
+function VideoSlide({ url, poster, playing, eager }) {
+  const ref = useRef(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    if (playing) v.play().catch(() => {});
+    else v.pause();
+  }, [playing, failed]);
+  if (failed) {
+    return (
+      <div
+        className="sv-slide"
+        style={
+          poster
+            ? undefined
+            : {
+                background:
+                  "linear-gradient(160deg,#1E2D3D 0%,#172331 60%,#2563A8 130%)",
+              }
+        }
+      >
+        {poster && <StoryImg url={poster} alt="" eager={eager} />}
+      </div>
+    );
+  }
+  return (
+    <div className="sv-slide">
+      <video
+        ref={ref}
+        src={url}
+        poster={poster || undefined}
+        muted
+        loop
+        playsInline
+        autoPlay={eager}
+        preload={eager ? "auto" : "metadata"}
+        onError={() => setFailed(true)}
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          display: "block",
+        }}
+      />
+    </div>
+  );
+}
+
 function HeroSlide({ url, alt, eager }) {
   const [dead, setDead] = useState(false);
   useEffect(() => setDead(false), [url]);
@@ -872,14 +959,24 @@ function StoryHeroGallery({
           }
         }}
       >
-        {slides.map((s, i) => (
-          <HeroSlide
-            key={s.act.id}
-            url={s.url}
-            alt={s.act.title}
-            eager={i === 0}
-          />
-        ))}
+        {slides.map((s, i) =>
+          s.video ? (
+            <VideoSlide
+              key={s.act.id}
+              url={s.url}
+              poster={s.poster}
+              playing={i === activeIdx}
+              eager={i === 0}
+            />
+          ) : (
+            <HeroSlide
+              key={s.act.id}
+              url={s.url}
+              alt={s.act.title}
+              eager={i === 0}
+            />
+          ),
+        )}
       </div>
       <div className="sv-scrim" />
       <span className="sv-chip sv-chip-caption" aria-live="polite">
