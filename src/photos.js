@@ -102,6 +102,32 @@ export function _isPortrait(url) {
   );
 }
 
+/* ── City b-roll video (Story hero slides) ──────────────────────────────
+   Destination-level Pexels footage via places-proxy (keyed API, cached
+   server-side 30d). Module-cached by promise so concurrent days dedupe. */
+const _cityVideoCache = {};
+export function fetchCityVideo(city) {
+  if (!city) return Promise.resolve(null);
+  const key = city.toLowerCase().trim();
+  if (key in _cityVideoCache) return _cityVideoCache[key];
+  _cityVideoCache[key] = (async () => {
+    try {
+      const res = await fetch(`${PLACES_PROXY}?action=city-video`, {
+        method: "POST",
+        headers: PLACES_HEADERS,
+        body: JSON.stringify({ q: city }),
+      });
+      const data = await res.json();
+      return data?.videoUrl
+        ? { videoUrl: data.videoUrl, posterUrl: data.posterUrl || null }
+        : null;
+    } catch {
+      return null;
+    }
+  })();
+  return _cityVideoCache[key];
+}
+
 export function makeQueue(delayMs, concurrency = 1) {
   const q = [];
   let active = 0;

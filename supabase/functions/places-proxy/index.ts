@@ -530,6 +530,64 @@ async function pexelsPhoto(query: string): Promise<string | null> {
   }
 }
 
+// ── Pexels stock city b-roll (Story hero video slides) ─────────────────────
+// Destination-level travel footage: muted looping hero material, not
+// activity-specific. Same free tier as pexelsPhoto; no-op without the key.
+async function pexelsVideo(
+  query: string,
+): Promise<{ videoUrl: string; posterUrl: string | null } | null> {
+  if (!PEXELS_KEY) return null;
+  try {
+    const res = await fetch(
+      `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=3&orientation=landscape&size=medium`,
+      { headers: { Authorization: PEXELS_KEY } },
+    );
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    for (const v of data?.videos || []) {
+      // SD/HD file ≤ ~1400px wide — hero slides don't need 4K weight
+      const files = (v.video_files || [])
+        .filter(
+          (f: any) =>
+            f.file_type === "video/mp4" && f.width >= 640 && f.width <= 1400,
+        )
+        .sort((a: any, b: any) => b.width - a.width);
+      if (files[0]?.link)
+        return { videoUrl: files[0].link, posterUrl: v.image || null };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleCityVideo(req: Request): Promise<Response> {
+  const { q } = await req.json();
+  if (!q)
+    return Response.json(
+      { videoUrl: null, posterUrl: null, source: null },
+      { headers: corsHeaders },
+    );
+  const city = String(q).trim().toLowerCase();
+  const cacheKey = `city-video:${city}`;
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
+    incrementUsage("city-video", "cache-hit", today()).catch(() => {});
+    return Response.json(cached, { headers: corsHeaders });
+  }
+  const hit = await pexelsVideo(`${String(q).trim()} travel`);
+  const payload = hit
+    ? { ...hit, source: "pexels" }
+    : { videoUrl: null, posterUrl: null, source: null };
+  // Misses cache briefly (3d) so a Pexels hiccup doesn't hammer the quota;
+  // hits cache for 30d like the photo paths.
+  await cacheSet(cacheKey, "city-video", payload, "pexels", hit ? 30 : 3);
+  incrementUsage("city-video", hit ? "pexels" : "miss", today()).catch(
+    () => {},
+  );
+  return Response.json(payload, { headers: corsHeaders });
+}
+
 async function handleFoodPhoto(req: Request): Promise<Response> {
   const { q } = await req.json();
   if (!q)
@@ -1617,6 +1675,7 @@ serve(async (req) => {
     if (action === "autocomplete") return await handleAutocomplete(req);
     if (action === "hotel-photo") return await handleHotelPhoto(req);
     if (action === "food-photo") return await handleFoodPhoto(req);
+    if (action === "city-video") return await handleCityVideo(req);
     if (action === "geocode") return await handleGeocode(req);
     if (action === "lookup-place") return await handleLookupPlace(req);
     if (action === "resolve-coords") return await handleResolveCoords(req);
