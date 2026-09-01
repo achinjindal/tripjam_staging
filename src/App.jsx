@@ -8429,6 +8429,17 @@ export default function App({
         /* checkpoint must never block building */
       }
     }
+    // Reopen within the session: restore the exact form state from the last
+    // close (pill tweaks included) and skip the extract-preferences call —
+    // reopen is instant and free.
+    const prefsKey = trip?.id || editingTrip?.id || "new-trip";
+    preIgClosingRef.current = false;
+    const cachedForm = preIgFormCacheRef.current[prefsKey];
+    if (cachedForm) {
+      setPreIgForm(cachedForm);
+      setShowPreIgSheet(true);
+      return;
+    }
     const defaults = {
       budget: "mid",
       morningStart: "early",
@@ -8467,6 +8478,69 @@ export default function App({
     }
     setShowPreIgSheet(true);
   };
+
+  /* Pre-IG sheet exit discipline (three-exit standard): ✕ / scrim / swipe
+     all funnel through one controller — typed notes get a discard guard,
+     the form state is session-cached so reopen is instant, and the
+     route-edit funnel keeps its reopen-editor behavior. */
+  const preIgFormCacheRef = useRef({});
+  const preIgClosingRef = useRef(false);
+  const preIgTouchY = useRef(0);
+  const preIgTouchDelta = useRef(0);
+  const closePreIgSheet = async () => {
+    if (preIgClosingRef.current) return false;
+    if (preIgForm.igNotes?.trim()) {
+      const ok = await confirmSheet({
+        title: "Discard your note?",
+        message: "What you typed here won't be saved.",
+        confirmLabel: "Discard",
+        cancelLabel: "Keep editing",
+        danger: true,
+      });
+      if (!ok) return false;
+    }
+    preIgClosingRef.current = true;
+    const prefsKey = trip?.id || editingTrip?.id || "new-trip";
+    preIgFormCacheRef.current[prefsKey] = { ...preIgForm, igNotes: "" };
+    if (cancelRouteFunnel()) return true;
+    setShowPreIgSheet(false);
+    return true;
+  };
+  const closePreIgSheetRef = useRef(null);
+  closePreIgSheetRef.current = closePreIgSheet;
+
+  useEffect(() => {
+    if (!showPreIgSheet) return undefined;
+    preIgClosingRef.current = false;
+    // History integration only OUTSIDE the route-edit funnel: in the funnel
+    // the editor sheet owns the back-stack layer, and a Pre-IG history.back()
+    // on close races the editor's re-push (the stray pop lands on the
+    // editor's popstate handler and fires its discard-confirm over the UI).
+    const ownsHistory = !pendingRouteEditRef.current;
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        closePreIgSheetRef.current?.();
+      }
+    };
+    const onPop = () => {
+      closePreIgSheetRef.current?.();
+      if (!preIgClosingRef.current) window.history.pushState({ preig: 1 }, "");
+    };
+    window.addEventListener("keydown", onKey);
+    if (ownsHistory) {
+      window.history.pushState({ preig: 1 }, "");
+      window.addEventListener("popstate", onPop);
+    }
+    setTimeout(() => document.getElementById("preig-sheet")?.focus(), 60);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (ownsHistory) {
+        window.removeEventListener("popstate", onPop);
+        if (window.history.state?.preig) window.history.back();
+      }
+    };
+  }, [showPreIgSheet]);
 
   const [magazineFilterRouteId, setMagazineFilterRouteId] = useState(null);
   const [chatOpen, setChatOpen] = useState(false); // floating chat sheet
@@ -15532,10 +15606,7 @@ export default function App({
           >
             {/* Scrim */}
             <div
-              onClick={() => {
-                if (cancelRouteFunnel()) return;
-                setShowPreIgSheet(false);
-              }}
+              onClick={() => closePreIgSheet()}
               style={{
                 position: "absolute",
                 inset: 0,
@@ -15547,6 +15618,11 @@ export default function App({
             />
             {/* Sheet */}
             <div
+              id="preig-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Fine-tune your itinerary"
+              tabIndex={-1}
               style={{
                 position: "relative",
                 width: "100%",
@@ -15561,19 +15637,60 @@ export default function App({
                 animation: "fadeUp 0.25s ease",
                 maxHeight: isDesktop ? "90vh" : "85vh",
                 overflowY: "auto",
+                outline: "none",
               }}
             >
-              {/* Handle — mobile only */}
+              <button
+                onClick={() => closePreIgSheet()}
+                aria-label="Close"
+                style={{
+                  position: "absolute",
+                  top: isDesktop ? 14 : 10,
+                  right: 14,
+                  background: "none",
+                  border: "none",
+                  fontSize: 17,
+                  color: T.mist,
+                  cursor: "pointer",
+                  padding: 6,
+                  zIndex: 2,
+                }}
+              >
+                ✕
+              </button>
+              {/* Handle — mobile only; swipe-down ≥60px closes (the drawn
+                  affordance now actually works) */}
               {!isDesktop && (
                 <div
-                  style={{
-                    width: 36,
-                    height: 4,
-                    borderRadius: 2,
-                    background: T.sand,
-                    margin: "0 auto 16px",
+                  onTouchStart={(e) => {
+                    preIgTouchY.current = e.touches[0].clientY;
+                    preIgTouchDelta.current = 0;
                   }}
-                />
+                  onTouchMove={(e) => {
+                    preIgTouchDelta.current =
+                      e.touches[0].clientY - preIgTouchY.current;
+                  }}
+                  onTouchEnd={() => {
+                    if (preIgTouchDelta.current > 60) closePreIgSheet();
+                    preIgTouchDelta.current = 0;
+                  }}
+                  style={{
+                    padding: "20px 20px 14px",
+                    margin: "-20px -20px 2px",
+                    touchAction: "none",
+                    cursor: "grab",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 36,
+                      height: 4,
+                      borderRadius: 2,
+                      background: T.sand,
+                      margin: "0 auto",
+                    }}
+                  />
+                </div>
               )}
 
               <div

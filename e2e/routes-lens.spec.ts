@@ -492,6 +492,23 @@ test.describe("18 · Routes Lens", () => {
     await expect(page.getByTestId("pending-edits")).toContainText(
       "Ziro Town 2→3N",
     );
+
+    // Exit standard: ESC and the ✕ button must also close the Pre-IG sheet
+    // (reopens are served from the session cache — still zero LLM calls).
+    await page.getByTestId("route-apply").click();
+    await expect(page.getByText("Fine-tune your itinerary")).toBeVisible({
+      timeout: 10000,
+    });
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeVisible({ timeout: 8000 });
+
+    await page.getByTestId("route-apply").click();
+    await expect(page.getByText("Fine-tune your itinerary")).toBeVisible({
+      timeout: 10000,
+    });
+    await page.locator('#preig-sheet button[aria-label="Close"]').click();
+    await expect(sheet).toBeVisible({ timeout: 8000 });
+
     expect(llmCalls).toBe(0);
   });
 
