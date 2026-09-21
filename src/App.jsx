@@ -10,7 +10,7 @@ import {
 } from "react";
 import { DebugContext } from "./context.js";
 import posthog from "posthog-js";
-import { supabase } from "./supabase";
+import { supabase, ensureLiveSession } from "./supabase";
 import {
   hotelRatesUrl as buildHotelRatesUrl,
   hotelStayRange,
@@ -99,8 +99,10 @@ async function freshAccessToken() {
     const {
       data: { session },
     } = await supabase.auth.getSession();
+    if (!session) ensureLiveSession(); // storage may hold a dead session
     return session?.access_token || null;
   } catch {
+    ensureLiveSession();
     return null;
   }
 }
