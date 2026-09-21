@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { supabase } from "./supabase";
+import { supabase, SESSION_EXPIRED_FLAG } from "./supabase";
 import { T, RADIUS, SHADOW, MOTION } from "./theme";
 
 // D9: Email is mandatory at signup. Signin still accepts either email OR a
@@ -91,6 +91,18 @@ export default function Auth({ initialMode }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // Dead-session guard landed us here — say why. Read WITHOUT clearing:
+  // sign-out remounts Auth once at the old URL before the /signin redirect,
+  // and a read-and-clear there eats the flag before the real mount. The
+  // timestamp bounds staleness; successful sign-in clears it.
+  const [sessionExpired] = useState(() => {
+    try {
+      const ts = Number(localStorage.getItem(SESSION_EXPIRED_FLAG) || 0);
+      return ts > 0 && Date.now() - ts < 5 * 60 * 1000;
+    } catch {
+      return false;
+    }
+  });
 
   function switchMode(next) {
     setMode(next);
@@ -181,6 +193,12 @@ export default function Auth({ initialMode }) {
     setLoading(false);
     if (signInError) {
       setError("Invalid email/username or password.");
+    } else {
+      try {
+        localStorage.removeItem(SESSION_EXPIRED_FLAG);
+      } catch {
+        /* private mode */
+      }
     }
   }
 
@@ -256,6 +274,24 @@ export default function Auth({ initialMode }) {
           >
             Plan together, travel better
           </p>
+          {sessionExpired && mode === "signin" && (
+            <div
+              style={{
+                fontFamily: "Georgia,serif",
+                fontSize: 13,
+                color: T.terra,
+                background: "#FDF0E9",
+                border: `1px solid ${T.terra}40`,
+                borderRadius: RADIUS.md,
+                padding: "10px 14px",
+                margin: "12px 0 0",
+                lineHeight: 1.5,
+                textAlign: "center",
+              }}
+            >
+              Your session expired — please sign in again.
+            </div>
+          )}
         </div>
 
         {/* Google OAuth — always rendered. */}
