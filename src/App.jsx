@@ -10832,10 +10832,19 @@ export default function App({
                     ? "Route title is missing"
                     : "Day descriptions are incomplete";
                 else delete result._error;
-                // Chat edits that rewrite days invalidate the structured
-                // stops — stale stops disagreeing with the edited days are
-                // worse than absent (the derivation ladder re-derives)
-                if (upd.days) result.stops = null;
+                // LLM drift guard: strip any "Day N:" prefixes the model
+                // bakes into day strings (the UI renders its own labels)
+                if (Array.isArray(result.days))
+                  result.days = result.days.map((d) =>
+                    typeof d === "string"
+                      ? d.replace(/^\s*Day\s*\d+\s*[:.\u2013\u2014-]\s*/i, "")
+                      : d,
+                  );
+                // Chat edits that rewrite days: keep the model's stops when
+                // it sent a plausible array (the contract now asks for one),
+                // else invalidate — stale stops disagreeing with edited days
+                // are worse than absent (the derivation ladder re-derives)
+                if (upd.days && !Array.isArray(upd.stops)) result.stops = null;
                 return result;
               });
               // Persist ONLY the changed route (non-destructive). upd.id ===
