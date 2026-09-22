@@ -118,6 +118,7 @@ export function MapView({
   session = null,
   tripId = null,
   focusDay = null,
+  onDayFocus = null,
 }) {
   const [pins, setPins] = useState(null);
   const [resolving, setResolving] = useState(true);
@@ -240,9 +241,15 @@ export function MapView({
       });
     } else {
       // Single-select: tap same day to deselect (show all)
-      setSelectedDays((prev) =>
-        prev.size === 1 && prev.has(i) ? new Set() : new Set([i]),
-      );
+      let focused = false;
+      setSelectedDays((prev) => {
+        focused = !(prev.size === 1 && prev.has(i));
+        return focused ? new Set([i]) : new Set();
+      });
+      // Navigation gesture: a single-day pill tap also drives the itinerary
+      // (desktop scrolls live; mobile lands there on tab return). Deselect
+      // and Multiple-mode taps are browsing, not navigation — no scroll.
+      if (focused) onDayFocus?.(i);
     }
   };
 

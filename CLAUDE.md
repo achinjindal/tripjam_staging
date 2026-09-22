@@ -228,6 +228,7 @@ supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
 - `collab-invite.spec.ts` members/invite tests skip unless `VITE_INVITE_ENABLED=true` and the invite RPC migrations are applied to staging; the invalid-token test always runs.
 - QA skills: `/code-review` (static analysis), `/qa-e2e` (browser tests with cost tracking).
 - Before sending code for review, run `npm run check`. If formatting fails, run `npm run format`, then rerun `npm run check`.
+- If the local network's ISP hijacks `*.supabase.co` DNS (E2E seeding fails with TLS resets; observed 2026-09), run tests with `TRIPJAM_DNS_PIN=1 NODE_OPTIONS="--import ./e2e/dns-pin.mjs" npx playwright test …` — pins the real edge IPs for Node and Chromium without touching system DNS.
 
 ## Environments
 
