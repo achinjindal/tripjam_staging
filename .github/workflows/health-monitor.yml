@@ -29,7 +29,8 @@ jobs:
     steps:
       - name: Probe all services
         run: |
-          set -u
+          # own the control flow: failures accumulate into FAIL, never abort
+          set +e -u
           FAIL=0
           note() { echo "::notice::$1"; }
           hard() { echo "::error::$1"; FAIL=1; }
