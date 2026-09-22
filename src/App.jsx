@@ -10046,6 +10046,15 @@ export default function App({
         }
       }
       itinerary = parsed;
+      // Models occasionally overrun the requested day count (the "Writing
+      // Day 9 of 8" sighting). Extra days would save with dates past the
+      // trip end — trim hard and say so.
+      if (Array.isArray(itinerary?.days) && itinerary.days.length > numDays) {
+        console.warn(
+          `IG returned ${itinerary.days.length} days for a ${numDays}-day trip — trimming overrun.`,
+        );
+        itinerary.days = itinerary.days.slice(0, numDays);
+      }
     } catch (e) {
       // If user navigated away (abort), silently stop — don't redirect
       if (e.name === "AbortError") {
@@ -11849,7 +11858,8 @@ export default function App({
                       fontWeight: 600,
                     }}
                   >
-                    Day {streamingDays}
+                    Day{" "}
+                    {Math.min(streamingDays, streamingTotal || streamingDays)}
                     {streamingTotal > 0 ? ` of ${streamingTotal}` : ""} planned
                     ✓
                   </div>
@@ -13355,8 +13365,12 @@ export default function App({
                                     </>
                                   ) : hasProgress ? (
                                     <>
-                                      Writing Day {streamingDays} of{" "}
-                                      {streamingTotal}…
+                                      Writing Day{" "}
+                                      {Math.min(
+                                        streamingDays + 1,
+                                        streamingTotal,
+                                      )}{" "}
+                                      of {streamingTotal}…
                                     </>
                                   ) : (
                                     <>Opening the notebook…</>
@@ -14085,7 +14099,11 @@ export default function App({
                       // (based on wishlist markers per day).
                       const detailedPct =
                         streamingTotal > 0
-                          ? Math.round((streamingDays / streamingTotal) * 85)
+                          ? Math.round(
+                              (Math.min(streamingDays, streamingTotal) /
+                                streamingTotal) *
+                                85,
+                            )
                           : 0;
                       const pct = Math.min(95, 10 + detailedPct);
                       return (
