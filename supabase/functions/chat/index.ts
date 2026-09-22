@@ -157,6 +157,7 @@ ${
    - "days" MUST be an array of complete descriptive strings. NEVER placeholders.
    - DAY-STRING FORMAT (must match the original generator exactly): highlight the key places in **bold** markdown — the overnight base city and 1-3 named sights/experiences per day (e.g. "Galle → **Mirissa** (1h), beach day, whale watching at **Mirissa Harbour**"). NEVER start a day string with "Day N:" or any day-number prefix — the UI renders its own day labels.
    - ALSO return "stops": the overnight bases in travel order as [{"city":"<base>","nights":<int≥1>}] — nights must sum to (days.length − 1); only cities where the traveller SLEEPS (day-trip destinations excluded).
+   - When your "message" text describes any route's shape, write it as a nights-annotated chain: "Galle (2 nights) → Mirissa (2 nights) → Kandy (1 night)" — never a bare city list.
    - "points" format: [{"text":"...","good":true|false}] — text must NOT start with ✓/✗/•/-
    - "city" field must list every city named in days, comma-separated, in travel order
    - PRESERVE trip duration (days array length) unless user explicitly asks to change it

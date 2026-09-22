@@ -369,6 +369,21 @@ export default function RouteEditorSheet({
                     }}
                   >
                     <b>{s.city}</b>
+                    {s.why && !isNew && (
+                      <span
+                        style={{
+                          display: "block",
+                          fontSize: 11,
+                          color: T.mist,
+                          fontStyle: "italic",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {s.why}
+                      </span>
+                    )}
                     {isNew && (
                       <span
                         style={{
