@@ -4,3 +4,7 @@
 // Routes Lens: Route Overview block on the Itinerary tab + Route Editor sheet.
 export const ROUTES_LENS_ENABLED =
   import.meta.env.VITE_ROUTES_LENS_ENABLED === "true";
+
+// Place Peek: tappable town chips/links on RG route cards → Wikipedia peek sheet.
+export const PLACE_PEEK_ENABLED =
+  import.meta.env.VITE_PLACE_PEEK_ENABLED === "true";

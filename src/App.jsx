@@ -47,7 +47,9 @@ import { sendTripEmail } from "./notify.js";
 import WelcomeSheet from "./components/WelcomeSheet.jsx";
 import RouteOverview from "./components/RouteOverview.jsx";
 import RouteEditorSheet from "./components/RouteEditorSheet.jsx";
-import { ROUTES_LENS_ENABLED } from "./flags.js";
+import { ROUTES_LENS_ENABLED, PLACE_PEEK_ENABLED } from "./flags.js";
+import PlacePeek from "./PlacePeek.jsx";
+import { findTownInText } from "./places.js";
 import {
   deriveStops,
   dRanges,
@@ -1239,6 +1241,54 @@ const BRAINSTORM_CATEGORY_ICONS = {
   "Day Trip": "🚌",
 };
 
+// ── Place Peek (RG) helpers ─────────────────────────────────────────────────
+// Linkify the first mention of each peekable town inside a day-line segment.
+// `remaining` is a Set created fresh per card render — towns are removed as
+// they're linked, so each gets exactly one dotted-underline tap point.
+// Styling inherits weight/color from the surrounding text (bold stays pure
+// emphasis; the underline alone means "tappable").
+function linkifyPlaceSegment(str, remaining, onTap, keyBase) {
+  if (!str) return [str];
+  const out = [];
+  let rest = str;
+  let k = 0;
+  while (rest) {
+    let best = null;
+    for (const town of remaining) {
+      const hit = findTownInText(rest, town);
+      if (hit && (!best || hit[0] < best.hit[0])) best = { town, hit };
+    }
+    if (!best) {
+      out.push(rest);
+      break;
+    }
+    const [s, e] = best.hit;
+    const town = best.town;
+    if (s > 0) out.push(rest.slice(0, s));
+    out.push(
+      <span
+        key={`${keyBase}-${k++}`}
+        onClick={(ev) => {
+          ev.stopPropagation();
+          onTap(town, "text");
+        }}
+        style={{
+          cursor: "pointer",
+          textDecoration: "underline dotted",
+          textDecorationThickness: 1.5,
+          textUnderlineOffset: 3,
+          textDecorationColor: "rgba(88,114,132,0.55)",
+        }}
+      >
+        {rest.slice(s, e)}
+      </span>,
+    );
+    remaining.delete(town);
+    rest = rest.slice(e);
+  }
+  return out;
+}
+
 function RouteCard({
   item,
   vs,
@@ -1251,11 +1301,24 @@ function RouteCard({
   onModify = null,
   onTellMore = null,
   onShowMap = null,
+  peekPlaces = null, // { chips: [{city, nights?, kind}] } — Place Peek towns
+  onPlacePeek = null, // (city, source: "text"|"chip", kind) => void
 }) {
   const selected = interactive
     ? vs.mine === 1
     : item.selected === true || vs.mine === 1;
   const hasError = !!item._error;
+  // Place Peek: towns not yet linked in this card's day text. Created fresh
+  // each render (pure — safe under StrictMode double-render); the day-line
+  // pass consumes towns so each gets exactly one first-mention link.
+  const peekRemaining =
+    onPlacePeek && peekPlaces?.chips?.length
+      ? new Set(peekPlaces.chips.map((c) => c.city))
+      : null;
+  const peekTap = (city, source) => {
+    const chip = peekPlaces?.chips?.find((c) => c.city === city);
+    onPlacePeek?.(city, source, chip?.kind || "day_trip", chip?.nights ?? null);
+  };
 
   // Compact mode: just label, icon, title, tagline — for 2-column grid
   if (compact) {
@@ -1520,15 +1583,83 @@ function RouteCard({
                     lineHeight: 1.4,
                   }}
                 >
-                  {text
-                    .split(/\*\*(.+?)\*\*/)
-                    .map((part, j) =>
-                      j % 2 === 1 ? <strong key={j}>{part}</strong> : part,
-                    )}
+                  {text.split(/\*\*(.+?)\*\*/).map((part, j) => {
+                    const content = peekRemaining
+                      ? linkifyPlaceSegment(
+                          part,
+                          peekRemaining,
+                          peekTap,
+                          `d${i}s${j}`,
+                        )
+                      : part;
+                    return j % 2 === 1 ? (
+                      <strong key={j}>{content}</strong>
+                    ) : (
+                      <span key={j}>{content}</span>
+                    );
+                  })}
                 </div>
               </div>
             );
           })}
+        </div>
+      )}
+      {/* Place Peek chips — the guaranteed index of every peekable town */}
+      {onPlacePeek && peekPlaces?.chips?.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            flexWrap: "wrap",
+            marginBottom: 10,
+            paddingTop: 8,
+            borderTop: `1px solid ${selected ? T.ocean + "33" : T.sand}`,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 9.5,
+              letterSpacing: 0.6,
+              color: T.mist,
+              fontFamily: "Georgia,serif",
+              width: "100%",
+            }}
+          >
+            PLACES ON THIS ROUTE
+          </div>
+          {peekPlaces.chips.map((c) => (
+            <span
+              key={c.city}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                peekTap(c.city, "chip");
+              }}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                border: `1px ${c.kind === "day_trip" ? "dashed" : "solid"} ${T.skyBorder}`,
+                background: c.kind === "day_trip" ? "transparent" : T.skyLight,
+                borderRadius: RADIUS.full,
+                padding: "3px 10px",
+                fontSize: 11,
+                color: c.kind === "day_trip" ? T.mist : T.ocean,
+                cursor: "pointer",
+                fontFamily: "Georgia,serif",
+                lineHeight: 1.3,
+              }}
+            >
+              {c.city}
+              {c.kind === "base" && c.nights != null && (
+                <span style={{ color: T.mist, fontSize: 10 }}>
+                  · {c.nights} night{c.nights > 1 ? "s" : ""}
+                </span>
+              )}
+              {c.kind === "day_trip" && (
+                <span style={{ fontSize: 10 }}>· day trip</span>
+              )}
+            </span>
+          ))}
         </div>
       )}
       {/* Salient points */}
@@ -2072,6 +2203,101 @@ function BrainstormView({
         .split(" → ")
         .map((s) => s.trim())
         .filter(Boolean);
+
+  // ── Place Peek (RG) ──────────────────────────────────────────────────────
+  const [placePeek, setPlacePeek] = useState(null);
+  const peekNumDays =
+    igReq.startDate && igReq.endDate
+      ? Math.max(
+          1,
+          Math.round(
+            (new Date(igReq.endDate) - new Date(igReq.startDate)) /
+              (1000 * 60 * 60 * 24),
+          ) + 1,
+        )
+      : null;
+  const peekTripNights = peekNumDays ? tripNightsOf(peekNumDays) : null;
+
+  // Chips for one route: bases (stops-derived, with nights) + day-trips
+  // (city − stops, dashed). When stops can't be derived, every city-list
+  // town becomes an unlabeled base-style chip (design Rev 6 fallback).
+  const computePeekPlaces = (it) => {
+    const cityList = [
+      ...new Map(
+        (it.city || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((c) => [c.toLowerCase(), c]),
+      ).values(),
+    ];
+    if (!cityList.length) return null;
+    const { stops } = deriveStops(it, peekTripNights);
+    if (!stops) {
+      return { chips: cityList.map((city) => ({ city, kind: "plain" })) };
+    }
+    const baseSet = new Set(stops.map((s) => s.city.toLowerCase()));
+    return {
+      chips: [
+        ...stops.map((s) => ({
+          city: s.city,
+          nights: s.nights,
+          kind: "base",
+        })),
+        ...cityList
+          .filter((c) => !baseSet.has(c.toLowerCase()))
+          .map((city) => ({ city, kind: "day_trip" })),
+      ],
+    };
+  };
+
+  const openPlacePeek = (place, source, kind, nights, routeId) => {
+    const lcPlace = place.toLowerCase();
+    // Context rows use POSITIONAL labels — same P{n} the cards render.
+    const context = (items || [])
+      .filter((it) => it.tier === 1 && !it.dismissed)
+      .map((it, idx) => {
+        const { stops } = deriveStops(it, peekTripNights);
+        const base = (stops || []).find(
+          (s) => s.city.toLowerCase() === lcPlace,
+        );
+        if (base)
+          return {
+            label: `P${idx + 1}`,
+            text: `Overnight base · ${base.nights} night${base.nights > 1 ? "s" : ""}`,
+          };
+        const visited = (it.city || "")
+          .toLowerCase()
+          .split(",")
+          .map((s) => s.trim())
+          .includes(lcPlace);
+        return {
+          label: `P${idx + 1}`,
+          text: visited
+            ? stops
+              ? "Day trip"
+              : "On this route"
+            : "Not visited",
+        };
+      });
+    setPlacePeek({ place, kind, nights, context, routeId });
+    // Warm the Magazine deep dive for this town (cache-deduped upstream).
+    loadCityDeepDive(place);
+    posthog.capture("place_peek_open", {
+      place,
+      source,
+      kind,
+      route_id: routeId,
+      trip_id: trip?.id || editTripIdRef.current || null,
+    });
+  };
+
+  // Every stop coordinate we know — geo-sanity for Wikipedia homonyms.
+  const peekStopCoords = (items || [])
+    .filter((it) => it.tier === 1 && !it.dismissed)
+    .flatMap((it) => deriveStops(it, peekTripNights).stops || [])
+    .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng))
+    .map((s) => ({ lat: s.lat, lng: s.lng }));
 
   useEffect(() => {
     if (editTripId) {
@@ -2728,6 +2954,20 @@ function BrainstormView({
         overflow: "hidden",
       }}
     >
+      {/* Place Peek overlay — rendered at view root (never inside a RouteCard:
+          the card root is click-to-vote and a scrim tap would bubble into it) */}
+      {PLACE_PEEK_ENABLED && isPretripMode && placePeek && (
+        <PlacePeek
+          peek={placePeek}
+          destination={destinations.join(", ")}
+          stopCoords={peekStopCoords}
+          onClose={() => setPlacePeek(null)}
+          onAskTrippy={onAskTrippy}
+          onOpenMagazine={
+            onTellMore ? (city, routeId) => onTellMore([city], routeId) : null
+          }
+        />
+      )}
       {/* Header */}
       <div
         style={{
@@ -3207,6 +3447,15 @@ function BrainstormView({
                         : null
                     }
                     onShowMap={onShowMap ? () => onShowMap(item.id) : null}
+                    peekPlaces={
+                      PLACE_PEEK_ENABLED ? computePeekPlaces(item) : null
+                    }
+                    onPlacePeek={
+                      PLACE_PEEK_ENABLED
+                        ? (place, source, kind, nights) =>
+                            openPlacePeek(place, source, kind, nights, item.id)
+                        : null
+                    }
                   />
                 </div>
               ))}
@@ -13510,6 +13759,12 @@ export default function App({
                   onInvite={editingTrip?.id ? () => setShowMembers(true) : null}
                   members={members}
                   preferences={preferences}
+                  onAskTrippy={(title) => {
+                    setChatInput(`Tell me about "${title}"`);
+                    setChatOpen(true);
+                    setChatUnread(false);
+                    setTimeout(() => chatInputRef.current?.focus(), 50);
+                  }}
                   onOpenChat={() => {
                     setChatOpen(true);
                     setChatUnread(false);
