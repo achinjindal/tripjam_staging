@@ -53,6 +53,7 @@ function normalizeStops(stops) {
   return stops.map((s) => ({
     city: s.city.trim(),
     nights: s.nights,
+    ...(typeof s.why === "string" && s.why.trim() ? { why: s.why.trim() } : {}),
     ...(Number.isFinite(s.lat) && Number.isFinite(s.lng)
       ? { lat: s.lat, lng: s.lng }
       : {}),
