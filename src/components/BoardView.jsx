@@ -2698,6 +2698,20 @@ function LogisticsTab({
       cancelled = true;
     };
   }, [trip.id]);
+  // The itinerary already picked a specific hotel per city (IG's
+  // "Check in at X" activities) — surface it as a tappable suggestion on
+  // empty rows instead of making the user re-find it.
+  const suggestedHotels = (() => {
+    const map = {};
+    for (const d of days) {
+      const act = (d.activities || []).find(
+        (a) => a.type === "hotel" && /check in at /i.test(a.title || ""),
+      );
+      if (act && d.city && !map[d.city])
+        map[d.city] = act.title.replace(/^check in at /i, "").trim();
+    }
+    return map;
+  })();
   const [hotels, setHotels] = useState(
     cities.map((city) => ({
       city,
@@ -2956,6 +2970,45 @@ function LogisticsTab({
               hotelCity={h.city}
               inputStyle={{ ...inputStyle(h.name) }}
             />
+            {!h.name &&
+              suggestedHotels[h.city] &&
+              suggestedHotels[h.city] !== h.name && (
+                <button
+                  onClick={() =>
+                    setHotels((prev) =>
+                      prev.map((x, j) =>
+                        j === i ? { ...x, name: suggestedHotels[h.city] } : x,
+                      ),
+                    )
+                  }
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    marginTop: 6,
+                    padding: "5px 10px",
+                    borderRadius: RADIUS.full,
+                    border: `1px dashed ${T.ocean}60`,
+                    background: `${T.ocean}0A`,
+                    color: T.ocean,
+                    fontFamily: "Georgia,serif",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    maxWidth: "100%",
+                  }}
+                >
+                  <span style={{ flexShrink: 0 }}>✨</span>
+                  <span
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    From your itinerary: {suggestedHotels[h.city]}
+                  </span>
+                </button>
+              )}
           </div>
         ))}
       </div>
