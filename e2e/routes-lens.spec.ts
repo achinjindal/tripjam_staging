@@ -621,6 +621,36 @@ test.describe("18 · Routes Lens", () => {
     }
   });
 
+  test("18.11b map day tap lands the itinerary there on tab return (mobile)", async ({
+    page,
+  }) => {
+    test.skip(!stored, "fixture seeding failed");
+    await login(page);
+    await blockLlm(page);
+    await openTrip(page, stored!.id);
+    // → Map tab, tap Day 4's pill (single-select = navigation gesture)
+    await page
+      .locator("button:visible", { hasText: /^\s*🗺?\s*Map\s*$/i })
+      .last()
+      .click();
+    await page.waitForTimeout(1500);
+    await page
+      .locator("button:visible", { hasText: /^Day 4$/ })
+      .first()
+      .click();
+    await page.waitForTimeout(400);
+    // → back to Itinerary: the pending map-day consumes and scrolls
+    await page
+      .locator("button:visible", { hasText: /Itinerary/ })
+      .last()
+      .click();
+    await page.waitForTimeout(2200);
+    const day4 = await page.getByText(/Day 4/).first().boundingBox();
+    const day1 = await page.getByText(/Day 1/).first().boundingBox();
+    expect(day4?.y ?? 9999).toBeLessThan(600);
+    expect(day1?.y ?? 9999).toBeLessThan(day4?.y ?? 9999);
+  });
+
   // MUTATES the stored fixture's route — must stay the LAST test in the file.
   test("18.12 replace-confirm shows the Route diff; accept persists the write-back (IG blocked)", async ({
     page,
@@ -709,6 +739,20 @@ test.describe("18D · Routes Lens desktop", () => {
       await expect(page.getByTestId("route-overview")).toContainText(
         "Ziro Town",
       );
+      // Desktop map→itinerary sync: clicking a day pill on the right-panel
+      // map scrolls the itinerary to that day
+      const day4Pill = page
+        .locator("button:visible", { hasText: /^Day 4$/ })
+        .last();
+      if (await day4Pill.isVisible({ timeout: 5000 }).catch(() => false)) {
+        const day4Card = page.getByText(/Day 4/).first();
+        const before = (await day4Card.boundingBox())?.y ?? 99999;
+        await day4Pill.click();
+        await page.waitForTimeout(1600);
+        const after = (await day4Card.boundingBox())?.y ?? 99999;
+        expect(after).toBeLessThanOrEqual(before);
+        expect(after).toBeLessThan(650);
+      }
     } finally {
       const { data: dayIds } = await sb!
         .from("days")

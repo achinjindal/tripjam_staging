@@ -7817,6 +7817,21 @@ export default function App({
   // per trip whenever the Plan timeline first becomes visible — covers both
   // opening straight into Plan and the first Story→Plan switch.
   const jumpedToTodayRef = useRef(null);
+  // Day tapped on the mobile Map tab — consumed when the itinerary tab
+  // returns, and it out-ranks the open-at-today jump for that visit.
+  const pendingMapDayRef = useRef(null);
+  useEffect(() => {
+    if (activeBottomTab !== "itinerary" || storyActive) return undefined;
+    const idx = pendingMapDayRef.current;
+    if (idx == null || days.length === 0) return undefined;
+    pendingMapDayRef.current = null;
+    jumpedToTodayRef.current = trip?.id; // explicit choice beats today-jump
+    const t = setTimeout(
+      () => scrollToDay(Math.min(idx, days.length - 1)),
+      400,
+    );
+    return () => clearTimeout(t);
+  }, [activeBottomTab, storyActive, days.length]);
   useEffect(() => {
     if (jumpedToTodayRef.current === trip?.id) return;
     if (screen !== "itinerary" || storyActive) return;
@@ -14865,6 +14880,11 @@ export default function App({
                       session={session}
                       tripId={trip?.id}
                       focusDay={activeDay}
+                      onDayFocus={(i) => {
+                        // Map tab is full-screen on mobile — the itinerary
+                        // can't scroll while hidden. Land there on tab return.
+                        pendingMapDayRef.current = i;
+                      }}
                     />
                   ) : (
                     <div
@@ -16612,6 +16632,7 @@ export default function App({
                 session={session}
                 tripId={trip?.id}
                 focusDay={activeDay}
+                onDayFocus={scrollToDay}
               />
             ) : (
               <div
