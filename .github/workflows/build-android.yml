@@ -29,8 +29,12 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # android-actions/setup-android@v3 crashes on the Node-24 runner image
+      # (sdkmanager version mismatch mid license-acceptance, 2026-09). The
+      # ubuntu-latest runner preinstalls the SDK — accepting licenses directly
+      # is all gradle needs.
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       - name: Install dependencies
         run: npm install --legacy-peer-deps
