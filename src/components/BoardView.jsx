@@ -2713,12 +2713,15 @@ function LogisticsTab({
     return map;
   })();
   const [hotels, setHotels] = useState(
-    cities.map((city) => ({
-      city,
-      name:
-        ((trip.hotels_data || []).find((h) => h.city === city) || {}).name ||
-        "",
-    })),
+    cities.map((city) => {
+      const saved = (trip.hotels_data || []).find((h) => h.city === city) || {};
+      return {
+        city,
+        name: saved.name || "",
+        status: saved.status || null, // "booked" | null
+        confirmation: saved.confirmation || "",
+      };
+    }),
   );
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | done
 
@@ -2734,11 +2737,13 @@ function LogisticsTab({
       : "",
     departureMode: trip.departure_mode || "flight",
   };
-  const hotelsChanged = hotels.some((h, i) => {
-    const orig =
-      ((trip.hotels_data || []).find((x) => x.city === h.city) || {}).name ||
-      "";
-    return h.name !== orig;
+  const hotelsChanged = hotels.some((h) => {
+    const orig = (trip.hotels_data || []).find((x) => x.city === h.city) || {};
+    return (
+      h.name !== (orig.name || "") ||
+      (h.status || null) !== (orig.status || null) ||
+      (h.confirmation || "") !== (orig.confirmation || "")
+    );
   });
   const hasChanges =
     saveStatus !== "saving" &&
@@ -2941,6 +2946,20 @@ function LogisticsTab({
           }}
         >
           🏨 Hotels
+          {hotels.some((h) => h.status === "booked") && (
+            <span
+              style={{
+                fontFamily: "Georgia,serif",
+                fontSize: 12,
+                color: T.moss,
+                marginLeft: 8,
+                fontWeight: 400,
+              }}
+            >
+              {hotels.filter((h) => h.status === "booked").length} of{" "}
+              {hotels.length} booked
+            </span>
+          )}
         </div>
         {hotels.map((h, i) => (
           <div
@@ -3009,6 +3028,76 @@ function LogisticsTab({
                   </span>
                 </button>
               )}
+            {h.name.trim() && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginTop: 6,
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  onClick={() =>
+                    setHotels((prev) =>
+                      prev.map((x, j) =>
+                        j === i
+                          ? {
+                              ...x,
+                              status: x.status === "booked" ? null : "booked",
+                            }
+                          : x,
+                      ),
+                    )
+                  }
+                  aria-pressed={h.status === "booked"}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                    padding: "5px 12px",
+                    borderRadius: RADIUS.full,
+                    border: `1.5px solid ${h.status === "booked" ? T.moss : T.sand}`,
+                    background: h.status === "booked" ? T.moss : "white",
+                    color: h.status === "booked" ? "white" : T.mist,
+                    fontFamily: "Georgia,serif",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    fontWeight: h.status === "booked" ? 700 : 400,
+                  }}
+                >
+                  {h.status === "booked" ? "✓ Booked" : "Mark booked"}
+                </button>
+                {h.status === "booked" && (
+                  <input
+                    value={h.confirmation}
+                    onChange={(e) =>
+                      setHotels((prev) =>
+                        prev.map((x, j) =>
+                          j === i ? { ...x, confirmation: e.target.value } : x,
+                        ),
+                      )
+                    }
+                    placeholder="Confirmation # (optional)"
+                    style={{
+                      flex: 1,
+                      minWidth: 150,
+                      padding: "6px 10px",
+                      borderRadius: RADIUS.md,
+                      border: `1.5px solid ${h.confirmation ? T.moss : T.sand}`,
+                      fontFamily: "Georgia,serif",
+                      fontSize: 12,
+                      color: T.ink,
+                      outline: "none",
+                      boxSizing: "border-box",
+                      background: "white",
+                    }}
+                  />
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>

@@ -4610,6 +4610,7 @@ function ActivityCard({
   transitMapsUrl,
   onAskTrippy,
   hotelRatesUrl = null,
+  hotelBooking = null,
 }) {
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -5203,7 +5204,32 @@ function ActivityCard({
                 💬 {activity.note}
               </div>
             )}
-            {activity.type === "hotel" && hotelRatesUrl && (
+            {activity.type === "hotel" && hotelBooking && (
+              <div
+                style={{
+                  marginTop: 8,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "5px 12px",
+                  borderRadius: RADIUS.full,
+                  background: `${T.moss}14`,
+                  border: `1.5px solid ${T.moss}`,
+                  color: T.moss,
+                  fontFamily: "Georgia,serif",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}
+              >
+                ✓ Booked
+                {hotelBooking.confirmation && (
+                  <span style={{ fontWeight: 400 }}>
+                    · #{hotelBooking.confirmation}
+                  </span>
+                )}
+              </div>
+            )}
+            {activity.type === "hotel" && !hotelBooking && hotelRatesUrl && (
               <div style={{ marginTop: 8 }}>
                 <a
                   href={hotelRatesUrl}
@@ -6109,6 +6135,7 @@ function DayCompact({
   onExpand,
   canExpand = true,
   hotelRatesUrl = null,
+  hotelBooking = null,
 }) {
   const acts = day.activities || [];
   const hotel = acts.find((a) => a.type === "hotel");
@@ -6247,7 +6274,18 @@ function DayCompact({
             🏨 {hotel.title.replace(/^Check in at /i, "")}{" "}
             {hotel.note ? `· ${hotel.note}` : ""}
           </a>
-          {hotelRatesUrl && (
+          {hotelBooking && (
+            <span
+              style={{
+                color: T.moss,
+                fontWeight: 700,
+                marginLeft: 2,
+              }}
+            >
+              · ✓ booked
+            </span>
+          )}
+          {!hotelBooking && hotelRatesUrl && (
             <a
               href={hotelRatesUrl}
               target="_blank"
@@ -6323,6 +6361,7 @@ function DaySection({
   day,
   dayIndex = 0,
   hotelRatesUrl = null,
+  hotelBooking = null,
   onEditActivity,
   onRemoveActivity,
   onReplaceActivity,
@@ -6619,6 +6658,7 @@ function DaySection({
                 transitMapsUrl={transitMapsUrl}
                 onAskTrippy={onAskTrippy}
                 hotelRatesUrl={act.type === "hotel" ? hotelRatesUrl : null}
+                hotelBooking={act.type === "hotel" ? hotelBooking : null}
               />
               {!lastAct && !samePackageAsNext && (
                 <TransitionRow
@@ -14576,6 +14616,22 @@ export default function App({
                             ? hotelPerDay[i]?.hotel || null
                             : null;
 
+                        // Booked stay for this day's check-in city (Board ·
+                        // Travel & Hotels) — surfaces on the hotel row and
+                        // replaces the Check-rates link once booked
+                        const dayHotelBooking = (() => {
+                          const hotelAct = (day.activities || []).find(
+                            (a) => a.type === "hotel",
+                          );
+                          if (!hotelAct) return null;
+                          const hCity = hotelAct.city || day.city;
+                          const rec = (trip?.hotels_data || []).find(
+                            (h) => h.city === hCity && h.status === "booked",
+                          );
+                          return rec
+                            ? { confirmation: rec.confirmation || "" }
+                            : null;
+                        })();
                         // Affiliate deep link for this day's check-in (if any)
                         const dayHotelRatesUrl = (() => {
                           const hotelAct = (day.activities || []).find(
@@ -14610,6 +14666,7 @@ export default function App({
                               <DayCompact
                                 day={day}
                                 hotelRatesUrl={dayHotelRatesUrl}
+                                hotelBooking={dayHotelBooking}
                                 canExpand={detailedReady || i < streamingDays}
                                 displayCity={(() => {
                                   const hCity = hotelPerDay[i]?.city;
@@ -14669,6 +14726,7 @@ export default function App({
                                 day={day}
                                 dayIndex={i}
                                 hotelRatesUrl={dayHotelRatesUrl}
+                                hotelBooking={dayHotelBooking}
                                 onCollapse={() =>
                                   setCollapsedDays((prev) =>
                                     new Set(prev).add(day.id),
