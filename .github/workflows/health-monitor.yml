@@ -1,0 +1,105 @@
+# TripJam health monitor — probes every layer that has silently died before:
+#   · Supabase project pause (INACTIVE)      — 2 incidents Aug/Sep 2026
+#   · Anthropic balance exhaustion (LLM 500) — 1 incident Aug 2026
+#   · dead payment keys (checkout 502)       — found Sep 2026, LS-gated below
+# A failed run emails the repo owner via GitHub's default workflow-failure
+# notification. Runs every 6 hours; cheap by design (one tiny Haiku call per
+# run via the unbilled extract-preferences).
+name: health-monitor
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PROD_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      PROD_ANON: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      STAGING_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_ANON: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      MGMT_TOKEN: ${{ secrets.SUPABASE_MGMT_TOKEN }}
+      PROBE_PW: ${{ secrets.HEALTH_PROBE_PASSWORD }}
+      # Soft-fail list — remove "checkout" once the Lemon Squeezy store is
+      # activated and a live key is installed.
+      KNOWN_ISSUES: "checkout"
+    steps:
+      - name: Probe all services
+        run: |
+          set -u
+          FAIL=0
+          note() { echo "::notice::$1"; }
+          hard() { echo "::error::$1"; FAIL=1; }
+          soft() { echo "::warning::(known issue) $1"; }
+
+          # ── 1. Project status (pause detection) ─────────────────────
+          for ref in viyvdqwwnbbqjuwiuzbh wlrzvwjdrjpfqcwgmzch; do
+            name=$([ "$ref" = "viyvdqwwnbbqjuwiuzbh" ] && echo PROD || echo STAGING)
+            status=$(curl -s "https://api.supabase.com/v1/projects/$ref" \
+              -H "Authorization: Bearer $MGMT_TOKEN" --max-time 20 \
+              | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','UNKNOWN'))" || echo UNREACHABLE)
+            if [ "$status" = "ACTIVE_HEALTHY" ]; then note "$name project: $status"
+            else hard "$name Supabase project status: $status (paused? restore via dashboard or POST /v1/projects/$ref/restore)"; fi
+          done
+
+          # ── 2. Gateways: auth + REST, both envs ─────────────────────
+          for env in PROD STAGING; do
+            url=$([ "$env" = "PROD" ] && echo "$PROD_URL" || echo "$STAGING_URL")
+            anon=$([ "$env" = "PROD" ] && echo "$PROD_ANON" || echo "$STAGING_ANON")
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url/auth/v1/health" -H "apikey: $anon" --max-time 15)
+            [ "$code" = "200" ] && note "$env auth: 200" || hard "$env auth health: HTTP $code"
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$url/rest/v1/trips?select=id&limit=1" -H "apikey: $anon" --max-time 15)
+            case "$code" in 200|401) note "$env REST: $code" ;; *) hard "$env REST gateway: HTTP $code" ;; esac
+          done
+
+          # ── 3. Edge functions (prod, anon-reachable) ────────────────
+          code=$(curl -s -o /dev/null -w "%{http_code}" "$PROD_URL/functions/v1/places-proxy?action=city-video" \
+            -H "apikey: $PROD_ANON" -H "Authorization: Bearer $PROD_ANON" \
+            -H "Content-Type: application/json" -d '{"q":"Kyoto"}' --max-time 20)
+          [ "$code" = "200" ] && note "prod edge fn (places-proxy): 200" || hard "prod places-proxy: HTTP $code"
+
+          # ── 4. Prod auth sign-in (probe account) ────────────────────
+          PTOKEN=$(curl -s "$PROD_URL/auth/v1/token?grant_type=password" -H "apikey: $PROD_ANON" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"health-probe@tripjam.app\",\"password\":\"$PROBE_PW\"}" --max-time 15 \
+            | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))" || true)
+          [ -n "$PTOKEN" ] && note "prod sign-in: ok" || hard "prod sign-in failed for probe account"
+
+          # ── 5. LLM balance (staging qa user, unbilled Haiku call) ───
+          QTOKEN=$(curl -s "$STAGING_URL/auth/v1/token?grant_type=password" -H "apikey: $STAGING_ANON" \
+            -H "Content-Type: application/json" \
+            -d '{"email":"qa-tester@tripjam.app","password":"qaTest123!"}' --max-time 15 \
+            | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))" || true)
+          if [ -n "$QTOKEN" ]; then
+            code=$(curl -s -o /tmp/llm.json -w "%{http_code}" "$STAGING_URL/functions/v1/extract-preferences" \
+              -H "Authorization: Bearer $QTOKEN" -H "Content-Type: application/json" \
+              -d '{"notes":"health probe","chatHistory":[],"tripId":null}' --max-time 45)
+            if [ "$code" = "200" ]; then note "LLM (Anthropic via extract-preferences): 200"
+            else hard "LLM probe: HTTP $code — $(head -c 200 /tmp/llm.json) (Anthropic balance?)"; fi
+          else
+            hard "staging sign-in failed (qa-tester) — LLM probe skipped"
+          fi
+
+          # ── 6. Checkout (prod) — LS-gated known issue ───────────────
+          if [ -n "$PTOKEN" ]; then
+            code=$(curl -s -o /tmp/co.json -w "%{http_code}" "$PROD_URL/functions/v1/create-checkout" \
+              -H "Authorization: Bearer $PTOKEN" -H "Content-Type: application/json" \
+              -d '{"pack":"small"}' --max-time 20)
+            if [ "$code" = "200" ]; then note "checkout: 200"
+            elif echo "$KNOWN_ISSUES" | grep -q checkout; then soft "checkout: HTTP $code — $(head -c 120 /tmp/co.json)"
+            else hard "checkout: HTTP $code — $(head -c 200 /tmp/co.json)"; fi
+          fi
+
+          # ── 7. Frontend ─────────────────────────────────────────────
+          BUNDLE=$(curl -s https://tripjam.co --max-time 15 | grep -o 'assets/index-[^"]*\.js' | head -1 || true)
+          if [ -n "$BUNDLE" ]; then
+            code=$(curl -s -o /dev/null -w "%{http_code}" "https://tripjam.co/$BUNDLE" --max-time 15)
+            [ "$code" = "200" ] && note "frontend: 200 ($BUNDLE)" || hard "frontend bundle $BUNDLE: HTTP $code"
+          else
+            hard "tripjam.co: no bundle reference found (site down or shell changed)"
+          fi
+
+          exit $FAIL
