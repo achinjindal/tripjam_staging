@@ -2946,6 +2946,23 @@ function LogisticsTab({
           }}
         >
           🏨 Hotels
+          {import.meta.env.VITE_EMAIL_INGEST_ADDRESS && (
+            <div
+              style={{
+                fontFamily: "Georgia,serif",
+                fontSize: 11.5,
+                color: T.mist,
+                fontWeight: 400,
+                marginTop: 3,
+              }}
+            >
+              📩 Forward booking confirmations to{" "}
+              <b style={{ color: T.ocean }}>
+                {import.meta.env.VITE_EMAIL_INGEST_ADDRESS}
+              </b>{" "}
+              — they book themselves
+            </div>
+          )}
           {hotels.some((h) => h.status === "booked") && (
             <span
               style={{
