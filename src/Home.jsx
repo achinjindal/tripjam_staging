@@ -42,6 +42,16 @@ function fmtTs(iso) {
   });
 }
 
+// Trip names carry an auto-appended date range ("Japan · Oct 7–Oct 13") —
+// redundant on cards where dates render on the next line, and the main
+// reason titles truncated instantly on phones. Strip ONLY that suffix.
+function displayTripName(name) {
+  return (name || "").replace(
+    /\s*·\s*[A-Z][a-z]{2}\s?\d{1,2}\s*[–-]\s*[A-Z][a-z]{2}\s?\d{1,2}$/,
+    "",
+  );
+}
+
 export default function Home({
   session,
   onOpenTrip,
@@ -350,12 +360,14 @@ export default function Home({
                           fontWeight: 600,
                           color: T.ink,
                           margin: 0,
-                          whiteSpace: "nowrap",
                           overflow: "hidden",
-                          textOverflow: "ellipsis",
+                          display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          lineHeight: 1.3,
                         }}
                       >
-                        {trip.name}
+                        {displayTripName(trip.name)}
                       </h3>
                       <span
                         style={{
