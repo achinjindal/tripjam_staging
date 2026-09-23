@@ -22,6 +22,23 @@ import LowCreditsBanner from "./LowCreditsBanner.jsx";
 import { refreshCredits, CREDITS_UI_ENABLED } from "./credits";
 import { initRevenueCat } from "./billing";
 
+// ── Android status bar (APK only): lay the webview out BELOW the status
+// bar instead of behind it — headers were rendering under the clock/battery
+// row. Config lives in capacitor.config.json; this runtime call is the
+// belt-and-braces for devices that ignore the config at cold start.
+(async () => {
+  try {
+    const { Capacitor } = await import("@capacitor/core");
+    if (!Capacitor.isNativePlatform()) return;
+    const { StatusBar, Style } = await import("@capacitor/status-bar");
+    await StatusBar.setOverlaysWebView({ overlay: false });
+    await StatusBar.setBackgroundColor({ color: "#FAF6F0" });
+    await StatusBar.setStyle({ style: Style.Light });
+  } catch {
+    /* web build or plugin unavailable — nothing to do */
+  }
+})();
+
 // ── Sentry (no-op when VITE_SENTRY_DSN is not set) ──
 if (import.meta.env.VITE_SENTRY_DSN) {
   Sentry.init({

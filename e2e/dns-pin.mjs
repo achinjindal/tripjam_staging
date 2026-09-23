@@ -9,6 +9,7 @@
 // host-resolver-rules launch arg in playwright.config.ts (same env gate).
 // The pinned IP is resolved live via DoH at process start — no stale
 // hard-coded edge IPs.
+/* global process, fetch, setTimeout, console */
 import dns from "node:dns";
 
 const PIN_DOMAINS = [
