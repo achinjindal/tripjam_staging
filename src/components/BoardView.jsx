@@ -2715,6 +2715,35 @@ function LogisticsTab({
   // Per-trip forwarding address: bookings+<trip id prefix>@… — routes the
   // email to THIS trip deterministically (plus-addressing through the
   // catch-all; the inbound function matches the id prefix).
+  // First email-booked stay → one-time celebration card (global, dismissible)
+  const emailBookedExists = (trip.hotels_data || []).some(
+    (h) => h.via === "email" && h.status === "booked",
+  );
+  const [celebrated, setCelebrated] = useState(() => {
+    try {
+      return localStorage.getItem("tripjam_email_book_celebrated") === "1";
+    } catch {
+      return true;
+    }
+  });
+  const dismissCelebration = () => {
+    try {
+      localStorage.setItem("tripjam_email_book_celebrated", "1");
+    } catch {
+      /* private mode */
+    }
+    setCelebrated(true);
+  };
+  const [addrCopied, setAddrCopied] = useState(false);
+  const copyIngestAddress = () => {
+    try {
+      navigator.clipboard.writeText(tripIngestAddress);
+      setAddrCopied(true);
+      setTimeout(() => setAddrCopied(false), 1800);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
   const tripIngestAddress = (() => {
     const base = import.meta.env.VITE_EMAIL_INGEST_ADDRESS;
     if (!base || !trip?.id) return base;
@@ -2955,33 +2984,6 @@ function LogisticsTab({
           }}
         >
           🏨 Hotels
-          {import.meta.env.VITE_EMAIL_INGEST_ADDRESS && (
-            <div
-              style={{
-                fontFamily: "Georgia,serif",
-                fontSize: 11.5,
-                color: T.mist,
-                fontWeight: 400,
-                marginTop: 3,
-              }}
-            >
-              📩 Forward booking confirmations to{" "}
-              <b
-                style={{ color: T.ocean, cursor: "pointer" }}
-                title="Tap to copy"
-                onClick={() => {
-                  try {
-                    navigator.clipboard.writeText(tripIngestAddress);
-                  } catch {
-                    /* clipboard unavailable */
-                  }
-                }}
-              >
-                {tripIngestAddress}
-              </b>{" "}
-              — they book themselves onto this trip
-            </div>
-          )}
           {hotels.some((h) => h.status === "booked") && (
             <span
               style={{
@@ -2996,7 +2998,111 @@ function LogisticsTab({
               {hotels.length} booked
             </span>
           )}
+          {import.meta.env.VITE_EMAIL_INGEST_ADDRESS &&
+            hotels.some((h) => h.status === "booked") && (
+              <div
+                style={{
+                  fontFamily: "Georgia,serif",
+                  fontSize: 11.5,
+                  color: T.mist,
+                  fontWeight: 400,
+                  marginTop: 3,
+                }}
+              >
+                📩 Forward hotel confirmations to{" "}
+                <b
+                  style={{ color: T.ocean, cursor: "pointer" }}
+                  title="Tap to copy"
+                  onClick={copyIngestAddress}
+                >
+                  {addrCopied ? "copied ✓" : tripIngestAddress}
+                </b>
+              </div>
+            )}
         </div>
+        {/* First-booking celebration — shown once, ever, after the first
+            stay books itself from a forwarded email */}
+        {emailBookedExists && !celebrated && (
+          <div
+            style={{
+              background: `${T.moss}12`,
+              border: `1.5px solid ${T.moss}`,
+              borderRadius: RADIUS.md + 2,
+              padding: "12px 14px",
+              marginBottom: 14,
+              fontFamily: "Georgia,serif",
+              fontSize: 12.5,
+              color: T.ink,
+              position: "relative",
+            }}
+          >
+            <button
+              onClick={dismissCelebration}
+              aria-label="Dismiss"
+              style={{
+                position: "absolute",
+                top: 6,
+                right: 8,
+                background: "none",
+                border: "none",
+                color: T.mist,
+                cursor: "pointer",
+                fontSize: 13,
+              }}
+            >
+              ✕
+            </button>
+            <b style={{ color: T.moss }}>✨ That stay booked itself.</b> A
+            forwarded confirmation email did that — every trip has its own
+            forwarding address (it's in this section), so bookings can keep
+            checking themselves off.
+          </div>
+        )}
+        {/* Empty state: teaching moment gets the space the feature deserves */}
+        {import.meta.env.VITE_EMAIL_INGEST_ADDRESS &&
+          !hotels.some((h) => h.status === "booked") && (
+            <div
+              style={{
+                border: `1.5px dashed ${T.ocean}50`,
+                background: `${T.ocean}07`,
+                borderRadius: RADIUS.md + 2,
+                padding: "12px 14px",
+                marginBottom: 14,
+                fontFamily: "Georgia,serif",
+                fontSize: 12.5,
+                color: T.ink,
+                lineHeight: 1.55,
+              }}
+            >
+              <b>📩 Book by forwarding.</b> Send hotel confirmation emails to
+              this trip's own address and they'll check themselves off here —
+              name, booked status, confirmation number.
+              <div style={{ marginTop: 8 }}>
+                <button
+                  onClick={copyIngestAddress}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "6px 12px",
+                    borderRadius: RADIUS.full,
+                    border: `1px solid ${T.ocean}`,
+                    background: "white",
+                    color: T.ocean,
+                    fontFamily: "ui-monospace, Menlo, monospace",
+                    fontSize: 11.5,
+                    cursor: "pointer",
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {addrCopied ? "copied ✓" : `${tripIngestAddress} ⧉`}
+                </button>
+              </div>
+            </div>
+          )}
         {hotels.map((h, i) => (
           <div
             key={h.city}

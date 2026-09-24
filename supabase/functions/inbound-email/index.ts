@@ -178,6 +178,84 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+/* P0 — reply-back receipt: the product answers the forwarder's email so
+ * the loop closes in their inbox. Loop-safety: receipts carry
+ * Auto-Submitted, thread via In-Reply-To, go only to the (already
+ * profile-verified) sender, and are capped per sender per day. Failures
+ * never affect the webhook result. */
+async function sendReceipt(opts: {
+  supabaseUrl: string;
+  db: Record<string, string>;
+  to: string;
+  origSubject: string;
+  origMessageId: string;
+  heading: string;
+  line: string;
+  tripId?: string;
+  senderProfileId?: string;
+}): Promise<void> {
+  try {
+    const key = Deno.env.get("RESEND_API_KEY");
+    const from = Deno.env.get("EMAIL_FROM") || "TripJam <trips@tripjam.co>";
+    if (!key) return;
+    // Cap: 20 receipts per sender per day
+    const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const capRes = await fetch(
+      `${opts.supabaseUrl}/rest/v1/email_log?type=eq.receipt&recipient=eq.${encodeURIComponent(opts.to)}&created_at=gte.${dayAgo}&select=id`,
+      { headers: opts.db },
+    );
+    if (capRes.ok && (await capRes.json()).length >= 20) return;
+    const tripUrl = opts.tripId
+      ? `https://tripjam.co/trip/${opts.tripId}`
+      : "https://tripjam.co";
+    const html = `
+  <div style="max-width:480px;margin:0 auto;background:#fff;border:1px solid #E2DDD5;border-radius:16px;padding:28px;font-family:Georgia,serif">
+    <div style="font-size:14px;letter-spacing:.08em;color:#587284;margin-bottom:14px">TRIPJAM</div>
+    <div style="font-size:20px;margin-bottom:10px">${opts.heading}</div>
+    <div style="font-size:14px;line-height:1.6;color:#3a4a58;margin-bottom:22px">${opts.line}</div>
+    <a href="${tripUrl}" style="display:inline-block;background:#2563A8;color:#fff;text-decoration:none;border-radius:10px;padding:11px 22px;font-size:14px">Open the trip</a>
+  </div>`;
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to: [opts.to],
+        subject: `Re: ${opts.origSubject || "your forwarded booking"}`.slice(
+          0,
+          160,
+        ),
+        html,
+        headers: {
+          "Auto-Submitted": "auto-replied",
+          ...(opts.origMessageId
+            ? {
+                "In-Reply-To": opts.origMessageId,
+                References: opts.origMessageId,
+              }
+            : {}),
+        },
+      }),
+    });
+    if (res.ok)
+      fetch(`${opts.supabaseUrl}/rest/v1/email_log`, {
+        method: "POST",
+        headers: opts.db,
+        body: JSON.stringify({
+          type: "receipt",
+          recipient: opts.to,
+          sender_id: opts.senderProfileId || null,
+          trip_id: opts.tripId || null,
+        }),
+      }).catch(() => {});
+  } catch {
+    /* receipts are best-effort */
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS")
     return new Response("ok", { headers: corsHeaders });
@@ -315,11 +393,22 @@ Deno.serve(async (req) => {
     { headers: db },
   );
   const candidates: any[] = tripRes.ok ? await tripRes.json() : [];
-  if (candidates.length === 0)
+  if (candidates.length === 0) {
+    await sendReceipt({
+      supabaseUrl,
+      db,
+      to: sender,
+      origSubject: subject,
+      origMessageId: messageId,
+      heading: "No upcoming trip to attach this to",
+      line: "We received your booking email, but there's no upcoming trip on your account yet. Create the trip first, then forward it again.",
+      senderProfileId: prof.id,
+    });
     return Response.json(
       { dropped: "no active trip" },
       { headers: corsHeaders },
     );
+  }
 
   // ── Full content ─────────────────────────────────────────────────────
   const full = await fetchReceivedEmail(String(data.email_id || ""), resendKey);
@@ -405,6 +494,7 @@ Deno.serve(async (req) => {
       name: h.name,
       status: "booked",
       confirmation: h.confirmation || "",
+      via: "email",
     };
     if (idx >= 0) list[idx] = { ...list[idx], ...entry };
     else list.push(entry);
@@ -442,6 +532,49 @@ Deno.serve(async (req) => {
       trip_id: trip.id,
     }),
   }).catch(() => {});
+
+  // ── P0: reply-back receipt (outcome-specific) ────────────────────────
+  const receipt = (() => {
+    const tripLabel = `<b>${trip.name}</b>`;
+    if (applied === "hotel_booked")
+      return {
+        heading: `✓ ${parsed.hotel.name} is booked`,
+        line: `Marked as booked on ${tripLabel}${parsed.hotel.confirmation ? ` with confirmation <b>#${parsed.hotel.confirmation}</b>` : ""}. You'll see it on the itinerary and in Travel &amp; Hotels.`,
+      };
+    if (applied === "hotel_unbooked")
+      return {
+        heading: `Cancellation noted — ${parsed.hotel.name}`,
+        line: `That stay is no longer marked booked on ${tripLabel}.`,
+      };
+    if (applied === "cancellation_noted")
+      return {
+        heading: "Cancellation received",
+        line: `We noted the cancellation on ${tripLabel}'s activity feed — no matching booked stay to update.`,
+      };
+    if (
+      parsed.kind === "flight" &&
+      (parsed.flight?.number || parsed.flight?.confirmation)
+    )
+      return {
+        heading: `✈️ Flight noted on ${trip.name}`,
+        line: `${parsed.flight.carrier || ""} ${parsed.flight.number || ""} is on the trip's activity feed. Flight bookings land in Travel &amp; Hotels soon.`,
+      };
+    return {
+      heading: "We couldn't read that as a booking",
+      line: `It's saved on ${tripLabel}'s activity feed, but nothing was booked. Forwarding the original confirmation email (rather than a summary) usually works best.`,
+    };
+  })();
+  await sendReceipt({
+    supabaseUrl,
+    db,
+    to: sender,
+    origSubject: subject,
+    origMessageId: messageId,
+    heading: receipt.heading,
+    line: receipt.line,
+    tripId: trip.id,
+    senderProfileId: prof.id,
+  });
 
   return Response.json(
     { ok: true, applied, kind: parsed.kind, trip: trip.name, routedBy },
