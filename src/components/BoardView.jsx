@@ -2712,6 +2712,15 @@ function LogisticsTab({
     }
     return map;
   })();
+  // Per-trip forwarding address: bookings+<trip id prefix>@… — routes the
+  // email to THIS trip deterministically (plus-addressing through the
+  // catch-all; the inbound function matches the id prefix).
+  const tripIngestAddress = (() => {
+    const base = import.meta.env.VITE_EMAIL_INGEST_ADDRESS;
+    if (!base || !trip?.id) return base;
+    const [local, domain] = base.split("@");
+    return `${local}+${String(trip.id).slice(0, 8)}@${domain}`;
+  })();
   const [hotels, setHotels] = useState(
     cities.map((city) => {
       const saved = (trip.hotels_data || []).find((h) => h.city === city) || {};
@@ -2957,10 +2966,20 @@ function LogisticsTab({
               }}
             >
               📩 Forward booking confirmations to{" "}
-              <b style={{ color: T.ocean }}>
-                {import.meta.env.VITE_EMAIL_INGEST_ADDRESS}
+              <b
+                style={{ color: T.ocean, cursor: "pointer" }}
+                title="Tap to copy"
+                onClick={() => {
+                  try {
+                    navigator.clipboard.writeText(tripIngestAddress);
+                  } catch {
+                    /* clipboard unavailable */
+                  }
+                }}
+              >
+                {tripIngestAddress}
               </b>{" "}
-              — they book themselves
+              — they book themselves onto this trip
             </div>
           )}
           {hotels.some((h) => h.status === "booked") && (

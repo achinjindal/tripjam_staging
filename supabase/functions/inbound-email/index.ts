@@ -166,14 +166,14 @@ Deno.serve(async (req) => {
       { headers: corsHeaders },
     );
 
-  // ── User → soonest not-yet-ended trip ────────────────────────────────
+  // ── User → candidate trips (routed deterministically after parse) ────
   const today = new Date().toISOString().slice(0, 10);
   const tripRes = await fetch(
-    `${supabaseUrl}/rest/v1/trips?created_by=eq.${prof.id}&end_date=gte.${today}&select=id,name,hotels_data,destination&order=start_date.asc&limit=1`,
+    `${supabaseUrl}/rest/v1/trips?created_by=eq.${prof.id}&end_date=gte.${today}&select=id,name,hotels_data,destination,start_date,end_date&order=start_date.asc&limit=20`,
     { headers: db },
   );
-  const trip = tripRes.ok ? (await tripRes.json())[0] : null;
-  if (!trip)
+  const candidates: any[] = tripRes.ok ? await tripRes.json() : [];
+  if (candidates.length === 0)
     return Response.json(
       { dropped: "no active trip" },
       { headers: corsHeaders },
@@ -223,6 +223,39 @@ ${bodyText || "(body unavailable — use the subject line only)"}`,
   } catch {
     parsed = { kind: "other", summary: subject };
   }
+
+  // ── Deterministic trip routing ───────────────────────────────────────
+  // 1. Per-trip address: bookings+<first 8 of trip id>@… (shown in the
+  //    Travel & Hotels header) — exact, user-chosen, wins outright.
+  // 2. Check-in date inside a trip's date range — strong deterministic
+  //    signal from the booking itself.
+  // 3. Soonest not-yet-ended trip — last resort, matches v1 behavior.
+  const toAddrs: string[] = Array.isArray(data.to)
+    ? data.to.map((t: any) => String(t).toLowerCase())
+    : [String(data.to || "").toLowerCase()];
+  let trip: any = null;
+  let routedBy = "fallback";
+  const plusMatch = toAddrs
+    .map((a) => a.match(/\+([a-f0-9-]{4,36})@/))
+    .find(Boolean);
+  if (plusMatch) {
+    const code = plusMatch[1];
+    trip = candidates.find((t) => String(t.id).startsWith(code)) || null;
+    if (trip) routedBy = "trip_address";
+  }
+  if (!trip && parsed.kind === "hotel" && parsed.hotel?.checkin) {
+    const ci = parsed.hotel.checkin;
+    trip =
+      candidates.find((t) => ci >= t.start_date && ci <= t.end_date) || null;
+    if (trip) routedBy = "checkin_date";
+  }
+  if (!trip && parsed.kind === "flight" && parsed.flight?.date) {
+    const fd = parsed.flight.date;
+    trip =
+      candidates.find((t) => fd >= t.start_date && fd <= t.end_date) || null;
+    if (trip) routedBy = "flight_date";
+  }
+  if (!trip) trip = candidates[0];
 
   // usage log (fire-and-forget)
   fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
@@ -276,8 +309,9 @@ ${bodyText || "(body unavailable — use the subject line only)"}`,
       entity_type: "trip",
       entity_id: trip.id,
       summary:
-        parsed.summary ||
-        `forwarded a booking email${parsed.hotel?.name ? ` — ${parsed.hotel.name}` : ""}`,
+        (parsed.summary ||
+          `forwarded a booking email${parsed.hotel?.name ? ` — ${parsed.hotel.name}` : ""}`) +
+        (routedBy !== "fallback" ? "" : " (routed to soonest trip)"),
     }),
   }).catch(() => {});
   await fetch(`${supabaseUrl}/rest/v1/email_log`, {
@@ -292,7 +326,7 @@ ${bodyText || "(body unavailable — use the subject line only)"}`,
   }).catch(() => {});
 
   return Response.json(
-    { ok: true, applied, kind: parsed.kind, trip: trip.name },
+    { ok: true, applied, kind: parsed.kind, trip: trip.name, routedBy },
     { headers: corsHeaders },
   );
 });
