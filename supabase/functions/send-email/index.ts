@@ -303,7 +303,16 @@ serve(async (req) => {
             )
           : template(
               "The day-by-day plan is ready",
-              `The itinerary for <b>${esc(tripName)}</b> has been generated. Take a look and tweak anything with Trippy.`,
+              `The itinerary for <b>${esc(tripName)}</b> has been generated. Take a look and tweak anything with Trippy.` +
+                (() => {
+                  // P1: teach forward-to-book at the moment booking begins.
+                  const inbound = Deno.env.get("INBOUND_EMAIL_ADDRESS");
+                  if (!inbound || !tripId) return "";
+                  const [local, domain] = inbound.split("@");
+                  if (!local || !domain) return "";
+                  const addr = `${local}+${String(tripId).slice(0, 8)}@${domain}`;
+                  return `<br/><br/><span style="font-size:13px;color:#587284">P.S. As you book hotels, forward the confirmation emails to <b style="color:#2563A8">${addr}</b> — they'll check themselves off on this trip.</span>`;
+                })(),
               "See the itinerary",
               tripUrl,
             );

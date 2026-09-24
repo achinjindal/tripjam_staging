@@ -91,6 +91,9 @@ supabase/
     redeem-coupon/             — Coupon code redemption (grants free credits; single-use per user)
     revenuecat-verify/         — Server-side RC purchase verification (called immediately after Android purchase)
     revenuecat-webhook/        — RevenueCat webhook handler for Android IAP (deployed with --no-verify-jwt)
+    inbound-email/             — Resend inbound webhook: forwarded booking emails → Haiku parse →
+                                 hotels_data booked state + reply receipt (deployed with --no-verify-jwt)
+    send-email/                — Outbound transactional email via Resend (itinerary-ready etc.)
   migrations/        — Postgres migrations (chronological)
 
 scripts/
@@ -261,3 +264,4 @@ Two Supabase projects — local dev and staging share one, production is isolate
 - All functions log token usage to `llm_usage` table (fire-and-forget)
 - Deploy to each environment separately — changes to staging don't affect production
 - `payment-webhook` and `revenuecat-webhook` must be deployed with `--no-verify-jwt`; both use their own secret-based verification instead of Supabase JWT
+- `inbound-email` is also deployed with `--no-verify-jwt` (Resend calls it; Svix signature + SPF/DKIM sender verification instead). Its secrets: `RESEND_INBOUND_WEBHOOK_SECRET`, `RESEND_INBOUND_API_KEY`, `INBOUND_EMAIL_ADDRESS`. **Pairing rule:** the frontend's `VITE_EMAIL_INGEST_ADDRESS` (`.env` / `.env.production` / Vercel) and the Supabase secret `INBOUND_EMAIL_ADDRESS` must hold the SAME address — the frontend renders `local+<tripid8>@domain` copy-to-clipboard addresses and `send-email` prints it in footers; if they drift, users forward to a dead address.
