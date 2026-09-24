@@ -2736,13 +2736,15 @@ function LogisticsTab({
   };
   const [addrCopied, setAddrCopied] = useState(false);
   const copyIngestAddress = () => {
-    try {
-      navigator.clipboard.writeText(tripIngestAddress);
-      setAddrCopied(true);
-      setTimeout(() => setAddrCopied(false), 1800);
-    } catch {
-      /* clipboard unavailable */
-    }
+    // writeText rejects async (permissions, insecure context) — a try/catch
+    // around the call can't see that, so confirm only on resolution.
+    navigator.clipboard
+      ?.writeText(tripIngestAddress)
+      .then(() => {
+        setAddrCopied(true);
+        setTimeout(() => setAddrCopied(false), 1800);
+      })
+      .catch(() => {});
   };
   const tripIngestAddress = (() => {
     const base = import.meta.env.VITE_EMAIL_INGEST_ADDRESS;
@@ -2750,17 +2752,28 @@ function LogisticsTab({
     const [local, domain] = base.split("@");
     return `${local}+${String(trip.id).slice(0, 8)}@${domain}`;
   })();
-  const [hotels, setHotels] = useState(
+  // Spread the saved entry first: fields this form doesn't edit (via:"email"
+  // from inbound ingestion, future metadata) must survive a round-trip.
+  const hotelsFromTrip = () =>
     cities.map((city) => {
       const saved = (trip.hotels_data || []).find((h) => h.city === city) || {};
       return {
+        ...saved,
         city,
         name: saved.name || "",
         status: saved.status || null, // "booked" | null
         confirmation: saved.confirmation || "",
       };
-    }),
-  );
+    });
+  const [hotels, setHotels] = useState(hotelsFromTrip);
+  // Resync when hotels_data changes underneath us (email ingestion writes
+  // server-side) — otherwise the next Save would overwrite the new booking
+  // with the stale rows this form mounted with.
+  const hotelsDataKey = JSON.stringify(trip.hotels_data || []);
+  useEffect(() => {
+    setHotels(hotelsFromTrip());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hotelsDataKey]);
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | done
 
   const saved = {
@@ -2791,8 +2804,18 @@ function LogisticsTab({
     if (!hasChanges) return;
     setSaveStatus("saving");
     await onSaveFlights({ ...flights });
-    await onSaveHotels(hotels);
-    await onApplyHotels(hotels);
+    if (hotelsChanged) {
+      // Keep hotels_data entries whose city isn't one of this form's rows
+      // (email-ingested bookings can carry city names outside the itinerary's
+      // city list) — dropping them here would silently delete the booking.
+      const rowCities = new Set(hotels.map((h) => h.city));
+      const unmatched = (trip.hotels_data || []).filter(
+        (h) => !rowCities.has(h.city),
+      );
+      const merged = [...hotels, ...unmatched];
+      await onSaveHotels(merged);
+      await onApplyHotels(merged);
+    }
     setSaveStatus("done");
     setTimeout(() => setSaveStatus("idle"), 2500);
   };
