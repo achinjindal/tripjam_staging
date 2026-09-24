@@ -92,6 +92,82 @@ async function fetchReceivedEmail(
   return null;
 }
 
+async function parseBooking(
+  anthropicKey: string,
+  subject: string,
+  bodyText: string,
+): Promise<{ parsed: any; usage: any } | null> {
+  const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": anthropicKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 400,
+      messages: [
+        {
+          role: "user",
+          content: `This is a forwarded travel confirmation email. Extract booking facts as MINIFIED JSON only (no prose):
+{"kind":"hotel"|"flight"|"other","status":"confirmed"|"cancelled","hotel":{"name":"","city":"","confirmation":"","checkin":"YYYY-MM-DD or empty","checkout":"YYYY-MM-DD or empty"},"flight":{"carrier":"","number":"","date":"","from":"","to":"","confirmation":""},"summary":"one line describing the booking"}
+Only include facts explicitly present. Empty strings for anything absent. kind="other" if it is not clearly a hotel or flight booking. status="cancelled" when the email announces a cancellation (even of a previously confirmed booking) — NEVER "confirmed" for cancellation/refund notices.
+
+SUBJECT: ${subject}
+BODY:
+${bodyText || "(body unavailable — use the subject line only)"}`,
+        },
+      ],
+    }),
+  });
+  if (!aiRes.ok) return null;
+  const ai = await aiRes.json();
+  const rawOut = ai?.content?.[0]?.text || "{}";
+  let parsed: any = {};
+  try {
+    parsed = JSON.parse(
+      rawOut.slice(rawOut.indexOf("{"), rawOut.lastIndexOf("}") + 1),
+    );
+  } catch {
+    parsed = { kind: "other", summary: subject };
+  }
+  return { parsed, usage: ai?.usage || {} };
+}
+
+function routeTrip(
+  candidates: any[],
+  parsed: any,
+  toAddrs: string[],
+): { trip: any; routedBy: string } {
+  let trip: any = null;
+  let routedBy = "fallback";
+  const plusMatch = toAddrs
+    .map((a) => a.match(/\+([a-f0-9-]{4,36})@/))
+    .find(Boolean);
+  if (plusMatch) {
+    const code = plusMatch[1];
+    // candidates is a date-ordered window — match the prefix against ALL
+    // of the sender's trips passed in (callers fetch without a tight cap)
+    trip = candidates.find((t) => String(t.id).startsWith(code)) || null;
+    if (trip) routedBy = "trip_address";
+  }
+  if (!trip && parsed.kind === "hotel" && parsed.hotel?.checkin) {
+    const ci = parsed.hotel.checkin;
+    trip =
+      candidates.find((t) => ci >= t.start_date && ci <= t.end_date) || null;
+    if (trip) routedBy = "checkin_date";
+  }
+  if (!trip && parsed.kind === "flight" && parsed.flight?.date) {
+    const fd = parsed.flight.date;
+    trip =
+      candidates.find((t) => fd >= t.start_date && fd <= t.end_date) || null;
+    if (trip) routedBy = "flight_date";
+  }
+  if (!trip) trip = candidates[0];
+  return { trip, routedBy };
+}
+
 function stripHtml(html: string): string {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -112,6 +188,72 @@ Deno.serve(async (req) => {
     });
 
   const payload = await req.text();
+
+  // Dry-run mode: authenticated parse+route diagnostics, ZERO writes.
+  // Powers testing and a future "paste your confirmation" UI.
+  try {
+    const maybe = JSON.parse(payload);
+    if (maybe?.dry_run === true) {
+      const auth = req.headers.get("authorization") || "";
+      const userRes = await fetch(
+        `${Deno.env.get("SUPABASE_URL")}/auth/v1/user`,
+        {
+          headers: {
+            Authorization: auth,
+            apikey: Deno.env.get("SUPABASE_ANON_KEY") || "",
+          },
+        },
+      );
+      if (!userRes.ok)
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      const user = await userRes.json();
+      const sk = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const dbh = {
+        apikey: sk,
+        Authorization: `Bearer ${sk}`,
+        "Content-Type": "application/json",
+      };
+      const today = new Date().toISOString().slice(0, 10);
+      const tRes = await fetch(
+        `${Deno.env.get("SUPABASE_URL")}/rest/v1/trips?created_by=eq.${user.id}&end_date=gte.${today}&select=id,name,start_date,end_date&order=start_date.asc&limit=100`,
+        { headers: dbh },
+      );
+      const cands: any[] = tRes.ok ? await tRes.json() : [];
+      const pr = await parseBooking(
+        Deno.env.get("ANTHROPIC_API_KEY")!,
+        String(maybe.subject || ""),
+        String(maybe.body || "").slice(0, 8000),
+      );
+      if (!pr)
+        return new Response(JSON.stringify({ error: "parse failed" }), {
+          status: 502,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      const routed = cands.length
+        ? routeTrip(
+            cands,
+            pr.parsed,
+            (maybe.to ? [String(maybe.to)] : []).map((s) => s.toLowerCase()),
+          )
+        : { trip: null, routedBy: "no_active_trip" };
+      return Response.json(
+        {
+          dry_run: true,
+          parsed: pr.parsed,
+          routedBy: routed.routedBy,
+          trip: routed.trip?.name || null,
+          candidates: cands.map((c) => c.name),
+        },
+        { headers: corsHeaders },
+      );
+    }
+  } catch {
+    /* not JSON or not dry_run — fall through to webhook path */
+  }
+
   if (!(await verifySvix(req, payload)))
     return new Response(JSON.stringify({ error: "invalid signature" }), {
       status: 401,
@@ -169,7 +311,7 @@ Deno.serve(async (req) => {
   // ── User → candidate trips (routed deterministically after parse) ────
   const today = new Date().toISOString().slice(0, 10);
   const tripRes = await fetch(
-    `${supabaseUrl}/rest/v1/trips?created_by=eq.${prof.id}&end_date=gte.${today}&select=id,name,hotels_data,destination,start_date,end_date&order=start_date.asc&limit=20`,
+    `${supabaseUrl}/rest/v1/trips?created_by=eq.${prof.id}&end_date=gte.${today}&select=id,name,hotels_data,destination,start_date,end_date&order=start_date.asc&limit=100`,
     { headers: db },
   );
   const candidates: any[] = tripRes.ok ? await tripRes.json() : [];
@@ -185,44 +327,15 @@ Deno.serve(async (req) => {
     ? (full.text || stripHtml(full.html)).slice(0, 8000)
     : "";
 
-  // ── Haiku parse ──────────────────────────────────────────────────────
-  const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": anthropicKey,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 400,
-      messages: [
-        {
-          role: "user",
-          content: `This is a forwarded travel confirmation email. Extract booking facts as MINIFIED JSON only (no prose):
-{"kind":"hotel"|"flight"|"other","hotel":{"name":"","city":"","confirmation":"","checkin":"YYYY-MM-DD or empty","checkout":"YYYY-MM-DD or empty"},"flight":{"carrier":"","number":"","date":"","from":"","to":"","confirmation":""},"summary":"one line describing the booking"}
-Only include facts explicitly present. Empty strings for anything absent. kind="other" if it is not clearly a hotel or flight booking.
-
-SUBJECT: ${subject}
-BODY:
-${bodyText || "(body unavailable — use the subject line only)"}`,
-        },
-      ],
-    }),
-  });
-  if (!aiRes.ok)
+  // ── Haiku parse (shared helper) ──────────────────────────────────────
+  const pr = await parseBooking(anthropicKey, subject, bodyText);
+  if (!pr)
     return new Response(JSON.stringify({ error: "parse model failed" }), {
       status: 502,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  const ai = await aiRes.json();
-  const rawOut = ai?.content?.[0]?.text || "{}";
-  let parsed: any = {};
-  try {
-    parsed = JSON.parse(rawOut.slice(rawOut.indexOf("{")));
-  } catch {
-    parsed = { kind: "other", summary: subject };
-  }
+  const parsed = pr.parsed;
+  const ai = { usage: pr.usage };
 
   // ── Deterministic trip routing ───────────────────────────────────────
   // 1. Per-trip address: bookings+<first 8 of trip id>@… (shown in the
@@ -233,29 +346,7 @@ ${bodyText || "(body unavailable — use the subject line only)"}`,
   const toAddrs: string[] = Array.isArray(data.to)
     ? data.to.map((t: any) => String(t).toLowerCase())
     : [String(data.to || "").toLowerCase()];
-  let trip: any = null;
-  let routedBy = "fallback";
-  const plusMatch = toAddrs
-    .map((a) => a.match(/\+([a-f0-9-]{4,36})@/))
-    .find(Boolean);
-  if (plusMatch) {
-    const code = plusMatch[1];
-    trip = candidates.find((t) => String(t.id).startsWith(code)) || null;
-    if (trip) routedBy = "trip_address";
-  }
-  if (!trip && parsed.kind === "hotel" && parsed.hotel?.checkin) {
-    const ci = parsed.hotel.checkin;
-    trip =
-      candidates.find((t) => ci >= t.start_date && ci <= t.end_date) || null;
-    if (trip) routedBy = "checkin_date";
-  }
-  if (!trip && parsed.kind === "flight" && parsed.flight?.date) {
-    const fd = parsed.flight.date;
-    trip =
-      candidates.find((t) => fd >= t.start_date && fd <= t.end_date) || null;
-    if (trip) routedBy = "flight_date";
-  }
-  if (!trip) trip = candidates[0];
+  const { trip, routedBy } = routeTrip(candidates, parsed, toAddrs);
 
   // usage log (fire-and-forget)
   fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
@@ -272,7 +363,34 @@ ${bodyText || "(body unavailable — use the subject line only)"}`,
 
   // ── Apply ────────────────────────────────────────────────────────────
   let applied = "logged";
-  if (parsed.kind === "hotel" && parsed.hotel?.name) {
+  if (
+    parsed.kind === "hotel" &&
+    parsed.hotel?.name &&
+    parsed.status === "cancelled"
+  ) {
+    // A cancellation must never create a booking — and if the stay exists
+    // as booked, it unbooks (keeps the hotel name, clears status/conf).
+    const list: any[] = Array.isArray(trip.hotels_data)
+      ? [...trip.hotels_data]
+      : [];
+    const idx = list.findIndex(
+      (x) =>
+        x.name?.toLowerCase() === parsed.hotel.name.toLowerCase() ||
+        (parsed.hotel.confirmation &&
+          x.confirmation === parsed.hotel.confirmation),
+    );
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], status: null, confirmation: "" };
+      const upd = await fetch(`${supabaseUrl}/rest/v1/trips?id=eq.${trip.id}`, {
+        method: "PATCH",
+        headers: { ...db, Prefer: "return=representation" },
+        body: JSON.stringify({ hotels_data: list }),
+      });
+      applied = upd.ok ? "hotel_unbooked" : "hotel_update_failed";
+    } else {
+      applied = "cancellation_noted";
+    }
+  } else if (parsed.kind === "hotel" && parsed.hotel?.name) {
     const h = parsed.hotel;
     const list: any[] = Array.isArray(trip.hotels_data)
       ? [...trip.hotels_data]
