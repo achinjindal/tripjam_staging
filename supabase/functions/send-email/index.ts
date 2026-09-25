@@ -311,7 +311,7 @@ serve(async (req) => {
                   const [local, domain] = inbound.split("@");
                   if (!local || !domain) return "";
                   const addr = `${local}+${String(tripId).slice(0, 8)}@${domain}`;
-                  return `<br/><br/><span style="font-size:13px;color:#587284">P.S. As you book hotels, forward the confirmation emails to <b style="color:#2563A8">${addr}</b> — they'll check themselves off on this trip.</span>`;
+                  return `<br/><br/><span style="font-size:13px;color:#587284">P.S. As you book hotels, flights and trains, forward the confirmation emails to <b style="color:#2563A8">${addr}</b> — they'll file themselves on this trip.</span>`;
                 })(),
               "See the itinerary",
               tripUrl,
