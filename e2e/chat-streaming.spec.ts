@@ -1,4 +1,8 @@
 import { test, expect } from "@playwright/test";
+import { createClient } from "@supabase/supabase-js";
+import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 import { login, dismissTripOverlays } from "./helpers";
 
 // Chat v2 streaming contract, verified against a MOCKED SSE endpoint so the
@@ -50,13 +54,36 @@ test.describe("Chat streaming", () => {
       });
     });
 
-    // Open the first trip that has a chat input
-    await page.goto("/");
-    const tripCard = page
-      .locator("div", { hasText: /Sep 9|Sep 19/ })
-      .locator("visible=true")
-      .first();
-    await tripCard.click();
+    // Open the QA trip directly — the old home-screen card lookup keyed on
+    // fixture dates ("Sep 9|Sep 19") that no longer exist on the account.
+    const env: Record<string, string> = {};
+    const raw = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", ".env"),
+      "utf8",
+    );
+    for (const line of raw.split("\n")) {
+      const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*)\s*$/);
+      if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    }
+    const sb = createClient(
+      env.VITE_SUPABASE_URL,
+      env.VITE_SUPABASE_ANON_KEY,
+      { auth: { persistSession: false, autoRefreshToken: false } },
+    );
+    await sb.auth.signInWithPassword({
+      email: "qa-tester@tripjam.app",
+      password: "qaTest123!",
+    });
+    const me = (await sb.auth.getUser()).data.user!.id;
+    const { data: trips } = await sb
+      .from("trips")
+      .select("id")
+      .ilike("name", "Tokyo to Kyoto Classic%")
+      .eq("created_by", me)
+      .not("ig_response", "is", null)
+      .limit(1);
+    test.skip(!trips?.[0], "QA trip not found");
+    await page.goto(`/trip/${trips![0].id}`);
     await page.waitForTimeout(4000);
     // Shared trips auto-open sheets (style nudge et al.) over the chat input.
     await dismissTripOverlays(page, 4000);

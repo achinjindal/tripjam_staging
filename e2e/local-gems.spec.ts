@@ -215,3 +215,141 @@ test("gems: inline anchor, orphan strip, dedupe, direct add, dismiss", async ({
       .eq("id", day!.id);
   }
 });
+
+// Expander ("＋N more nearby") + strip-menu hit-test regression: the strip
+// ⋯ menu was originally clipped by its overflow-x container (review B1);
+// TRUSTED clicks (not JS clicks) prove the fixed-position menu is actually
+// hittable in a real browser.
+test("gems: inline expander caps at 2, strip menu is hit-testable", async ({
+  page,
+}) => {
+  test.setTimeout(150000);
+  page.setDefaultTimeout(20000);
+  const env: Record<string, string> = {};
+  const raw = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", ".env"),
+    "utf8",
+  );
+  for (const line of raw.split("\n")) {
+    const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*)\s*$/);
+    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+  }
+  const sb = createClient(env.VITE_SUPABASE_URL, env.VITE_SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  await sb.auth.signInWithPassword({
+    email: "qa-tester@tripjam.app",
+    password: "qaTest123!",
+  });
+  const me = (await sb.auth.getUser()).data.user!.id;
+  const { data: trips } = await sb
+    .from("trips")
+    .select("id")
+    .ilike("name", "Tokyo to Kyoto Classic%")
+    .eq("created_by", me)
+    .not("ig_response", "is", null)
+    .limit(1);
+  const tripId = trips?.[0]?.id;
+  test.skip(!tripId, "QA trip not found");
+  const { data: dayRows } = await sb
+    .from("days")
+    .select("id, label, city, wishlist, position")
+    .eq("trip_id", tripId)
+    .order("position")
+    .limit(1);
+  const day = dayRows?.[0];
+  const { data: acts } = await sb
+    .from("activities")
+    .select("id, title")
+    .eq("day_id", day!.id)
+    .order("position");
+  const anchor = acts![0];
+  const originalWishlist = day!.wishlist ?? null;
+
+  const gems = [1, 2, 3].map((n) => ({
+    id: `e2e-exp-${n}`,
+    title: `E2E Anchored Gem ${n}`,
+    geocode: "Tokyo",
+    near: anchor.title,
+  }));
+  gems.push({
+    id: "e2e-exp-orphan",
+    title: "E2E Strip Menu Gem",
+    geocode: "Tokyo",
+    near: "No Such Anchor QQ",
+  });
+
+  try {
+    await sb.from("days").update({ wishlist: gems }).eq("id", day!.id);
+    await login(page);
+    await page.evaluate(
+      (k) => localStorage.setItem(k, "plan"),
+      `tripjam_itin_mode_${tripId}`,
+    );
+    await page.goto(`/trip/${tripId}`);
+    await page.waitForTimeout(2500);
+    await dismissTripOverlays(page, 2000);
+    await page
+      .locator("button:visible", { hasText: /Itinerary/ })
+      .first()
+      .click();
+    await page.waitForTimeout(1000);
+    await page
+      .getByRole("button", { name: "✦ Story" })
+      .waitFor({ state: "visible", timeout: 30000 });
+    await page
+      .locator(`div:text-is("${day!.label}")`)
+      .first()
+      .evaluate((el) => {
+        let node: HTMLElement | null = el as HTMLElement;
+        while (node && node.style?.cursor !== "pointer")
+          node = node.parentElement;
+        node?.click();
+      });
+    await page.waitForTimeout(1000);
+
+    // Cap at 2 inline + expander reveals the third
+    await expect(page.getByText("E2E Anchored Gem 1")).toBeVisible();
+    await expect(page.getByText("E2E Anchored Gem 2")).toBeVisible();
+    await expect(page.getByText("E2E Anchored Gem 3")).not.toBeVisible();
+    const expander = page.getByText("＋1 more nearby");
+    await expect(expander).toBeVisible();
+    await expander.evaluate((el) => (el as HTMLElement).click());
+    await expect(page.getByText("E2E Anchored Gem 3")).toBeVisible();
+
+    // Strip menu regression (review B1): REAL clicks must land — a menu
+    // clipped by the strip's overflow container would fail hit-testing.
+    const stripDots = page.getByLabel("Gem options").last();
+    await stripDots.evaluate((el) =>
+      el.scrollIntoView({ block: "center", inline: "center" }),
+    );
+    await page.waitForTimeout(400);
+    await stripDots.click(); // trusted click
+    const dismissItem = page.getByRole("button", { name: /✕ Dismiss/ });
+    await expect(dismissItem).toBeVisible();
+    const box = await dismissItem.boundingBox();
+    expect(box).not.toBeNull();
+    const vp = page.viewportSize()!;
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(vp.height);
+    await dismissItem.click(); // trusted click on the fixed-position menu
+    await expect(page.getByText("E2E Strip Menu Gem")).not.toBeVisible();
+    await expect
+      .poll(async () => {
+        const { data: dAfter } = await sb
+          .from("days")
+          .select("wishlist")
+          .eq("id", day!.id)
+          .single();
+        return (dAfter!.wishlist || []).find(
+          (w: any) => w.id === "e2e-exp-orphan",
+        )?.dismissed;
+      })
+      .toBe(true);
+  } finally {
+    await sb
+      .from("days")
+      .update({ wishlist: originalWishlist })
+      .eq("id", day!.id);
+  }
+});
