@@ -7,6 +7,7 @@ import {
   useContext,
   Fragment,
   Component,
+  useId,
 } from "react";
 import { DebugContext } from "./context.js";
 import posthog from "posthog-js";
@@ -3374,10 +3375,12 @@ function BrainstormView({
               highlights = [...highlights, ...extra];
             }
             highlights = highlights.slice(0, 6);
-            // Wishlist roll-up across all days in this city (unique by title)
+            // Wishlist roll-up across all days in this city (unique by title;
+            // dismissed/promoted gems stay dismissed here too)
             const wishlistMap = new Map();
             for (const d of cityDays)
               for (const w of d.wishlist || []) {
+                if (w.dismissed) continue;
                 if (!wishlistMap.has(w.title)) wishlistMap.set(w.title, w);
               }
             const wishlist = [...wishlistMap.values()];
@@ -4009,6 +4012,7 @@ function BrainstormView({
               }
               for (const d of cityDays) {
                 for (const w of d.wishlist || []) {
+                  if (w.dismissed) continue;
                   const key = (w.title || "").toLowerCase();
                   if (seenTitles.has(key)) continue;
                   seenTitles.add(key);
@@ -5950,8 +5954,222 @@ function ArrivalTimeline({
 }
 
 /* ─── DAY SECTION ────────────────────────────────────────────────────── */
-function GemCard({ gem, city, activities, onAdd, onDismiss, onAskTrippy }) {
-  const [menuOpen, setMenuOpen] = useState(false);
+/* ─── LOCAL GEMS (activity-anchored) ──────────────────────────────────
+   Gems live in days.wishlist. groupGems anchors each live gem under the
+   activity its `near` field names (InlineGemRow, rendered inside the
+   timeline right after that activity); gems whose anchor is gone render in
+   a compact end-of-day AlsoNearbyStrip. Add is a direct activities insert
+   (no chat round-trip); Dismiss is the existing soft-delete. */
+
+// Google Maps multicolor pin — inline SVG (text glyphs render
+// inconsistently across the fonts we ship).
+function GMapsPinIcon({ size = 14 }) {
+  const id = useId();
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <defs>
+        <clipPath id={id}>
+          <path d="M12 1.5c-4.7 0-8.5 3.8-8.5 8.5 0 6.4 8.5 12.5 8.5 12.5S20.5 16.4 20.5 10C20.5 5.3 16.7 1.5 12 1.5z" />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#${id})`}>
+        <path fill="#EA4335" d="M12 10 0 -2h24z" />
+        <path fill="#4285F4" d="M12 10 24 -2v24z" />
+        <path fill="#34A853" d="M12 10 24 22H0z" />
+        <path fill="#FBBC04" d="M12 10 0 22V-2z" />
+      </g>
+      <circle cx="12" cy="9.6" r="3" fill="#fff" />
+    </svg>
+  );
+}
+
+// Three-dot menu button (SVG dots — the ⋯ glyph sits off-center in a
+// small circular button across our font stack).
+function GemDotsButton({ onClick, open }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label="Gem options"
+      style={{
+        width: 26,
+        height: 26,
+        borderRadius: RADIUS.full,
+        border: `1px solid ${open ? T.ocean : T.border}`,
+        background: T.chalk,
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 0,
+        flexShrink: 0,
+      }}
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+        {[2.5, 7, 11.5].map((cx) => (
+          <circle
+            key={cx}
+            cx={cx}
+            cy="7"
+            r="1.4"
+            fill={open ? T.ocean : T.dusk}
+          />
+        ))}
+      </svg>
+    </button>
+  );
+}
+
+// Shared 3-item menu: Tell me more · Open in Google Maps · Dismiss.
+// anchorRect (the dots button's getBoundingClientRect) positions the menu
+// FIXED — an absolutely-positioned menu inside the strip's overflow-x:auto
+// container gets clipped on both axes (overflow-x:auto forces overflow-y
+// to auto too), which would make orphan-gem actions unreachable.
+function GemMenu({
+  onClose,
+  onTellMore,
+  mapsUrl,
+  onDismiss,
+  includeAdd,
+  anchorRect,
+}) {
+  const item = (children, onClick, danger, isLink, href, isLast) => {
+    const style = {
+      display: "flex",
+      alignItems: "center",
+      gap: 9,
+      width: "100%",
+      textAlign: "left",
+      padding: "11px 14px",
+      background: "none",
+      border: "none",
+      borderBottom: isLast ? "none" : `1px solid ${T.border}`,
+      fontFamily: "Georgia,serif",
+      fontSize: 13,
+      color: danger ? T.error : T.ink,
+      cursor: "pointer",
+      textDecoration: "none",
+      boxSizing: "border-box",
+    };
+    return isLink ? (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={style}
+        onClick={onClose}
+      >
+        {children}
+      </a>
+    ) : (
+      <button
+        style={style}
+        onClick={() => {
+          onClose();
+          onClick();
+        }}
+      >
+        {children}
+      </button>
+    );
+  };
+  return (
+    <>
+      <div
+        onClick={onClose}
+        style={{ position: "fixed", inset: 0, zIndex: 40 }}
+      />
+      <div
+        style={{
+          position: "fixed",
+          left: Math.max(8, (anchorRect?.right ?? 200) - 190),
+          top: (anchorRect?.bottom ?? 0) + 4,
+          zIndex: 41,
+          background: T.chalk,
+          border: `1px solid ${T.border}`,
+          borderRadius: RADIUS.md + 2,
+          boxShadow: SHADOW.lg,
+          minWidth: 190,
+          overflow: "hidden",
+        }}
+      >
+        {includeAdd && item(<>✨ Add to this day</>, includeAdd)}
+        {item(<>💬 Tell me more</>, onTellMore)}
+        {item(
+          <>
+            <GMapsPinIcon /> Open in Google Maps
+          </>,
+          null,
+          false,
+          true,
+          mapsUrl,
+        )}
+        {item(<>✕ Dismiss</>, onDismiss, true, false, null, true)}
+      </div>
+    </>
+  );
+}
+
+// Walk-time pill: geocode the gem (photos.js caches by key) and haversine
+// against the anchor's stored coords. Silent absence on any miss or when
+// the distance stops being walkable.
+function useGemWalkMins(gem, anchor, city) {
+  const [mins, setMins] = useState(null);
+  useEffect(() => {
+    // Reset on every re-run: a repaired/repositioned anchor (verifyActivity
+    // on day expand) must not leave a stale pill from the old coords.
+    setMins(null);
+    if (anchor?.lat == null || anchor?.lng == null) return;
+    let cancelled = false;
+    geocodePlace(gem.title, city, gem.geocode)
+      .then((c) => {
+        if (cancelled || !c || c.lat == null) return;
+        const km =
+          haversineMeters(
+            { lat: anchor.lat, lng: anchor.lng },
+            { lat: c.lat, lng: c.lng },
+          ) / 1000;
+        // ~4.5 km/h walking pace; beyond 2.5 km "walk" is the wrong frame
+        if (km <= 2.5) setMins(Math.max(1, Math.round((km / 4.5) * 60)));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [gem.id, anchor?.lat, anchor?.lng]);
+  return mins;
+}
+
+// Group a day's live gems under their anchor activity. Keyed by activity
+// id so duplicate-title days render each gem exactly once. Repair-aware:
+// verifyActivity can rewrite an anchor's title, but the original survives
+// in geocode_corrected_from — which is what gem.near still points at.
+function groupGems(day) {
+  const norm = (s) => (s || "").trim().toLowerCase();
+  const acts = day.activities || [];
+  const titleSet = new Set(acts.map((a) => norm(a.title)));
+  const anchorKeys = new Map();
+  for (const a of acts) {
+    if (!anchorKeys.has(norm(a.title))) anchorKeys.set(norm(a.title), a.id);
+    const corr = norm(a.geocode_corrected_from);
+    if (corr && !anchorKeys.has(corr)) anchorKeys.set(corr, a.id);
+  }
+  const byActivityId = new Map();
+  const orphans = [];
+  for (const g of day.wishlist || []) {
+    if (g.dismissed) continue;
+    if (titleSet.has(norm(g.title))) continue; // already an activity — hide
+    const anchorId = g.near ? anchorKeys.get(norm(g.near)) : undefined;
+    if (anchorId != null) {
+      if (!byActivityId.has(anchorId)) byActivityId.set(anchorId, []);
+      byActivityId.get(anchorId).push(g);
+    } else {
+      orphans.push(g);
+    }
+  }
+  return { byActivityId, orphans };
+}
+
+function GemThumb({ gem, city, size }) {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [photoLoaded, setPhotoLoaded] = useState(false);
   useEffect(() => {
@@ -5970,78 +6188,109 @@ function GemCard({ gem, city, activities, onAdd, onDismiss, onAskTrippy }) {
       cancelled = true;
     };
   }, [gem.geocode, gem.title, city]);
-  const nearMatches =
-    gem.near && (activities || []).some((a) => a.title === gem.near);
-  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${gem.geocode || gem.title} ${city}`)}`;
   return (
     <div
       style={{
+        flexShrink: 0,
+        width: size,
+        height: size,
+        borderRadius: RADIUS.md - 1,
+        overflow: "hidden",
+        background: T.sand,
         display: "flex",
-        gap: 12,
-        padding: "10px 12px",
-        background: T.chalk,
-        border: `1px solid ${T.sand}`,
-        borderRadius: RADIUS.lg,
-        position: "relative",
+        alignItems: "center",
+        justifyContent: "center",
       }}
     >
-      <a
-        href={mapsUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{
-          flexShrink: 0,
-          width: 64,
-          height: 64,
-          borderRadius: RADIUS.md,
-          overflow: "hidden",
-          background: T.sand,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          textDecoration: "none",
-        }}
-      >
-        {photoUrl ? (
-          <img
-            src={photoUrl}
-            alt={gem.title}
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-              display: "block",
-            }}
-          />
-        ) : !photoLoaded ? (
-          <div
-            style={{
-              width: "100%",
-              height: "100%",
-              background: T.sand,
-              animation: "shimmer 1.5s ease-in-out infinite",
-            }}
-          />
-        ) : (
-          <span style={{ fontSize: 26 }}>{gem.icon || "📍"}</span>
-        )}
-      </a>
-      <div
-        style={{
-          flex: 1,
-          minWidth: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: 2,
-        }}
-      >
+      {photoUrl ? (
+        <img
+          src={photoUrl}
+          alt={gem.title}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block",
+          }}
+        />
+      ) : !photoLoaded ? (
         <div
           style={{
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            gap: 6,
+            width: "100%",
+            height: "100%",
+            background: T.sand,
+            animation: "shimmer 1.5s ease-in-out infinite",
           }}
+        />
+      ) : (
+        <span style={{ fontSize: Math.round(size * 0.45) }}>
+          {gem.icon || "📍"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+const gemMapsUrl = (gem, city) =>
+  `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    `${gem.geocode || gem.title} ${city || ""}`.trim(),
+  )}`;
+
+// Inline suggestion row under its anchor activity: sand-tinted, dashed
+// gold border — visually a suggestion, not an itinerary item.
+function InlineGemRow({
+  gem,
+  anchor,
+  city,
+  busy,
+  onAdd,
+  onDismiss,
+  onTellMore,
+}) {
+  const [menuRect, setMenuRect] = useState(null); // dots button rect when open
+  const walkMins = useGemWalkMins(gem, anchor, city);
+  return (
+    <div style={{ padding: "0 20px 10px 34px" }}>
+      <div
+        style={{
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          background: T.warm,
+          border: `1px dashed ${T.gold}`,
+          borderRadius: RADIUS.md + 2,
+          padding: "9px 10px",
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            top: -8,
+            left: 10,
+            fontSize: 10.5,
+            fontFamily: "Georgia,serif",
+            background: T.warm,
+            padding: "0 5px",
+            color: T.gold,
+            borderRadius: 4,
+          }}
+        >
+          ✨ nearby
+        </span>
+        <a
+          href={gemMapsUrl(gem, city)}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ textDecoration: "none", flexShrink: 0, display: "block" }}
+        >
+          <GemThumb gem={gem} city={city} size={40} />
+        </a>
+        <a
+          href={gemMapsUrl(gem, city)}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ flex: 1, minWidth: 0, textDecoration: "none" }}
         >
           <div
             style={{
@@ -6049,206 +6298,177 @@ function GemCard({ gem, city, activities, onAdd, onDismiss, onAskTrippy }) {
               fontSize: 14,
               color: T.ink,
               lineHeight: 1.25,
-              flex: 1,
-              minWidth: 0,
+              whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
             }}
           >
             {gem.title}
           </div>
-          <div style={{ position: "relative", flexShrink: 0 }}>
-            <button
-              onClick={() => setMenuOpen((m) => !m)}
-              aria-label="More options"
+          {walkMins != null && (
+            <span
               style={{
-                background: "transparent",
-                border: "none",
-                cursor: "pointer",
-                fontSize: 16,
-                padding: "0 3px",
+                display: "inline-block",
+                fontSize: 10,
                 color: T.mist,
-                lineHeight: 1,
+                fontFamily: "Georgia,serif",
+                background: T.chalk,
+                border: `1px solid ${T.border}`,
+                borderRadius: RADIUS.full,
+                padding: "1px 7px",
+                marginTop: 2,
               }}
             >
-              ⋯
-            </button>
-            {menuOpen && (
-              <>
-                <div
-                  onClick={() => setMenuOpen(false)}
-                  style={{ position: "fixed", inset: 0, zIndex: 99 }}
-                />
-                <div
-                  style={{
-                    position: "absolute",
-                    right: 0,
-                    top: 22,
-                    zIndex: 100,
-                    background: T.chalk,
-                    borderRadius: RADIUS.lg,
-                    boxShadow: SHADOW.md,
-                    border: `1px solid ${T.sand}`,
-                    minWidth: 180,
-                    overflow: "hidden",
-                  }}
-                >
-                  <button
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onAdd?.();
-                    }}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "11px 16px",
-                      background: "none",
-                      border: "none",
-                      fontFamily: "Georgia,serif",
-                      fontSize: 13,
-                      color: T.ink,
-                      cursor: "pointer",
-                      borderBottom: `1px solid ${T.sand}`,
-                    }}
-                  >
-                    ➕ Add to Itinerary
-                  </button>
-                  <a
-                    href={mapsUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => setMenuOpen(false)}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "11px 16px",
-                      background: "none",
-                      border: "none",
-                      fontFamily: "Georgia,serif",
-                      fontSize: 13,
-                      color: T.ink,
-                      cursor: "pointer",
-                      borderBottom: `1px solid ${T.sand}`,
-                      textDecoration: "none",
-                      boxSizing: "border-box",
-                    }}
-                  >
-                    📍 Open in Google Maps
-                  </a>
-                  <button
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onAskTrippy?.();
-                    }}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "11px 16px",
-                      background: "none",
-                      border: "none",
-                      fontFamily: "Georgia,serif",
-                      fontSize: 13,
-                      color: T.ink,
-                      cursor: "pointer",
-                      borderBottom: `1px solid ${T.sand}`,
-                    }}
-                  >
-                    💬 Ask Trippy
-                  </button>
-                  <button
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onDismiss?.();
-                    }}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "11px 16px",
-                      background: "none",
-                      border: "none",
-                      fontFamily: "Georgia,serif",
-                      fontSize: 13,
-                      color: T.error,
-                      cursor: "pointer",
-                    }}
-                  >
-                    🗑 Dismiss
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-        {gem.note && (
-          <div
-            style={{
-              fontSize: 12,
-              color: T.mist,
-              fontFamily: "Georgia,serif",
-              lineHeight: 1.35,
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
-            }}
-          >
-            {gem.note}
-          </div>
-        )}
-        {nearMatches && (
-          <div
-            style={{
-              fontSize: 11,
-              color: T.ocean,
-              fontFamily: "Georgia,serif",
-              marginTop: 2,
-            }}
-          >
-            📍 Near {gem.near}
-          </div>
+              {walkMins} min walk
+            </span>
+          )}
+        </a>
+        <button
+          onClick={() => !busy && onAdd()}
+          disabled={busy}
+          style={{
+            border: "none",
+            background: "none",
+            color: busy ? T.mist : T.ocean,
+            fontFamily: "Georgia,serif",
+            fontSize: 13,
+            fontWeight: busy ? 400 : 700,
+            fontStyle: busy ? "italic" : "normal",
+            cursor: busy ? "default" : "pointer",
+            padding: "6px 2px",
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+          }}
+        >
+          {busy ? "Adding…" : "+ Add"}
+        </button>
+        <GemDotsButton
+          onClick={(e) =>
+            setMenuRect((r) =>
+              r ? null : e.currentTarget.getBoundingClientRect(),
+            )
+          }
+          open={!!menuRect}
+        />
+        {menuRect && (
+          <GemMenu
+            anchorRect={menuRect}
+            onClose={() => setMenuRect(null)}
+            onTellMore={onTellMore}
+            mapsUrl={gemMapsUrl(gem, city)}
+            onDismiss={onDismiss}
+          />
         )}
       </div>
     </div>
   );
 }
 
-function WishlistSection({
+// End-of-day fallback for gems whose anchor no longer exists: one compact
+// horizontal strip, never a wall. Add lives in the menu here (anchor = the
+// day's last activity, resolved by the caller).
+function AlsoNearbyStrip({
   items,
   city,
-  activities,
-  onAddToItinerary,
+  busyIds,
+  onAdd,
   onDismiss,
-  onAskTrippy,
+  onTellMore,
 }) {
-  const visible = (items || []).filter((it) => !it.dismissed);
-  if (!visible.length) return null;
+  const [openMenu, setOpenMenu] = useState(null); // { id, rect }
+  if (!items.length) return null;
   return (
     <div style={{ padding: "4px 20px 8px" }}>
       <div
         style={{
-          fontFamily: "'DM Serif Display',serif",
-          fontSize: 14,
-          color: T.ink,
+          fontSize: 11,
+          letterSpacing: 1,
+          textTransform: "uppercase",
+          color: T.mist,
+          fontFamily: "Georgia,serif",
           marginBottom: 8,
         }}
       >
-        ✨ Local gems · {visible.length} nearby
+        ✨ Also nearby
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {visible.map((gem, i) => (
-          <GemCard
-            key={gem.id || i}
-            gem={gem}
-            city={city}
-            activities={activities}
-            onAdd={() => onAddToItinerary?.(gem)}
-            onDismiss={() => onDismiss?.(gem)}
-            onAskTrippy={() => onAskTrippy?.(gem.title)}
-          />
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          overflowX: "auto",
+          paddingBottom: 4,
+        }}
+      >
+        {items.map((gem) => (
+          <div
+            key={gem.id}
+            style={{
+              position: "relative",
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              background: T.chalk,
+              border: `1px solid ${T.border}`,
+              borderRadius: RADIUS.md + 1,
+              padding: "7px 9px",
+              maxWidth: 230,
+            }}
+          >
+            <a
+              href={gemMapsUrl(gem, city)}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                textDecoration: "none",
+                flexShrink: 0,
+                display: "block",
+              }}
+            >
+              <GemThumb gem={gem} city={city} size={32} />
+            </a>
+            <a
+              href={gemMapsUrl(gem, city)}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                fontFamily: "'DM Serif Display',serif",
+                fontSize: 12.5,
+                color: T.ink,
+                lineHeight: 1.2,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                textDecoration: "none",
+                minWidth: 0,
+              }}
+            >
+              {busyIds?.has(gem.id) ? "Adding…" : gem.title}
+            </a>
+            <GemDotsButton
+              onClick={(e) =>
+                setOpenMenu((v) =>
+                  v?.id === gem.id
+                    ? null
+                    : {
+                        id: gem.id,
+                        rect: e.currentTarget.getBoundingClientRect(),
+                      },
+                )
+              }
+              open={openMenu?.id === gem.id}
+            />
+            {openMenu?.id === gem.id && (
+              <GemMenu
+                anchorRect={openMenu.rect}
+                onClose={() => setOpenMenu(null)}
+                onTellMore={() => onTellMore(gem)}
+                mapsUrl={gemMapsUrl(gem, city)}
+                onDismiss={() => onDismiss(gem)}
+                includeAdd={() => onAdd(gem)}
+              />
+            )}
+          </div>
         ))}
       </div>
     </div>
@@ -6465,21 +6685,6 @@ function DayCompact({
           ))}
         </div>
       ))}
-
-      {/* Wishlist count removed from compact view */}
-      {false && day.wishlist?.length > 0 && (
-        <div
-          style={{
-            fontSize: 10,
-            fontFamily: "Georgia,serif",
-            color: T.terra,
-            marginTop: 4,
-          }}
-        >
-          ✨ {day.wishlist.length} local gem{day.wishlist.length > 1 ? "s" : ""}{" "}
-          nearby
-        </div>
-      )}
     </div>
   );
 }
@@ -6515,8 +6720,10 @@ function DaySection({
   originDepartureHHMM = null,
   destIata = null,
   destArrivalHHMM = null,
-  onAddGemToItinerary,
+  onPromoteGem,
   onDismissGem,
+  onTellMoreGem,
+  busyGemIds = null,
   dayLegs = [],
 }) {
   const total = day.activities.length;
@@ -6542,6 +6749,10 @@ function DaySection({
       unmatched: dayLegs.filter((l) => !used.has(l.id || l)),
     };
   })();
+
+  // Local gems: anchored inline under their activity, orphans in the strip.
+  const { byActivityId: gemsByAnchor, orphans: orphanGems } = groupGems(day);
+  const [expandedGemAnchors, setExpandedGemAnchors] = useState(() => new Set());
 
   const dayMapsUrl =
     day.activities.length > 0
@@ -6815,6 +7026,46 @@ function DaySection({
                 hotelBooking={act.type === "hotel" ? hotelBooking : null}
                 bookedLeg={legAssignments.byActId.get(act.id) || null}
               />
+              {(() => {
+                const anchored = gemsByAnchor.get(act.id) || [];
+                if (!anchored.length) return null;
+                const expanded = expandedGemAnchors.has(act.id);
+                const shown = expanded ? anchored : anchored.slice(0, 2);
+                return (
+                  <>
+                    {shown.map((g) => (
+                      <InlineGemRow
+                        key={g.id}
+                        gem={g}
+                        anchor={act}
+                        city={day.city}
+                        busy={busyGemIds?.has(g.id)}
+                        onAdd={() => onPromoteGem?.(day, act.id, g)}
+                        onDismiss={() => onDismissGem?.(day, g, "inline")}
+                        onTellMore={() => onTellMoreGem?.(g, act)}
+                      />
+                    ))}
+                    {!expanded && anchored.length > 2 && (
+                      <div
+                        onClick={() =>
+                          setExpandedGemAnchors((prev) =>
+                            new Set(prev).add(act.id),
+                          )
+                        }
+                        style={{
+                          padding: "0 20px 10px 34px",
+                          fontSize: 11,
+                          color: T.mist,
+                          fontFamily: "Georgia,serif",
+                          cursor: "pointer",
+                        }}
+                      >
+                        ＋{anchored.length - 2} more nearby
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               {!lastAct && !samePackageAsNext && (
                 <TransitionRow
                   from={
@@ -6905,17 +7156,15 @@ function DaySection({
         });
       })()}
 
-      {/* Wishlist */}
-      {day.wishlist?.some((w) => !w.dismissed) && (
-        <WishlistSection
-          items={day.wishlist}
-          city={day.city}
-          activities={day.activities || []}
-          onAddToItinerary={(gem) => onAddGemToItinerary?.(day, gem)}
-          onDismiss={(gem) => onDismissGem?.(day, gem)}
-          onAskTrippy={onAskTrippy}
-        />
-      )}
+      {/* Gems whose anchor activity no longer exists */}
+      <AlsoNearbyStrip
+        items={orphanGems}
+        city={day.city}
+        busyIds={busyGemIds}
+        onAdd={(gem) => onPromoteGem?.(day, null, gem)}
+        onDismiss={(gem) => onDismissGem?.(day, gem, "strip")}
+        onTellMore={(gem) => onTellMoreGem?.(gem, null)}
+      />
 
       {/* Last activity / hotel → departure point */}
       {departureTime && departureCity && day.activities.length > 0 && (
@@ -10851,6 +11100,200 @@ export default function App({
         id: `undo-gem-${Date.now()}`,
       },
     ]);
+  };
+
+  // Promote a gem to a real activity — direct insert, no chat round-trip.
+  // Position strategy: splice after the anchor, then renumber the whole
+  // day 0..n with per-row updates (positions are integers; selectHotel's
+  // no-shift duplicates reorder unpredictably on reload — this feature's
+  // point is "appears exactly here", so we pay for the renumber).
+  const [busyGemIds, setBusyGemIds] = useState(() => new Set());
+  const addGemAsActivity = async (day, anchorActivityId, gem) => {
+    const d = days.find((x) => x.id === day.id);
+    if (!d || !gem?.id || busyGemIds.has(gem.id)) return;
+    const norm = (s) => (s || "").trim().toLowerCase();
+    const acts = d.activities || [];
+    if (acts.some((a) => norm(a.title) === norm(gem.title))) {
+      // Already on the day — just retire the suggestion.
+      showToast(`"${gem.title}" is already on ${d.label}`);
+      dismissGemPersist(d, gem, `"${gem.title}" is already on ${d.label}.`);
+      return;
+    }
+    let anchorIdx = acts.findIndex((a) => a.id === anchorActivityId);
+    const matchedAnchor = anchorIdx >= 0;
+    if (anchorIdx < 0) anchorIdx = acts.length - 1;
+    if (anchorIdx < 0) {
+      showToast("Add an activity to this day first");
+      return;
+    }
+    setBusyGemIds((prev) => new Set(prev).add(gem.id));
+    try {
+      // Verify-place ladder (selectHotel's shape) — non-blocking on any
+      // failure; gems were prompt-validated as real places, so our lookup
+      // missing is never the user's problem. type must be null: "attraction"
+      // is not a valid Google Places type and poisons the verify cache.
+      let resolved = null;
+      try {
+        const res = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/places-proxy?action=verify-place`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${(await freshAccessToken()) || session.access_token}`,
+            },
+            body: JSON.stringify({
+              name: gem.title,
+              city: d.city,
+              hint: gem.geocode,
+              type: null,
+              tripId: trip?.id,
+            }),
+          },
+        );
+        if (res.ok) resolved = await res.json();
+      } catch (e) {
+        console.warn("Gem verify-place exception:", e.message);
+      }
+      const repaired = resolved?.repaired && resolved?.corrected_to;
+      const useTitle = repaired ? resolved.corrected_to : gem.title;
+      // Re-check dedupe against the REPAIRED title too — a repair can land
+      // exactly on an existing activity's name.
+      if (repaired && acts.some((a) => norm(a.title) === norm(useTitle))) {
+        showToast(`"${useTitle}" is already on ${d.label}`);
+        dismissGemPersist(d, gem, `"${useTitle}" is already on ${d.label}.`);
+        return;
+      }
+      const spliceIdx = anchorIdx + 1;
+      const insertPayload = {
+        day_id: d.id,
+        time: null, // untimed; "" would corrupt selectHotel's position math
+        title: useTitle,
+        geocode: repaired ? resolved.corrected_to : gem.geocode || gem.title,
+        type: "sight",
+        duration: "45m",
+        note: gem.note || "",
+        icon: "✨",
+        confirmed: false,
+        position: spliceIdx,
+        added_by: session.user.id,
+      };
+      if (resolved?.lat && resolved?.lng) {
+        insertPayload.lat = resolved.lat;
+        insertPayload.lng = resolved.lng;
+        insertPayload.geocode_source = resolved.source || null;
+        insertPayload.geocode_confidence = resolved.confidence || null;
+        insertPayload.geocode_verified_at = new Date().toISOString();
+        if (resolved.place_id) insertPayload.place_id = resolved.place_id;
+        if (resolved.business_status)
+          insertPayload.business_status = resolved.business_status;
+        if (resolved.repaired && resolved.corrected_from)
+          insertPayload.geocode_corrected_from = resolved.corrected_from;
+      }
+      const { data: newAct, error } = await supabase
+        .from("activities")
+        .insert(insertPayload)
+        .select()
+        .single();
+      if (error || !newAct) {
+        showToast("Couldn't add it just now — try again");
+        return;
+      }
+      // One optimistic update: splice, re-map in-memory positions (stale
+      // position fields would let any position-sort reorder the day), and
+      // retire the gem — all before the slower DB renumber, to shrink the
+      // window where a realtime reconcile could resurrect the gem row.
+      // nextWishlist is computed OUTSIDE the updater: React 18 does not run
+      // functional updaters synchronously, so a value assigned inside one
+      // is not readable on the next line.
+      const nextWishlist = (d.wishlist || []).map((w) =>
+        w.id === gem.id ? { ...w, dismissed: true, promoted: true } : w,
+      );
+      setDays((prev) =>
+        prev.map((x) => {
+          if (x.id !== d.id) return x;
+          const spliced = [...(x.activities || [])];
+          spliced.splice(spliceIdx, 0, newAct);
+          return {
+            ...x,
+            activities: spliced.map((a, idx) => ({ ...a, position: idx })),
+            wishlist: nextWishlist,
+          };
+        }),
+      );
+      {
+        const { error: wErr } = await supabase
+          .from("days")
+          .update({ wishlist: nextWishlist })
+          .eq("id", d.id);
+        if (wErr) console.warn("gem wishlist write failed:", wErr.message);
+      }
+      // DB renumber, per-row (batched upsert would take the INSERT path on
+      // a concurrently-deleted id and abort atomically). Non-fatal.
+      const rows = [...acts];
+      rows.splice(spliceIdx, 0, newAct);
+      await Promise.all(
+        rows.map((a, idx) => {
+          if (a.position === idx || String(a.id).startsWith("tmp-"))
+            return null;
+          return supabase
+            .from("activities")
+            .update({ position: idx })
+            .eq("id", a.id)
+            .then(({ error: e }) => {
+              if (e) console.warn("gem renumber failed:", e.message, a.id);
+            });
+        }),
+      );
+      // No explicit photo warm: activity cards fetch (and persist) their
+      // photo on render when photo_url is empty.
+      logActivity({
+        tripId: trip.id,
+        action: "add_activity",
+        entityType: "activity",
+        entityId: newAct.id,
+        summary: `added "${useTitle}" from gems`,
+      });
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "system-undo",
+          content: `Added "${useTitle}" to ${d.label}.`,
+          undoData: {
+            promotedGemId: gem.id,
+            dayId: d.id,
+            activityId: newAct.id,
+          },
+          id: `undo-promote-${Date.now()}`,
+        },
+      ]);
+      posthog.capture("gem_promoted", {
+        trip_id: trip.id,
+        day_index: days.findIndex((x) => x.id === d.id),
+        matched_anchor: matchedAnchor,
+      });
+    } finally {
+      setBusyGemIds((prev) => {
+        const n = new Set(prev);
+        n.delete(gem.id);
+        return n;
+      });
+    }
+  };
+
+  // "Tell me more" — pre-send so the answer starts streaming immediately;
+  // if chat is mid-stream (sendChatDirect would silently no-op), fall back
+  // to prefilling the input instead of dropping the message.
+  const tellMeMoreGem = (gem, anchor) => {
+    const msg = `Tell me more about ${gem.title}${anchor?.title ? ` near ${anchor.title}` : ""}.`;
+    setChatOpen(true);
+    setChatUnread(false);
+    if (chatLoading) {
+      setChatInput(msg);
+      setTimeout(() => chatInputRef.current?.focus(), 50);
+    } else {
+      sendChatDirect(msg);
+    }
   };
 
   // Persist a chat row. supabase-js v2 only sends a query when it's awaited or
@@ -14900,25 +15343,20 @@ export default function App({
                                     `Suggest 2-3 alternatives to "${act.title}" for the same time slot, without making any changes yet`,
                                   );
                                 }}
-                                onAddGemToItinerary={(d, gem) => {
-                                  setChatOpen(true);
-                                  setChatUnread(false);
-                                  sendChatDirect(
-                                    `Please add ${gem.title} to the itinerary on ${d.label} at a suitable time.`,
-                                  );
-                                  dismissGemPersist(
-                                    d,
-                                    gem,
-                                    `Added "${gem.title}" to itinerary.`,
-                                  );
-                                }}
-                                onDismissGem={(d, gem) =>
+                                onPromoteGem={addGemAsActivity}
+                                onTellMoreGem={tellMeMoreGem}
+                                busyGemIds={busyGemIds}
+                                onDismissGem={(d, gem, surface) => {
                                   dismissGemPersist(
                                     d,
                                     gem,
                                     `"${gem.title}" dismissed.`,
-                                  )
-                                }
+                                  );
+                                  posthog.capture("gem_dismissed", {
+                                    trip_id: trip.id,
+                                    surface: surface || "inline",
+                                  });
+                                }}
                                 onChangeHotel={(dayId, act, mode) => {
                                   const dayLabel =
                                     days.find((d) => d.id === dayId)?.label ||
@@ -17201,6 +17639,55 @@ export default function App({
                               prev.filter((msg) => msg.id !== m.id),
                             );
                           } else if (
+                            m.undoData?.promotedGemId &&
+                            m.undoData?.dayId
+                          ) {
+                            // Undo gem promote: delete the inserted activity
+                            // and resurrect the gem. Position holes left by
+                            // the delete are harmless (sort survives gaps).
+                            const { dayId, activityId, promotedGemId } =
+                              m.undoData;
+                            const { error: delErr } = await supabase
+                              .from("activities")
+                              .delete()
+                              .eq("id", activityId);
+                            if (delErr) {
+                              showToast(
+                                "Couldn't undo just now — remove the activity manually",
+                              );
+                              return;
+                            }
+                            // Compute outside the updater (React 18 doesn't
+                            // run updaters synchronously).
+                            const undoDay = days.find((d) => d.id === dayId);
+                            const nextWishlist = (undoDay?.wishlist || []).map(
+                              (w) =>
+                                w.id === promotedGemId
+                                  ? { ...w, dismissed: false, promoted: false }
+                                  : w,
+                            );
+                            setDays((prev) =>
+                              prev.map((d) =>
+                                d.id !== dayId
+                                  ? d
+                                  : {
+                                      ...d,
+                                      activities: (d.activities || []).filter(
+                                        (a) => a.id !== activityId,
+                                      ),
+                                      wishlist: nextWishlist,
+                                    },
+                              ),
+                            );
+                            if (undoDay)
+                              await supabase
+                                .from("days")
+                                .update({ wishlist: nextWishlist })
+                                .eq("id", dayId);
+                            setChatMessages((prev) =>
+                              prev.filter((msg) => msg.id !== m.id),
+                            );
+                          } else if (
                             m.undoData?.dismissedGemId &&
                             m.undoData?.dayId
                           ) {
@@ -17208,19 +17695,26 @@ export default function App({
                             // activity, if any, stays — user manages it through normal activity controls).
                             const dayId = m.undoData.dayId;
                             const gemId = m.undoData.dismissedGemId;
-                            let nextWishlist = null;
-                            setDays((prev) =>
-                              prev.map((d) => {
-                                if (d.id !== dayId) return d;
-                                nextWishlist = (d.wishlist || []).map((w) =>
-                                  w.id === gemId
-                                    ? { ...w, dismissed: false }
-                                    : w,
-                                );
-                                return { ...d, wishlist: nextWishlist };
-                              }),
+                            // Computed OUTSIDE the updater — React 18 does
+                            // not run functional updaters synchronously, so
+                            // the old inside-updater assignment left this
+                            // null and the DB write silently never ran
+                            // (dismiss-undo only ever un-dismissed in
+                            // memory; a reload brought the gem back as
+                            // dismissed).
+                            const gemDay = days.find((d) => d.id === dayId);
+                            const nextWishlist = (gemDay?.wishlist || []).map(
+                              (w) =>
+                                w.id === gemId ? { ...w, dismissed: false } : w,
                             );
-                            if (nextWishlist)
+                            setDays((prev) =>
+                              prev.map((d) =>
+                                d.id !== dayId
+                                  ? d
+                                  : { ...d, wishlist: nextWishlist },
+                              ),
+                            );
+                            if (gemDay)
                               await supabase
                                 .from("days")
                                 .update({ wishlist: nextWishlist })
