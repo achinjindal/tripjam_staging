@@ -10,6 +10,7 @@ import {
 import { supabase } from "../supabase";
 import { handleGatedResponse, refreshCredits } from "../credits";
 import { logActivity } from "../activity";
+import { showToast, confirmSheet } from "../dialogs";
 import { DecisionsView } from "./Polls.jsx";
 
 /* ─── BOARD VIEW ─────────────────────────────────────────────────────── */
@@ -2613,15 +2614,883 @@ function CityInput({
 }
 
 /* ─── LOGISTICS TAB ──────────────────────────────────────────────────── */
+/* ─── Travel legs (P3): booked flights/trains from trips.travel_data ─── */
+
+// "London (LHR)" → { place: "London", code: "LHR" }
+const splitPlace = (s) => {
+  const m = String(s || "").match(/^(.*?)\s*\(([A-Z]{3})\)\s*$/);
+  return m
+    ? { place: m[1].trim(), code: m[2] }
+    : { place: String(s || "").trim(), code: "" };
+};
+const legIata = (s) => {
+  const m = String(s || "").match(/\(([A-Z]{3})\)/);
+  if (m) return m[1];
+  const bare = String(s || "").trim();
+  return /^[A-Z]{3}$/.test(bare) ? bare : "";
+};
+const legCity = (s) =>
+  String(s || "")
+    .replace(/\s*\([A-Z]{3}\)\s*/g, " ")
+    .trim();
+
+// Same-leg identity, mirroring the edge function: ref match wins, else
+// (kind, number, date).
+const legMatches = (a, b) => {
+  // A shared ref alone isn't identity — one airline PNR covers outbound +
+  // return, so a ref match must also agree on the number when both known.
+  const ac = String(a.confirmation || "");
+  const bc = String(b.confirmation || "");
+  const an = String(a.number || "");
+  const bn = String(b.number || "");
+  if (ac && bc && ac.toLowerCase() === bc.toLowerCase()) {
+    if (!an || !bn || an.toLowerCase() === bn.toLowerCase()) return true;
+  }
+  return (
+    a.kind === b.kind &&
+    !!an &&
+    an.toLowerCase() === bn.toLowerCase() &&
+    a.date === b.date
+  );
+};
+
+const validHHMM = (s) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(s || ""));
+
+// Client mirror of the edge function's boundary auto-fill: a booked leg on
+// the trip's first/last day fills the arrival/departure editors. Only
+// validated HH:MM times (a free-typed "6pm" must never reach the timestamp
+// compose); an existing time is overwritten only for a ref-matched
+// reschedule (isUpdate) whose airport agrees.
+const legBoundaryPatch = (trip, leg, isUpdate = false) => {
+  if (leg.status !== "booked") return null;
+  const mode = leg.kind === "flight" ? "flight" : "train";
+  if (leg.date === trip.start_date && validHHMM(leg.arrive_time)) {
+    const iata = leg.kind === "flight" ? legIata(leg.to) : "";
+    if (
+      trip.arrival_time &&
+      !(isUpdate && iata && iata === trip.arrival_airport_iata)
+    )
+      return null;
+    const patch = {
+      arrival_time: `${trip.start_date}T${leg.arrive_time}:00`,
+      arrival_mode: mode,
+    };
+    if (iata) patch.arrival_airport_iata = iata;
+    if (!trip.arrival_city) patch.arrival_city = legCity(leg.to) || null;
+    return patch;
+  }
+  if (leg.date === trip.end_date && validHHMM(leg.depart_time)) {
+    const iata = leg.kind === "flight" ? legIata(leg.from) : "";
+    if (
+      trip.departure_time &&
+      !(isUpdate && iata && iata === trip.departure_airport_iata)
+    )
+      return null;
+    const patch = {
+      departure_time: `${trip.end_date}T${leg.depart_time}:00`,
+      departure_mode: mode,
+    };
+    if (iata) patch.departure_airport_iata = iata;
+    if (!trip.departure_city) patch.departure_city = legCity(leg.from) || null;
+    return patch;
+  }
+  return null;
+};
+
+// Route headline: "London LHR → Rome FCO" with small codes, ocean arrow.
+function LegRoute({ from, to, fontSize = 14, color }) {
+  const f = splitPlace(from);
+  const t = splitPlace(to);
+  const code = (c) =>
+    c ? (
+      <span
+        style={{
+          fontFamily: "Georgia,serif",
+          fontSize: Math.round(fontSize * 0.72),
+          color: T.mist,
+          letterSpacing: 0.6,
+          verticalAlign: 2,
+          marginLeft: 3,
+        }}
+      >
+        {c}
+      </span>
+    ) : null;
+  return (
+    <span
+      style={{
+        fontFamily: "'DM Serif Display',serif",
+        fontSize,
+        color: color || T.ink,
+      }}
+    >
+      {f.place}
+      {code(f.code)} <span style={{ color: T.ocean }}>→</span> {t.place}
+      {code(t.code)}
+    </span>
+  );
+}
+
+function TravelLegRow({ leg, onRemove }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const cancelled = leg.status === "cancelled";
+  const metaBits = [
+    [leg.carrier, leg.number].filter(Boolean).join(" "),
+    leg.date,
+    leg.depart_time ? `dep ${leg.depart_time}` : "",
+    leg.class,
+  ].filter(Boolean);
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        background: T.warm,
+        border: `1px solid ${T.border}`,
+        borderRadius: RADIUS.md + 2,
+        padding: "9px 11px",
+        marginBottom: 8,
+        opacity: cancelled ? 0.55 : 1,
+        position: "relative",
+      }}
+    >
+      <div
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 8,
+          background: T.skyLight,
+          border: `1px solid ${T.skyBorder}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 14,
+          flexShrink: 0,
+        }}
+      >
+        {leg.kind === "flight" ? "✈️" : "🚆"}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            textDecoration: cancelled ? "line-through" : "none",
+          }}
+        >
+          <LegRoute
+            from={leg.from}
+            to={leg.to}
+            fontSize={14}
+            color={cancelled ? T.mist : T.ink}
+          />
+        </div>
+        <div
+          style={{
+            fontFamily: "Georgia,serif",
+            fontSize: 11,
+            color: T.mist,
+            marginTop: 2,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {cancelled ? "Cancelled · " : ""}
+          {metaBits.join(" · ")}
+          {leg.confirmation && (
+            <span
+              style={{
+                background: T.sand,
+                borderRadius: 6,
+                padding: "1px 6px",
+                marginLeft: 6,
+                color: T.dusk,
+              }}
+            >
+              REF {leg.confirmation}
+            </span>
+          )}
+          {leg.via && (
+            <span style={{ marginLeft: 6 }}>
+              {leg.via === "email" ? "📩" : "📎"}
+            </span>
+          )}
+        </div>
+      </div>
+      <button
+        onClick={() => setMenuOpen((v) => !v)}
+        aria-label="Leg options"
+        style={{
+          background: "none",
+          border: "none",
+          color: T.mist,
+          cursor: "pointer",
+          fontSize: 16,
+          padding: "2px 6px",
+          flexShrink: 0,
+        }}
+      >
+        ⋯
+      </button>
+      {menuOpen && (
+        <>
+          <div
+            onClick={() => setMenuOpen(false)}
+            style={{ position: "fixed", inset: 0, zIndex: 40 }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              right: 8,
+              top: "80%",
+              zIndex: 41,
+              background: T.chalk,
+              border: `1px solid ${T.border}`,
+              borderRadius: RADIUS.md,
+              boxShadow: SHADOW.lg,
+              minWidth: 140,
+              overflow: "hidden",
+            }}
+          >
+            {leg.confirmation && (
+              <button
+                onClick={() => {
+                  navigator.clipboard
+                    ?.writeText(leg.confirmation)
+                    .then(() => showToast("Ref copied"))
+                    .catch(() => {});
+                  setMenuOpen(false);
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "10px 13px",
+                  background: "none",
+                  border: "none",
+                  borderBottom: `1px solid ${T.border}`,
+                  fontFamily: "Georgia,serif",
+                  fontSize: 13,
+                  color: T.ink,
+                  cursor: "pointer",
+                }}
+              >
+                Copy ref
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setMenuOpen(false);
+                onRemove(leg);
+              }}
+              style={{
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                padding: "10px 13px",
+                background: "none",
+                border: "none",
+                fontFamily: "Georgia,serif",
+                fontSize: 13,
+                color: T.error,
+                cursor: "pointer",
+              }}
+            >
+              Remove
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Downscale a screenshot to ≤1600px JPEG so uploads stay well under the
+// edge function's 4MB cap; PDFs pass through untouched.
+async function fileToUpload(file) {
+  if (file.type === "application/pdf") {
+    if (file.size > 3_500_000) throw new Error("PDF too large (max 3.5 MB)");
+    const buf = await file.arrayBuffer();
+    let bin = "";
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i += 0x8000)
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return { media_type: "application/pdf", data: btoa(bin) };
+  }
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type))
+    throw new Error("Use a JPG/PNG screenshot or a PDF");
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error("Couldn't read that image"));
+      i.src = url;
+    });
+    const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    return { media_type: "image/jpeg", data: dataUrl.split(",")[1] };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// "Add a booking" — one front door: forward the email, or upload a
+// screenshot/PDF. Upload parses via the metered dry_run endpoint; apply is
+// a client-side RLS write (no new endpoint).
+function AddBookingSheet({
+  trip,
+  ingestAddress,
+  onClose,
+  onApplyLeg,
+  onApplyHotel,
+}) {
+  const [stage, setStage] = useState("choose"); // choose|parsing|preview|done|error
+  const [errMsg, setErrMsg] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [parsed, setParsed] = useState(null);
+  const [leg, setLeg] = useState(null); // editable leg preview
+  const [doneLabel, setDoneLabel] = useState("");
+  const [addrCopied, setAddrCopied] = useState(false);
+  const fileRef = useRef(null);
+
+  const copyAddr = () => {
+    navigator.clipboard
+      ?.writeText(ingestAddress)
+      .then(() => {
+        setAddrCopied(true);
+        setTimeout(() => setAddrCopied(false), 1800);
+      })
+      .catch(() => {});
+  };
+
+  const onFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setFileName(file.name);
+    setStage("parsing");
+    try {
+      const upload = await fileToUpload(file);
+      const { data: sess } = await supabase.auth.getSession();
+      if (!sess?.session?.access_token)
+        throw new Error("Your session expired — sign in again to upload");
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/inbound-email`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${sess?.session?.access_token || ""}`,
+          },
+          body: JSON.stringify({
+            dry_run: true,
+            to: ingestAddress || "",
+            subject: file.name,
+            file: upload,
+          }),
+        },
+      );
+      if (res.status === 429)
+        throw new Error("Daily limit reached — try again tomorrow");
+      if (!res.ok) throw new Error("We couldn't read that file");
+      const out = await res.json();
+      if (out.leg_preview) {
+        setParsed(out.parsed);
+        setLeg({ ...out.leg_preview, via: "upload" });
+        setStage("preview");
+      } else if (out.parsed?.kind === "hotel" && out.parsed.hotel?.name) {
+        setParsed(out.parsed);
+        setLeg(null);
+        setStage("preview");
+      } else {
+        throw new Error(
+          "That didn't look like a hotel, flight or train confirmation",
+        );
+      }
+    } catch (err) {
+      setErrMsg(err.message || "Something went wrong");
+      setStage("error");
+    }
+  };
+
+  const apply = async () => {
+    setStage("saving");
+    try {
+      const cancelled = parsed?.status === "cancelled";
+      if (leg) {
+        await onApplyLeg(leg);
+        const label = [leg.carrier, leg.number].filter(Boolean).join(" ");
+        setDoneLabel(
+          cancelled
+            ? `${label} is marked cancelled.`
+            : `${label} is in Travel & Hotels.`,
+        );
+      } else {
+        const h = parsed.hotel;
+        await onApplyHotel({
+          city: h.city || trip.destination,
+          name: h.name,
+          status: cancelled ? null : "booked",
+          confirmation: h.confirmation || "",
+          via: "upload",
+        });
+        setDoneLabel(
+          cancelled
+            ? `${h.name} is no longer marked booked.`
+            : `${h.name} is in Travel & Hotels.`,
+        );
+      }
+      setStage("done");
+    } catch (err) {
+      setErrMsg(
+        err?.message === "save failed" || !err?.message
+          ? "Couldn't save it just now — try again in a minute"
+          : err.message,
+      );
+      setStage("error");
+    }
+  };
+
+  const field = (label, value, onChange, width) => (
+    <div style={{ flex: width ? `0 0 ${width}px` : 1, minWidth: 0 }}>
+      <div
+        style={{
+          fontSize: 10,
+          color: T.mist,
+          fontFamily: "Georgia,serif",
+          textTransform: "uppercase",
+          letterSpacing: 0.8,
+          marginBottom: 3,
+        }}
+      >
+        {label}
+      </div>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          width: "100%",
+          padding: "7px 9px",
+          borderRadius: RADIUS.sm,
+          border: `1.5px solid ${T.sand}`,
+          fontFamily: "Georgia,serif",
+          fontSize: 12.5,
+          color: T.ink,
+          outline: "none",
+          boxSizing: "border-box",
+        }}
+      />
+    </div>
+  );
+
+  const sheetBtn = (label, onClick, primary) => (
+    <button
+      onClick={onClick}
+      style={{
+        display: "block",
+        width: "100%",
+        marginTop: primary ? 12 : 4,
+        background: primary ? T.ocean : "none",
+        color: primary ? "#fff" : T.mist,
+        border: "none",
+        borderRadius: RADIUS.md + 2,
+        padding: primary ? 12 : 8,
+        fontFamily: "Georgia,serif",
+        fontSize: primary ? 14 : 12,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 300,
+        background: "rgba(15,25,35,0.4)",
+        display: "flex",
+        alignItems: "flex-end",
+        justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 520,
+          background: T.chalk,
+          borderRadius: "20px 20px 0 0",
+          padding: "16px 18px 26px",
+          boxShadow: SHADOW.lg,
+          maxHeight: "85vh",
+          overflowY: "auto",
+        }}
+      >
+        <div
+          style={{
+            width: 36,
+            height: 4,
+            borderRadius: 999,
+            background: T.border,
+            margin: "0 auto 14px",
+          }}
+        />
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,.pdf,application/pdf"
+          onChange={onFile}
+          style={{ display: "none" }}
+        />
+
+        {stage === "choose" && (
+          <>
+            <div
+              style={{
+                fontFamily: "'DM Serif Display',serif",
+                fontSize: 18,
+                color: T.ink,
+                marginBottom: 4,
+              }}
+            >
+              Add a booking
+            </div>
+            <div
+              style={{
+                fontFamily: "Georgia,serif",
+                fontSize: 12,
+                color: T.mist,
+                marginBottom: 12,
+              }}
+            >
+              Hotel, flight or train — we'll read it and file it on this trip.
+            </div>
+            {ingestAddress && (
+              <div
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "flex-start",
+                  border: `1.5px solid ${T.border}`,
+                  borderRadius: RADIUS.lg,
+                  padding: "13px 12px",
+                  marginBottom: 10,
+                  background: T.warm,
+                }}
+              >
+                <div style={{ fontSize: 17, flexShrink: 0 }}>📩</div>
+                <div style={{ minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontFamily: "'DM Serif Display',serif",
+                      fontSize: 15,
+                      color: T.ink,
+                      marginBottom: 2,
+                    }}
+                  >
+                    Forward the confirmation email
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "Georgia,serif",
+                      fontSize: 11.5,
+                      color: T.mist,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    Works from Gmail, Outlook, anything. We reply once it's
+                    filed.
+                  </div>
+                  <button
+                    onClick={copyAddr}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: T.sand,
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "3px 9px",
+                      fontFamily: "ui-monospace, Menlo, monospace",
+                      fontSize: 11,
+                      color: T.dusk,
+                      marginTop: 6,
+                      cursor: "pointer",
+                      maxWidth: "100%",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {addrCopied ? "copied ✓" : `${ingestAddress} ⧉`}
+                  </button>
+                </div>
+              </div>
+            )}
+            <div
+              onClick={() => fileRef.current?.click()}
+              style={{
+                display: "flex",
+                gap: 12,
+                alignItems: "flex-start",
+                border: `1.5px solid ${T.border}`,
+                borderRadius: RADIUS.lg,
+                padding: "13px 12px",
+                background: T.warm,
+                cursor: "pointer",
+              }}
+            >
+              <div style={{ fontSize: 17, flexShrink: 0 }}>📎</div>
+              <div>
+                <div
+                  style={{
+                    fontFamily: "'DM Serif Display',serif",
+                    fontSize: 15,
+                    color: T.ink,
+                    marginBottom: 2,
+                  }}
+                >
+                  Upload a screenshot or PDF
+                </div>
+                <div
+                  style={{
+                    fontFamily: "Georgia,serif",
+                    fontSize: 11.5,
+                    color: T.mist,
+                  }}
+                >
+                  Ticket PDFs, app screenshots, boarding passes.
+                </div>
+              </div>
+            </div>
+            {sheetBtn("Cancel", onClose)}
+          </>
+        )}
+
+        {(stage === "parsing" || stage === "saving") && (
+          <div
+            style={{
+              textAlign: "center",
+              padding: "28px 0 20px",
+              fontFamily: "Georgia,serif",
+              color: T.mist,
+              fontSize: 13,
+            }}
+          >
+            {stage === "saving"
+              ? "Saving to the trip…"
+              : `Reading ${fileName || "your booking"}…`}
+          </div>
+        )}
+
+        {stage === "preview" && (
+          <>
+            <div
+              style={{
+                fontFamily: "'DM Serif Display',serif",
+                fontSize: 18,
+                color: T.ink,
+                marginBottom: 4,
+              }}
+            >
+              Here's what we read
+            </div>
+            <div
+              style={{
+                fontFamily: "Georgia,serif",
+                fontSize: 12,
+                color: T.mist,
+                marginBottom: 10,
+              }}
+            >
+              Check it before it goes on the trip.
+            </div>
+            <div
+              style={{
+                background: T.skyLight,
+                border: `1px solid ${T.skyBorder}`,
+                borderRadius: RADIUS.lg,
+                padding: "13px 13px 11px",
+              }}
+            >
+              {leg ? (
+                <>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 9,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <div style={{ fontSize: 18 }}>
+                      {leg.kind === "flight" ? "✈️" : "🚆"}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <LegRoute from={leg.from} to={leg.to} fontSize={16} />
+                      <div
+                        style={{
+                          fontFamily: "Georgia,serif",
+                          fontSize: 11,
+                          color: T.mist,
+                        }}
+                      >
+                        {[leg.carrier, leg.number].filter(Boolean).join(" ")} ·{" "}
+                        {leg.kind}
+                        {parsed?.status === "cancelled" ? " · cancelled" : ""}
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      flexWrap: "wrap",
+                      marginBottom: 6,
+                    }}
+                  >
+                    {field("Date", leg.date, (v) =>
+                      setLeg((l) => ({ ...l, date: v })),
+                    )}
+                    {field(
+                      "Departs",
+                      leg.depart_time,
+                      (v) => setLeg((l) => ({ ...l, depart_time: v })),
+                      86,
+                    )}
+                    {field(
+                      "Ref",
+                      leg.confirmation,
+                      (v) => setLeg((l) => ({ ...l, confirmation: v })),
+                      110,
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {field("From", leg.from, (v) =>
+                      setLeg((l) => ({ ...l, from: v })),
+                    )}
+                    {field("To", leg.to, (v) =>
+                      setLeg((l) => ({ ...l, to: v })),
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div
+                  style={{
+                    fontFamily: "Georgia,serif",
+                    fontSize: 13,
+                    color: T.ink,
+                  }}
+                >
+                  🏨 <b>{parsed.hotel.name}</b>
+                  {parsed.hotel.city ? ` · ${parsed.hotel.city}` : ""}
+                  {parsed.hotel.confirmation
+                    ? ` · #${parsed.hotel.confirmation}`
+                    : ""}
+                  {parsed.status === "cancelled" ? " · cancelled" : ""}
+                </div>
+              )}
+            </div>
+            <div
+              style={{
+                fontFamily: "Georgia,serif",
+                fontSize: 12,
+                color: T.dusk,
+                margin: "10px 2px 0",
+              }}
+            >
+              Adding to{" "}
+              <span
+                style={{
+                  background: T.sand,
+                  borderRadius: 999,
+                  padding: "2px 10px",
+                  fontSize: 11,
+                }}
+              >
+                {trip.name}
+              </span>
+            </div>
+            {sheetBtn(
+              parsed?.status === "cancelled" ? "Update trip" : "Add to trip",
+              apply,
+              true,
+            )}
+            {sheetBtn("Discard", onClose)}
+          </>
+        )}
+
+        {stage === "done" && (
+          <div style={{ textAlign: "center", padding: "14px 0 4px" }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>
+              {leg ? (leg.kind === "flight" ? "✈️" : "🚆") : "🏨"}
+            </div>
+            <div
+              style={{
+                fontFamily: "'DM Serif Display',serif",
+                fontSize: 18,
+                color: T.ink,
+              }}
+            >
+              On the trip.
+            </div>
+            <div
+              style={{
+                fontFamily: "Georgia,serif",
+                fontSize: 12,
+                color: T.mist,
+                marginTop: 4,
+              }}
+            >
+              {doneLabel}
+            </div>
+            {sheetBtn("Done", onClose)}
+          </div>
+        )}
+
+        {stage === "error" && (
+          <div style={{ textAlign: "center", padding: "14px 0 4px" }}>
+            <div
+              style={{
+                fontFamily: "Georgia,serif",
+                fontSize: 13,
+                color: T.error,
+                marginBottom: 6,
+              }}
+            >
+              {errMsg}
+            </div>
+            {sheetBtn("Try another file", () => fileRef.current?.click(), true)}
+            {sheetBtn("Close", onClose)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function LogisticsTab({
   trip,
   days,
   onSaveFlights,
   onSaveHotels,
   onApplyHotels,
+  onSaveTravelLegs,
 }) {
   const cities = [...new Set(days.map((d) => d.city))];
-  const [flights, setFlights] = useState({
+  const flightsFromTrip = () => ({
     arrivalCity: trip.arrival_city || "",
     arrivalTime: trip.arrival_time
       ? trip.arrival_time.split("T")[1]?.substring(0, 5)
@@ -2633,21 +3502,25 @@ function LogisticsTab({
       : "",
     departureMode: trip.departure_mode || "flight",
   });
+  const [flights, setFlights] = useState(flightsFromTrip);
 
+  // Resync when the arrival/departure fields change underneath the form —
+  // P3's boundary auto-fill (leg upload / forwarded email) is the first
+  // writer of these outside this form; without the resync, the next Save
+  // would clobber the auto-fill with the stale values the form mounted with.
+  const flightsDataKey = JSON.stringify([
+    trip.id,
+    trip.arrival_city,
+    trip.arrival_time,
+    trip.arrival_mode,
+    trip.departure_city,
+    trip.departure_time,
+    trip.departure_mode,
+  ]);
   useEffect(() => {
-    setFlights({
-      arrivalCity: trip.arrival_city || "",
-      arrivalTime: trip.arrival_time
-        ? trip.arrival_time.split("T")[1]?.substring(0, 5)
-        : "",
-      arrivalMode: trip.arrival_mode || "flight",
-      departureCity: trip.departure_city || "",
-      departureTime: trip.departure_time
-        ? trip.departure_time.split("T")[1]?.substring(0, 5)
-        : "",
-      departureMode: trip.departure_mode || "flight",
-    });
-  }, [trip.id]);
+    setFlights(flightsFromTrip());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flightsDataKey]);
 
   // Auto-resolve airport for first/last day's city when flight fields are empty.
   // Uses bundled OurAirports dataset (free, ~98KB gzipped, lazy-loaded).
@@ -2766,6 +3639,106 @@ function LogisticsTab({
       };
     });
   const [hotels, setHotels] = useState(hotelsFromTrip);
+  // Travel legs (P3): derived straight from trip.travel_data — the server
+  // (forwarded email) or the Add-a-booking sheet writes them; this card
+  // only deletes.
+  const travelLegs = Array.isArray(trip.travel_data) ? trip.travel_data : [];
+  const bookedLegs = travelLegs
+    .filter((l) => l.status !== "cancelled")
+    .sort((a, b) =>
+      `${a.date || ""} ${a.depart_time || ""}`.localeCompare(
+        `${b.date || ""} ${b.depart_time || ""}`,
+      ),
+    );
+  const cancelledLegs = travelLegs.filter((l) => l.status === "cancelled");
+  const [showCancelledLegs, setShowCancelledLegs] = useState(false);
+  const [showAddBooking, setShowAddBooking] = useState(false);
+
+  const removeLeg = async (leg) => {
+    const ok = await confirmSheet({
+      title: "Remove this leg?",
+      message: `${[leg.carrier, leg.number].filter(Boolean).join(" ")} · ${legCity(leg.from)} → ${legCity(leg.to)}. Re-forwarding the confirmation adds it back.`,
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
+    await onSaveTravelLegs(
+      travelLegs.filter((l) => (l.id ? l.id !== leg.id : l !== leg)),
+    );
+  };
+
+  const applyLegFromSheet = async (leg) => {
+    const list = [...travelLegs];
+    const idx = list.findIndex((x) => legMatches(x, leg));
+    // Honor the parsed status: a cancellation upload must cancel the
+    // matching leg (mirroring the email path) — never book it, never
+    // resurrect a cancelled leg, never auto-fill boundaries from it.
+    if (leg.status === "cancelled") {
+      if (idx < 0)
+        throw new Error(
+          "That's a cancellation — there's no matching booked leg on this trip",
+        );
+      list[idx] = { ...list[idx], status: "cancelled" };
+      const ok = await onSaveTravelLegs(list);
+      if (ok === false) throw new Error("save failed");
+      logActivity({
+        tripId: trip.id,
+        action: "booking_uploaded",
+        entityType: "trip",
+        entityId: trip.id,
+        summary: `cancelled ${[list[idx].carrier, list[idx].number].filter(Boolean).join(" ")} from an upload`,
+      });
+      return;
+    }
+    let saved = { ...leg, status: "booked" };
+    if (idx >= 0) {
+      saved = { ...list[idx], ...saved, id: list[idx].id };
+      list[idx] = saved;
+    } else list.push(saved);
+    const patch = legBoundaryPatch(trip, saved, idx >= 0) || {};
+    const ok = await onSaveTravelLegs(list, patch);
+    if (ok === false) throw new Error("save failed");
+    logActivity({
+      tripId: trip.id,
+      action: "booking_uploaded",
+      entityType: "trip",
+      entityId: trip.id,
+      summary: `added ${[saved.carrier, saved.number].filter(Boolean).join(" ")} from an upload`,
+    });
+  };
+
+  const applyHotelFromSheet = async (entry) => {
+    const list = Array.isArray(trip.hotels_data) ? [...trip.hotels_data] : [];
+    let idx = list.findIndex(
+      (x) =>
+        x.name?.toLowerCase() === entry.name.toLowerCase() ||
+        (entry.confirmation && x.confirmation === entry.confirmation),
+    );
+    if (idx < 0)
+      idx = list.findIndex(
+        (x) =>
+          entry.city &&
+          x.city?.toLowerCase() === entry.city.toLowerCase() &&
+          x.status !== "booked",
+      );
+    // A cancellation (status null) with no matching stay must not create a
+    // ghost unbooked row.
+    if (idx < 0 && !entry.status)
+      throw new Error(
+        "That's a cancellation — there's no matching stay on this trip",
+      );
+    if (idx >= 0) list[idx] = { ...list[idx], ...entry, city: list[idx].city };
+    else list.push(entry);
+    await onSaveHotels(list);
+    await onApplyHotels(list);
+    logActivity({
+      tripId: trip.id,
+      action: "booking_uploaded",
+      entityType: "trip",
+      entityId: trip.id,
+      summary: `added ${entry.name} from an upload`,
+    });
+  };
   // Resync when hotels_data changes underneath us (email ingestion writes
   // server-side) — otherwise the next Save would overwrite the new booking
   // with the stale rows this form mounted with.
@@ -2796,14 +3769,17 @@ function LogisticsTab({
       (h.confirmation || "") !== (orig.confirmation || "")
     );
   });
+  const flightsChanged = JSON.stringify(flights) !== JSON.stringify(saved);
   const hasChanges =
-    saveStatus !== "saving" &&
-    (JSON.stringify(flights) !== JSON.stringify(saved) || hotelsChanged);
+    saveStatus !== "saving" && (flightsChanged || hotelsChanged);
 
   const handleSaveAll = async () => {
     if (!hasChanges) return;
     setSaveStatus("saving");
-    await onSaveFlights({ ...flights });
+    // Only write the section the user actually touched — a hotels-only save
+    // must never push stale arrival/departure values over a boundary
+    // auto-fill that landed since mount (and vice versa).
+    if (flightsChanged) await onSaveFlights({ ...flights });
     if (hotelsChanged) {
       // Keep hotels_data entries whose city isn't one of this form's rows
       // (email-ingested bookings can carry city names outside the itinerary's
@@ -2862,13 +3838,35 @@ function LogisticsTab({
       >
         <div
           style={{
-            fontFamily: "'DM Serif Display',serif",
-            fontSize: 16,
-            color: T.ink,
+            display: "flex",
+            alignItems: "baseline",
             marginBottom: 14,
           }}
         >
-          🧭 Travel
+          <div
+            style={{
+              fontFamily: "'DM Serif Display',serif",
+              fontSize: 16,
+              color: T.ink,
+            }}
+          >
+            🧭 Travel
+          </div>
+          <button
+            onClick={() => setShowAddBooking(true)}
+            style={{
+              marginLeft: "auto",
+              background: "none",
+              border: "none",
+              color: T.ocean,
+              fontFamily: "Georgia,serif",
+              fontSize: 12,
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            ＋ Add a booking
+          </button>
         </div>
 
         {/* Arrival */}
@@ -2926,7 +3924,81 @@ function LogisticsTab({
               />
             )}
           </div>
+          {import.meta.env.VITE_FLIGHT_LINK_PREFIX &&
+            flights.arrivalMode === "flight" &&
+            !flights.arrivalTime &&
+            !bookedLegs.some(
+              (l) => l.kind === "flight" && l.date === trip.start_date,
+            ) && (
+              <a
+                href={import.meta.env.VITE_FLIGHT_LINK_PREFIX}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  fontFamily: "Georgia,serif",
+                  fontSize: 11.5,
+                  color: T.ocean,
+                  textDecoration: "none",
+                  display: "inline-block",
+                  marginTop: 6,
+                }}
+              >
+                Compare flights ↗
+              </a>
+            )}
         </div>
+
+        {/* Booked legs (P3) — any count; mid-trip legs also surface on
+            their itinerary day card */}
+        {travelLegs.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div
+              style={{
+                fontSize: 11,
+                color: T.mist,
+                fontFamily: "Georgia,serif",
+                marginBottom: 6,
+                textTransform: "uppercase",
+                letterSpacing: 1,
+              }}
+            >
+              Booked legs
+            </div>
+            {bookedLegs.map((l, i) => (
+              <TravelLegRow
+                key={l.id || `${l.number}-${l.date}-${i}`}
+                leg={l}
+                onRemove={removeLeg}
+              />
+            ))}
+            {cancelledLegs.length > 0 && (
+              <>
+                {showCancelledLegs &&
+                  cancelledLegs.map((l, i) => (
+                    <TravelLegRow
+                      key={l.id || `cxl-${l.number}-${l.date}-${i}`}
+                      leg={l}
+                      onRemove={removeLeg}
+                    />
+                  ))}
+                <div
+                  onClick={() => setShowCancelledLegs((v) => !v)}
+                  style={{
+                    fontSize: 11,
+                    color: T.mist,
+                    textAlign: "center",
+                    cursor: "pointer",
+                    fontFamily: "Georgia,serif",
+                    padding: "2px 0",
+                  }}
+                >
+                  {showCancelledLegs ? "hide" : "show"} cancelled (
+                  {cancelledLegs.length}) {showCancelledLegs ? "▴" : "▾"}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Departure */}
         <div style={{ marginBottom: 14 }}>
@@ -2986,8 +4058,40 @@ function LogisticsTab({
               />
             )}
           </div>
+          {import.meta.env.VITE_FLIGHT_LINK_PREFIX &&
+            flights.departureMode === "flight" &&
+            !flights.departureTime &&
+            !bookedLegs.some(
+              (l) => l.kind === "flight" && l.date === trip.end_date,
+            ) && (
+              <a
+                href={import.meta.env.VITE_FLIGHT_LINK_PREFIX}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  fontFamily: "Georgia,serif",
+                  fontSize: 11.5,
+                  color: T.ocean,
+                  textDecoration: "none",
+                  display: "inline-block",
+                  marginTop: 6,
+                }}
+              >
+                Compare flights ↗
+              </a>
+            )}
         </div>
       </div>
+
+      {showAddBooking && (
+        <AddBookingSheet
+          trip={trip}
+          ingestAddress={tripIngestAddress}
+          onClose={() => setShowAddBooking(false)}
+          onApplyLeg={applyLegFromSheet}
+          onApplyHotel={applyHotelFromSheet}
+        />
+      )}
 
       {/* Hotels */}
       <div
@@ -3032,7 +4136,7 @@ function LogisticsTab({
                   marginTop: 3,
                 }}
               >
-                📩 Forward hotel confirmations to{" "}
+                📩 Forward hotel, flight or train confirmations to{" "}
                 <b
                   style={{ color: T.ocean, cursor: "pointer" }}
                   title="Tap to copy"
@@ -3097,9 +4201,9 @@ function LogisticsTab({
                 lineHeight: 1.55,
               }}
             >
-              <b>📩 Book by forwarding.</b> Send hotel confirmation emails to
-              this trip's own address and they'll check themselves off here —
-              name, booked status, confirmation number.
+              <b>📩 Book by forwarding.</b> Send hotel, flight or train
+              confirmation emails to this trip's own address and they'll file
+              themselves here — name, route, booked status, confirmation number.
               <div style={{ marginTop: 8 }}>
                 <button
                   onClick={copyIngestAddress}
@@ -3122,6 +4226,21 @@ function LogisticsTab({
                   }}
                 >
                   {addrCopied ? "copied ✓" : `${tripIngestAddress} ⧉`}
+                </button>
+                <button
+                  onClick={() => setShowAddBooking(true)}
+                  style={{
+                    marginLeft: 10,
+                    background: "none",
+                    border: "none",
+                    color: T.ocean,
+                    fontFamily: "Georgia,serif",
+                    fontSize: 11.5,
+                    cursor: "pointer",
+                    padding: "6px 0",
+                  }}
+                >
+                  or upload a ticket →
                 </button>
               </div>
             </div>
@@ -3315,6 +4434,7 @@ function BoardView({
   onSaveFlights,
   onSaveHotels,
   onApplyHotels,
+  onSaveTravelLegs,
   initialSection = null,
   onInitialSectionConsumed,
   isSharedTrip = false,
@@ -3454,6 +4574,7 @@ function BoardView({
           onSaveFlights={onSaveFlights}
           onSaveHotels={onSaveHotels}
           onApplyHotels={onApplyHotels}
+          onSaveTravelLegs={onSaveTravelLegs}
         />
       </div>
     );
@@ -3875,4 +4996,4 @@ function BoardView({
 }
 
 export default BoardView;
-export { LogisticsTab, CityInput };
+export { LogisticsTab, CityInput, LegRoute };

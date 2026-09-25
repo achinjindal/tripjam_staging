@@ -1,8 +1,14 @@
-// Inbound booking-email ingestion (TripIt-style):
-//   forward a hotel confirmation → Resend inbound → this webhook → Haiku
-//   parse → the matching trip's hotels_data gains {status:"booked",
-//   confirmation, via:"email"} → the itinerary shows ✓ Booked → the sender
-//   gets an outcome receipt in their inbox.
+// Inbound booking ingestion (TripIt-style):
+//   forward a hotel/flight/train confirmation → Resend inbound → this
+//   webhook → Haiku parse → the matching trip's hotels_data gains
+//   {status:"booked", confirmation, via:"email"} or travel_data gains a
+//   leg {kind, route, date, times, ref} → the itinerary shows it → the
+//   sender gets an outcome receipt in their inbox.
+//
+// P3 additions (2026-09-25): global flight/train legs in trips.travel_data
+// (any count, any date — mid-trip legs are first-class), boundary
+// auto-fill of arrival/departure on first/last-day legs, and dry_run
+// accepts an image/PDF `file` for the in-app upload path.
 //
 // Deploy with --no-verify-jwt (Resend calls it); webhook authenticity via
 // Svix signatures. EMAIL SENDER authenticity via Resend's structured
@@ -139,11 +145,50 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+type UploadFile = { media_type: string; data: string };
+
 async function parseBooking(
   anthropicKey: string,
   subject: string,
   bodyText: string,
+  file?: UploadFile | null,
 ): Promise<{ parsed: any; usage: any } | null> {
+  const prompt = `This is a travel confirmation (forwarded email, screenshot, or ticket PDF). Extract booking facts as MINIFIED JSON only (no prose):
+{"kind":"hotel"|"flight"|"train"|"other","status":"confirmed"|"cancelled","hotel":{"name":"","city":"","confirmation":"","checkin":"YYYY-MM-DD or empty","checkout":"YYYY-MM-DD or empty"},"flight":{"carrier":"","number":"","date":"YYYY-MM-DD or empty","depart_time":"HH:MM or empty","arrive_time":"","from":"","to":"","confirmation":""},"train":{"operator":"","name":"","number":"","date":"YYYY-MM-DD or empty","depart_time":"","arrive_time":"","from":"","to":"","class":"","confirmation":""},"summary":"one line describing the booking"}
+Rules:
+- Only facts explicitly present; empty strings for anything absent. NEVER invent times, dates or codes.
+- kind="train" for ANY rail booking worldwide (Amtrak, Eurostar, DB, SNCF, Trenitalia, JR, IRCTC, ...). Keep operator, train name/number, stations and class VERBATIM as printed — do not translate or normalize.
+- Flight from/to: "City (CODE)" when the city name appears anywhere (e.g. "London (LHR)"); bare code only if no city name is present. Train from/to: full station names as printed.
+- Vendor hints: IRCTC PNR is 10 digits and trains print as "NUMBER NAME"; Eurostar/Amtrak refs are 6-char alphanumeric.
+- Times 24h HH:MM.
+- status="cancelled" for cancellation/refund/TDR notices — NEVER "confirmed" on those, even if they restate the original booking details.
+- kind="other" if not clearly a hotel, flight or train booking.
+
+SUBJECT: ${subject}
+BODY:
+${bodyText || (file ? "(see attached file)" : "(body unavailable — use the subject line only)")}`;
+  const content: any[] = [];
+  if (file)
+    content.push(
+      file.media_type === "application/pdf"
+        ? {
+            type: "document",
+            source: {
+              type: "base64",
+              media_type: "application/pdf",
+              data: file.data,
+            },
+          }
+        : {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: file.media_type,
+              data: file.data,
+            },
+          },
+    );
+  content.push({ type: "text", text: prompt });
   const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -153,19 +198,8 @@ async function parseBooking(
     },
     body: JSON.stringify({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 400,
-      messages: [
-        {
-          role: "user",
-          content: `This is a forwarded travel confirmation email. Extract booking facts as MINIFIED JSON only (no prose):
-{"kind":"hotel"|"flight"|"other","status":"confirmed"|"cancelled","hotel":{"name":"","city":"","confirmation":"","checkin":"YYYY-MM-DD or empty","checkout":"YYYY-MM-DD or empty"},"flight":{"carrier":"","number":"","date":"","from":"","to":"","confirmation":""},"summary":"one line describing the booking"}
-Only include facts explicitly present. Empty strings for anything absent. kind="other" if it is not clearly a hotel or flight booking. status="cancelled" when the email announces a cancellation (even of a previously confirmed booking) — NEVER "confirmed" for cancellation/refund notices.
-
-SUBJECT: ${subject}
-BODY:
-${bodyText || "(body unavailable — use the subject line only)"}`,
-        },
-      ],
+      max_tokens: 500,
+      messages: [{ role: "user", content }],
     }),
   });
   if (!aiRes.ok) return null;
@@ -180,6 +214,137 @@ ${bodyText || "(body unavailable — use the subject line only)"}`,
     parsed = { kind: "other", summary: subject };
   }
   return { parsed, usage: ai?.usage || {} };
+}
+
+// ── Travel legs ─────────────────────────────────────────────────────────
+// Normalized leg the apply branch writes and dry_run previews. Returns
+// null when the parse has neither an identity (number) nor a ref.
+function normalizeLeg(parsed: any): any | null {
+  const kind = parsed?.kind;
+  if (kind !== "flight" && kind !== "train") return null;
+  const src = kind === "flight" ? parsed.flight : parsed.train;
+  if (!src) return null;
+  const number = String(src.number || "").trim();
+  const confirmation = String(src.confirmation || "").trim();
+  if (!number && !confirmation) return null;
+  // Trains display best as "Frecciarossa 9528" / "12951 Mumbai Rajdhani":
+  // prefer the printed name as the carrier label when present.
+  let carrier = String(
+    (kind === "train" ? src.name || src.operator : src.carrier) || "",
+  ).trim();
+  // Models sometimes fold the number into the name ("Frecciarossa 9528",
+  // IRCTC's "12951 MUMBAI RAJDHANI") — strip it from either end so
+  // "carrier + number" displays don't double it.
+  if (number) {
+    const nl = number.toLowerCase();
+    const cl = carrier.toLowerCase();
+    if (cl.endsWith(nl))
+      carrier = carrier.slice(0, carrier.length - number.length).trim();
+    else if (cl.startsWith(nl)) carrier = carrier.slice(number.length).trim();
+  }
+  return {
+    id: crypto.randomUUID(),
+    kind,
+    carrier,
+    number,
+    date: String(src.date || "").trim(),
+    // Times must be clean 24h HH:MM — model output like "08:40 AM" or
+    // "14:05+1" would otherwise poison the arrival_time timestamp compose
+    // and 400 the whole leg save. Invalid → dropped, leg still saves.
+    depart_time: validHHMM(src.depart_time)
+      ? String(src.depart_time).trim()
+      : "",
+    arrive_time: validHHMM(src.arrive_time)
+      ? String(src.arrive_time).trim()
+      : "",
+    from: String(src.from || "").trim(),
+    to: String(src.to || "").trim(),
+    confirmation,
+    class: String(src.class || "").trim(),
+    status: parsed.status === "cancelled" ? "cancelled" : "booked",
+    via: "email",
+    created_at: new Date().toISOString(),
+  };
+}
+
+// Same leg? A shared ref is necessary but not sufficient — airlines issue
+// ONE PNR for outbound + return, so a ref match must also agree on the
+// number (when both are known) or it would merge the return into the
+// outbound. Fallback identity: (kind, number, date).
+function legMatches(a: any, b: any): boolean {
+  const ac = String(a.confirmation || "");
+  const bc = String(b.confirmation || "");
+  const an = String(a.number || "");
+  const bn = String(b.number || "");
+  if (ac && bc && ac.toLowerCase() === bc.toLowerCase()) {
+    if (!an || !bn || an.toLowerCase() === bn.toLowerCase()) return true;
+  }
+  return (
+    a.kind === b.kind &&
+    !!an &&
+    an.toLowerCase() === bn.toLowerCase() &&
+    a.date === b.date
+  );
+}
+
+const validHHMM = (s: unknown): boolean =>
+  /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(s || ""));
+
+const iataOf = (s: string): string => {
+  const m = String(s || "").match(/\(([A-Z]{3})\)/);
+  if (m) return m[1];
+  const bare = String(s || "").trim();
+  return /^[A-Z]{3}$/.test(bare) ? bare : "";
+};
+const cityOf = (s: string): string =>
+  String(s || "")
+    .replace(/\s*\([A-Z]{3}\)\s*/g, " ")
+    .trim();
+
+// Boundary auto-fill: a booked leg on the trip's first/last day fills the
+// arrival/departure editors — only with genuinely parsed, validated times.
+// An already-set time is overwritten ONLY for a reschedule of the same
+// booking (isUpdate, ref-matched) whose airport agrees — never by a
+// different flight to the same airport (e.g. a co-traveller's own leg on a
+// shared trip). Returns the trips PATCH fields (or null).
+function boundaryFill(
+  trip: any,
+  leg: any,
+  isUpdate: boolean,
+): Record<string, unknown> | null {
+  if (leg.status !== "booked") return null;
+  const mode = leg.kind === "flight" ? "flight" : "train";
+  if (leg.date === trip.start_date && validHHMM(leg.arrive_time)) {
+    const iata = leg.kind === "flight" ? iataOf(leg.to) : "";
+    if (
+      trip.arrival_time &&
+      !(isUpdate && iata && iata === trip.arrival_airport_iata)
+    )
+      return null;
+    const patch: Record<string, unknown> = {
+      arrival_time: `${trip.start_date}T${leg.arrive_time}:00`,
+      arrival_mode: mode,
+    };
+    if (iata) patch.arrival_airport_iata = iata;
+    if (!trip.arrival_city) patch.arrival_city = cityOf(leg.to) || null;
+    return patch;
+  }
+  if (leg.date === trip.end_date && validHHMM(leg.depart_time)) {
+    const iata = leg.kind === "flight" ? iataOf(leg.from) : "";
+    if (
+      trip.departure_time &&
+      !(isUpdate && iata && iata === trip.departure_airport_iata)
+    )
+      return null;
+    const patch: Record<string, unknown> = {
+      departure_time: `${trip.end_date}T${leg.depart_time}:00`,
+      departure_mode: mode,
+    };
+    if (iata) patch.departure_airport_iata = iata;
+    if (!trip.departure_city) patch.departure_city = cityOf(leg.from) || null;
+    return patch;
+  }
+  return null;
 }
 
 // Member-aware candidates: trips the user created OR is a member of, not
@@ -204,7 +369,7 @@ async function fetchCandidates(
   if (memberIds.length)
     orParts.push(`id.in.(${memberIds.slice(0, 50).join(",")})`);
   const tRes = await fetch(
-    `${supabaseUrl}/rest/v1/trips?or=(${orParts.join(",")})&end_date=gte.${today}&select=id,name,hotels_data,destination,start_date,end_date&order=start_date.asc&limit=100`,
+    `${supabaseUrl}/rest/v1/trips?or=(${orParts.join(",")})&end_date=gte.${today}&select=id,name,hotels_data,travel_data,destination,start_date,end_date,arrival_city,arrival_time,arrival_airport_iata,departure_city,departure_time,departure_airport_iata&order=start_date.asc&limit=100`,
     { headers: db },
   );
   return tRes.ok ? await tRes.json() : [];
@@ -233,11 +398,13 @@ function routeTrip(
       candidates.find((t) => ci >= t.start_date && ci <= t.end_date) || null;
     if (trip) return { trip, routedBy: "checkin_date" };
   }
-  if (parsed.kind === "flight" && parsed.flight?.date) {
-    const fd = parsed.flight.date;
+  const legDate = parsed.flight?.date || parsed.train?.date;
+  if ((parsed.kind === "flight" || parsed.kind === "train") && legDate) {
     const trip =
-      candidates.find((t) => fd >= t.start_date && fd <= t.end_date) || null;
-    if (trip) return { trip, routedBy: "flight_date" };
+      candidates.find(
+        (t) => legDate >= t.start_date && legDate <= t.end_date,
+      ) || null;
+    if (trip) return { trip, routedBy: "leg_date" };
   }
   return { trip: candidates[0] || null, routedBy: "fallback" };
 }
@@ -369,18 +536,73 @@ Deno.serve(async (req) => {
           status: 429,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
+      // Optional upload: screenshot or ticket PDF, base64. 4MB binary ≈
+      // 5.6M base64 chars; reject oversize/unknown types before Anthropic.
+      let file: UploadFile | null = null;
+      if (maybe.file) {
+        const mt = String(maybe.file.media_type || "");
+        const okTypes = [
+          "image/jpeg",
+          "image/png",
+          "image/webp",
+          "application/pdf",
+        ];
+        const data = String(maybe.file.data || "");
+        if (!okTypes.includes(mt) || !data)
+          return new Response(
+            JSON.stringify({ error: "unsupported file type" }),
+            {
+              status: 415,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            },
+          );
+        if (data.length > 5_600_000)
+          return new Response(JSON.stringify({ error: "file too large" }), {
+            status: 413,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        // PDFs: page-count cap (a 4MB PDF can be hundreds of Haiku-vision
+        // pages; the client caps at 3.5MB but a raw JWT caller isn't bound
+        // by the client). Malformed base64 → Anthropic rejects downstream.
+        if (mt === "application/pdf") {
+          try {
+            const head = atob(data);
+            const pages = (head.match(/\/Type\s*\/Page[^s]/g) || []).length;
+            if (pages > 8)
+              return new Response(
+                JSON.stringify({ error: "PDF too long (max 8 pages)" }),
+                {
+                  status: 413,
+                  headers: {
+                    ...corsHeaders,
+                    "Content-Type": "application/json",
+                  },
+                },
+              );
+          } catch {
+            return new Response(JSON.stringify({ error: "bad file data" }), {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+        }
+        file = { media_type: mt, data };
+      }
       const cands = await fetchCandidates(sUrl, dbh, user.id);
       const pr = await parseBooking(
         Deno.env.get("ANTHROPIC_API_KEY")!,
         String(maybe.subject || ""),
         String(maybe.body || "").slice(0, 8000),
+        file,
       );
       if (!pr)
         return new Response(JSON.stringify({ error: "parse failed" }), {
           status: 502,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
-      fetch(`${sUrl}/rest/v1/llm_usage`, {
+      // Awaited: these rows ARE the 30/day meter — a dropped write would
+      // make the cap soft (same reasoning as the receipt counter).
+      await fetch(`${sUrl}/rest/v1/llm_usage`, {
         method: "POST",
         headers: dbh,
         body: JSON.stringify({
@@ -402,6 +624,7 @@ Deno.serve(async (req) => {
         {
           dry_run: true,
           parsed: pr.parsed,
+          leg_preview: normalizeLeg(pr.parsed),
           routedBy: routed.routedBy,
           trip: routed.trip?.name || null,
           candidates: cands.map((c) => c.name),
@@ -577,6 +800,8 @@ Deno.serve(async (req) => {
 
   // ── Apply ─────────────────────────────────────────────────────────────
   let applied = "logged";
+  let appliedLeg: any = null;
+  let boundarySide: "arrival" | "departure" | "" = "";
   if (
     parsed.kind === "hotel" &&
     parsed.hotel?.name &&
@@ -637,6 +862,70 @@ Deno.serve(async (req) => {
       body: JSON.stringify({ hotels_data: list }),
     });
     applied = upd.ok ? "hotel_booked" : "hotel_update_failed";
+  } else if (parsed.kind === "flight" || parsed.kind === "train") {
+    // ── Travel legs: any count, any date. Mid-trip legs are first-class;
+    // the frontend surfaces them on their itinerary day. Tickets dated
+    // outside the trip range still store (the ticket is ground truth).
+    const leg = normalizeLeg(parsed);
+    if (leg) {
+      const list: any[] = Array.isArray(trip.travel_data)
+        ? [...trip.travel_data]
+        : [];
+      const idx = list.findIndex((x) => legMatches(x, leg));
+      if (parsed.status === "cancelled") {
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], status: "cancelled" };
+          const upd = await fetch(
+            `${supabaseUrl}/rest/v1/trips?id=eq.${trip.id}`,
+            {
+              method: "PATCH",
+              headers: { ...db, Prefer: "return=representation" },
+              body: JSON.stringify({ travel_data: list }),
+            },
+          );
+          applied = upd.ok ? "leg_cancelled" : "leg_update_failed";
+        } else {
+          applied = "leg_cancellation_noted";
+        }
+      } else {
+        if (idx >= 0) {
+          // Reschedule/re-forward: merge, non-empty new values win.
+          const merged = { ...list[idx] };
+          for (const k of [
+            "carrier",
+            "number",
+            "date",
+            "depart_time",
+            "arrive_time",
+            "from",
+            "to",
+            "confirmation",
+            "class",
+          ])
+            if (leg[k]) merged[k] = leg[k];
+          merged.status = "booked";
+          list[idx] = merged;
+          appliedLeg = merged;
+          applied = "leg_updated";
+        } else {
+          list.push(leg);
+          appliedLeg = leg;
+          applied = "leg_booked";
+        }
+        const fill = boundaryFill(trip, appliedLeg, idx >= 0);
+        const upd = await fetch(
+          `${supabaseUrl}/rest/v1/trips?id=eq.${trip.id}`,
+          {
+            method: "PATCH",
+            headers: { ...db, Prefer: "return=representation" },
+            body: JSON.stringify({ travel_data: list, ...(fill || {}) }),
+          },
+        );
+        if (!upd.ok) applied = "leg_update_failed";
+        else if (fill)
+          boundarySide = fill.arrival_time ? "arrival" : "departure";
+      }
+    }
   }
 
   // feed row
@@ -652,6 +941,10 @@ Deno.serve(async (req) => {
       summary:
         (parsed.summary ||
           `forwarded a booking email${parsed.hotel?.name ? ` — ${parsed.hotel.name}` : ""}`) +
+        (appliedLeg?.date &&
+        (appliedLeg.date < trip.start_date || appliedLeg.date > trip.end_date)
+          ? " (dates outside trip)"
+          : "") +
         (routedBy !== "fallback" ? "" : " (routed to soonest trip)"),
     }),
   }).catch(() => {});
@@ -674,18 +967,49 @@ Deno.serve(async (req) => {
         heading: "Cancellation received",
         line: `We noted the cancellation on ${tripLabel}'s activity feed — no matching booked stay to update.`,
       };
-    if (applied === "hotel_update_failed")
+    if (applied === "hotel_update_failed" || applied === "leg_update_failed")
       return {
         heading: "We hit a snag saving that booking",
         line: `We read the booking fine but couldn't save it to ${tripLabel} just now. Forward it once more in a few minutes.`,
       };
-    if (
-      parsed.kind === "flight" &&
-      (parsed.flight?.number || parsed.flight?.confirmation)
-    )
+    if (applied === "leg_booked" || applied === "leg_updated") {
+      const l = appliedLeg;
+      const icon = l.kind === "flight" ? "✈️" : "🚆";
+      const label =
+        [l.carrier, l.number].filter(Boolean).join(" ") ||
+        (l.kind === "flight" ? "Your flight" : "Your train");
+      // Day N mention for mid-trip legs (boundary legs get the auto-fill
+      // sentence instead).
+      let daySuffix = "";
+      if (boundarySide) {
+        daySuffix = `, and your ${boundarySide} day now shows it`;
+      } else if (
+        l.date &&
+        l.date >= trip.start_date &&
+        l.date <= trip.end_date
+      ) {
+        const dayN =
+          Math.round(
+            (Date.parse(l.date) - Date.parse(trip.start_date)) / 86400000,
+          ) + 1;
+        daySuffix = ` — you'll see it on Day ${dayN}`;
+      }
       return {
-        heading: `✈️ Flight noted on ${esc(trip.name)}`,
-        line: `${esc(parsed.flight.carrier || "")} ${esc(parsed.flight.number || "")} is on the trip's activity feed. Flight bookings land in Travel &amp; Hotels soon.`,
+        heading: `${icon} ${esc(label)} is on your trip`,
+        line: `<b>${esc(l.from)} → ${esc(l.to)}</b>${l.date ? ` on ${esc(l.date)}` : ""}${l.depart_time ? `, departing ${esc(l.depart_time)}` : ""}${l.confirmation ? `, ref <b>${esc(l.confirmation)}</b>` : ""} — ${applied === "leg_updated" ? "updated on" : "saved to"} ${tripLabel}'s Travel &amp; Hotels${daySuffix}.`,
+      };
+    }
+    if (applied === "leg_cancelled") {
+      const l = parsed.kind === "flight" ? parsed.flight : parsed.train;
+      return {
+        heading: `Cancellation noted — ${esc([l?.carrier || l?.name || l?.operator, l?.number].filter(Boolean).join(" "))}`,
+        line: `That ${parsed.kind} is marked cancelled on ${tripLabel}.`,
+      };
+    }
+    if (applied === "leg_cancellation_noted")
+      return {
+        heading: "Cancellation received",
+        line: `We noted it on ${tripLabel}'s activity feed — no matching booked ${esc(parsed.kind)} to update.`,
       };
     return {
       heading: "We couldn't read that as a booking",

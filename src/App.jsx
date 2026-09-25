@@ -16,7 +16,7 @@ import {
   hotelStayRange,
   HOTEL_AFFILIATE_ENABLED,
 } from "./booking.js";
-import BoardView, { LogisticsTab } from "./components/BoardView.jsx";
+import BoardView, { LogisticsTab, LegRoute } from "./components/BoardView.jsx";
 import SetupForm from "./components/SetupForm.jsx";
 import {
   T,
@@ -4599,6 +4599,126 @@ function TransitionRow({
 }
 
 /* ─── ACTIVITY CARD ──────────────────────────────────────────────────── */
+/* ── P3: booked travel legs on day cards ──
+   A leg (trips.travel_data) whose date matches this day either badges a
+   matching transit activity or renders as a pinned strip. Derived at
+   render time — never written into activities, so day regenerates can't
+   touch it. */
+function transitMatchesLeg(act, leg) {
+  if (act.type !== "transit") return false;
+  const hay =
+    `${act.title || ""} ${act.service || ""} ${act.from_station || ""} ${act.to_station || ""}`.toLowerCase();
+  // Match on the city's first two words with word boundaries — a bare
+  // first-word substring turns "New York" into "new" and matches any
+  // "Newark"/"new" in the title, badging the wrong activity. Origin and
+  // destination must also be distinct phrases.
+  const phrase = (s) =>
+    String(s || "")
+      .replace(/\s*\([A-Z]{3}\)\s*/g, " ")
+      .trim()
+      .toLowerCase()
+      .split(/[\s,]+/)
+      .slice(0, 2)
+      .join(" ");
+  const found = (needle) =>
+    needle.length >= 3 &&
+    new RegExp(
+      `(^|[^a-z\\u00C0-\\u024F])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z\\u00C0-\\u024F]|$)`,
+    ).test(hay);
+  const f = phrase(leg.from);
+  const t = phrase(leg.to);
+  if (!f || !t || f === t) return false;
+  return found(f) && found(t);
+}
+
+function LegBookedBadge({ leg, compact = false }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        background: T.successLight,
+        border: `1px solid ${T.successBorder}`,
+        borderRadius: RADIUS.full,
+        padding: compact ? "1px 8px" : "2px 9px",
+        fontFamily: "Georgia,serif",
+        fontSize: 10.5,
+        color: T.success,
+        whiteSpace: "nowrap",
+      }}
+    >
+      ✓ Booked{leg.confirmation ? ` · ${leg.confirmation}` : ""}
+    </span>
+  );
+}
+
+// Pinned strip for a booked leg with no matching transit activity (e.g. a
+// mid-trip hop the itinerary didn't plan). Route-first, like the Travel
+// card rows.
+function DayLegStrip({ leg }) {
+  return (
+    <div style={{ padding: "0 20px", marginBottom: 8 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          background: T.chalk,
+          border: `1px solid ${T.sand}`,
+          borderRadius: RADIUS.lg,
+          padding: "10px 12px",
+          boxShadow: SHADOW.sm,
+        }}
+      >
+        <div
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            background: T.skyLight,
+            border: `1px solid ${T.skyBorder}`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 14,
+            flexShrink: 0,
+          }}
+        >
+          {leg.kind === "flight" ? "✈️" : "🚆"}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            <LegRoute from={leg.from} to={leg.to} fontSize={14} />
+          </div>
+          <div
+            style={{
+              fontFamily: "Georgia,serif",
+              fontSize: 11,
+              color: T.mist,
+              marginTop: 2,
+            }}
+          >
+            {[
+              [leg.carrier, leg.number].filter(Boolean).join(" "),
+              leg.depart_time ? `dep ${leg.depart_time}` : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </div>
+        </div>
+        <LegBookedBadge leg={leg} compact />
+      </div>
+    </div>
+  );
+}
+
 function ActivityCard({
   activity,
   city,
@@ -4611,6 +4731,7 @@ function ActivityCard({
   onAskTrippy,
   hotelRatesUrl = null,
   hotelBooking = null,
+  bookedLeg = null,
 }) {
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -4726,6 +4847,7 @@ function ActivityCard({
               >
                 {activity.service}
               </span>
+              {bookedLeg && <LegBookedBadge leg={bookedLeg} compact />}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
               {activity.transit_duration && (
@@ -5202,6 +5324,11 @@ function ActivityCard({
                 }}
               >
                 💬 {activity.note}
+              </div>
+            )}
+            {activity.type === "transit" && bookedLeg && (
+              <div style={{ marginTop: 6 }}>
+                <LegBookedBadge leg={bookedLeg} />
               </div>
             )}
             {activity.type === "hotel" && hotelBooking && (
@@ -6390,9 +6517,31 @@ function DaySection({
   destArrivalHHMM = null,
   onAddGemToItinerary,
   onDismissGem,
+  dayLegs = [],
 }) {
   const total = day.activities.length;
   const [showDesc, setShowDesc] = useState(false);
+  // P3: pair each booked leg with at most one matching transit activity
+  // (badge mode); unmatched legs render as pinned strips at the top.
+  const legAssignments = (() => {
+    if (!dayLegs.length) return { byActId: new Map(), unmatched: [] };
+    const used = new Set();
+    const byActId = new Map();
+    for (const act of day.activities || []) {
+      if (act.type !== "transit") continue;
+      const leg = dayLegs.find(
+        (l) => !used.has(l.id || l) && transitMatchesLeg(act, l),
+      );
+      if (leg) {
+        used.add(leg.id || leg);
+        byActId.set(act.id, leg);
+      }
+    }
+    return {
+      byActId,
+      unmatched: dayLegs.filter((l) => !used.has(l.id || l)),
+    };
+  })();
 
   const dayMapsUrl =
     day.activities.length > 0
@@ -6607,6 +6756,11 @@ function DaySection({
           />
         )}
 
+      {/* Booked legs with no matching transit activity (P3) */}
+      {legAssignments.unmatched.map((l, i) => (
+        <DayLegStrip key={l.id || `leg-${i}`} leg={l} />
+      ))}
+
       {/* Activities */}
       {(() => {
         const seenPkgs = new Set();
@@ -6659,6 +6813,7 @@ function DaySection({
                 onAskTrippy={onAskTrippy}
                 hotelRatesUrl={act.type === "hotel" ? hotelRatesUrl : null}
                 hotelBooking={act.type === "hotel" ? hotelBooking : null}
+                bookedLeg={legAssignments.byActId.get(act.id) || null}
               />
               {!lastAct && !samePackageAsNext && (
                 <TransitionRow
@@ -9385,6 +9540,27 @@ export default function App({
       .update({ hotels_data: data.length ? data : null })
       .eq("id", trip.id);
     setTrip((t) => ({ ...t, hotels_data: data.length ? data : null }));
+  };
+
+  // Travel legs (P3): booked flights/trains in trips.travel_data. extraPatch
+  // carries the boundary auto-fill (arrival/departure fields) so both land
+  // in one write. Returns false on failure so callers can surface it.
+  const saveTravelLegs = async (legs, extraPatch = {}) => {
+    const payload = {
+      travel_data: legs && legs.length ? legs : null,
+      ...extraPatch,
+    };
+    const { data, error } = await supabase
+      .from("trips")
+      .update(payload)
+      .eq("id", trip.id)
+      .select("id")
+      .maybeSingle();
+    // RLS matching zero rows returns {data:null, error:null} — that's a
+    // silent no-op, not a success; don't mirror a phantom write into state.
+    if (error || !data) return false;
+    setTrip((t) => ({ ...t, ...payload }));
+    return true;
   };
 
   const applyHotelsToItinerary = async (hotels) => {
@@ -14727,6 +14903,21 @@ export default function App({
                                 dayIndex={i}
                                 hotelRatesUrl={dayHotelRatesUrl}
                                 hotelBooking={dayHotelBooking}
+                                dayLegs={(Array.isArray(trip.travel_data)
+                                  ? trip.travel_data
+                                  : []
+                                )
+                                  .filter(
+                                    (l) =>
+                                      l.status !== "cancelled" &&
+                                      l.date &&
+                                      l.date === day.date,
+                                  )
+                                  .sort((a, b) =>
+                                    (a.depart_time || "").localeCompare(
+                                      b.depart_time || "",
+                                    ),
+                                  )}
                                 onCollapse={() =>
                                   setCollapsedDays((prev) =>
                                     new Set(prev).add(day.id),
@@ -15043,6 +15234,7 @@ export default function App({
                         onSaveFlights={saveLogisticsFlights}
                         onSaveHotels={saveLogisticsHotels}
                         onApplyHotels={applyHotelsToItinerary}
+                        onSaveTravelLegs={saveTravelLegs}
                         onSaveNotes={async (text) => {
                           setTrip((t) => ({ ...t, board_notes: text }));
                           await supabase
