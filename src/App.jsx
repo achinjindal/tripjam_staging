@@ -3061,9 +3061,13 @@ function BrainstormView({
                       marginTop: 2,
                     }}
                   >
-                    {generating || !items?.length
+                    {generating
                       ? "Generating your routes…"
-                      : "Pick a route, then build your itinerary"}
+                      : loadingItems || items === null
+                        ? "Loading your plans…"
+                        : !items?.length
+                          ? "Let's find you some routes"
+                          : "Pick a route, then build your itinerary"}
                   </div>
                 )}
               </div>
@@ -3420,91 +3424,122 @@ function BrainstormView({
                   </div>
                 </div>
               )}
-            {/* Skeleton route cards — shown before first route arrives */}
-            {(generating || loadingItems || items === null) &&
+            {/* Quiet loader — routes being FETCHED from the DB, not generated.
+                Showing the generation theater here made users think their
+                saved routes were being regenerated (prod report 2026-09-26). */}
+            {!generating &&
+              (loadingItems || items === null) &&
               tier1Items.length === 0 && (
-                <div
-                  style={{ display: "flex", flexDirection: "column", gap: 10 }}
-                >
-                  <RouteDraftingCard destinations={destinations} />
-                  {[0, 1, 2, 3].map((i) => (
+                <div style={{ textAlign: "center", padding: "48px 20px" }}>
+                  <div
+                    style={{
+                      fontFamily: "Georgia,serif",
+                      fontSize: 13,
+                      color: T.mist,
+                      marginBottom: 14,
+                    }}
+                  >
+                    Loading your plans…
+                  </div>
+                  {[0, 1].map((i) => (
                     <div
                       key={i}
                       style={{
+                        height: 64,
                         background: T.chalk,
+                        border: `1.5px solid ${T.sand}`,
                         borderRadius: RADIUS.lg,
-                        padding: "14px 16px",
-                        border: `2px solid ${T.sand}`,
-                        animation: `shimmer 1.5s ease-in-out ${i * 0.18}s infinite`,
+                        marginBottom: 8,
+                        animation: `shimmer 1.5s ease-in-out ${i * 0.2}s infinite`,
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            {/* Generation theater — only while RG is actually running */}
+            {generating && tier1Items.length === 0 && (
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: 10 }}
+              >
+                <RouteDraftingCard destinations={destinations} />
+                {[0, 1, 2, 3].map((i) => (
+                  <div
+                    key={i}
+                    style={{
+                      background: T.chalk,
+                      borderRadius: RADIUS.lg,
+                      padding: "14px 16px",
+                      border: `2px solid ${T.sand}`,
+                      animation: `shimmer 1.5s ease-in-out ${i * 0.18}s infinite`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 10,
+                        marginBottom: 10,
+                        alignItems: "flex-start",
                       }}
                     >
                       <div
                         style={{
-                          display: "flex",
-                          gap: 10,
-                          marginBottom: 10,
-                          alignItems: "flex-start",
+                          width: 26,
+                          height: 26,
+                          borderRadius: "50%",
+                          background: T.sand,
+                          flexShrink: 0,
                         }}
-                      >
+                      />
+                      <div style={{ flex: 1 }}>
                         <div
                           style={{
-                            width: 26,
-                            height: 26,
-                            borderRadius: "50%",
+                            height: 14,
+                            width: "55%",
                             background: T.sand,
-                            flexShrink: 0,
+                            borderRadius: 4,
+                            marginBottom: 7,
                           }}
                         />
-                        <div style={{ flex: 1 }}>
-                          <div
-                            style={{
-                              height: 14,
-                              width: "55%",
-                              background: T.sand,
-                              borderRadius: 4,
-                              marginBottom: 7,
-                            }}
-                          />
-                          <div
-                            style={{
-                              height: 10,
-                              width: "35%",
-                              background: T.sand,
-                              borderRadius: 4,
-                            }}
-                          />
-                        </div>
+                        <div
+                          style={{
+                            height: 10,
+                            width: "35%",
+                            background: T.sand,
+                            borderRadius: 4,
+                          }}
+                        />
                       </div>
-                      <div
-                        style={{
-                          height: 10,
-                          width: "100%",
-                          background: T.sand,
-                          borderRadius: 4,
-                          marginBottom: 5,
-                        }}
-                      />
-                      <div
-                        style={{
-                          height: 10,
-                          width: "80%",
-                          background: T.sand,
-                          borderRadius: 4,
-                          marginBottom: 5,
-                        }}
-                      />
-                      <div
-                        style={{
-                          height: 10,
-                          width: "60%",
-                          background: T.sand,
-                          borderRadius: 4,
-                        }}
-                      />
                     </div>
-                  ))}
-                </div>
-              )}
+                    <div
+                      style={{
+                        height: 10,
+                        width: "100%",
+                        background: T.sand,
+                        borderRadius: 4,
+                        marginBottom: 5,
+                      }}
+                    />
+                    <div
+                      style={{
+                        height: 10,
+                        width: "80%",
+                        background: T.sand,
+                        borderRadius: 4,
+                        marginBottom: 5,
+                      }}
+                    />
+                    <div
+                      style={{
+                        height: 10,
+                        width: "60%",
+                        background: T.sand,
+                        borderRadius: 4,
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {tier1Items.map((item, idx) => (
                 <div
@@ -9190,8 +9225,12 @@ export default function App({
   //   "magazine"    — Magazine grid (city deep-dives etc)
   // Desktop pre-trip: separate "inspirations" top tab. Mobile pre-trip: bottom nav
   // uses the "magazine" key (Inspirations label) with sub-tabs inside.
+  // Drafts (post-RG, no itinerary yet) open straight onto their saved routes —
+  // landing on Inspirations/Magazine read as "my routes are gone". The create
+  // flow and Explore-plans set this explicitly, so the default only governs
+  // direct opens.
   const [pretripTab, setPretripTab] = useState(() =>
-    isDesktop ? "inspirations" : "magazine",
+    isDraft ? "brainstorm" : isDesktop ? "inspirations" : "magazine",
   );
   // Sub-tab inside the "magazine area" — used on mobile (both pre- and post-trip)
   // and on desktop post-trip, where Inspirations and Magazine share one top-tab

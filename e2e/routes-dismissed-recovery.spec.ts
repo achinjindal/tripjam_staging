@@ -173,14 +173,9 @@ test.describe.serial("All-routes-dismissed recovery", () => {
     await page.goto(`/trip/${tripId}`);
     await page.waitForTimeout(2500);
 
-    // Desktop shell defaults drafts to Inspirations — go to Route.
-    const routeTab = page
-      .locator("button", { hasText: /^🛣️?\s*Route$/ })
-      .first();
-    if (await routeTab.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await routeTab.click();
-      await page.waitForTimeout(800);
-    }
+    // NO Route-tab click here — drafts must open ON the Route tab now
+    // (2026-09-26 fix: pretripTab defaults to "brainstorm" for drafts).
+    // If that default regresses, this assertion fails on the wrong tab.
 
     // The dead-end blank panel is gone — recovery state renders instead.
     await expect(
@@ -225,14 +220,7 @@ test.describe.serial("All-routes-dismissed recovery", () => {
     await login(page);
     await page.goto(`/trip/${tier2OnlyTripId}`);
     await page.waitForTimeout(2500);
-
-    const routeTab = page
-      .locator("button", { hasText: /^🛣️?\s*Route$/ })
-      .first();
-    if (await routeTab.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await routeTab.click();
-      await page.waitForTimeout(800);
-    }
+    // Drafts open on the Route tab by default — no tab click (see above).
 
     // items is non-empty (one tier-2 row) but there are no routes: the old
     // condition (items.length === 0) hid the CTA and rendered nothing.
