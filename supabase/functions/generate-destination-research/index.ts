@@ -45,7 +45,7 @@ const MODEL = "claude-haiku-4-5-20251001";
 // Haiku cold call comes back with zero inspirations we retry once with Sonnet
 // 4.6 — the model this feature originally shipped on — which reliably finds
 // content. Only fires on the ~10% of cold calls Haiku bails on.
-const ESCALATION_MODEL = "claude-sonnet-4-6";
+const ESCALATION_MODEL = "claude-sonnet-5";
 // Min credits required to attempt a cold call. Sized to comfortably cover
 // the worst case (1 tag-extract Haiku + 1 main Haiku with 4 web searches).
 const MIN_CREDITS = 8;
@@ -220,6 +220,11 @@ async function callResearchLLM(
     body: JSON.stringify({
       model,
       max_tokens: 4000,
+      // Claude 5 family: thinking defaults ON and would eat the budget;
+      // this call wants structured JSON + web search, not deliberation.
+      ...(model.startsWith("claude-sonnet-5")
+        ? { thinking: { type: "disabled" } }
+        : {}),
       tools: [
         { type: "web_search_20250305", name: "web_search", max_uses: maxUses },
       ],

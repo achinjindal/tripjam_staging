@@ -10,7 +10,7 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 
 - **Frontend:** React 18 (JSX) + Vite 8, single-page app, no router library (History API for URL routing)
 - **Backend:** Supabase (Postgres, Auth, Edge Functions, RLS, Realtime)
-- **AI:** Anthropic Claude API — Sonnet 4.6 for RG/IG/chat, Haiku 4.5 for todos/expenses/deep-dives/preferences/inspirations
+- **AI:** Anthropic Claude API — Sonnet 5 for RG/IG (+ research escalation), Haiku 4.5 for chat/todos/expenses/deep-dives/preferences/inspirations/booking-parse. Model env overrides: RG_MODEL / IG_MODEL / CHAT_MODEL (CHAT_MODEL is set to Haiku on both envs). Claude 5 family calls must send thinking:{type:"disabled"} and no temperature.
 - **Maps:** Leaflet + react-leaflet, Photon/Nominatim geocoding (with trip destination enrichment)
 - **Photos:** Wikipedia/Wikimedia Commons (free, serialized queue 2 concurrent / 400ms)
 - **Places:** Google Places API (autocomplete, hotel search with lodging type)

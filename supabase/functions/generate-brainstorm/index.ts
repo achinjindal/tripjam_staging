@@ -185,14 +185,23 @@ serve(async (req) => {
         : "";
     const finalUserMessage = userMessage + stylesBlock;
 
+    // Model resolved BEFORE the request body — previously the body hardcoded
+    // sonnet-4-6 and RG_MODEL only ever routed the Gemini canary.
+    const rgModel = Deno.env.get("RG_MODEL") || "claude-sonnet-5";
     const requestBody = JSON.stringify({
-      model: "claude-sonnet-4-6",
+      model: rgModel,
       // 4 routes + 15-20 tier-2 experiences runs ~3.8-4.4k tokens on 6-day
       // multi-city trips — the old 4000 cap truncated mid-JSON on most runs
       // (llm_usage showed output_tokens pinned at exactly 4000), which read
       // as "RG randomly fails, re-run until it works".
       max_tokens: 9000,
-      temperature: 0.7,
+      // Claude 5 family: temperature is rejected and thinking defaults ON
+      // (which would eat the max_tokens budget mid-JSON) — disable it.
+      ...(rgModel.startsWith("claude-sonnet-5") ||
+      rgModel.startsWith("claude-fable") ||
+      rgModel.startsWith("claude-opus-5")
+        ? { thinking: { type: "disabled" } }
+        : { temperature: 0.7 }),
       stream: true,
       // The system prompt is fully static, so cache it as a stable prefix.
       system: [
@@ -209,7 +218,6 @@ serve(async (req) => {
     // Unset (prod) → Sonnet 4.6 (the Anthropic path below, unchanged). Set to a
     // "gemini-*" id (staging) → Gemini streaming path (canary A/B). Same code
     // ships to both; behaviour differs only by the env var.
-    const rgModel = Deno.env.get("RG_MODEL") || "claude-sonnet-4-6";
     if (rgModel.startsWith("gemini")) {
       const gResp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${rgModel}:streamGenerateContent?alt=sse`,
