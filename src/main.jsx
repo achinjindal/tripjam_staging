@@ -334,6 +334,50 @@ function Root() {
     );
   }
 
+  // Deep link to a trip while its row is still loading: show a quiet
+  // interstitial instead of flashing the Home list (screen stays "home"
+  // until loadTrip resolves; a failed load pushes "/" and Home renders).
+  if (
+    screen === "home" &&
+    !activeTrip &&
+    (route.page === "trip" || route.page === "edit")
+  ) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 14,
+          background: "#FAF6F0",
+          fontFamily: "Georgia,serif",
+        }}
+      >
+        <style>{`@keyframes tjPulse{0%,100%{opacity:0.45;}50%{opacity:0.9;}}`}</style>
+        <div
+          style={{
+            fontFamily: "'DM Serif Display',Georgia,serif",
+            fontSize: 26,
+            color: "#0F1923",
+          }}
+        >
+          TripJam
+        </div>
+        <div
+          style={{
+            fontSize: 13,
+            color: "#587284",
+            animation: "tjPulse 1.4s ease-in-out infinite",
+          }}
+        >
+          Opening trip…
+        </div>
+      </div>
+    );
+  }
+
   if (screen === "home") {
     return (
       <>

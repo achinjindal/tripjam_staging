@@ -1241,6 +1241,26 @@ const BRAINSTORM_CATEGORY_ICONS = {
   "Day Trip": "🚌",
 };
 
+// Amber dot on the members affordance — "share your travel style" nudge,
+// demoted from an auto-opened sheet to this passive badge (sheet-parade fix).
+function StyleBadgeDot() {
+  return (
+    <span
+      title="Share your travel style"
+      style={{
+        position: "absolute",
+        top: -2,
+        right: -2,
+        width: 9,
+        height: 9,
+        borderRadius: "50%",
+        background: T.gold,
+        border: `1.5px solid ${T.chalk}`,
+      }}
+    />
+  );
+}
+
 // ── Place Peek (RG) helpers ─────────────────────────────────────────────────
 // Linkify the first mention of each peekable town inside a day-line segment.
 // `remaining` is a Set created fresh per card render — towns are removed as
@@ -2099,6 +2119,7 @@ function BrainstormView({
   onBack,
   onEditForm = null,
   onInvite = null,
+  styleBadge = false,
   members = [],
   preferences = [],
   onOpenChat = null,
@@ -3090,8 +3111,10 @@ function BrainstormView({
                     display: "inline-flex",
                     alignItems: "center",
                     gap: 6,
+                    position: "relative",
                   }}
                 >
+                  {styleBadge && <StyleBadgeDot />}
                   {members.length > 1 ? (
                     <>
                       <AvatarStack
@@ -8246,6 +8269,7 @@ export default function App({
   }, [members]);
   // Phase 5: per-traveller preferences ("Your travel style").
   const [preferences, setPreferences] = useState([]);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [showPreferences, setShowPreferences] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false); // WS6 join briefing
   const [showMembers, setShowMembers] = useState(false);
@@ -8285,15 +8309,9 @@ export default function App({
       return;
     }
     // WS6: first open after accepting an invite → one-time welcome briefing.
-    // Also pre-marks the style nudge so the two sheets don't stack.
     try {
       if (localStorage.getItem(`tripjam_just_joined_${tripId}`)) {
         localStorage.removeItem(`tripjam_just_joined_${tripId}`);
-        if (session?.user?.id)
-          localStorage.setItem(
-            `tripjam_prefs_nudged_${tripId}_${session.user.id}`,
-            "1",
-          );
         setShowWelcome(true);
       }
     } catch {
@@ -8305,7 +8323,12 @@ export default function App({
     // bell badge (they didn't happen "while away").
     tripOpenedAtRef.current = Date.now();
     fetchMembers(tripId).then((list) => !cancelled && setMembers(list));
-    fetchPreferences(tripId).then((list) => !cancelled && setPreferences(list));
+    setPrefsLoaded(false);
+    fetchPreferences(tripId).then((list) => {
+      if (cancelled) return;
+      setPreferences(list);
+      setPrefsLoaded(true);
+    });
     fetchPolls(tripId).then((list) => !cancelled && setPolls(list));
     fetchActivity(tripId).then((list) => !cancelled && setActivity(list));
     if (session?.user?.id)
@@ -8319,35 +8342,19 @@ export default function App({
   // A trip is "shared" once it has more than one member. Only then do we show
   // the pool pill / Trip Credits sheet — solo trips behave exactly as before.
   const isSharedTrip = INVITE_ENABLED && members.length > 1;
-  // Phase 5: gentle one-time nudge to share your travel style once a trip is
-  // shared and you haven't set yours. Guarded by localStorage so it shows once
-  // per (trip, user); the sheet is skippable (close = decline).
-  useEffect(() => {
-    if (!isSharedTrip || !trip?.id || !session?.user?.id) return;
-    // One auto-sheet at a time: welcome briefing and while-away outrank the
-    // style nudge. Deferring WITHOUT consuming the localStorage guard means
-    // the nudge simply retries when the higher-priority sheet closes.
-    if (showWelcome || showWhileAway) return;
-    const key = `tripjam_prefs_nudged_${trip.id}_${session.user.id}`;
-    if (localStorage.getItem(key)) return;
-    let cancelled = false;
-    fetchPreferences(trip.id).then((list) => {
-      if (cancelled) return;
-      if (showWelcome || showWhileAway) return; // re-check after async fetch
-      const hasMine =
-        list.some((p) => p.user_id === session.user.id && hasStyle(p)) ||
-        // The owner's setup-form notes already count as their shared style.
-        (session.user.id === (trip?.owner_id || trip?.created_by) &&
-          (trip?.notes || "").trim());
-      if (!hasMine) {
-        localStorage.setItem(key, "1");
-        setShowPreferences(true);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [isSharedTrip, trip?.id, showWelcome, showWhileAway]);
+  // Style nudge, demoted from auto-sheet to a passive badge (sheet-parade
+  // fix): an amber dot on the members affordance until you've shared your
+  // style. MembersSheet's "Share what you want from this trip" row is the
+  // entry point — no more auto-opened PreferencesSheet on trip open.
+  const needsStyleBadge =
+    isSharedTrip &&
+    !!session?.user?.id &&
+    prefsLoaded && // wait for the fetch — no flicker before load
+    !preferences.some((p) => p.user_id === session.user.id && hasStyle(p)) &&
+    !(
+      session.user.id === (trip?.owner_id || trip?.created_by) &&
+      (trip?.notes || "").trim()
+    );
   // Phase 3: unseen changes by others (drives the bell badge + while-away sheet).
   const selfId = session?.user?.id;
   const unseen = useMemo(
@@ -8403,10 +8410,13 @@ export default function App({
   useEffect(() => {
     if (!isSharedTrip || !trip?.id) return;
     if (whileAwayShownFor.current === trip.id) return;
-    // One auto-sheet at a time: the welcome briefing outranks while-away (it
-    // already summarizes trip state for a fresh joiner). Deferring instead of
-    // consuming the ref lets this fire when the welcome sheet closes.
-    if (showWelcome) return;
+    // Merged sheets: the welcome briefing ABSORBS the away digest (it renders
+    // awayUnseen bullets itself), so seeing the briefing consumes this trigger
+    // — no second sheet chained after it.
+    if (showWelcome) {
+      whileAwayShownFor.current = trip.id;
+      return;
+    }
     if (awayUnseen.length > 0) {
       whileAwayShownFor.current = trip.id;
       setShowWhileAway(true);
@@ -8440,8 +8450,32 @@ export default function App({
   const [igGenerating, setIgGenerating] = useState(false); // true while IG is in flight (Magazine shown instead of generating screen)
   const [igCompletedInPlace, setIgCompletedInPlace] = useState(false); // IG finished while the user stayed on the pre-trip Magazine
 
+  const daysCacheHitRef = useRef(false);
+  const daysRetryRef = useRef(null);
+  const [daysLoadSlow, setDaysLoadSlow] = useState(false);
   useEffect(() => {
     if (initialScreen === "itinerary" && initialTrip?.id) {
+      // Cache-first hydration: the whole itinerary usually sits in
+      // localStorage from the last visit — paint it immediately and let the
+      // network response reconcile (setDays below overwrites unconditionally).
+      // Before this, the cache was only an error fallback and every open
+      // blocked on the network behind "Loading itinerary…".
+      let cacheHit = false;
+      try {
+        const cached = localStorage.getItem(`tripjam_days_${initialTrip.id}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setDays(parsed);
+            setLoading(false);
+            cacheHit = true;
+            setTimeout(() => preloadDay(0), 100);
+          }
+        }
+      } catch {
+        /* corrupt cache/private mode — network path below */
+      }
+      daysCacheHitRef.current = cacheHit;
       const processDays = (data) => {
         const seenPhotos = new Set();
         const allDays = (data || []).map((d) => {
@@ -8475,55 +8509,72 @@ export default function App({
           return true;
         });
       };
-      supabase
-        .from("days")
-        .select("*, activities(*)")
-        .eq("trip_id", initialTrip.id)
-        .order("position")
-        .then(async ({ data, error }) => {
-          if (data?.length) {
-            const deduped = processDays(data);
-            setDays(deduped);
-            // Resume any unfinished photo backfill for this trip (once per open)
-            if (photoSweepTripRef.current !== initialTrip.id) {
-              photoSweepTripRef.current = initialTrip.id;
-              setTimeout(() => sweepTripPhotos(deduped, initialTrip.id), 2500);
-            }
-            // Persist any newly-generated gem IDs (fire-and-forget; idempotent)
-            for (let i = 0; i < deduped.length; i++) {
-              const orig = data[i];
-              const next = deduped[i];
-              const origNeedsBackfill =
-                Array.isArray(orig?.wishlist) &&
-                orig.wishlist.some((w) => !w.id);
-              if (origNeedsBackfill) {
-                supabase
-                  .from("days")
-                  .update({ wishlist: next.wishlist })
-                  .eq("id", next.id)
-                  .then(() => {});
+      // First-open (no cache) hang guard: paused Supabase / ISP DNS hijack
+      // leave the query pending forever with no error. After 8s surface a
+      // hint + Retry in the skeleton instead of an indefinite spinner.
+      const doFetch = () => {
+        setDaysLoadSlow(false);
+        const slowTimer = daysCacheHitRef.current
+          ? null
+          : setTimeout(() => setDaysLoadSlow(true), 8000);
+        supabase
+          .from("days")
+          .select("*, activities(*)")
+          .eq("trip_id", initialTrip.id)
+          .order("position")
+          .then(async ({ data, error }) => {
+            if (slowTimer) clearTimeout(slowTimer);
+            setDaysLoadSlow(false);
+            if (data?.length) {
+              const deduped = processDays(data);
+              setDays(deduped);
+              // Resume any unfinished photo backfill for this trip (once per open)
+              if (photoSweepTripRef.current !== initialTrip.id) {
+                photoSweepTripRef.current = initialTrip.id;
+                setTimeout(
+                  () => sweepTripPhotos(deduped, initialTrip.id),
+                  2500,
+                );
               }
+              // Persist any newly-generated gem IDs (fire-and-forget; idempotent)
+              for (let i = 0; i < deduped.length; i++) {
+                const orig = data[i];
+                const next = deduped[i];
+                const origNeedsBackfill =
+                  Array.isArray(orig?.wishlist) &&
+                  orig.wishlist.some((w) => !w.id);
+                if (origNeedsBackfill) {
+                  supabase
+                    .from("days")
+                    .update({ wishlist: next.wishlist })
+                    .eq("id", next.id)
+                    .then(() => {});
+                }
+              }
+              // Cache for offline viewing
+              try {
+                localStorage.setItem(
+                  `tripjam_days_${initialTrip.id}`,
+                  JSON.stringify(deduped),
+                );
+              } catch {}
+            } else if (!daysCacheHitRef.current && (error || !data?.length)) {
+              // Offline fallback: load from localStorage (cache-hit opens
+              // already painted from it)
+              try {
+                const cached = localStorage.getItem(
+                  `tripjam_days_${initialTrip.id}`,
+                );
+                if (cached) setDays(JSON.parse(cached));
+              } catch {}
             }
-            // Cache for offline viewing
-            try {
-              localStorage.setItem(
-                `tripjam_days_${initialTrip.id}`,
-                JSON.stringify(deduped),
-              );
-            } catch {}
-          } else if (error || !data?.length) {
-            // Offline fallback: load from localStorage
-            try {
-              const cached = localStorage.getItem(
-                `tripjam_days_${initialTrip.id}`,
-              );
-              if (cached) setDays(JSON.parse(cached));
-            } catch {}
-          }
-          setLoading(false);
-          // Pre-load Day 1 for existing trips
-          setTimeout(() => preloadDay(0), 100);
-        });
+            setLoading(false);
+            // Pre-load Day 1 for existing trips (cache-hit opens already did)
+            if (!daysCacheHitRef.current) setTimeout(() => preloadDay(0), 100);
+          });
+      };
+      daysRetryRef.current = doFetch;
+      doFetch();
     }
   }, []);
 
@@ -13753,9 +13804,10 @@ export default function App({
               {INVITE_ENABLED && (
                 <button
                   onClick={() => setShowMembers(true)}
-                  style={tripContextBtnStyle}
+                  style={{ ...tripContextBtnStyle, position: "relative" }}
                   title="Trip members"
                 >
+                  {needsStyleBadge && <StyleBadgeDot />}
                   {members.length > 1 ? (
                     <span
                       style={{
@@ -13921,6 +13973,7 @@ export default function App({
                       : null
                   }
                   onInvite={editingTrip?.id ? () => setShowMembers(true) : null}
+                  styleBadge={needsStyleBadge}
                   members={members}
                   preferences={preferences}
                   onAskTrippy={(title) => {
@@ -14934,15 +14987,75 @@ export default function App({
             <div
               style={{
                 flex: 1,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#8BA5BB",
-                fontFamily: "Georgia,serif",
-                fontSize: 14,
+                overflowY: "hidden",
+                padding: "18px 16px",
+                maxWidth: 560,
+                width: "100%",
+                margin: "0 auto",
               }}
             >
-              Loading itinerary…
+              <div
+                style={{
+                  fontFamily: "Georgia,serif",
+                  fontSize: 12,
+                  color: T.mist,
+                  marginBottom: 12,
+                }}
+              >
+                Loading your itinerary…
+              </div>
+              {[0, 1, 2].map((i) => (
+                <div key={i} style={{ marginBottom: 18 }}>
+                  <div
+                    style={{
+                      height: 12,
+                      width: 90,
+                      background: T.sand,
+                      borderRadius: 4,
+                      marginBottom: 8,
+                      animation: `shimmer 1.5s ease-in-out ${i * 0.15}s infinite`,
+                    }}
+                  />
+                  <div
+                    style={{
+                      height: 110,
+                      background: T.chalk,
+                      border: `1.5px solid ${T.sand}`,
+                      borderRadius: RADIUS.lg,
+                      animation: `shimmer 1.5s ease-in-out ${i * 0.15 + 0.1}s infinite`,
+                    }}
+                  />
+                </div>
+              ))}
+              {daysLoadSlow && (
+                <div
+                  style={{
+                    textAlign: "center",
+                    fontFamily: "Georgia,serif",
+                    fontSize: 12.5,
+                    color: T.mist,
+                    marginTop: 4,
+                  }}
+                >
+                  Taking longer than usual — check your connection.
+                  <button
+                    onClick={() => daysRetryRef.current?.()}
+                    style={{
+                      marginLeft: 8,
+                      background: "transparent",
+                      border: `1.5px solid ${T.skyBorder}`,
+                      borderRadius: RADIUS.md,
+                      color: T.ocean,
+                      padding: "4px 12px",
+                      fontFamily: "Georgia,serif",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
             </div>
           )}
           {screen === "itinerary" && !loading && (
@@ -15087,8 +15200,10 @@ export default function App({
                             display: "inline-flex",
                             alignItems: "center",
                             gap: 6,
+                            position: "relative",
                           }}
                         >
+                          {needsStyleBadge && <StyleBadgeDot />}
                           {members.length > 1 ? (
                             <>
                               <AvatarStack
@@ -19137,6 +19252,11 @@ export default function App({
             polls={polls}
             members={members}
             selfId={session?.user?.id || null}
+            awayUnseen={awayUnseen}
+            onReviewActivity={() => {
+              setShowWelcome(false);
+              openFeed();
+            }}
             onShareStyle={() => {
               setShowWelcome(false);
               setShowPreferences(true);
