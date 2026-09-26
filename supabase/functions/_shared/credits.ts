@@ -50,19 +50,28 @@ export const EXTERNAL_API_USER_VALUE = 0.01;
 export const CACHE_WRITE_MULTIPLIER = 1.25;
 export const CACHE_READ_MULTIPLIER = 0.1;
 
+// Anthropic web_search server tool: $10 per 1,000 searches, billed on top
+// of token costs. Omitting this undercharged every Inspirations call by
+// ~40% of its true cost.
+export const WEB_SEARCH_COST_USD = 0.01;
+
 export function computeLLMCost(
   model: string,
   inputTokens: number,
   outputTokens: number,
   cacheCreationTokens = 0,
   cacheReadTokens = 0,
+  webSearchCount = 0,
 ): number {
   const r = RATES[model] || RATES["claude-sonnet-4-6"];
   const inputUsd =
     inputTokens * r.input +
     cacheCreationTokens * r.input * CACHE_WRITE_MULTIPLIER +
     cacheReadTokens * r.input * CACHE_READ_MULTIPLIER;
-  return (inputUsd + outputTokens * r.output) / 1_000_000;
+  return (
+    (inputUsd + outputTokens * r.output) / 1_000_000 +
+    webSearchCount * WEB_SEARCH_COST_USD
+  );
 }
 
 // Round up to nearest 0.01 (whole cent of LLM spend). No `Math.max(1, ...)`
@@ -316,6 +325,7 @@ export async function deductCredits(args: {
   outputTokens: number;
   cacheCreationTokens?: number;
   cacheReadTokens?: number;
+  webSearchCount?: number;
   functionName: string;
   tripId?: string | null;
   // Phase 2.5: which wallet pays, as resolved by resolveAndGate. Omit → 'auto'
@@ -330,6 +340,7 @@ export async function deductCredits(args: {
     args.outputTokens,
     cacheCreationTokens,
     cacheReadTokens,
+    args.webSearchCount ?? 0,
   );
   const credits = costToCredits(usd);
   if (credits <= 0) return;

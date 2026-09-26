@@ -25,6 +25,7 @@ import {
   llmKillSwitch,
   resolveAndGate,
   deductCredits,
+  runInBackground,
 } from "../_shared/credits.ts";
 
 const corsHeaders = {
@@ -686,27 +687,34 @@ serve(async (req) => {
     }
 
     // Deduct credits — Haiku (tag-extract + main) always; Sonnet on escalation.
-    // Web search cost is absorbed in the input_tokens bill from Anthropic
-    // (server-side tool call) so costToCredits() captures it implicitly.
-    deductCredits({
-      userId: user.id,
-      model: MODEL,
-      inputTokens: haiku.inputTokens + tagResult.inputTokens,
-      outputTokens: haiku.outputTokens + tagResult.outputTokens,
-      functionName: "generate-destination-research",
-      tripId,
-      source,
-    }).catch(() => {});
-    if (sonnet && sonnet.ok) {
+    // Web search is billed by Anthropic SEPARATELY from tokens ($10/1k
+    // requests) — the old comment claiming input_tokens "absorbs" it was
+    // wrong and undercharged every searched call by ~$0.01/search.
+    runInBackground(
       deductCredits({
         userId: user.id,
-        model: ESCALATION_MODEL,
-        inputTokens: sonnet.inputTokens,
-        outputTokens: sonnet.outputTokens,
-        functionName: "generate-destination-research:escalation",
+        model: MODEL,
+        inputTokens: haiku.inputTokens + tagResult.inputTokens,
+        outputTokens: haiku.outputTokens + tagResult.outputTokens,
+        webSearchCount: haiku.webSearchCount,
+        functionName: "generate-destination-research",
         tripId,
         source,
-      }).catch(() => {});
+      }),
+    );
+    if (sonnet && sonnet.ok) {
+      runInBackground(
+        deductCredits({
+          userId: user.id,
+          model: ESCALATION_MODEL,
+          inputTokens: sonnet.inputTokens,
+          outputTokens: sonnet.outputTokens,
+          webSearchCount: sonnet.webSearchCount,
+          functionName: "generate-destination-research:escalation",
+          tripId,
+          source,
+        }),
+      );
     }
 
     return new Response(
