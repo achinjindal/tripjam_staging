@@ -8,3 +8,11 @@ export const ROUTES_LENS_ENABLED =
 // Place Peek: tappable town chips/links on RG route cards → Wikipedia peek sheet.
 export const PLACE_PEEK_ENABLED =
   import.meta.env.VITE_PLACE_PEEK_ENABLED === "true";
+
+// E2E cost mode: set ONLY by the Playwright webServer (playwright.config.ts),
+// never in .env files, so manual dev and prod are untouched. Suppresses the
+// background LLM spenders no spec asserts on (Inspirations auto-fire,
+// Magazine stagger pre-load, Story narrative backfill) and caps the
+// verify-place ladder at the free tiers. Explicit user actions (opening a
+// Magazine city, running RG/IG, chatting) still hit the real backends.
+export const E2E_CHEAP = import.meta.env.VITE_E2E_CHEAP === "1";

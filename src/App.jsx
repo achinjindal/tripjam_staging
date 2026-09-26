@@ -47,7 +47,11 @@ import { sendTripEmail } from "./notify.js";
 import WelcomeSheet from "./components/WelcomeSheet.jsx";
 import RouteOverview from "./components/RouteOverview.jsx";
 import RouteEditorSheet from "./components/RouteEditorSheet.jsx";
-import { ROUTES_LENS_ENABLED, PLACE_PEEK_ENABLED } from "./flags.js";
+import {
+  ROUTES_LENS_ENABLED,
+  PLACE_PEEK_ENABLED,
+  E2E_CHEAP,
+} from "./flags.js";
 import PlacePeek from "./PlacePeek.jsx";
 import { findTownInText } from "./places.js";
 import {
@@ -2140,6 +2144,9 @@ function BrainstormView({
   // per-trip DB cache makes this a one-time cost).
   const magazinePrefetchRef = useRef(false);
   useEffect(() => {
+    // E2E cost mode: no background stagger-load — Magazine specs open
+    // cities explicitly and those on-demand fetches still run.
+    if (E2E_CHEAP) return;
     if (!days.length || magazinePrefetchRef.current) return;
     magazinePrefetchRef.current = true;
     const destinations = resolveDestinationsForMagazine({ trip });
@@ -2862,6 +2869,36 @@ function BrainstormView({
   const tier1Items = (items || [])
     .filter((it) => it.tier === 1 && !it.dismissed)
     .slice(0, 12);
+  // All-dismissed detection: chat's dismiss_route can bulk-dismiss every
+  // route (destination pivot). Rows survive with dismissed=true, but with
+  // zero visible cards the panel used to render NOTHING (the empty-state CTA
+  // checks items.length === 0) — a dead end that reads as lost work.
+  const dismissedTier1 = (items || []).filter(
+    (it) => it.tier === 1 && it.dismissed,
+  );
+  const restoreDismissedRoutes = () => {
+    const ids = dismissedTier1.map((it) => it.id).filter(Boolean);
+    if (!ids.length) return;
+    setItems((prev) =>
+      (prev || []).map((it) =>
+        it.tier === 1 && it.dismissed ? { ...it, dismissed: false } : it,
+      ),
+    );
+    const dbIds = ids.filter((id) => !String(id).startsWith("temp_"));
+    if (dbIds.length) {
+      supabase
+        .from("brainstorm_items")
+        .update({ dismissed: false })
+        .in("id", dbIds)
+        .then(({ error }) => {
+          if (error) console.warn("route restore failed:", error.message);
+        });
+    }
+    posthog.capture("routes_restored_all", {
+      count: ids.length,
+      trip_id: trip?.id || editTripIdRef.current || null,
+    });
+  };
   const tier2Items = (items || []).filter(
     (it) => (it.tier || 2) === 2 && !it.dismissed,
   );
@@ -8858,6 +8895,9 @@ export default function App({
         num_days: days.length,
       });
     }
+    // E2E cost mode: no narrative backfill — story-mode specs assert on
+    // narratives already persisted on the QA trip.
+    if (E2E_CHEAP) return;
     if (narrativesInflightRef.current === trip.id) return;
     if (!days.some((d) => !d.narrative)) return;
     narrativesInflightRef.current = trip.id;
@@ -9563,6 +9603,10 @@ export default function App({
   // Eager pre-load: as soon as the first batch of routes arrives from RG,
   // kick off Inspirations and the first Magazine city deep-dive in the background.
   useEffect(() => {
+    // E2E cost mode: Inspirations (web-search Haiku, the app's most
+    // expensive call) + country deep-dives never auto-fire. No spec asserts
+    // on their content — this was 37% of a full suite run's spend.
+    if (E2E_CHEAP) return;
     if (pretripRoutes.length === 0) return;
     if (hasEagerLoadedRef.current) return;
     hasEagerLoadedRef.current = true;
@@ -9603,6 +9647,7 @@ export default function App({
       onDesktopInspirations ||
       ((onMobilePretripMagazine || onPosttripMagazine) &&
         magazineSubTab === "inspirations");
+    if (E2E_CHEAP) return;
     if (!inspirationsVisible) return;
     if (destResearch.hasLoaded || destResearch.loading) return;
     loadDestinationResearch();
@@ -9798,6 +9843,7 @@ export default function App({
             hint: hotel.geocode,
             type: "lodging",
             tripId: trip?.id,
+            ...(E2E_CHEAP ? { skip_paid_tiers: true } : {}),
           }),
         },
       );
@@ -11397,6 +11443,7 @@ export default function App({
               hint: gem.geocode,
               type: null,
               tripId: trip?.id,
+              ...(E2E_CHEAP ? { skip_paid_tiers: true } : {}),
             }),
           },
         );

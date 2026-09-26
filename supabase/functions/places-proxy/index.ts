@@ -1365,7 +1365,7 @@ async function nominatimSearchNamed(
 //   Needs picker:   { status: "needs_user_choice", alternatives: [{ name, hint, reason }], reason }
 //   Unresolved:     { status: "unresolved", reason }
 async function handleVerifyPlace(req: Request): Promise<Response> {
-  const { name, city, hint, type, tripId } = await req.json();
+  const { name, city, hint, type, tripId, skip_paid_tiers } = await req.json();
   if (!name) {
     return Response.json(
       { error: "name required" },
@@ -1473,6 +1473,24 @@ async function handleVerifyPlace(req: Request): Promise<Response> {
       );
       return Response.json(payload, { headers: corsHeaders });
     }
+  }
+
+  // ── Paid-tier cap (E2E cost mode) ──
+  // Free tiers missed and the caller opted out of paid tiers (Haiku repair,
+  // Google, alternatives). Spend-reducing only, so client-controlled is
+  // safe. Deliberately NOT cached: a cheap-mode miss must never poison the
+  // shared verify cache for real users whose ladder would have resolved it.
+  if (skip_paid_tiers === true) {
+    incrementUsage("verify-place", "skipped-paid-tiers", today()).catch(
+      () => {},
+    );
+    return Response.json(
+      {
+        status: "unresolved" as const,
+        reason: "Free tiers missed; paid tiers skipped by caller.",
+      },
+      { headers: corsHeaders },
+    );
   }
 
   // ── Tier 3: Haiku name-repair, then re-verify ──
