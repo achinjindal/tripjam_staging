@@ -75,10 +75,17 @@ jobs:
             -d '{"email":"qa-tester@tripjam.app","password":"qaTest123!"}' --max-time 15 \
             | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))" || true)
           if [ -n "$QTOKEN" ]; then
+            # extract-preferences catches ALL Anthropic errors and returns
+            # 200 with {budget:null,...} — a bare status check stays green
+            # through a balance outage (observed 2026-09-26). Force an
+            # extraction and assert the value actually came back.
             code=$(curl -s -o /tmp/llm.json -w "%{http_code}" "$STAGING_URL/functions/v1/extract-preferences" \
               -H "Authorization: Bearer $QTOKEN" -H "Content-Type: application/json" \
-              -d '{"notes":"health probe","chatHistory":[],"tripId":null}' --max-time 45)
-            if [ "$code" = "200" ]; then note "LLM (Anthropic via extract-preferences): 200"
+              -d '{"notes":"We want a luxury budget, a relaxed pace, and late morning starts.","chatHistory":[],"tripId":null}' --max-time 45)
+            if [ "$code" = "200" ] && grep -q '"budget":"luxury"' /tmp/llm.json; then
+              note "LLM (Anthropic via extract-preferences): 200 + extraction OK"
+            elif [ "$code" = "200" ]; then
+              hard "LLM probe: 200 but extraction empty — $(head -c 200 /tmp/llm.json) (Anthropic balance? fn swallows errors)"
             else hard "LLM probe: HTTP $code — $(head -c 200 /tmp/llm.json) (Anthropic balance?)"; fi
           else
             hard "staging sign-in failed (qa-tester) — LLM probe skipped"
