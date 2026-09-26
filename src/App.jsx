@@ -47,11 +47,7 @@ import { sendTripEmail } from "./notify.js";
 import WelcomeSheet from "./components/WelcomeSheet.jsx";
 import RouteOverview from "./components/RouteOverview.jsx";
 import RouteEditorSheet from "./components/RouteEditorSheet.jsx";
-import {
-  ROUTES_LENS_ENABLED,
-  PLACE_PEEK_ENABLED,
-  E2E_CHEAP,
-} from "./flags.js";
+import { ROUTES_LENS_ENABLED, PLACE_PEEK_ENABLED, E2E_CHEAP } from "./flags.js";
 import PlacePeek from "./PlacePeek.jsx";
 import { findTownInText } from "./places.js";
 import {
@@ -3340,6 +3336,81 @@ function BrainstormView({
                   >
                     Generate plans
                   </button>
+                </div>
+              )}
+            {/* All plans dismissed (chat destination pivot etc.) — rows still
+                exist with dismissed=true. Offer restore before regeneration;
+                without this branch the panel rendered nothing at all. */}
+            {tier1Items.length === 0 &&
+              dismissedTier1.length > 0 &&
+              !generating &&
+              !loadingItems &&
+              !genError && (
+                <div style={{ textAlign: "center", padding: "60px 20px" }}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>🗂️</div>
+                  <div
+                    style={{
+                      fontFamily: "'DM Serif Display',serif",
+                      fontSize: 18,
+                      color: T.ink,
+                      marginBottom: 8,
+                    }}
+                  >
+                    All your plans were dismissed
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "Georgia,serif",
+                      fontSize: 13,
+                      color: T.mist,
+                      marginBottom: 16,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    This usually happens after a destination change in chat.
+                    Your plans are still saved — bring them back, or start
+                    fresh.
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      justifyContent: "center",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <button
+                      onClick={restoreDismissedRoutes}
+                      style={{
+                        background: T.ocean,
+                        color: "white",
+                        border: "none",
+                        borderRadius: RADIUS.md,
+                        padding: "9px 20px",
+                        fontFamily: "Georgia,serif",
+                        fontSize: 13,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Restore {dismissedTier1.length} dismissed plan
+                      {dismissedTier1.length > 1 ? "s" : ""}
+                    </button>
+                    <button
+                      onClick={generate}
+                      style={{
+                        background: "transparent",
+                        color: T.ocean,
+                        border: `1.5px solid ${T.skyBorder}`,
+                        borderRadius: RADIUS.md,
+                        padding: "9px 20px",
+                        fontFamily: "Georgia,serif",
+                        fontSize: 13,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Generate new plans
+                    </button>
+                  </div>
                 </div>
               )}
             {/* Skeleton route cards — shown before first route arrives */}
