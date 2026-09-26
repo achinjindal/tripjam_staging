@@ -3295,7 +3295,14 @@ function BrainstormView({
                 </div>
               );
             })()}
-            {items?.length === 0 &&
+            {/* No visible routes AND none dismissed → offer generation. Keyed
+                on tier-1 rows, not items.length: a failed regeneration can
+                leave only tier-2 highlight rows behind, which used to render
+                a blank panel (items non-empty suppressed this CTA, no cards,
+                nothing to restore). */}
+            {items !== null &&
+              tier1Items.length === 0 &&
+              dismissedTier1.length === 0 &&
               !generating &&
               !loadingItems &&
               !genError && (

@@ -53,6 +53,7 @@ async function signedClient(): Promise<SupabaseClient | null> {
 test.describe.serial("All-routes-dismissed recovery", () => {
   let sb: SupabaseClient | null = null;
   let tripId = "";
+  let tier2OnlyTripId = "";
 
   test.beforeAll(async () => {
     sb = await signedClient();
@@ -109,10 +110,56 @@ test.describe.serial("All-routes-dismissed recovery", () => {
       })),
     );
     if (brainErr) tripId = "";
+
+    // Case B: a trip whose regeneration died after the old rows were
+    // replaced — only tier-2 highlight rows remain, zero tier-1 routes.
+    tier2OnlyTripId = randomUUID();
+    const { error: t2TripErr } = await sb.from("trips").insert({
+      id: tier2OnlyTripId,
+      name: "Tier2-only Regression",
+      destination: "Sri Lanka",
+      start_date: "2026-11-02",
+      end_date: "2026-11-06",
+      created_by: uid,
+      owner_id: uid,
+      ig_request: {
+        destinations: ["Sri Lanka"],
+        startDate: "2026-11-02",
+        endDate: "2026-11-06",
+        travelers: "2",
+        styles: [],
+        budget: "mid",
+        pace: "active",
+        morningStart: "early",
+      },
+    });
+    if (t2TripErr) {
+      tier2OnlyTripId = "";
+    } else {
+      await sb.from("trip_members").insert({
+        trip_id: tier2OnlyTripId,
+        user_id: uid,
+        role: "edit",
+      });
+      const { error: t2Err } = await sb.from("brainstorm_items").insert([
+        {
+          trip_id: tier2OnlyTripId,
+          title: "Mirissa Beach",
+          city: "Mirissa",
+          category: "Sightseeing",
+          note: "Whale watching Nov–Apr",
+          position: 0,
+          tier: 2,
+        },
+      ]);
+      if (t2Err) tier2OnlyTripId = "";
+    }
   });
 
   test.afterAll(async () => {
     if (sb && tripId) await sb.from("trips").delete().eq("id", tripId);
+    if (sb && tier2OnlyTripId)
+      await sb.from("trips").delete().eq("id", tier2OnlyTripId);
     await sb?.auth.signOut();
   });
 
@@ -167,5 +214,33 @@ test.describe.serial("All-routes-dismissed recovery", () => {
         { timeout: 10000 },
       )
       .toBe(2);
+  });
+
+  test("tier-2-only trip shows Generate CTA, not a blank panel", async ({
+    page,
+  }) => {
+    test.setTimeout(120000);
+    test.skip(!sb || !tier2OnlyTripId, "Could not seed tier-2-only trip");
+
+    await login(page);
+    await page.goto(`/trip/${tier2OnlyTripId}`);
+    await page.waitForTimeout(2500);
+
+    const routeTab = page
+      .locator("button", { hasText: /^🛣️?\s*Route$/ })
+      .first();
+    if (await routeTab.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await routeTab.click();
+      await page.waitForTimeout(800);
+    }
+
+    // items is non-empty (one tier-2 row) but there are no routes: the old
+    // condition (items.length === 0) hid the CTA and rendered nothing.
+    await expect(
+      page.locator("button", { hasText: /^Generate plans$/ }).first(),
+    ).toBeVisible({ timeout: 15000 });
+    await expect(
+      page.locator("text=All your plans were dismissed"),
+    ).toHaveCount(0);
   });
 });
