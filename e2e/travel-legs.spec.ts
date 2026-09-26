@@ -200,7 +200,8 @@ test("travel legs: day-card strip + badge + cancelled hidden", async ({
       .eq("day_id", d.id);
     const t = (acts || []).find(
       (a: any) =>
-        a.type === "transit" && /(\w[\w'\s]*?)\s+to\s+(\w[\w'\s]*)/i.test(a.title || ""),
+        a.type === "transit" &&
+        /(\w[\w'\s]*?)\s+to\s+(\w[\w'\s]*)/i.test(a.title || ""),
     );
     if (t) {
       const m = t.title.match(/(\w[\w'\s]*?)\s+to\s+(\w[\w'\s]*)/i)!;
@@ -316,7 +317,9 @@ test("travel legs: day-card strip + badge + cancelled hidden", async ({
       // Badge consumed the leg — no duplicate strip for it
       await expect(page.getByText(/QA Express 8002/)).toHaveCount(0);
     } else {
-      console.log("badge-mode sub-assertion skipped: no 'X to Y' transit title on QA trip");
+      console.log(
+        "badge-mode sub-assertion skipped: no 'X to Y' transit title on QA trip",
+      );
     }
   } finally {
     await sb

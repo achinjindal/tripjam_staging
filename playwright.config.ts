@@ -28,5 +28,10 @@ export default defineConfig({
     port: 5173,
     reuseExistingServer: true,
     timeout: 30000,
+    // E2E cost mode (see src/flags.js E2E_CHEAP): suppress background LLM
+    // spenders + paid verify tiers during tests. NOTE: reuseExistingServer
+    // means a manually-started `npm run dev` (no flag) will be reused —
+    // kill it before test runs if you want the savings.
+    env: { ...process.env, VITE_E2E_CHEAP: "1" },
   },
 });

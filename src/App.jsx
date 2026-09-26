@@ -47,7 +47,7 @@ import { sendTripEmail } from "./notify.js";
 import WelcomeSheet from "./components/WelcomeSheet.jsx";
 import RouteOverview from "./components/RouteOverview.jsx";
 import RouteEditorSheet from "./components/RouteEditorSheet.jsx";
-import { ROUTES_LENS_ENABLED } from "./flags.js";
+import { ROUTES_LENS_ENABLED, E2E_CHEAP } from "./flags.js";
 import {
   deriveStops,
   dRanges,
@@ -2009,6 +2009,9 @@ function BrainstormView({
   // per-trip DB cache makes this a one-time cost).
   const magazinePrefetchRef = useRef(false);
   useEffect(() => {
+    // E2E cost mode: no background stagger-load — Magazine specs open
+    // cities explicitly and those on-demand fetches still run.
+    if (E2E_CHEAP) return;
     if (!days.length || magazinePrefetchRef.current) return;
     magazinePrefetchRef.current = true;
     const destinations = resolveDestinationsForMagazine({ trip });
@@ -8609,6 +8612,9 @@ export default function App({
         num_days: days.length,
       });
     }
+    // E2E cost mode: no narrative backfill — story-mode specs assert on
+    // narratives already persisted on the QA trip.
+    if (E2E_CHEAP) return;
     if (narrativesInflightRef.current === trip.id) return;
     if (!days.some((d) => !d.narrative)) return;
     narrativesInflightRef.current = trip.id;
@@ -9314,6 +9320,10 @@ export default function App({
   // Eager pre-load: as soon as the first batch of routes arrives from RG,
   // kick off Inspirations and the first Magazine city deep-dive in the background.
   useEffect(() => {
+    // E2E cost mode: Inspirations (web-search Haiku, the app's most
+    // expensive call) + country deep-dives never auto-fire. No spec asserts
+    // on their content — this was 37% of a full suite run's spend.
+    if (E2E_CHEAP) return;
     if (pretripRoutes.length === 0) return;
     if (hasEagerLoadedRef.current) return;
     hasEagerLoadedRef.current = true;
@@ -9354,6 +9364,7 @@ export default function App({
       onDesktopInspirations ||
       ((onMobilePretripMagazine || onPosttripMagazine) &&
         magazineSubTab === "inspirations");
+    if (E2E_CHEAP) return;
     if (!inspirationsVisible) return;
     if (destResearch.hasLoaded || destResearch.loading) return;
     loadDestinationResearch();
@@ -9549,6 +9560,7 @@ export default function App({
             hint: hotel.geocode,
             type: "lodging",
             tripId: trip?.id,
+            ...(E2E_CHEAP ? { skip_paid_tiers: true } : {}),
           }),
         },
       );
@@ -11148,6 +11160,7 @@ export default function App({
               hint: gem.geocode,
               type: null,
               tripId: trip?.id,
+              ...(E2E_CHEAP ? { skip_paid_tiers: true } : {}),
             }),
           },
         );

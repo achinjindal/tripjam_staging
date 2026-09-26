@@ -64,7 +64,15 @@ test("gems: inline anchor, orphan strip, dedupe, direct add, dismiss", async ({
     .order("position");
   test.skip(!acts?.length, "No activities on day 1");
   const anchor = acts![0];
-  const existingTitle = acts![acts!.length - 1].title;
+  // Dedupe-gem subject: an activity title that appears EXACTLY ONCE on the
+  // day — the QA trip drifts (chat specs mutate it) and duplicate-title
+  // days made a hardcoded "last activity" pick flaky.
+  const titleCounts = new Map<string, number>();
+  for (const a of acts!)
+    titleCounts.set(a.title, (titleCounts.get(a.title) || 0) + 1);
+  const existingTitle =
+    [...acts!].reverse().find((a) => titleCounts.get(a.title) === 1)?.title ??
+    acts![acts!.length - 1].title;
   const originalWishlist = day!.wishlist ?? null;
 
   const gems = [

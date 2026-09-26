@@ -2,6 +2,7 @@
 // Shared mutable photo state and fetch logic, used by App.jsx and Magazine components.
 
 import { PLACES_PROXY, PLACES_HEADERS } from "./theme";
+import { E2E_CHEAP } from "./flags.js";
 import { supabase } from "./supabase";
 export { PLACES_PROXY, PLACES_HEADERS };
 
@@ -842,6 +843,8 @@ export async function verifyActivity(activity, city, session, tripId) {
           hint: activity.geocode || null,
           type: activity.type === "hotel" ? "lodging" : null,
           tripId: tripId || null,
+          // E2E cost mode: free geocoder tiers only (no Haiku repair/Google)
+          ...(E2E_CHEAP ? { skip_paid_tiers: true } : {}),
         }),
       });
       if (!res.ok) {

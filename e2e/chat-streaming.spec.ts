@@ -65,11 +65,9 @@ test.describe("Chat streaming", () => {
       const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*)\s*$/);
       if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, "");
     }
-    const sb = createClient(
-      env.VITE_SUPABASE_URL,
-      env.VITE_SUPABASE_ANON_KEY,
-      { auth: { persistSession: false, autoRefreshToken: false } },
-    );
+    const sb = createClient(env.VITE_SUPABASE_URL, env.VITE_SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
     await sb.auth.signInWithPassword({
       email: "qa-tester@tripjam.app",
       password: "qaTest123!",
