@@ -930,102 +930,109 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
 
-    (async () => {
-      let outputLength = 0;
-      const usage = newStreamUsage();
-      try {
-        const reader = response.body!.getReader();
-        const decoder = new TextDecoder();
-        let lineBuffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          lineBuffer += decoder.decode(value, { stream: true });
-          const lines = lineBuffer.split("\n");
-          lineBuffer = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const raw = line.slice(6).trim();
-            if (raw === "[DONE]") continue;
-            try {
-              const event = JSON.parse(raw);
-              accumulateStreamUsage(usage, event);
-              if (
-                event.type === "content_block_delta" &&
-                event.delta?.type === "text_delta"
-              ) {
-                outputLength += event.delta.text.length;
-                await writer.write(
-                  encoder.encode(
-                    `data: ${JSON.stringify(event.delta.text)}\n\n`,
-                  ),
-                );
-              } else if (event.type === "error") {
-                console.error(
-                  "Anthropic stream error:",
-                  JSON.stringify(event.error),
-                );
-              } else {
-                console.log("Event type:", event.type);
+    // The whole pump runs under waitUntil: a client disconnect must not
+    // reclaim the isolate before billing lands — Anthropic has already
+    // charged for every token generated up to that point.
+    runInBackground(
+      (async () => {
+        let outputLength = 0;
+        const usage = newStreamUsage();
+        try {
+          const reader = response.body!.getReader();
+          const decoder = new TextDecoder();
+          let lineBuffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            lineBuffer += decoder.decode(value, { stream: true });
+            const lines = lineBuffer.split("\n");
+            lineBuffer = lines.pop() ?? "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const raw = line.slice(6).trim();
+              if (raw === "[DONE]") continue;
+              try {
+                const event = JSON.parse(raw);
+                accumulateStreamUsage(usage, event);
+                if (
+                  event.type === "content_block_delta" &&
+                  event.delta?.type === "text_delta"
+                ) {
+                  outputLength += event.delta.text.length;
+                  await writer.write(
+                    encoder.encode(
+                      `data: ${JSON.stringify(event.delta.text)}\n\n`,
+                    ),
+                  );
+                } else if (event.type === "error") {
+                  console.error(
+                    "Anthropic stream error:",
+                    JSON.stringify(event.error),
+                  );
+                } else {
+                  console.log("Event type:", event.type);
+                }
+              } catch (e) {
+                console.error("Parse error:", e.message, raw.slice(0, 100));
               }
-            } catch (e) {
-              console.error("Parse error:", e.message, raw.slice(0, 100));
             }
           }
-        }
-      } finally {
-        await writer.write(encoder.encode("data: [DONE]\n\n"));
-        await writer.close();
+        } finally {
+          // BILLING FIRST, stream niceties second: the old order awaited
+          // writer.write/close un-caught here — a client disconnect made the
+          // finally throw and skipped the log + deduction entirely (billed
+          // tokens, zero record). Same bug as generate-brainstorm.
+          const inputTokens = hasStreamUsage(usage)
+            ? usage.inputTokens
+            : estimatedInputTokens;
+          const outputTokens =
+            usage.outputTokens || Math.round(outputLength / 4);
+          const cacheCreationTokens = usage.cacheCreationTokens;
+          const cacheReadTokens = usage.cacheReadTokens;
 
-        // Prefer the API's real token counts (incl. cache read/write); fall
-        // back to length estimates only when usage events never arrived.
-        const inputTokens = hasStreamUsage(usage)
-          ? usage.inputTokens
-          : estimatedInputTokens;
-        const outputTokens = usage.outputTokens || Math.round(outputLength / 4);
-        const cacheCreationTokens = usage.cacheCreationTokens;
-        const cacheReadTokens = usage.cacheReadTokens;
+          const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+          const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+          runInBackground(
+            (async () => {
+              await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  apikey: supabaseKey,
+                  Authorization: `Bearer ${supabaseKey}`,
+                },
+                body: JSON.stringify({
+                  trip_id: tripId || null,
+                  function_name: "generate-itinerary",
+                  model: igModel,
+                  input_tokens: inputTokens,
+                  output_tokens: outputTokens,
+                  cache_creation_tokens: cacheCreationTokens,
+                  cache_read_tokens: cacheReadTokens,
+                }),
+              }).catch(() => {});
 
-        // Log LLM usage + deduct credits. Wrapped in runInBackground so the
-        // isolate is NOT reclaimed before these run — the bug that dropped
-        // every generate-itinerary usage log + credit deduction.
-        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-        runInBackground(
-          (async () => {
-            await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                apikey: supabaseKey,
-                Authorization: `Bearer ${supabaseKey}`,
-              },
-              body: JSON.stringify({
-                trip_id: tripId || null,
-                function_name: "generate-itinerary",
+              await deductCredits({
+                userId: user.id,
                 model: igModel,
-                input_tokens: inputTokens,
-                output_tokens: outputTokens,
-                cache_creation_tokens: cacheCreationTokens,
-                cache_read_tokens: cacheReadTokens,
-              }),
-            }).catch(() => {});
+                inputTokens,
+                outputTokens,
+                cacheCreationTokens,
+                cacheReadTokens,
+                functionName: "generate-itinerary",
+                tripId: tripId || null,
+                source,
+              });
+            })(),
+          );
 
-            await deductCredits({
-              userId: user.id,
-              model: igModel,
-              inputTokens,
-              outputTokens,
-              cacheCreationTokens,
-              cacheReadTokens,
-              functionName: "generate-itinerary",
-              tripId: tripId || null,
-              source,
-            });
-          })(),
-        );
-      }
-    })();
+          await writer
+            .write(encoder.encode("data: [DONE]\n\n"))
+            .catch(() => {});
+          await writer.close().catch(() => {});
+        }
+      })(),
+    );
 
     return new Response(readable, {
       headers: {

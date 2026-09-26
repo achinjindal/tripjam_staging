@@ -675,6 +675,10 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
       );
       return data;
     })();
+    // Keep the isolate alive for the WHOLE pump, not just the trailing log —
+    // a client disconnect mid-stream must still land the usage row and the
+    // credit deduction (Anthropic billed the tokens either way).
+    runInBackground(pump.then(() => {}));
 
     if (!wantsStream) {
       const data = await pump;

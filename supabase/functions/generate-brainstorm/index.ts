@@ -336,104 +336,113 @@ serve(async (req) => {
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
 
-    (async () => {
-      let outputLength = 0;
-      const usage = newStreamUsage();
-      try {
-        const reader = response.body!.getReader();
-        const decoder = new TextDecoder();
-        let lineBuffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          lineBuffer += decoder.decode(value, { stream: true });
-          const lines = lineBuffer.split("\n");
-          lineBuffer = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const raw = line.slice(6).trim();
-            if (raw === "[DONE]") continue;
-            try {
-              const event = JSON.parse(raw);
-              accumulateStreamUsage(usage, event);
-              if (
-                event.type === "content_block_delta" &&
-                event.delta?.type === "text_delta"
-              ) {
-                outputLength += event.delta.text.length;
-                await writer.write(
-                  encoder.encode(
-                    "data: " + JSON.stringify(event.delta.text) + "\n\n",
-                  ),
-                );
-              } else if (
-                event.type === "message_delta" &&
-                event.delta?.stop_reason === "max_tokens"
-              ) {
-                // Truncated output = unparseable JSON downstream. Make it
-                // loud in the logs instead of masquerading as a client bug.
-                console.error(
-                  `RG hit max_tokens — output truncated at ~${outputLength} chars`,
-                );
+    // The whole pump runs under waitUntil: a client disconnect must not
+    // reclaim the isolate before billing lands — Anthropic has already
+    // charged for every token generated up to that point.
+    runInBackground(
+      (async () => {
+        let outputLength = 0;
+        const usage = newStreamUsage();
+        try {
+          const reader = response.body!.getReader();
+          const decoder = new TextDecoder();
+          let lineBuffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            lineBuffer += decoder.decode(value, { stream: true });
+            const lines = lineBuffer.split("\n");
+            lineBuffer = lines.pop() ?? "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const raw = line.slice(6).trim();
+              if (raw === "[DONE]") continue;
+              try {
+                const event = JSON.parse(raw);
+                accumulateStreamUsage(usage, event);
+                if (
+                  event.type === "content_block_delta" &&
+                  event.delta?.type === "text_delta"
+                ) {
+                  outputLength += event.delta.text.length;
+                  await writer.write(
+                    encoder.encode(
+                      "data: " + JSON.stringify(event.delta.text) + "\n\n",
+                    ),
+                  );
+                } else if (
+                  event.type === "message_delta" &&
+                  event.delta?.stop_reason === "max_tokens"
+                ) {
+                  // Truncated output = unparseable JSON downstream. Make it
+                  // loud in the logs instead of masquerading as a client bug.
+                  console.error(
+                    `RG hit max_tokens — output truncated at ~${outputLength} chars`,
+                  );
+                }
+              } catch {
+                /* ignore */
               }
-            } catch {
-              /* ignore */
             }
           }
+        } finally {
+          // BILLING FIRST, stream niceties second. The old order awaited
+          // writer.write/close un-caught at the top of this finally — a client
+          // disconnect (tab closed, E2E timeout) made those REJECT, the finally
+          // threw, and the log + credit deduction below never ran: every
+          // abandoned RG stream billed Anthropic in full and recorded nothing.
+          const inputTokens = hasStreamUsage(usage)
+            ? usage.inputTokens
+            : estimatedInputTokens;
+          const outputTokens =
+            usage.outputTokens || Math.round(outputLength / 4);
+          const cacheCreationTokens = usage.cacheCreationTokens;
+          const cacheReadTokens = usage.cacheReadTokens;
+
+          const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+          const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+          runInBackground(
+            (async () => {
+              await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  apikey: supabaseKey,
+                  Authorization: `Bearer ${supabaseKey}`,
+                },
+                body: JSON.stringify({
+                  trip_id: tripId || null,
+                  function_name: "generate-brainstorm",
+                  model: rgModel,
+                  input_tokens: inputTokens,
+                  output_tokens: outputTokens,
+                  cache_creation_tokens: cacheCreationTokens,
+                  cache_read_tokens: cacheReadTokens,
+                }),
+              }).catch(() => {});
+
+              // Deduct credits based on actual consumption.
+              await deductCredits({
+                userId: user.id,
+                model: rgModel,
+                inputTokens,
+                outputTokens,
+                cacheCreationTokens,
+                cacheReadTokens,
+                functionName: "generate-brainstorm",
+                tripId: tripId || null,
+                source,
+              });
+            })(),
+          );
+
+          await writer
+            .write(encoder.encode("data: [DONE]\n\n"))
+            .catch(() => {});
+          await writer.close().catch(() => {});
         }
-      } finally {
-        await writer.write(encoder.encode("data: [DONE]\n\n"));
-        await writer.close();
-
-        // Prefer the API's real token counts; fall back to length estimates
-        // only when the usage events never arrived.
-        const inputTokens = hasStreamUsage(usage)
-          ? usage.inputTokens
-          : estimatedInputTokens;
-        const outputTokens = usage.outputTokens || Math.round(outputLength / 4);
-        const cacheCreationTokens = usage.cacheCreationTokens;
-        const cacheReadTokens = usage.cacheReadTokens;
-
-        // Log LLM usage + deduct credits. Wrapped in runInBackground so the
-        // isolate survives until both complete after the stream closes.
-        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-        runInBackground(
-          (async () => {
-            await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                apikey: supabaseKey,
-                Authorization: `Bearer ${supabaseKey}`,
-              },
-              body: JSON.stringify({
-                trip_id: tripId || null,
-                function_name: "generate-brainstorm",
-                model: "claude-sonnet-4-6",
-                input_tokens: inputTokens,
-                output_tokens: outputTokens,
-                cache_creation_tokens: cacheCreationTokens,
-                cache_read_tokens: cacheReadTokens,
-              }),
-            }).catch(() => {});
-
-            // Deduct credits based on actual consumption.
-            await deductCredits({
-              userId: user.id,
-              model: "claude-sonnet-4-6",
-              inputTokens,
-              outputTokens,
-              cacheCreationTokens,
-              cacheReadTokens,
-              functionName: "generate-brainstorm",
-              tripId: tripId || null,
-              source,
-            });
-          })(),
-        );
-      }
-    })();
+      })(),
+    );
 
     return new Response(readable, {
       headers: {
