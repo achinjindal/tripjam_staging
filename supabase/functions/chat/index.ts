@@ -322,7 +322,7 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
     // that model (threaded through the request AND billing — it was hardcoded
     // before, which would have billed a Haiku A/B at Sonnet rates). A
     // "gemini-*" id → Gemini non-streaming path (returns full JSON).
-    const chatModel = Deno.env.get("CHAT_MODEL") || "claude-sonnet-4-6";
+    const chatModel = Deno.env.get("CHAT_MODEL") || "claude-sonnet-5";
 
     const requestBody = JSON.stringify({
       model: chatModel,

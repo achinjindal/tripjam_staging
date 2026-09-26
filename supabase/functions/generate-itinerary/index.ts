@@ -532,7 +532,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
     // PLAN skeleton + concurrent day fills (wall-clock ≈ plan + one day, any
     // trip length — what makes Sonnet 5 viable under the ~150s edge limit);
     // "single" = the original one-call streaming path, kept as escape hatch.
-    const igModel = Deno.env.get("IG_MODEL") || "claude-sonnet-4-6";
+    const igModel = Deno.env.get("IG_MODEL") || "claude-sonnet-5";
     const igArch = Deno.env.get("IG_ARCH") || "parallel";
     if (igModel.startsWith("gemini")) {
       const gResp = await fetch(
