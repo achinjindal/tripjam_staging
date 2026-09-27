@@ -9367,38 +9367,49 @@ export default function App({
       morningStart: "early",
       pace: "active",
     };
-    try {
-      // D15: extract-preferences requires user authentication.
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/extract-preferences`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({
-            notes: pendingForm?.notes || "",
-            chatHistory: chatMessages.filter((m) => m.role !== "system-undo"),
-            tripId: trip?.id || editingTrip?.id || null,
-          }),
-        },
-      );
-      if (res.ok) {
-        const prefs = await res.json();
-        setPreIgForm({
-          budget: prefs.budget || defaults.budget,
-          morningStart: prefs.morningStart || defaults.morningStart,
-          pace: prefs.pace || defaults.pace,
-          igNotes: "",
-        });
-      } else {
-        setPreIgForm({ ...defaults, igNotes: "" });
-      }
-    } catch {
-      setPreIgForm({ ...defaults, igNotes: "" });
-    }
+    // Open INSTANTLY with defaults — this used to await the Haiku
+    // extract-preferences call, leaving 1.5-4s of dead air after "Build My
+    // Itinerary". The extraction now runs in the background and fills in
+    // only the pills the user hasn't already tapped.
+    setPreIgForm({ ...defaults, igNotes: "" });
     setShowPreIgSheet(true);
+    (async () => {
+      try {
+        // D15: extract-preferences requires user authentication.
+        const res = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/extract-preferences`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            },
+            body: JSON.stringify({
+              notes: pendingForm?.notes || "",
+              chatHistory: chatMessages.filter((m) => m.role !== "system-undo"),
+              tripId: trip?.id || editingTrip?.id || null,
+            }),
+          },
+        );
+        if (!res.ok) return;
+        const prefs = await res.json();
+        setPreIgForm((cur) => ({
+          ...cur,
+          budget:
+            cur.budget === defaults.budget && prefs.budget
+              ? prefs.budget
+              : cur.budget,
+          morningStart:
+            cur.morningStart === defaults.morningStart && prefs.morningStart
+              ? prefs.morningStart
+              : cur.morningStart,
+          pace:
+            cur.pace === defaults.pace && prefs.pace ? prefs.pace : cur.pace,
+        }));
+      } catch {
+        /* defaults stand */
+      }
+    })();
   };
 
   /* Pre-IG sheet exit discipline (three-exit standard): ✕ / scrim / swipe
