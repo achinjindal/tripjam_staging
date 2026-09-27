@@ -185,7 +185,7 @@ const STORY_CSS = `
 .sv-frame .sv-frame-credit{font-size:8.5px;letter-spacing:0.4px;color:rgba(255,255,255,0.55);text-align:right;line-height:1.5;}
 
 /* ── full-screen player ── */
-.sv-player{position:fixed;inset:0;z-index:1000;background:${T.ink};container-type:size;touch-action:none;}
+.sv-player{position:fixed;inset:0;z-index:2000;background:${T.ink};container-type:size;touch-action:none;}
 .sv-player:focus{outline:none;}
 .sv-player .sv-progress{position:absolute;top:calc(10px + env(safe-area-inset-top,0px));left:14px;right:14px;display:flex;gap:4px;z-index:6;}
 .sv-player .sv-seg{flex:1;height:2.5px;border-radius:2px;background:rgba(255,255,255,0.3);overflow:hidden;}
