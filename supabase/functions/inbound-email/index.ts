@@ -1,3 +1,4 @@
+import { captureException } from "../_shared/errortrack.ts";
 // Inbound booking ingestion (TripIt-style):
 //   forward a hotel/flight/train confirmation → Resend inbound → this
 //   webhook → Haiku parse → the matching trip's hotels_data gains
@@ -487,7 +488,22 @@ async function sendReceipt(opts: {
   }
 }
 
+// Top-level guard: the handler had no outer catch, so any uncaught throw
+// was a silent runtime 500. Capture, then return the same 500.
 Deno.serve(async (req) => {
+  try {
+    return await handleInbound(req);
+  } catch (err) {
+    console.error("inbound-email error:", (err as Error).message);
+    await captureException(err, { functionName: "inbound-email" });
+    return new Response("internal error", {
+      status: 500,
+      headers: corsHeaders,
+    });
+  }
+});
+
+async function handleInbound(req: Request): Promise<Response> {
   if (req.method === "OPTIONS")
     return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST")
@@ -1032,4 +1048,4 @@ Deno.serve(async (req) => {
     { ok: true, applied, kind: parsed.kind, trip: trip.name, routedBy },
     { headers: corsHeaders },
   );
-});
+}

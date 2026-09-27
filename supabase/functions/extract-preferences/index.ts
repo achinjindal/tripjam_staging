@@ -1,3 +1,4 @@
+import { captureException } from "../_shared/errortrack.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { authenticateUser, unauthorized } from "../_shared/credits.ts";
 
@@ -105,7 +106,10 @@ serve(async (req) => {
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
-  } catch {
+  } catch (err) {
+    // Fail-open by design (never block IG) — but REPORT the swallow: this
+    // silent path hid the 2026-09 Anthropic balance outage from every probe.
+    await captureException(err, { functionName: "extract-preferences" });
     return new Response(
       JSON.stringify({ budget: null, morningStart: null, pace: null }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },

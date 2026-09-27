@@ -1,3 +1,4 @@
+import { captureException } from "../_shared/errortrack.ts";
 // RevenueCat webhook — grants credits on Android In-App Purchase completion.
 // Deployed with --no-verify-jwt (RevenueCat calls this without a Supabase token).
 // Auth: compares Authorization header against REVENUECAT_WEBHOOK_SECRET.
@@ -110,6 +111,7 @@ serve(async (req) => {
     );
   } catch (err) {
     console.error("revenuecat-webhook error:", (err as Error).message);
+    await captureException(err, { functionName: "revenuecat-webhook" });
     return new Response(JSON.stringify({ error: (err as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

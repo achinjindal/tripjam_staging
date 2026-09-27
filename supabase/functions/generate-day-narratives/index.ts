@@ -1,3 +1,4 @@
+import { captureException } from "../_shared/errortrack.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
@@ -228,6 +229,7 @@ ${JSON.stringify(payload)}`;
     );
   } catch (err) {
     console.error("generate-day-narratives error:", err.message);
+    await captureException(err, { functionName: "generate-day-narratives" });
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -1,3 +1,4 @@
+import { captureException } from "../_shared/errortrack.ts";
 // Coupon code redemption — grants free credits without payment.
 // Each coupon is single-use per user (idempotent via provider_session_id UNIQUE constraint).
 
@@ -137,6 +138,7 @@ serve(async (req) => {
     );
   } catch (err) {
     console.error("redeem-coupon error:", (err as Error).message);
+    await captureException(err, { functionName: "redeem-coupon" });
     return new Response(JSON.stringify({ error: (err as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

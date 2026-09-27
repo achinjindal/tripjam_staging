@@ -1,3 +1,4 @@
+import { captureException } from "../_shared/errortrack.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { deductCredits } from "../_shared/credits.ts";
 
@@ -1704,6 +1705,7 @@ serve(async (req) => {
     );
   } catch (err) {
     console.error("places-proxy error:", err.message);
+    await captureException(err, { functionName: "places-proxy" });
     return Response.json(
       { error: err.message },
       { status: 500, headers: corsHeaders },

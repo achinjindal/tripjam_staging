@@ -1,3 +1,4 @@
+import { captureException } from "../_shared/errortrack.ts";
 // Phase 4 minimal slice — transactional email via Resend.
 //
 // Types: config (capability probe), invite_external (join link to a non-user
@@ -325,6 +326,7 @@ serve(async (req) => {
     return json({ error: "unknown_type" }, 400);
   } catch (err) {
     console.error("send-email error:", (err as Error).message);
+    await captureException(err, { functionName: "send-email" });
     return json({ error: (err as Error).message }, 500);
   }
 });
