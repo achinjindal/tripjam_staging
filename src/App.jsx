@@ -121,6 +121,10 @@ class ErrorBoundary extends Component {
   }
   componentDidCatch(err) {
     console.error("ErrorBoundary caught:", err);
+    // Boundaries intercept render crashes before any global handler sees
+    // them — captureException (not a bare event) gets the stack, grouping,
+    // and replay linkage in PostHog error tracking.
+    posthog.captureException(err, { surface: "error-boundary" });
     posthog.capture("render_error", { error: err.message });
   }
   render() {

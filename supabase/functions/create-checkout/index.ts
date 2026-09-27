@@ -14,7 +14,7 @@
 //   {APP_PUBLIC_URL}/?credits_success=300   (or 1000)
 
 import { authenticateUser, unauthorized } from "../_shared/credits.ts";
-import { captureException } from "../_shared/sentry.ts";
+import { captureException } from "../_shared/errortrack.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {

@@ -11,7 +11,6 @@ import React, {
   useRef,
   useState,
 } from "react";
-import * as Sentry from "@sentry/react";
 import html2canvas from "html2canvas";
 import posthog from "posthog-js";
 import { T } from "../theme";
@@ -1253,7 +1252,7 @@ class StoryErrorBoundary extends Component {
   }
   componentDidCatch(error) {
     try {
-      Sentry.captureException(error, { tags: { surface: "story-mode" } });
+      posthog.captureException(error, { surface: "story-mode" });
     } catch {}
     if (this.props.onError) this.props.onError(error);
   }

@@ -18,6 +18,7 @@
 //   - Charge credits on cache-miss (D2 / D24)
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { captureException } from "../_shared/errortrack.ts";
 import {
   authenticateUser,
   unauthorized,
@@ -739,6 +740,9 @@ serve(async (req) => {
       "generate-destination-research error:",
       (err as Error).message,
     );
+    await captureException(err, {
+      functionName: "generate-destination-research",
+    });
     return new Response(JSON.stringify({ error: (err as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

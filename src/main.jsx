@@ -85,6 +85,9 @@ if (import.meta.env.VITE_POSTHOG_KEY) {
     autocapture: true,
     capture_pageview: true,
     capture_pageleave: true,
+    // Error tracking: auto-capture unhandled errors/rejections with stacks
+    // (PostHog is the single error sink — Sentry is being retired).
+    capture_exceptions: true,
     persistence: "localStorage",
   });
   posthog.register({ app_env: import.meta.env.VITE_APP_ENV || "unknown" });
