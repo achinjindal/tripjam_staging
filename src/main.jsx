@@ -1,7 +1,6 @@
 import { StrictMode, useState, useEffect, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import posthog from "posthog-js";
-import * as Sentry from "@sentry/react";
 import { supabase } from "./supabase";
 import Auth from "./Auth.jsx";
 import ForgotPassword from "./ForgotPassword.jsx";
@@ -39,29 +38,6 @@ import { initRevenueCat } from "./billing";
   }
 })();
 
-// ── Sentry (no-op when VITE_SENTRY_DSN is not set) ──
-if (import.meta.env.VITE_SENTRY_DSN) {
-  Sentry.init({
-    dsn: import.meta.env.VITE_SENTRY_DSN,
-    environment: import.meta.env.VITE_APP_ENV || "unknown",
-    integrations: [
-      Sentry.browserTracingIntegration(),
-      Sentry.replayIntegration({ maskAllText: false, blockAllMedia: false }),
-    ],
-    // Performance: 10% of transactions
-    tracesSampleRate: 0.1,
-    // Session replays: 1% of all sessions, 100% of sessions that hit an error
-    replaysSessionSampleRate: 0.01,
-    replaysOnErrorSampleRate: 1.0,
-    // Filter out browser-extension noise + cancelled fetches
-    ignoreErrors: [
-      "ResizeObserver loop completed",
-      "Non-Error promise rejection captured",
-      /AbortError/,
-    ],
-  });
-}
-
 // ── PWA update check — reload on new version ──
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.ready.then((registration) => {
@@ -86,7 +62,7 @@ if (import.meta.env.VITE_POSTHOG_KEY) {
     capture_pageview: true,
     capture_pageleave: true,
     // Error tracking: auto-capture unhandled errors/rejections with stacks
-    // (PostHog is the single error sink — Sentry is being retired).
+    // (PostHog is the single error sink — Sentry removed 2026-09-27).
     capture_exceptions: true,
     persistence: "localStorage",
   });
@@ -176,14 +152,10 @@ function Root() {
       // Identify user in PostHog
       if (s?.user) {
         posthog.identify(s.user.id, { email: s.user.email });
-        if (import.meta.env.VITE_SENTRY_DSN) {
-          Sentry.setUser({ id: s.user.id, email: s.user.email });
-        }
         if (CREDITS_UI_ENABLED) refreshCredits(s.user.id);
         initRevenueCat(s.user.id);
       } else {
         posthog.reset();
-        if (import.meta.env.VITE_SENTRY_DSN) Sentry.setUser(null);
       }
     });
     return () => subscription.unsubscribe();
