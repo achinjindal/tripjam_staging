@@ -41,8 +41,11 @@ import { initRevenueCat } from "./billing";
 // ── PWA update check — reload on new version ──
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.ready.then((registration) => {
-    // Check for updates every 5 minutes
-    setInterval(() => registration.update(), 5 * 60 * 1000);
+    // Check for updates every 5 minutes. update() rejects on any transient
+    // network failure mid-poll — expected and harmless, so swallow it
+    // (unhandled, it files a TypeError in PostHog error tracking on every
+    // connection blip; first real captured issue, 2026-09-27).
+    setInterval(() => registration.update().catch(() => {}), 5 * 60 * 1000);
     // Auto-reload when new service worker activates
     let refreshing = false;
     navigator.serviceWorker.addEventListener("controllerchange", () => {
