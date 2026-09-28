@@ -1,7 +1,6 @@
 import { StrictMode, useState, useEffect, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import posthog from "posthog-js";
-import * as Sentry from "@sentry/react";
 import { supabase } from "./supabase";
 import Auth from "./Auth.jsx";
 import ForgotPassword from "./ForgotPassword.jsx";
@@ -39,34 +38,14 @@ import { initRevenueCat } from "./billing";
   }
 })();
 
-// ── Sentry (no-op when VITE_SENTRY_DSN is not set) ──
-if (import.meta.env.VITE_SENTRY_DSN) {
-  Sentry.init({
-    dsn: import.meta.env.VITE_SENTRY_DSN,
-    environment: import.meta.env.VITE_APP_ENV || "unknown",
-    integrations: [
-      Sentry.browserTracingIntegration(),
-      Sentry.replayIntegration({ maskAllText: false, blockAllMedia: false }),
-    ],
-    // Performance: 10% of transactions
-    tracesSampleRate: 0.1,
-    // Session replays: 1% of all sessions, 100% of sessions that hit an error
-    replaysSessionSampleRate: 0.01,
-    replaysOnErrorSampleRate: 1.0,
-    // Filter out browser-extension noise + cancelled fetches
-    ignoreErrors: [
-      "ResizeObserver loop completed",
-      "Non-Error promise rejection captured",
-      /AbortError/,
-    ],
-  });
-}
-
 // ── PWA update check — reload on new version ──
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.ready.then((registration) => {
-    // Check for updates every 5 minutes
-    setInterval(() => registration.update(), 5 * 60 * 1000);
+    // Check for updates every 5 minutes. update() rejects on any transient
+    // network failure mid-poll — expected and harmless, so swallow it
+    // (unhandled, it files a TypeError in PostHog error tracking on every
+    // connection blip; first real captured issue, 2026-09-27).
+    setInterval(() => registration.update().catch(() => {}), 5 * 60 * 1000);
     // Auto-reload when new service worker activates
     let refreshing = false;
     navigator.serviceWorker.addEventListener("controllerchange", () => {
@@ -85,6 +64,9 @@ if (import.meta.env.VITE_POSTHOG_KEY) {
     autocapture: true,
     capture_pageview: true,
     capture_pageleave: true,
+    // Error tracking: auto-capture unhandled errors/rejections with stacks
+    // (PostHog is the single error sink — Sentry removed 2026-09-27).
+    capture_exceptions: true,
     persistence: "localStorage",
   });
   posthog.register({ app_env: import.meta.env.VITE_APP_ENV || "unknown" });
@@ -173,14 +155,10 @@ function Root() {
       // Identify user in PostHog
       if (s?.user) {
         posthog.identify(s.user.id, { email: s.user.email });
-        if (import.meta.env.VITE_SENTRY_DSN) {
-          Sentry.setUser({ id: s.user.id, email: s.user.email });
-        }
         if (CREDITS_UI_ENABLED) refreshCredits(s.user.id);
         initRevenueCat(s.user.id);
       } else {
         posthog.reset();
-        if (import.meta.env.VITE_SENTRY_DSN) Sentry.setUser(null);
       }
     });
     return () => subscription.unsubscribe();
@@ -331,6 +309,50 @@ function Root() {
         <Avatar session={session} />
         {CREDITS_UI_ENABLED && <CreditsOverlay session={session} />}
       </>
+    );
+  }
+
+  // Deep link to a trip while its row is still loading: show a quiet
+  // interstitial instead of flashing the Home list (screen stays "home"
+  // until loadTrip resolves; a failed load pushes "/" and Home renders).
+  if (
+    screen === "home" &&
+    !activeTrip &&
+    (route.page === "trip" || route.page === "edit")
+  ) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 14,
+          background: "#FAF6F0",
+          fontFamily: "Georgia,serif",
+        }}
+      >
+        <style>{`@keyframes tjPulse{0%,100%{opacity:0.45;}50%{opacity:0.9;}}`}</style>
+        <div
+          style={{
+            fontFamily: "'DM Serif Display',Georgia,serif",
+            fontSize: 26,
+            color: "#0F1923",
+          }}
+        >
+          TripJam
+        </div>
+        <div
+          style={{
+            fontSize: 13,
+            color: "#587284",
+            animation: "tjPulse 1.4s ease-in-out infinite",
+          }}
+        >
+          Opening trip…
+        </div>
+      </div>
     );
   }
 

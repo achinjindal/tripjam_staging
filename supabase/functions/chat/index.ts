@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { captureException } from "../_shared/errortrack.ts";
 import {
   authenticateUser,
   unauthorized,
@@ -695,6 +696,7 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
     });
   } catch (err) {
     console.error("chat error:", err.message);
+    await captureException(err, { functionName: "chat" });
     return new Response(
       JSON.stringify({
         error: err.message,

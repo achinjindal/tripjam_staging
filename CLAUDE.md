@@ -15,7 +15,7 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 - **Photos:** Wikipedia/Wikimedia Commons (free, serialized queue 2 concurrent / 400ms)
 - **Places:** Google Places API (autocomplete, hotel search with lodging type)
 - **Analytics:** PostHog (tagged with `app_env` for staging/production filtering)
-- **Error tracking:** Sentry (`VITE_SENTRY_DSN` env var; no-op when unset)
+- **Error tracking:** PostHog error tracking (web `capture_exceptions` + edge `_shared/errortrack.ts`, gated on `POSTHOG_KEY` secret; alerts file GitHub issues)
 - **Mobile:** Capacitor (Android APK), vite-plugin-pwa (auto-update, 5-min check interval)
 - **Payments:** Lemon Squeezy (web MoR; credits via `create-checkout` + `payment-webhook` edge functions) + RevenueCat (Android Google Play Billing via `@revenuecat/purchases-capacitor`)
 - **Testing:** Playwright E2E (sequential, workers: 1)
@@ -26,7 +26,7 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 ```
 src/
   App.jsx            — Main UI (~14,700 lines, core state + views)
-  main.jsx           — Entry point, Supabase init, PostHog/Sentry init, URL routing
+  main.jsx           — Entry point, Supabase init, PostHog init, URL routing
   Auth.jsx           — Login/signup (serif fonts, design system tokens)
   Home.jsx           — Trip list (card hover, warm palette)
   Landing.jsx        — Public marketing/landing page (unauthenticated)
@@ -75,7 +75,7 @@ supabase/
     _shared/
       credits.ts     — Shared auth + credit-deduction helpers for all gated functions
                        (authenticateUser, deductCredits, costToCredits, rateLimit, etc.)
-      sentry.ts      — Sentry integration for edge functions
+      errortrack.ts  — PostHog exception capture for edge functions ($exception via capture API)
     generate-brainstorm/       — Route Generation (RG): 4 route options with **bold** day text
     generate-itinerary/        — Itinerary Generation (IG): day-by-day plan with transit tips + transitions
     generate-destination-research/ — Inspirations tab: web-search-backed articles/vlogs via Haiku + web_search

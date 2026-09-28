@@ -1,3 +1,4 @@
+import { captureException } from "../_shared/errortrack.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   authenticateUser,
@@ -144,6 +145,7 @@ serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
+    await captureException(err, { functionName: "generate-todos" });
     return new Response(JSON.stringify({ error: err.message, items: [] }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

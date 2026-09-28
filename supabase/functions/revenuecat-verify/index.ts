@@ -1,3 +1,4 @@
+import { captureException } from "../_shared/errortrack.ts";
 // Client-triggered purchase verification for Android Google Play purchases.
 // Called immediately after a successful RevenueCat SDK purchase to grant
 // credits without waiting for the RevenueCat webhook (which fires async).
@@ -160,6 +161,7 @@ serve(async (req) => {
     );
   } catch (err) {
     console.error("revenuecat-verify error:", (err as Error).message);
+    await captureException(err, { functionName: "revenuecat-verify" });
     return new Response(JSON.stringify({ error: (err as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

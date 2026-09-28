@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { captureException } from "../_shared/errortrack.ts";
 import {
   authenticateUser,
   unauthorized,
@@ -1043,6 +1044,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
     });
   } catch (err) {
     console.error("Function error:", err.message, err.stack);
+    await captureException(err, { functionName: "generate-itinerary" });
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

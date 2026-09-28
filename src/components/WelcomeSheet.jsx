@@ -4,6 +4,14 @@
 // accept paths set (JoinTrip link flow + PendingInvitesBanner).
 import { T, RADIUS, SHADOW } from "../theme";
 
+const nameFor = (members, uid, selfId) => {
+  if (uid === selfId) return "You";
+  return (
+    members.find((m) => m.user_id === uid)?.profiles?.username || "Traveler"
+  );
+};
+const MAX_AWAY_BULLETS = 4;
+
 export default function WelcomeSheet({
   trip,
   days = [],
@@ -11,6 +19,11 @@ export default function WelcomeSheet({
   polls = [],
   members = [],
   selfId = null,
+  // Merged "while you were away" — when the join briefing and the away
+  // digest would both fire on the same open, the briefing absorbs the
+  // digest's bullets instead of chaining a second sheet after this one.
+  awayUnseen = [],
+  onReviewActivity = null,
   onShareStyle,
   onClose,
 }) {
@@ -109,6 +122,62 @@ export default function WelcomeSheet({
             </div>
           ))}
         </div>
+        {awayUnseen.length > 0 && (
+          <div
+            style={{
+              background: T.chalk,
+              border: `1px solid ${T.sand}`,
+              borderRadius: RADIUS.lg,
+              padding: "12px 14px",
+              marginBottom: 18,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 10,
+                letterSpacing: 0.6,
+                color: T.mist,
+                fontFamily: "Georgia,serif",
+                marginBottom: 7,
+              }}
+            >
+              WHILE YOU WERE AWAY
+            </div>
+            {awayUnseen.slice(0, MAX_AWAY_BULLETS).map((row) => (
+              <div
+                key={row.id}
+                style={{
+                  fontSize: 13,
+                  color: T.ink,
+                  fontFamily: "Georgia,serif",
+                  lineHeight: 1.5,
+                  marginBottom: 3,
+                }}
+              >
+                <b>{nameFor(members, row.user_id, selfId)}</b>{" "}
+                {row.summary || row.action}
+              </div>
+            ))}
+            {awayUnseen.length > MAX_AWAY_BULLETS && onReviewActivity && (
+              <button
+                onClick={onReviewActivity}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: T.ocean,
+                  fontFamily: "Georgia,serif",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  padding: 0,
+                  marginTop: 4,
+                }}
+              >
+                +{awayUnseen.length - MAX_AWAY_BULLETS} more — see all activity
+                →
+              </button>
+            )}
+          </div>
+        )}
         <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
           <button
             onClick={onShareStyle}

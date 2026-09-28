@@ -13,7 +13,7 @@
 //   supabase functions deploy payment-webhook --no-verify-jwt --project-ref <ref>
 
 import { grantCredits } from "../_shared/credits.ts";
-import { captureException } from "../_shared/sentry.ts";
+import { captureException } from "../_shared/errortrack.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

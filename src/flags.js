@@ -5,6 +5,10 @@
 export const ROUTES_LENS_ENABLED =
   import.meta.env.VITE_ROUTES_LENS_ENABLED === "true";
 
+// Place Peek: tappable town chips/links on RG route cards → Wikipedia peek sheet.
+export const PLACE_PEEK_ENABLED =
+  import.meta.env.VITE_PLACE_PEEK_ENABLED === "true";
+
 // E2E cost mode: set ONLY by the Playwright webServer (playwright.config.ts),
 // never in .env files, so manual dev and prod are untouched. Suppresses the
 // background LLM spenders no spec asserts on (Inspirations auto-fire,

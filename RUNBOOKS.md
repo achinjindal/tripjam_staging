@@ -563,12 +563,20 @@ git push origin --tags
 - Trip-create funnel → events: trip_create_started → trip_create_completed
 - IG funnel → events: ig_started → ig_compact_complete → ig_detailed_complete
 
-### Sentry
+### PostHog error tracking (replaced Sentry 2026-09-27)
 
-- Add DSN: Supabase secrets `SENTRY_DSN`, Vercel env `VITE_SENTRY_DSN`
-- Configure alert rules (Sentry → Alerts → New alert):
-  - "New issue" → Slack/email immediately
-  - "Error frequency > 5/min" → page on-call
+- Console: us.posthog.com → Error tracking. Exceptions flow from web
+  (`capture_exceptions` in main.jsx) and edge (`_shared/errortrack.ts`,
+  gated on Supabase secret `POSTHOG_KEY` — set on both projects).
+- Alerts (Error tracking → Configuration → Alerting) file GitHub issues in
+  `achinjindal/tripjam`: issue created (filter app_env=production) and
+  issue spiking (`[spike]` title prefix, unfiltered — spiking event lacks
+  exception properties, a filter silently blocks everything).
+- Spike detection tuned for current scale: snooze 60m, multiplier 5,
+  minimum threshold 5.
+- Staging errors still create PostHog issues (alerts are prod-only). If
+  E2E noise clutters the list: Configuration → Suppression rules →
+  app_env=staging.
 
 ### Supabase logs
 

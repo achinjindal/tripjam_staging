@@ -47,7 +47,9 @@ import { sendTripEmail } from "./notify.js";
 import WelcomeSheet from "./components/WelcomeSheet.jsx";
 import RouteOverview from "./components/RouteOverview.jsx";
 import RouteEditorSheet from "./components/RouteEditorSheet.jsx";
-import { ROUTES_LENS_ENABLED, E2E_CHEAP } from "./flags.js";
+import { ROUTES_LENS_ENABLED, PLACE_PEEK_ENABLED, E2E_CHEAP } from "./flags.js";
+import PlacePeek from "./PlacePeek.jsx";
+import { findTownInText } from "./places.js";
 import {
   deriveStops,
   dRanges,
@@ -119,6 +121,10 @@ class ErrorBoundary extends Component {
   }
   componentDidCatch(err) {
     console.error("ErrorBoundary caught:", err);
+    // Boundaries intercept render crashes before any global handler sees
+    // them — captureException (not a bare event) gets the stack, grouping,
+    // and replay linkage in PostHog error tracking.
+    posthog.captureException(err, { surface: "error-boundary" });
     posthog.capture("render_error", { error: err.message });
   }
   render() {
@@ -1239,6 +1245,74 @@ const BRAINSTORM_CATEGORY_ICONS = {
   "Day Trip": "🚌",
 };
 
+// Amber dot on the members affordance — "share your travel style" nudge,
+// demoted from an auto-opened sheet to this passive badge (sheet-parade fix).
+function StyleBadgeDot() {
+  return (
+    <span
+      title="Share your travel style"
+      style={{
+        position: "absolute",
+        top: -2,
+        right: -2,
+        width: 9,
+        height: 9,
+        borderRadius: "50%",
+        background: T.gold,
+        border: `1.5px solid ${T.chalk}`,
+      }}
+    />
+  );
+}
+
+// ── Place Peek (RG) helpers ─────────────────────────────────────────────────
+// Linkify the first mention of each peekable town inside a day-line segment.
+// `remaining` is a Set created fresh per card render — towns are removed as
+// they're linked, so each gets exactly one dotted-underline tap point.
+// Styling inherits weight/color from the surrounding text (bold stays pure
+// emphasis; the underline alone means "tappable").
+function linkifyPlaceSegment(str, remaining, onTap, keyBase) {
+  if (!str) return [str];
+  const out = [];
+  let rest = str;
+  let k = 0;
+  while (rest) {
+    let best = null;
+    for (const town of remaining) {
+      const hit = findTownInText(rest, town);
+      if (hit && (!best || hit[0] < best.hit[0])) best = { town, hit };
+    }
+    if (!best) {
+      out.push(rest);
+      break;
+    }
+    const [s, e] = best.hit;
+    const town = best.town;
+    if (s > 0) out.push(rest.slice(0, s));
+    out.push(
+      <span
+        key={`${keyBase}-${k++}`}
+        onClick={(ev) => {
+          ev.stopPropagation();
+          onTap(town, "text");
+        }}
+        style={{
+          cursor: "pointer",
+          textDecoration: "underline dotted",
+          textDecorationThickness: 1.5,
+          textUnderlineOffset: 3,
+          textDecorationColor: "rgba(88,114,132,0.55)",
+        }}
+      >
+        {rest.slice(s, e)}
+      </span>,
+    );
+    remaining.delete(town);
+    rest = rest.slice(e);
+  }
+  return out;
+}
+
 function RouteCard({
   item,
   vs,
@@ -1251,11 +1325,24 @@ function RouteCard({
   onModify = null,
   onTellMore = null,
   onShowMap = null,
+  peekPlaces = null, // { chips: [{city, nights?, kind}] } — Place Peek towns
+  onPlacePeek = null, // (city, source: "text"|"chip", kind) => void
 }) {
   const selected = interactive
     ? vs.mine === 1
     : item.selected === true || vs.mine === 1;
   const hasError = !!item._error;
+  // Place Peek: towns not yet linked in this card's day text. Created fresh
+  // each render (pure — safe under StrictMode double-render); the day-line
+  // pass consumes towns so each gets exactly one first-mention link.
+  const peekRemaining =
+    onPlacePeek && peekPlaces?.chips?.length
+      ? new Set(peekPlaces.chips.map((c) => c.city))
+      : null;
+  const peekTap = (city, source) => {
+    const chip = peekPlaces?.chips?.find((c) => c.city === city);
+    onPlacePeek?.(city, source, chip?.kind || "day_trip", chip?.nights ?? null);
+  };
 
   // Compact mode: just label, icon, title, tagline — for 2-column grid
   if (compact) {
@@ -1520,15 +1607,83 @@ function RouteCard({
                     lineHeight: 1.4,
                   }}
                 >
-                  {text
-                    .split(/\*\*(.+?)\*\*/)
-                    .map((part, j) =>
-                      j % 2 === 1 ? <strong key={j}>{part}</strong> : part,
-                    )}
+                  {text.split(/\*\*(.+?)\*\*/).map((part, j) => {
+                    const content = peekRemaining
+                      ? linkifyPlaceSegment(
+                          part,
+                          peekRemaining,
+                          peekTap,
+                          `d${i}s${j}`,
+                        )
+                      : part;
+                    return j % 2 === 1 ? (
+                      <strong key={j}>{content}</strong>
+                    ) : (
+                      <span key={j}>{content}</span>
+                    );
+                  })}
                 </div>
               </div>
             );
           })}
+        </div>
+      )}
+      {/* Place Peek chips — the guaranteed index of every peekable town */}
+      {onPlacePeek && peekPlaces?.chips?.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            flexWrap: "wrap",
+            marginBottom: 10,
+            paddingTop: 8,
+            borderTop: `1px solid ${selected ? T.ocean + "33" : T.sand}`,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 9.5,
+              letterSpacing: 0.6,
+              color: T.mist,
+              fontFamily: "Georgia,serif",
+              width: "100%",
+            }}
+          >
+            PLACES ON THIS ROUTE
+          </div>
+          {peekPlaces.chips.map((c) => (
+            <span
+              key={c.city}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                peekTap(c.city, "chip");
+              }}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                border: `1px ${c.kind === "day_trip" ? "dashed" : "solid"} ${T.skyBorder}`,
+                background: c.kind === "day_trip" ? "transparent" : T.skyLight,
+                borderRadius: RADIUS.full,
+                padding: "3px 10px",
+                fontSize: 11,
+                color: c.kind === "day_trip" ? T.mist : T.ocean,
+                cursor: "pointer",
+                fontFamily: "Georgia,serif",
+                lineHeight: 1.3,
+              }}
+            >
+              {c.city}
+              {c.kind === "base" && c.nights != null && (
+                <span style={{ color: T.mist, fontSize: 10 }}>
+                  · {c.nights} night{c.nights > 1 ? "s" : ""}
+                </span>
+              )}
+              {c.kind === "day_trip" && (
+                <span style={{ fontSize: 10 }}>· day trip</span>
+              )}
+            </span>
+          ))}
         </div>
       )}
       {/* Salient points */}
@@ -1968,6 +2123,7 @@ function BrainstormView({
   onBack,
   onEditForm = null,
   onInvite = null,
+  styleBadge = false,
   members = [],
   preferences = [],
   onOpenChat = null,
@@ -2075,6 +2231,101 @@ function BrainstormView({
         .split(" → ")
         .map((s) => s.trim())
         .filter(Boolean);
+
+  // ── Place Peek (RG) ──────────────────────────────────────────────────────
+  const [placePeek, setPlacePeek] = useState(null);
+  const peekNumDays =
+    igReq.startDate && igReq.endDate
+      ? Math.max(
+          1,
+          Math.round(
+            (new Date(igReq.endDate) - new Date(igReq.startDate)) /
+              (1000 * 60 * 60 * 24),
+          ) + 1,
+        )
+      : null;
+  const peekTripNights = peekNumDays ? tripNightsOf(peekNumDays) : null;
+
+  // Chips for one route: bases (stops-derived, with nights) + day-trips
+  // (city − stops, dashed). When stops can't be derived, every city-list
+  // town becomes an unlabeled base-style chip (design Rev 6 fallback).
+  const computePeekPlaces = (it) => {
+    const cityList = [
+      ...new Map(
+        (it.city || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((c) => [c.toLowerCase(), c]),
+      ).values(),
+    ];
+    if (!cityList.length) return null;
+    const { stops } = deriveStops(it, peekTripNights);
+    if (!stops) {
+      return { chips: cityList.map((city) => ({ city, kind: "plain" })) };
+    }
+    const baseSet = new Set(stops.map((s) => s.city.toLowerCase()));
+    return {
+      chips: [
+        ...stops.map((s) => ({
+          city: s.city,
+          nights: s.nights,
+          kind: "base",
+        })),
+        ...cityList
+          .filter((c) => !baseSet.has(c.toLowerCase()))
+          .map((city) => ({ city, kind: "day_trip" })),
+      ],
+    };
+  };
+
+  const openPlacePeek = (place, source, kind, nights, routeId) => {
+    const lcPlace = place.toLowerCase();
+    // Context rows use POSITIONAL labels — same P{n} the cards render.
+    const context = (items || [])
+      .filter((it) => it.tier === 1 && !it.dismissed)
+      .map((it, idx) => {
+        const { stops } = deriveStops(it, peekTripNights);
+        const base = (stops || []).find(
+          (s) => s.city.toLowerCase() === lcPlace,
+        );
+        if (base)
+          return {
+            label: `P${idx + 1}`,
+            text: `Overnight base · ${base.nights} night${base.nights > 1 ? "s" : ""}`,
+          };
+        const visited = (it.city || "")
+          .toLowerCase()
+          .split(",")
+          .map((s) => s.trim())
+          .includes(lcPlace);
+        return {
+          label: `P${idx + 1}`,
+          text: visited
+            ? stops
+              ? "Day trip"
+              : "On this route"
+            : "Not visited",
+        };
+      });
+    setPlacePeek({ place, kind, nights, context, routeId });
+    // Warm the Magazine deep dive for this town (cache-deduped upstream).
+    loadCityDeepDive(place);
+    posthog.capture("place_peek_open", {
+      place,
+      source,
+      kind,
+      route_id: routeId,
+      trip_id: trip?.id || editTripIdRef.current || null,
+    });
+  };
+
+  // Every stop coordinate we know — geo-sanity for Wikipedia homonyms.
+  const peekStopCoords = (items || [])
+    .filter((it) => it.tier === 1 && !it.dismissed)
+    .flatMap((it) => deriveStops(it, peekTripNights).stops || [])
+    .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng))
+    .map((s) => ({ lat: s.lat, lng: s.lng }));
 
   useEffect(() => {
     if (editTripId) {
@@ -2639,6 +2890,36 @@ function BrainstormView({
   const tier1Items = (items || [])
     .filter((it) => it.tier === 1 && !it.dismissed)
     .slice(0, 12);
+  // All-dismissed detection: chat's dismiss_route can bulk-dismiss every
+  // route (destination pivot). Rows survive with dismissed=true, but with
+  // zero visible cards the panel used to render NOTHING (the empty-state CTA
+  // checks items.length === 0) — a dead end that reads as lost work.
+  const dismissedTier1 = (items || []).filter(
+    (it) => it.tier === 1 && it.dismissed,
+  );
+  const restoreDismissedRoutes = () => {
+    const ids = dismissedTier1.map((it) => it.id).filter(Boolean);
+    if (!ids.length) return;
+    setItems((prev) =>
+      (prev || []).map((it) =>
+        it.tier === 1 && it.dismissed ? { ...it, dismissed: false } : it,
+      ),
+    );
+    const dbIds = ids.filter((id) => !String(id).startsWith("temp_"));
+    if (dbIds.length) {
+      supabase
+        .from("brainstorm_items")
+        .update({ dismissed: false })
+        .in("id", dbIds)
+        .then(({ error }) => {
+          if (error) console.warn("route restore failed:", error.message);
+        });
+    }
+    posthog.capture("routes_restored_all", {
+      count: ids.length,
+      trip_id: trip?.id || editTripIdRef.current || null,
+    });
+  };
   const tier2Items = (items || []).filter(
     (it) => (it.tier || 2) === 2 && !it.dismissed,
   );
@@ -2731,6 +3012,20 @@ function BrainstormView({
         overflow: "hidden",
       }}
     >
+      {/* Place Peek overlay — rendered at view root (never inside a RouteCard:
+          the card root is click-to-vote and a scrim tap would bubble into it) */}
+      {PLACE_PEEK_ENABLED && isPretripMode && placePeek && (
+        <PlacePeek
+          peek={placePeek}
+          destination={destinations.join(", ")}
+          stopCoords={peekStopCoords}
+          onClose={() => setPlacePeek(null)}
+          onAskTrippy={onAskTrippy}
+          onOpenMagazine={
+            onTellMore ? (city, routeId) => onTellMore([city], routeId) : null
+          }
+        />
+      )}
       {/* Header */}
       <div
         style={{
@@ -2791,9 +3086,13 @@ function BrainstormView({
                       marginTop: 2,
                     }}
                   >
-                    {generating || !items?.length
+                    {generating
                       ? "Generating your routes…"
-                      : "Pick a route, then build your itinerary"}
+                      : loadingItems || items === null
+                        ? "Loading your plans…"
+                        : !items?.length
+                          ? "Let's find you some routes"
+                          : "Pick a route, then build your itinerary"}
                   </div>
                 )}
               </div>
@@ -2816,8 +3115,10 @@ function BrainstormView({
                     display: "inline-flex",
                     alignItems: "center",
                     gap: 6,
+                    position: "relative",
                   }}
                 >
+                  {styleBadge && <StyleBadgeDot />}
                   {members.length > 1 ? (
                     <>
                       <AvatarStack
@@ -3025,7 +3326,14 @@ function BrainstormView({
                 </div>
               );
             })()}
-            {items?.length === 0 &&
+            {/* No visible routes AND none dismissed → offer generation. Keyed
+                on tier-1 rows, not items.length: a failed regeneration can
+                leave only tier-2 highlight rows behind, which used to render
+                a blank panel (items non-empty suppressed this CTA, no cards,
+                nothing to restore). */}
+            {items !== null &&
+              tier1Items.length === 0 &&
+              dismissedTier1.length === 0 &&
               !generating &&
               !loadingItems &&
               !genError && (
@@ -3068,91 +3376,197 @@ function BrainstormView({
                   </button>
                 </div>
               )}
-            {/* Skeleton route cards — shown before first route arrives */}
-            {(generating || loadingItems || items === null) &&
+            {/* All plans dismissed (chat destination pivot etc.) — rows still
+                exist with dismissed=true. Offer restore before regeneration;
+                without this branch the panel rendered nothing at all. */}
+            {tier1Items.length === 0 &&
+              dismissedTier1.length > 0 &&
+              !generating &&
+              !loadingItems &&
+              !genError && (
+                <div style={{ textAlign: "center", padding: "60px 20px" }}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>🗂️</div>
+                  <div
+                    style={{
+                      fontFamily: "'DM Serif Display',serif",
+                      fontSize: 18,
+                      color: T.ink,
+                      marginBottom: 8,
+                    }}
+                  >
+                    All your plans were dismissed
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "Georgia,serif",
+                      fontSize: 13,
+                      color: T.mist,
+                      marginBottom: 16,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    This usually happens after a destination change in chat.
+                    Your plans are still saved — bring them back, or start
+                    fresh.
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      justifyContent: "center",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <button
+                      onClick={restoreDismissedRoutes}
+                      style={{
+                        background: T.ocean,
+                        color: "white",
+                        border: "none",
+                        borderRadius: RADIUS.md,
+                        padding: "9px 20px",
+                        fontFamily: "Georgia,serif",
+                        fontSize: 13,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Restore {dismissedTier1.length} dismissed plan
+                      {dismissedTier1.length > 1 ? "s" : ""}
+                    </button>
+                    <button
+                      onClick={generate}
+                      style={{
+                        background: "transparent",
+                        color: T.ocean,
+                        border: `1.5px solid ${T.skyBorder}`,
+                        borderRadius: RADIUS.md,
+                        padding: "9px 20px",
+                        fontFamily: "Georgia,serif",
+                        fontSize: 13,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Generate new plans
+                    </button>
+                  </div>
+                </div>
+              )}
+            {/* Quiet loader — routes being FETCHED from the DB, not generated.
+                Showing the generation theater here made users think their
+                saved routes were being regenerated (prod report 2026-09-26). */}
+            {!generating &&
+              (loadingItems || items === null) &&
               tier1Items.length === 0 && (
-                <div
-                  style={{ display: "flex", flexDirection: "column", gap: 10 }}
-                >
-                  <RouteDraftingCard destinations={destinations} />
-                  {[0, 1, 2, 3].map((i) => (
+                <div style={{ textAlign: "center", padding: "48px 20px" }}>
+                  <div
+                    style={{
+                      fontFamily: "Georgia,serif",
+                      fontSize: 13,
+                      color: T.mist,
+                      marginBottom: 14,
+                    }}
+                  >
+                    Loading your plans…
+                  </div>
+                  {[0, 1].map((i) => (
                     <div
                       key={i}
                       style={{
+                        height: 64,
                         background: T.chalk,
+                        border: `1.5px solid ${T.sand}`,
                         borderRadius: RADIUS.lg,
-                        padding: "14px 16px",
-                        border: `2px solid ${T.sand}`,
-                        animation: `shimmer 1.5s ease-in-out ${i * 0.18}s infinite`,
+                        marginBottom: 8,
+                        animation: `shimmer 1.5s ease-in-out ${i * 0.2}s infinite`,
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            {/* Generation theater — only while RG is actually running */}
+            {generating && tier1Items.length === 0 && (
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: 10 }}
+              >
+                <RouteDraftingCard destinations={destinations} />
+                {[0, 1, 2, 3].map((i) => (
+                  <div
+                    key={i}
+                    style={{
+                      background: T.chalk,
+                      borderRadius: RADIUS.lg,
+                      padding: "14px 16px",
+                      border: `2px solid ${T.sand}`,
+                      animation: `shimmer 1.5s ease-in-out ${i * 0.18}s infinite`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 10,
+                        marginBottom: 10,
+                        alignItems: "flex-start",
                       }}
                     >
                       <div
                         style={{
-                          display: "flex",
-                          gap: 10,
-                          marginBottom: 10,
-                          alignItems: "flex-start",
+                          width: 26,
+                          height: 26,
+                          borderRadius: "50%",
+                          background: T.sand,
+                          flexShrink: 0,
                         }}
-                      >
+                      />
+                      <div style={{ flex: 1 }}>
                         <div
                           style={{
-                            width: 26,
-                            height: 26,
-                            borderRadius: "50%",
+                            height: 14,
+                            width: "55%",
                             background: T.sand,
-                            flexShrink: 0,
+                            borderRadius: 4,
+                            marginBottom: 7,
                           }}
                         />
-                        <div style={{ flex: 1 }}>
-                          <div
-                            style={{
-                              height: 14,
-                              width: "55%",
-                              background: T.sand,
-                              borderRadius: 4,
-                              marginBottom: 7,
-                            }}
-                          />
-                          <div
-                            style={{
-                              height: 10,
-                              width: "35%",
-                              background: T.sand,
-                              borderRadius: 4,
-                            }}
-                          />
-                        </div>
+                        <div
+                          style={{
+                            height: 10,
+                            width: "35%",
+                            background: T.sand,
+                            borderRadius: 4,
+                          }}
+                        />
                       </div>
-                      <div
-                        style={{
-                          height: 10,
-                          width: "100%",
-                          background: T.sand,
-                          borderRadius: 4,
-                          marginBottom: 5,
-                        }}
-                      />
-                      <div
-                        style={{
-                          height: 10,
-                          width: "80%",
-                          background: T.sand,
-                          borderRadius: 4,
-                          marginBottom: 5,
-                        }}
-                      />
-                      <div
-                        style={{
-                          height: 10,
-                          width: "60%",
-                          background: T.sand,
-                          borderRadius: 4,
-                        }}
-                      />
                     </div>
-                  ))}
-                </div>
-              )}
+                    <div
+                      style={{
+                        height: 10,
+                        width: "100%",
+                        background: T.sand,
+                        borderRadius: 4,
+                        marginBottom: 5,
+                      }}
+                    />
+                    <div
+                      style={{
+                        height: 10,
+                        width: "80%",
+                        background: T.sand,
+                        borderRadius: 4,
+                        marginBottom: 5,
+                      }}
+                    />
+                    <div
+                      style={{
+                        height: 10,
+                        width: "60%",
+                        background: T.sand,
+                        borderRadius: 4,
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {tier1Items.map((item, idx) => (
                 <div
@@ -3210,6 +3624,15 @@ function BrainstormView({
                         : null
                     }
                     onShowMap={onShowMap ? () => onShowMap(item.id) : null}
+                    peekPlaces={
+                      PLACE_PEEK_ENABLED ? computePeekPlaces(item) : null
+                    }
+                    onPlacePeek={
+                      PLACE_PEEK_ENABLED
+                        ? (place, source, kind, nights) =>
+                            openPlacePeek(place, source, kind, nights, item.id)
+                        : null
+                    }
                   />
                 </div>
               ))}
@@ -7850,6 +8273,7 @@ export default function App({
   }, [members]);
   // Phase 5: per-traveller preferences ("Your travel style").
   const [preferences, setPreferences] = useState([]);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [showPreferences, setShowPreferences] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false); // WS6 join briefing
   const [showMembers, setShowMembers] = useState(false);
@@ -7889,15 +8313,9 @@ export default function App({
       return;
     }
     // WS6: first open after accepting an invite → one-time welcome briefing.
-    // Also pre-marks the style nudge so the two sheets don't stack.
     try {
       if (localStorage.getItem(`tripjam_just_joined_${tripId}`)) {
         localStorage.removeItem(`tripjam_just_joined_${tripId}`);
-        if (session?.user?.id)
-          localStorage.setItem(
-            `tripjam_prefs_nudged_${tripId}_${session.user.id}`,
-            "1",
-          );
         setShowWelcome(true);
       }
     } catch {
@@ -7909,7 +8327,12 @@ export default function App({
     // bell badge (they didn't happen "while away").
     tripOpenedAtRef.current = Date.now();
     fetchMembers(tripId).then((list) => !cancelled && setMembers(list));
-    fetchPreferences(tripId).then((list) => !cancelled && setPreferences(list));
+    setPrefsLoaded(false);
+    fetchPreferences(tripId).then((list) => {
+      if (cancelled) return;
+      setPreferences(list);
+      setPrefsLoaded(true);
+    });
     fetchPolls(tripId).then((list) => !cancelled && setPolls(list));
     fetchActivity(tripId).then((list) => !cancelled && setActivity(list));
     if (session?.user?.id)
@@ -7923,35 +8346,19 @@ export default function App({
   // A trip is "shared" once it has more than one member. Only then do we show
   // the pool pill / Trip Credits sheet — solo trips behave exactly as before.
   const isSharedTrip = INVITE_ENABLED && members.length > 1;
-  // Phase 5: gentle one-time nudge to share your travel style once a trip is
-  // shared and you haven't set yours. Guarded by localStorage so it shows once
-  // per (trip, user); the sheet is skippable (close = decline).
-  useEffect(() => {
-    if (!isSharedTrip || !trip?.id || !session?.user?.id) return;
-    // One auto-sheet at a time: welcome briefing and while-away outrank the
-    // style nudge. Deferring WITHOUT consuming the localStorage guard means
-    // the nudge simply retries when the higher-priority sheet closes.
-    if (showWelcome || showWhileAway) return;
-    const key = `tripjam_prefs_nudged_${trip.id}_${session.user.id}`;
-    if (localStorage.getItem(key)) return;
-    let cancelled = false;
-    fetchPreferences(trip.id).then((list) => {
-      if (cancelled) return;
-      if (showWelcome || showWhileAway) return; // re-check after async fetch
-      const hasMine =
-        list.some((p) => p.user_id === session.user.id && hasStyle(p)) ||
-        // The owner's setup-form notes already count as their shared style.
-        (session.user.id === (trip?.owner_id || trip?.created_by) &&
-          (trip?.notes || "").trim());
-      if (!hasMine) {
-        localStorage.setItem(key, "1");
-        setShowPreferences(true);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [isSharedTrip, trip?.id, showWelcome, showWhileAway]);
+  // Style nudge, demoted from auto-sheet to a passive badge (sheet-parade
+  // fix): an amber dot on the members affordance until you've shared your
+  // style. MembersSheet's "Share what you want from this trip" row is the
+  // entry point — no more auto-opened PreferencesSheet on trip open.
+  const needsStyleBadge =
+    isSharedTrip &&
+    !!session?.user?.id &&
+    prefsLoaded && // wait for the fetch — no flicker before load
+    !preferences.some((p) => p.user_id === session.user.id && hasStyle(p)) &&
+    !(
+      session.user.id === (trip?.owner_id || trip?.created_by) &&
+      (trip?.notes || "").trim()
+    );
   // Phase 3: unseen changes by others (drives the bell badge + while-away sheet).
   const selfId = session?.user?.id;
   const unseen = useMemo(
@@ -8007,10 +8414,13 @@ export default function App({
   useEffect(() => {
     if (!isSharedTrip || !trip?.id) return;
     if (whileAwayShownFor.current === trip.id) return;
-    // One auto-sheet at a time: the welcome briefing outranks while-away (it
-    // already summarizes trip state for a fresh joiner). Deferring instead of
-    // consuming the ref lets this fire when the welcome sheet closes.
-    if (showWelcome) return;
+    // Merged sheets: the welcome briefing ABSORBS the away digest (it renders
+    // awayUnseen bullets itself), so seeing the briefing consumes this trigger
+    // — no second sheet chained after it.
+    if (showWelcome) {
+      whileAwayShownFor.current = trip.id;
+      return;
+    }
     if (awayUnseen.length > 0) {
       whileAwayShownFor.current = trip.id;
       setShowWhileAway(true);
@@ -8044,8 +8454,32 @@ export default function App({
   const [igGenerating, setIgGenerating] = useState(false); // true while IG is in flight (Magazine shown instead of generating screen)
   const [igCompletedInPlace, setIgCompletedInPlace] = useState(false); // IG finished while the user stayed on the pre-trip Magazine
 
+  const daysCacheHitRef = useRef(false);
+  const daysRetryRef = useRef(null);
+  const [daysLoadSlow, setDaysLoadSlow] = useState(false);
   useEffect(() => {
     if (initialScreen === "itinerary" && initialTrip?.id) {
+      // Cache-first hydration: the whole itinerary usually sits in
+      // localStorage from the last visit — paint it immediately and let the
+      // network response reconcile (setDays below overwrites unconditionally).
+      // Before this, the cache was only an error fallback and every open
+      // blocked on the network behind "Loading itinerary…".
+      let cacheHit = false;
+      try {
+        const cached = localStorage.getItem(`tripjam_days_${initialTrip.id}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setDays(parsed);
+            setLoading(false);
+            cacheHit = true;
+            setTimeout(() => preloadDay(0), 100);
+          }
+        }
+      } catch {
+        /* corrupt cache/private mode — network path below */
+      }
+      daysCacheHitRef.current = cacheHit;
       const processDays = (data) => {
         const seenPhotos = new Set();
         const allDays = (data || []).map((d) => {
@@ -8079,55 +8513,72 @@ export default function App({
           return true;
         });
       };
-      supabase
-        .from("days")
-        .select("*, activities(*)")
-        .eq("trip_id", initialTrip.id)
-        .order("position")
-        .then(async ({ data, error }) => {
-          if (data?.length) {
-            const deduped = processDays(data);
-            setDays(deduped);
-            // Resume any unfinished photo backfill for this trip (once per open)
-            if (photoSweepTripRef.current !== initialTrip.id) {
-              photoSweepTripRef.current = initialTrip.id;
-              setTimeout(() => sweepTripPhotos(deduped, initialTrip.id), 2500);
-            }
-            // Persist any newly-generated gem IDs (fire-and-forget; idempotent)
-            for (let i = 0; i < deduped.length; i++) {
-              const orig = data[i];
-              const next = deduped[i];
-              const origNeedsBackfill =
-                Array.isArray(orig?.wishlist) &&
-                orig.wishlist.some((w) => !w.id);
-              if (origNeedsBackfill) {
-                supabase
-                  .from("days")
-                  .update({ wishlist: next.wishlist })
-                  .eq("id", next.id)
-                  .then(() => {});
+      // First-open (no cache) hang guard: paused Supabase / ISP DNS hijack
+      // leave the query pending forever with no error. After 8s surface a
+      // hint + Retry in the skeleton instead of an indefinite spinner.
+      const doFetch = () => {
+        setDaysLoadSlow(false);
+        const slowTimer = daysCacheHitRef.current
+          ? null
+          : setTimeout(() => setDaysLoadSlow(true), 8000);
+        supabase
+          .from("days")
+          .select("*, activities(*)")
+          .eq("trip_id", initialTrip.id)
+          .order("position")
+          .then(async ({ data, error }) => {
+            if (slowTimer) clearTimeout(slowTimer);
+            setDaysLoadSlow(false);
+            if (data?.length) {
+              const deduped = processDays(data);
+              setDays(deduped);
+              // Resume any unfinished photo backfill for this trip (once per open)
+              if (photoSweepTripRef.current !== initialTrip.id) {
+                photoSweepTripRef.current = initialTrip.id;
+                setTimeout(
+                  () => sweepTripPhotos(deduped, initialTrip.id),
+                  2500,
+                );
               }
+              // Persist any newly-generated gem IDs (fire-and-forget; idempotent)
+              for (let i = 0; i < deduped.length; i++) {
+                const orig = data[i];
+                const next = deduped[i];
+                const origNeedsBackfill =
+                  Array.isArray(orig?.wishlist) &&
+                  orig.wishlist.some((w) => !w.id);
+                if (origNeedsBackfill) {
+                  supabase
+                    .from("days")
+                    .update({ wishlist: next.wishlist })
+                    .eq("id", next.id)
+                    .then(() => {});
+                }
+              }
+              // Cache for offline viewing
+              try {
+                localStorage.setItem(
+                  `tripjam_days_${initialTrip.id}`,
+                  JSON.stringify(deduped),
+                );
+              } catch {}
+            } else if (!daysCacheHitRef.current && (error || !data?.length)) {
+              // Offline fallback: load from localStorage (cache-hit opens
+              // already painted from it)
+              try {
+                const cached = localStorage.getItem(
+                  `tripjam_days_${initialTrip.id}`,
+                );
+                if (cached) setDays(JSON.parse(cached));
+              } catch {}
             }
-            // Cache for offline viewing
-            try {
-              localStorage.setItem(
-                `tripjam_days_${initialTrip.id}`,
-                JSON.stringify(deduped),
-              );
-            } catch {}
-          } else if (error || !data?.length) {
-            // Offline fallback: load from localStorage
-            try {
-              const cached = localStorage.getItem(
-                `tripjam_days_${initialTrip.id}`,
-              );
-              if (cached) setDays(JSON.parse(cached));
-            } catch {}
-          }
-          setLoading(false);
-          // Pre-load Day 1 for existing trips
-          setTimeout(() => preloadDay(0), 100);
-        });
+            setLoading(false);
+            // Pre-load Day 1 for existing trips (cache-hit opens already did)
+            if (!daysCacheHitRef.current) setTimeout(() => preloadDay(0), 100);
+          });
+      };
+      daysRetryRef.current = doFetch;
+      doFetch();
     }
   }, []);
 
@@ -8829,8 +9280,12 @@ export default function App({
   //   "magazine"    — Magazine grid (city deep-dives etc)
   // Desktop pre-trip: separate "inspirations" top tab. Mobile pre-trip: bottom nav
   // uses the "magazine" key (Inspirations label) with sub-tabs inside.
+  // Drafts (post-RG, no itinerary yet) open straight onto their saved routes —
+  // landing on Inspirations/Magazine read as "my routes are gone". The create
+  // flow and Explore-plans set this explicitly, so the default only governs
+  // direct opens.
   const [pretripTab, setPretripTab] = useState(() =>
-    isDesktop ? "inspirations" : "magazine",
+    isDraft ? "brainstorm" : isDesktop ? "inspirations" : "magazine",
   );
   // Sub-tab inside the "magazine area" — used on mobile (both pre- and post-trip)
   // and on desktop post-trip, where Inspirations and Magazine share one top-tab
@@ -8912,38 +9367,49 @@ export default function App({
       morningStart: "early",
       pace: "active",
     };
-    try {
-      // D15: extract-preferences requires user authentication.
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/extract-preferences`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({
-            notes: pendingForm?.notes || "",
-            chatHistory: chatMessages.filter((m) => m.role !== "system-undo"),
-            tripId: trip?.id || editingTrip?.id || null,
-          }),
-        },
-      );
-      if (res.ok) {
-        const prefs = await res.json();
-        setPreIgForm({
-          budget: prefs.budget || defaults.budget,
-          morningStart: prefs.morningStart || defaults.morningStart,
-          pace: prefs.pace || defaults.pace,
-          igNotes: "",
-        });
-      } else {
-        setPreIgForm({ ...defaults, igNotes: "" });
-      }
-    } catch {
-      setPreIgForm({ ...defaults, igNotes: "" });
-    }
+    // Open INSTANTLY with defaults — this used to await the Haiku
+    // extract-preferences call, leaving 1.5-4s of dead air after "Build My
+    // Itinerary". The extraction now runs in the background and fills in
+    // only the pills the user hasn't already tapped.
+    setPreIgForm({ ...defaults, igNotes: "" });
     setShowPreIgSheet(true);
+    (async () => {
+      try {
+        // D15: extract-preferences requires user authentication.
+        const res = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/extract-preferences`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${(await freshAccessToken()) || session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            },
+            body: JSON.stringify({
+              notes: pendingForm?.notes || "",
+              chatHistory: chatMessages.filter((m) => m.role !== "system-undo"),
+              tripId: trip?.id || editingTrip?.id || null,
+            }),
+          },
+        );
+        if (!res.ok) return;
+        const prefs = await res.json();
+        setPreIgForm((cur) => ({
+          ...cur,
+          budget:
+            cur.budget === defaults.budget && prefs.budget
+              ? prefs.budget
+              : cur.budget,
+          morningStart:
+            cur.morningStart === defaults.morningStart && prefs.morningStart
+              ? prefs.morningStart
+              : cur.morningStart,
+          pace:
+            cur.pace === defaults.pace && prefs.pace ? prefs.pace : cur.pace,
+        }));
+      } catch {
+        /* defaults stand */
+      }
+    })();
   };
 
   /* Pre-IG sheet exit discipline (three-exit standard): ✕ / scrim / swipe
@@ -13353,9 +13819,10 @@ export default function App({
               {INVITE_ENABLED && (
                 <button
                   onClick={() => setShowMembers(true)}
-                  style={tripContextBtnStyle}
+                  style={{ ...tripContextBtnStyle, position: "relative" }}
                   title="Trip members"
                 >
+                  {needsStyleBadge && <StyleBadgeDot />}
                   {members.length > 1 ? (
                     <span
                       style={{
@@ -13521,8 +13988,15 @@ export default function App({
                       : null
                   }
                   onInvite={editingTrip?.id ? () => setShowMembers(true) : null}
+                  styleBadge={needsStyleBadge}
                   members={members}
                   preferences={preferences}
+                  onAskTrippy={(title) => {
+                    setChatInput(`Tell me about "${title}"`);
+                    setChatOpen(true);
+                    setChatUnread(false);
+                    setTimeout(() => chatInputRef.current?.focus(), 50);
+                  }}
                   onOpenChat={() => {
                     setChatOpen(true);
                     setChatUnread(false);
@@ -14528,15 +15002,75 @@ export default function App({
             <div
               style={{
                 flex: 1,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#8BA5BB",
-                fontFamily: "Georgia,serif",
-                fontSize: 14,
+                overflowY: "hidden",
+                padding: "18px 16px",
+                maxWidth: 560,
+                width: "100%",
+                margin: "0 auto",
               }}
             >
-              Loading itinerary…
+              <div
+                style={{
+                  fontFamily: "Georgia,serif",
+                  fontSize: 12,
+                  color: T.mist,
+                  marginBottom: 12,
+                }}
+              >
+                Loading your itinerary…
+              </div>
+              {[0, 1, 2].map((i) => (
+                <div key={i} style={{ marginBottom: 18 }}>
+                  <div
+                    style={{
+                      height: 12,
+                      width: 90,
+                      background: T.sand,
+                      borderRadius: 4,
+                      marginBottom: 8,
+                      animation: `shimmer 1.5s ease-in-out ${i * 0.15}s infinite`,
+                    }}
+                  />
+                  <div
+                    style={{
+                      height: 110,
+                      background: T.chalk,
+                      border: `1.5px solid ${T.sand}`,
+                      borderRadius: RADIUS.lg,
+                      animation: `shimmer 1.5s ease-in-out ${i * 0.15 + 0.1}s infinite`,
+                    }}
+                  />
+                </div>
+              ))}
+              {daysLoadSlow && (
+                <div
+                  style={{
+                    textAlign: "center",
+                    fontFamily: "Georgia,serif",
+                    fontSize: 12.5,
+                    color: T.mist,
+                    marginTop: 4,
+                  }}
+                >
+                  Taking longer than usual — check your connection.
+                  <button
+                    onClick={() => daysRetryRef.current?.()}
+                    style={{
+                      marginLeft: 8,
+                      background: "transparent",
+                      border: `1.5px solid ${T.skyBorder}`,
+                      borderRadius: RADIUS.md,
+                      color: T.ocean,
+                      padding: "4px 12px",
+                      fontFamily: "Georgia,serif",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
             </div>
           )}
           {screen === "itinerary" && !loading && (
@@ -14681,8 +15215,10 @@ export default function App({
                             display: "inline-flex",
                             alignItems: "center",
                             gap: 6,
+                            position: "relative",
                           }}
                         >
+                          {needsStyleBadge && <StyleBadgeDot />}
                           {members.length > 1 ? (
                             <>
                               <AvatarStack
@@ -18731,6 +19267,11 @@ export default function App({
             polls={polls}
             members={members}
             selfId={session?.user?.id || null}
+            awayUnseen={awayUnseen}
+            onReviewActivity={() => {
+              setShowWelcome(false);
+              openFeed();
+            }}
             onShareStyle={() => {
               setShowWelcome(false);
               setShowPreferences(true);

@@ -1,3 +1,4 @@
+import { captureException } from "../_shared/errortrack.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   authenticateUser,
@@ -136,6 +137,7 @@ Already in the itinerary (exclude these): ${allActivities}`;
     });
   } catch (err) {
     console.error("generate-wishlist error:", err.message);
+    await captureException(err, { functionName: "generate-wishlist" });
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

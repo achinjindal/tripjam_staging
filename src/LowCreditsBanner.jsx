@@ -8,6 +8,11 @@ import {
   getCredits,
 } from "./credits";
 import { CouponModal } from "./CreditsOverlay";
+import {
+  claimBannerSlot,
+  releaseBannerSlot,
+  useBannerSlotOwner,
+} from "./bannerSlot";
 
 // D4 (updated): show banner when displayCredits(balance) ≤ 10, dismissible per session.
 // Top-of-page banner that nudges the user to top up before they hit the hard 0-credit wall.
@@ -33,14 +38,27 @@ export default function LowCreditsBanner({ session }) {
       refreshCredits(session.user.id);
   }, [session?.user?.id]);
 
-  if (!CREDITS_UI_ENABLED) return null;
-  if (!session?.user?.id) return null;
-  if (credits == null) return null;
+  // Single banner slot: hide while a higher-priority banner (AddRealEmail)
+  // owns it — one banner at a time on any screen.
+  const slotOwner = useBannerSlotOwner();
+  const shown = displayCredits(credits ?? 0);
+  const wouldShow =
+    CREDITS_UI_ENABLED &&
+    !!session?.user?.id &&
+    credits != null &&
+    shown <= LOW_THRESHOLD &&
+    shown > 0 &&
+    dismissedAt === 0;
+  useEffect(() => {
+    if (wouldShow) claimBannerSlot("credits");
+    else releaseBannerSlot("credits");
+    return () => releaseBannerSlot("credits");
+  }, [wouldShow]);
 
-  const visible = displayCredits(credits);
-  if (visible > LOW_THRESHOLD) return null;
-  if (visible <= 0) return null; // hard-stop modal (PaywallSheet) handles this
-  if (dismissedAt > 0) return null;
+  if (!wouldShow) return null;
+  if (slotOwner && slotOwner !== "credits") return null;
+
+  const visible = shown;
 
   function dismiss() {
     const now = Date.now();

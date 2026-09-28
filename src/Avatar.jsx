@@ -103,7 +103,7 @@ export default function Avatar({ session }) {
   async function signOut() {
     setOpen(false);
     await supabase.auth.signOut();
-    // PostHog reset + Sentry.setUser(null) are handled in main.jsx auth listener
+    // PostHog reset is handled in main.jsx auth listener
   }
 
   function goToTrips() {

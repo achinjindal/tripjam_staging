@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { captureException } from "../_shared/errortrack.ts";
 import {
   authenticateUser,
   unauthorized,
@@ -461,6 +462,7 @@ serve(async (req) => {
     });
   } catch (err) {
     console.error("generate-brainstorm error:", err.message);
+    await captureException(err, { functionName: "generate-brainstorm" });
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

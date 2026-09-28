@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import { T, RADIUS, SHADOW, MOTION } from "./theme";
+import { claimBannerSlot, releaseBannerSlot } from "./bannerSlot";
 
 // D9 Part C: force-prompt legacy username-only users (whose email is a
 // synthetic `<username>@tripjam.app`) to add a real email on next login.
@@ -33,7 +34,16 @@ export default function AddRealEmailPrompt({ session }) {
     setNeedsPrompt(LEGACY_EMAIL_RE.test(session.user.email));
   }, [session?.user?.email]);
 
-  if (!needsPrompt || dismissed || success) return null;
+  // Single banner slot: email (account recovery) outranks the credits
+  // banner — claim while visible, release when hidden/unmounted.
+  const visible = needsPrompt && !dismissed && !success;
+  useEffect(() => {
+    if (visible) claimBannerSlot("email");
+    else releaseBannerSlot("email");
+    return () => releaseBannerSlot("email");
+  }, [visible]);
+
+  if (!visible) return null;
 
   async function submit() {
     setError("");

@@ -2,7 +2,7 @@ import LegalPage, { H2, P, UL, LI } from "./LegalPage";
 
 export default function Privacy() {
   return (
-    <LegalPage title="Privacy Policy" lastUpdated="May 26, 2026">
+    <LegalPage title="Privacy Policy" lastUpdated="September 27, 2026">
       <P>
         TripJam ("we", "us", "our") is a single-founder project that helps
         people plan trips with the help of AI. This Privacy Policy explains what
@@ -44,8 +44,8 @@ export default function Privacy() {
         </LI>
         <LI>
           <strong>Error logs:</strong> when something breaks, we capture the
-          error and a stack trace via Sentry to fix it. May include your user ID
-          for correlation.
+          error and a stack trace via PostHog error tracking to fix it. May
+          include your user ID for correlation.
         </LI>
         <LI>
           <strong>Payment info:</strong> when you purchase credits, our payment
@@ -93,12 +93,9 @@ export default function Privacy() {
           is stored on their managed Postgres instance in their chosen regions.
         </LI>
         <LI>
-          <strong>PostHog:</strong> product analytics. Sees your user ID,
-          events, and approximate location.
-        </LI>
-        <LI>
-          <strong>Sentry:</strong> error tracking. Sees crash reports including
-          your user ID.
+          <strong>PostHog:</strong> product analytics, session replay, and error
+          tracking. Sees your user ID, events, crash reports, and approximate
+          location.
         </LI>
         <LI>
           <strong>Vercel:</strong> hosts our web frontend. Serves the app, sees
