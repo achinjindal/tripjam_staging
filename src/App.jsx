@@ -2701,22 +2701,38 @@ function BrainstormView({
         }
       };
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        lineBuffer += decoder.decode(value, { stream: true });
-        const lines = lineBuffer.split("\n");
-        lineBuffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const raw = line.slice(6).trim();
-          if (raw === "[DONE]") continue;
-          try {
-            tryParseItem(JSON.parse(raw));
-          } catch {
-            /* skip */
+      // Same salvage rule as IG (2026-09-28): a mid-body stream death with
+      // routes already parsed falls through to the normal save path with
+      // what arrived, instead of discarding paid-for work. "Show me more
+      // routes" (addMore) then tops the set back up.
+      let rgStreamSalvaged = false;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          lineBuffer += decoder.decode(value, { stream: true });
+          const lines = lineBuffer.split("\n");
+          lineBuffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const raw = line.slice(6).trim();
+            if (raw === "[DONE]") continue;
+            try {
+              tryParseItem(JSON.parse(raw));
+            } catch {
+              /* skip */
+            }
           }
         }
+      } catch (streamErr) {
+        if (streamErr.name === "AbortError") throw streamErr;
+        const tier1SoFar = streamedItems.filter((s) => s.tier === 1).length;
+        if (tier1SoFar < 1) throw streamErr;
+        console.warn(
+          `RG stream died after ${tier1SoFar} route(s) — salvaging:`,
+          streamErr.message,
+        );
+        rgStreamSalvaged = true;
       }
 
       if (!streamedItems.length) throw new Error("no_items");
@@ -2739,12 +2755,19 @@ function BrainstormView({
       // PostHog + rg_log, mirroring IG's ig_detailed_complete + generation_log.
       const rgAllRoutesAt = new Date().toISOString();
       const rgNumRoutes = streamedItems.filter((s) => s.tier === 1).length;
-      posthog.capture("rg_all_routes", {
-        trip_id: rgTripId,
-        ms_since_start: Date.now() - __rgStartedAt,
-        routes: rgNumRoutes,
-        add_more: !!isAddingMore.current,
-      });
+      posthog.capture(
+        rgStreamSalvaged ? "rg_partial_salvage" : "rg_all_routes",
+        {
+          trip_id: rgTripId,
+          ms_since_start: Date.now() - __rgStartedAt,
+          routes: rgNumRoutes,
+          add_more: !!isAddingMore.current,
+        },
+      );
+      if (rgStreamSalvaged)
+        showToast(
+          `Connection dropped — saved ${rgNumRoutes} route${rgNumRoutes > 1 ? "s" : ""}. "Show me more routes" adds the rest.`,
+        );
       supabase
         .from("rg_log")
         .insert({
