@@ -652,7 +652,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
           },
         ],
         userMessage,
-        Math.min(8000, numDays * 300 + 2500),
+        Math.min(12000, numDays * 350 + 2500),
       );
       let plan: {
         name?: string;
@@ -779,90 +779,112 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
         return sendChain;
       };
 
-      (async () => {
-        try {
-          const header =
-            `{"name":${JSON.stringify(plan.name || destinations.join(" → "))},` +
-            `"summary":${JSON.stringify(plan.summary || "")},` +
-            `"cities":${JSON.stringify(plan.cities || [])},"days":[`;
-          await send(header);
+      // waitUntil-registered: without this, a client disconnect can reclaim
+      // the isolate mid-fill, before the finally's billing/usage logging —
+      // same reason the single-shot path registers its post-work.
+      runInBackground(
+        (async () => {
+          try {
+            const header =
+              `{"name":${JSON.stringify(plan.name || destinations.join(" → "))},` +
+              `"summary":${JSON.stringify(plan.summary || "")},` +
+              `"cities":${JSON.stringify(plan.cities || [])},"days":[`;
+            await send(header);
 
-          const results: any[] = new Array(planDays.length).fill(null);
-          let next = 0;
-          // Synchronous drain: writer.write queues in call order, so a single
-          // pass here cannot interleave with another resolve's pass.
-          const flush = () => {
-            while (next < results.length && results[next]) {
-              send((next > 0 ? "," : "") + JSON.stringify(results[next]));
-              next++;
-            }
-          };
-          await Promise.all(
-            planDays.map(async (d, i) => {
-              results[i] = await fillOne(d, i);
-              flush();
-            }),
-          );
-          await send("]}");
-        } catch (e) {
-          console.error("Parallel fill stream error:", e.message);
-        } finally {
-          await sendChain;
-          await writer
-            .write(encoder.encode("data: [DONE]\n\n"))
-            .catch(() => {});
-          await writer.close().catch(() => {});
+            const results: any[] = new Array(planDays.length).fill(null);
+            let next = 0;
+            // Synchronous drain: writer.write queues in call order, so a single
+            // pass here cannot interleave with another resolve's pass.
+            const flush = () => {
+              while (next < results.length && results[next]) {
+                send((next > 0 ? "," : "") + JSON.stringify(results[next]));
+                next++;
+              }
+            };
+            await Promise.all(
+              planDays.map(async (d, i) => {
+                results[i] = await fillOne(d, i);
+                flush();
+              }),
+            );
+            await send("]}");
+          } catch (e) {
+            console.error("Parallel fill stream error:", e.message);
+            await captureException(e, {
+              functionName: "generate-itinerary:stream",
+              tripId: tripId || null,
+            });
+          } finally {
+            await sendChain;
+            await writer
+              .write(encoder.encode("data: [DONE]\n\n"))
+              .catch(() => {});
+            await writer.close().catch(() => {});
 
-          const sum = (fn: (u: AnthropicUsage) => number | undefined) =>
-            allUsages.reduce((acc, u) => acc + (fn(u) || 0), 0);
-          const inputTokens = sum((u) => u.input_tokens);
-          const outputTokens = sum((u) => u.output_tokens);
-          const cacheCreationTokens = sum((u) => u.cache_creation_input_tokens);
-          const cacheReadTokens = sum((u) => u.cache_read_input_tokens);
-          if (fillErrors.length)
-            console.error("Fill errors:", JSON.stringify(fillErrors));
-          console.log(
-            `Parallel IG done in ${Date.now() - totalStart}ms, tokens in=${inputTokens} out=${outputTokens}`,
-          );
-
-          const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-          const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-          runInBackground(
-            (async () => {
-              await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  apikey: supabaseKey,
-                  Authorization: `Bearer ${supabaseKey}`,
+            const sum = (fn: (u: AnthropicUsage) => number | undefined) =>
+              allUsages.reduce((acc, u) => acc + (fn(u) || 0), 0);
+            const inputTokens = sum((u) => u.input_tokens);
+            const outputTokens = sum((u) => u.output_tokens);
+            const cacheCreationTokens = sum(
+              (u) => u.cache_creation_input_tokens,
+            );
+            const cacheReadTokens = sum((u) => u.cache_read_input_tokens);
+            if (fillErrors.length) {
+              console.error("Fill errors:", JSON.stringify(fillErrors));
+              await captureException(
+                new Error(
+                  `IG day fills failed: ${fillErrors.map((f) => f.day).join(", ")}`,
+                ),
+                {
+                  functionName: "generate-itinerary:fills",
+                  tripId: tripId || null,
+                  fill_errors: JSON.stringify(fillErrors).slice(0, 900),
                 },
-                body: JSON.stringify({
-                  trip_id: tripId || null,
-                  function_name: "generate-itinerary",
-                  model: igModel,
-                  input_tokens: inputTokens,
-                  output_tokens: outputTokens,
-                  cache_creation_tokens: cacheCreationTokens,
-                  cache_read_tokens: cacheReadTokens,
-                  duration_ms: Date.now() - totalStart,
-                }),
-              }).catch(() => {});
+              );
+            }
+            console.log(
+              `Parallel IG done in ${Date.now() - totalStart}ms, tokens in=${inputTokens} out=${outputTokens}`,
+            );
 
-              await deductCredits({
-                userId: user.id,
-                model: igModel,
-                inputTokens,
-                outputTokens,
-                cacheCreationTokens,
-                cacheReadTokens,
-                functionName: "generate-itinerary",
-                tripId: tripId || null,
-                source,
-              });
-            })(),
-          );
-        }
-      })();
+            const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+            const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+            runInBackground(
+              (async () => {
+                await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    apikey: supabaseKey,
+                    Authorization: `Bearer ${supabaseKey}`,
+                  },
+                  body: JSON.stringify({
+                    trip_id: tripId || null,
+                    function_name: "generate-itinerary",
+                    model: igModel,
+                    input_tokens: inputTokens,
+                    output_tokens: outputTokens,
+                    cache_creation_tokens: cacheCreationTokens,
+                    cache_read_tokens: cacheReadTokens,
+                    duration_ms: Date.now() - totalStart,
+                  }),
+                }).catch(() => {});
+
+                await deductCredits({
+                  userId: user.id,
+                  model: igModel,
+                  inputTokens,
+                  outputTokens,
+                  cacheCreationTokens,
+                  cacheReadTokens,
+                  functionName: "generate-itinerary",
+                  tripId: tripId || null,
+                  source,
+                });
+              })(),
+            );
+          }
+        })(),
+      );
 
       return new Response(readable, {
         headers: {

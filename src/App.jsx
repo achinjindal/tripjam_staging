@@ -10701,6 +10701,11 @@ export default function App({
     });
     setGenerateError("");
     setStreamingDays(0);
+    // Set when the SSE body dies mid-stream with days already parsed — the
+    // save path then salvages what arrived instead of discarding it, and
+    // suppresses completion-only side effects (2026-09-27 hostile-network
+    // incident: server built 14 days twice, delivery died, user lost all).
+    let igStreamSalvaged = false;
     preloadedDaysRef.current = new Set();
     setAllDaysPlanned(false);
     setIgStreamTitles([]);
@@ -10812,135 +10817,150 @@ export default function App({
       const decoder = new TextDecoder();
       let lineBuffer = "";
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        lineBuffer += decoder.decode(value, { stream: true });
-        const lines = lineBuffer.split("\n");
-        lineBuffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const raw = line.slice(6).trim();
-          if (raw === "[DONE]") continue;
-          try {
-            accumulated += JSON.parse(raw);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          lineBuffer += decoder.decode(value, { stream: true });
+          const lines = lineBuffer.split("\n");
+          lineBuffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const raw = line.slice(6).trim();
+            if (raw === "[DONE]") continue;
+            try {
+              accumulated += JSON.parse(raw);
 
-            // Detect trip header (name/summary/cities) complete — save the trip
-            // early so Magazine shows the real name while days stream in.
-            if (!headerSaved && /"days"\s*:\s*\[/.test(accumulated)) {
-              try {
-                // Extract just enough JSON to parse the header
-                const headerEnd = accumulated.indexOf('"days"');
-                if (headerEnd > 0) {
-                  let partial =
-                    accumulated.slice(0, headerEnd).replace(/,\s*$/, "") + "}";
-                  partial = partial.replace(/^```(?:json)?\s*/i, "").trim();
-                  const s = partial.indexOf("{");
-                  if (s >= 0) {
-                    const compactData = JSON.parse(partial.slice(s));
-                    if (compactData.name) {
-                      headerSaved = true;
-                      posthog.capture("ig_header_complete", {
-                        trip_id: capturedTripId,
-                        ms_since_start: Date.now() - __igStartedAt,
-                      });
-                      const fmt = (d) =>
-                        new Date(d).toLocaleDateString("en-US", {
-                          month: "short",
-                          day: "numeric",
+              // Detect trip header (name/summary/cities) complete — save the trip
+              // early so Magazine shows the real name while days stream in.
+              if (!headerSaved && /"days"\s*:\s*\[/.test(accumulated)) {
+                try {
+                  // Extract just enough JSON to parse the header
+                  const headerEnd = accumulated.indexOf('"days"');
+                  if (headerEnd > 0) {
+                    let partial =
+                      accumulated.slice(0, headerEnd).replace(/,\s*$/, "") +
+                      "}";
+                    partial = partial.replace(/^```(?:json)?\s*/i, "").trim();
+                    const s = partial.indexOf("{");
+                    if (s >= 0) {
+                      const compactData = JSON.parse(partial.slice(s));
+                      if (compactData.name) {
+                        headerSaved = true;
+                        posthog.capture("ig_header_complete", {
+                          trip_id: capturedTripId,
+                          ms_since_start: Date.now() - __igStartedAt,
                         });
-                      const compactTripName = `${compactData.name} · ${fmt(form.startDate)}–${fmt(form.endDate)}`;
-                      const compactDates =
-                        form.startDate && form.endDate
-                          ? `${fmt(form.startDate)} – ${fmt(form.endDate)}, ${new Date(form.endDate).getFullYear()}`
-                          : "";
-                      const originalDest =
-                        editingTrip?.destination ||
-                        (form.destinations || []).join(" → ");
-                      setTrip((prev) => ({
-                        ...prev,
-                        name: compactTripName,
-                        destination: originalDest,
-                        dates: compactDates,
-                        travelers:
-                          parseInt(form.travelers) || prev.travelers || null,
-                        ig_response: compactData,
-                      }));
-                      if (capturedTripId) {
-                        const compactReadyAt = new Date().toISOString();
-                        supabase
-                          .from("trips")
-                          .update({
-                            name: compactTripName,
-                            destination: originalDest,
-                            ig_response: compactData,
-                            compact_ready_at: compactReadyAt,
-                            generation_started_at: generationStartedAt,
-                          })
-                          .eq("id", capturedTripId)
-                          .then(({ error }) => {
-                            if (error)
-                              console.warn(
-                                "header IG save failed:",
-                                error.message,
-                              );
+                        const fmt = (d) =>
+                          new Date(d).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
                           });
-                        supabase
-                          .from("generation_log")
-                          .insert({
-                            trip_id: capturedTripId,
-                            generation_started_at: generationStartedAt,
-                            compact_ready_at: compactReadyAt,
-                          })
-                          .select("id")
-                          .single()
-                          .then(({ data }) => {
-                            if (data) genLogId = data.id;
-                          });
+                        const compactTripName = `${compactData.name} · ${fmt(form.startDate)}–${fmt(form.endDate)}`;
+                        const compactDates =
+                          form.startDate && form.endDate
+                            ? `${fmt(form.startDate)} – ${fmt(form.endDate)}, ${new Date(form.endDate).getFullYear()}`
+                            : "";
+                        const originalDest =
+                          editingTrip?.destination ||
+                          (form.destinations || []).join(" → ");
+                        setTrip((prev) => ({
+                          ...prev,
+                          name: compactTripName,
+                          destination: originalDest,
+                          dates: compactDates,
+                          travelers:
+                            parseInt(form.travelers) || prev.travelers || null,
+                          ig_response: compactData,
+                        }));
+                        if (capturedTripId) {
+                          const compactReadyAt = new Date().toISOString();
+                          supabase
+                            .from("trips")
+                            .update({
+                              name: compactTripName,
+                              destination: originalDest,
+                              ig_response: compactData,
+                              compact_ready_at: compactReadyAt,
+                              generation_started_at: generationStartedAt,
+                            })
+                            .eq("id", capturedTripId)
+                            .then(({ error }) => {
+                              if (error)
+                                console.warn(
+                                  "header IG save failed:",
+                                  error.message,
+                                );
+                            });
+                          supabase
+                            .from("generation_log")
+                            .insert({
+                              trip_id: capturedTripId,
+                              generation_started_at: generationStartedAt,
+                              compact_ready_at: compactReadyAt,
+                            })
+                            .select("id")
+                            .single()
+                            .then(({ data }) => {
+                              if (data) genLogId = data.id;
+                            });
+                        }
+                        // Magazine-first: stay on pre-trip Magazine while days
+                        // stream in; navigate on full IG complete.
+                        setDetailedLoading(true);
                       }
-                      // Magazine-first: stay on pre-trip Magazine while days
-                      // stream in; navigate on full IG complete.
-                      setDetailedLoading(true);
                     }
                   }
+                } catch {
+                  /* header parse failed, continue streaming */
                 }
-              } catch {
-                /* header parse failed, continue streaming */
               }
-            }
 
-            // Track day progress: count completed days by "wishlist" markers
-            // (one appears at the end of each streamed day)
-            const daysStart = accumulated.indexOf('"days"');
-            const daysSection =
-              daysStart >= 0 ? accumulated.slice(daysStart) : "";
-            const detailedDays = (
-              daysSection.match(/"wishlist"\s*:\s*\[/g) || []
-            ).length;
-            if (detailedDays > 0) {
-              setStreamingDays(detailedDays);
-              // Live ✓ marks on Magazine cards: surface streamed activity
-              // titles as each day completes (compact previews used to do this)
-              if (detailedDays > igStreamTitlesCountRef.current) {
-                igStreamTitlesCountRef.current = detailedDays;
-                setIgStreamTitles(
-                  [
-                    ...daysSection.matchAll(/"title"\s*:\s*"([^"]{2,80})"/g),
-                  ].map((m) => m[1]),
-                );
+              // Track day progress: count completed days by "wishlist" markers
+              // (one appears at the end of each streamed day)
+              const daysStart = accumulated.indexOf('"days"');
+              const daysSection =
+                daysStart >= 0 ? accumulated.slice(daysStart) : "";
+              const detailedDays = (
+                daysSection.match(/"wishlist"\s*:\s*\[/g) || []
+              ).length;
+              if (detailedDays > 0) {
+                setStreamingDays(detailedDays);
+                // Live ✓ marks on Magazine cards: surface streamed activity
+                // titles as each day completes (compact previews used to do this)
+                if (detailedDays > igStreamTitlesCountRef.current) {
+                  igStreamTitlesCountRef.current = detailedDays;
+                  setIgStreamTitles(
+                    [
+                      ...daysSection.matchAll(/"title"\s*:\s*"([^"]{2,80})"/g),
+                    ].map((m) => m[1]),
+                  );
+                }
               }
+              if (
+                detailedDays >= numDays &&
+                (/"summary"\s*:/.test(accumulated) ||
+                  /"wishlist"\s*:\s*\[[\s\S]*?\][\s\S]{200,}/.test(accumulated))
+              ) {
+                setAllDaysPlanned(true);
+              }
+            } catch {
+              /* skip malformed chunk */
             }
-            if (
-              detailedDays >= numDays &&
-              (/"summary"\s*:/.test(accumulated) ||
-                /"wishlist"\s*:\s*\[[\s\S]*?\][\s\S]{200,}/.test(accumulated))
-            ) {
-              setAllDaysPlanned(true);
-            }
-          } catch {
-            /* skip malformed chunk */
           }
         }
+      } catch (streamErr) {
+        // User aborts keep their exact existing semantics.
+        if (streamErr.name === "AbortError") throw streamErr;
+        const daysSoFar = (accumulated.match(/"wishlist"\s*:\s*\[/g) || [])
+          .length;
+        // Nothing usable arrived — fall through to the normal error path.
+        if (daysSoFar < 1) throw streamErr;
+        console.warn(
+          `IG stream died after ~${daysSoFar} day(s) — salvaging received content:`,
+          streamErr.message,
+        );
+        igStreamSalvaged = true;
       }
 
       // Parse accumulated JSON (same cleanup logic as before)
@@ -11093,8 +11113,14 @@ export default function App({
       end_date: form.endDate,
       created_by: session.user.id,
       generation_started_at: generationStartedAt,
-      generation_completed_at: generationCompletedAt,
-      detailed_ready_at: generationCompletedAt,
+      // Salvaged partial runs must NOT look complete: detailed_ready_at is
+      // the marker the partial-recovery banner keys on.
+      ...(igStreamSalvaged
+        ? {}
+        : {
+            generation_completed_at: generationCompletedAt,
+            detailed_ready_at: generationCompletedAt,
+          }),
       ig_request: igRequest,
       ig_response: itinerary,
       ig_count: (editingTrip?.ig_count || 0) + 1,
@@ -11317,11 +11343,12 @@ export default function App({
     });
     setDays(savedDays);
     setActiveDay(0);
-    posthog.capture("ig_detailed_complete", {
-      trip_id: capturedTripId,
-      ms_since_start: Date.now() - __igStartedAt,
-      days: savedDays?.length || 0,
-    });
+    if (!igStreamSalvaged)
+      posthog.capture("ig_detailed_complete", {
+        trip_id: capturedTripId,
+        ms_since_start: Date.now() - __igStartedAt,
+        days: savedDays?.length || 0,
+      });
     setChatUnread(true);
     setEditingTrip(null);
     setPendingForm(null);
@@ -11334,22 +11361,33 @@ export default function App({
       setPendingRouteEdit(null);
       setRouteLensNonce((n) => n + 1);
     }
-    playDoneChime();
-    // Milestone row for the activity feed.
-    logActivity({
-      tripId,
-      action: "itinerary_generated",
-      entityType: "trip",
-      summary: `generated the day-by-day itinerary`,
-    });
-    // Shared trips: email the rest of the group that the plan is ready
-    // (server dedupes to one per trip per 24h, so regenerations don't spam).
-    // Uses the local tripId — the `trip` state is stale-null for new trips.
-    if (isSharedTrip && tripId)
-      sendTripEmail("itinerary_ready", tripId, {
-        tripName: tripName || "your trip",
-        tripUrl: `${window.location.origin}/trip/${tripId}`,
+    if (igStreamSalvaged) {
+      posthog.capture("ig_partial_salvage", {
+        trip_id: capturedTripId,
+        days_saved: itinerary.days?.length || 0,
+        days_expected: numDays,
       });
+      showToast(
+        `Connection dropped — saved ${itinerary.days?.length || 0} of ${numDays} days. Rebuild from Explore plans to finish.`,
+      );
+    } else {
+      playDoneChime();
+      // Milestone row for the activity feed.
+      logActivity({
+        tripId,
+        action: "itinerary_generated",
+        entityType: "trip",
+        summary: `generated the day-by-day itinerary`,
+      });
+      // Shared trips: email the rest of the group that the plan is ready
+      // (server dedupes to one per trip per 24h, so regenerations don't spam).
+      // Uses the local tripId — the `trip` state is stale-null for new trips.
+      if (isSharedTrip && tripId)
+        sendTripEmail("itinerary_ready", tripId, {
+          tripName: tripName || "your trip",
+          tripUrl: `${window.location.origin}/trip/${tripId}`,
+        });
+    }
     // Pulse the chat mascot to draw attention
     setChatAttention(true);
     setTimeout(() => setChatAttention(false), 3000);
@@ -11363,7 +11401,9 @@ export default function App({
     const logDetailedErr = ({ error }) =>
       error &&
       console.warn("generation_log detailed write failed:", error.message);
-    if (genLogId) {
+    if (igStreamSalvaged) {
+      /* partial run — generation_log detailed_ready_at stays null */
+    } else if (genLogId) {
       supabase
         .from("generation_log")
         .update({
@@ -15600,6 +15640,79 @@ export default function App({
                         </div>
                       );
                     })()}
+
+                  {/* Partial-build banner: days exist but generation never
+                      completed (stream salvage / refresh mid-build).
+                      detailed_ready_at is set ONLY by a fully completed save,
+                      so legacy complete trips and server-side underruns never
+                      false-positive here. */}
+                  {(() => {
+                    const expectedDays =
+                      trip?.start_date && trip?.end_date
+                        ? Math.round(
+                            (new Date(trip.end_date) -
+                              new Date(trip.start_date)) /
+                              86400000,
+                          ) + 1
+                        : null;
+                    const partialBuild =
+                      days.length > 0 &&
+                      expectedDays &&
+                      days.length < expectedDays &&
+                      !trip?.detailed_ready_at &&
+                      !igGenerating &&
+                      !detailedLoading &&
+                      !loading;
+                    if (!partialBuild) return null;
+                    return (
+                      <div
+                        style={{
+                          margin: "10px 16px 4px",
+                          padding: "11px 14px",
+                          borderRadius: RADIUS.lg,
+                          background: T.warningLight,
+                          border: `1.5px solid ${T.warningBorder}`,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          flexWrap: "wrap",
+                          fontFamily: "Georgia,serif",
+                        }}
+                      >
+                        <div
+                          style={{
+                            flex: 1,
+                            minWidth: 200,
+                            fontSize: 12.5,
+                            color: T.warning,
+                            lineHeight: 1.45,
+                          }}
+                        >
+                          <b>
+                            Built through Day {days.length} of {expectedDays}
+                          </b>{" "}
+                          — the connection dropped before the rest arrived. Your
+                          saved days are safe.
+                        </div>
+                        <button
+                          onClick={openExplorePlans}
+                          style={{
+                            background: T.ocean,
+                            color: "white",
+                            border: "none",
+                            borderRadius: RADIUS.md,
+                            padding: "7px 14px",
+                            fontFamily: "Georgia,serif",
+                            fontSize: 12,
+                            cursor: "pointer",
+                            flexShrink: 0,
+                          }}
+                        >
+                          Finish the rest →
+                        </button>
+                      </div>
+                    );
+                  })()}
 
                   {/* Recovery state: the trip exists but has no days — the
                       generation was interrupted (tab closed mid-stream) or
