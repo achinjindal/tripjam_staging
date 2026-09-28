@@ -362,9 +362,13 @@ function Root() {
         <Home
           session={session}
           onOpenTrip={openTrip}
-          onOpenTripById={async (tripId) => {
+          onOpenTripById={async (tripId, fallbackTrip = null) => {
             const trip = await loadTrip(tripId);
             if (trip) openTrip(trip);
+            // Offline: open the slim cached row — days come from the
+            // localStorage days cache; digest sections refetch when back
+            // online.
+            else if (fallbackTrip) openTrip(fallbackTrip);
           }}
           onCreateTrip={() => {
             setActiveTrip(null);

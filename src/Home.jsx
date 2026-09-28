@@ -112,10 +112,20 @@ export default function Home({
 
       const tripIds = myMemberships.map((m) => m.trip_id);
 
-      // 2. Fetch the trips
+      // 2. Fetch the trips — SLIM columns only. select("*") was pulling
+      // every trip's ig_response/magazine/inspirations JSONB (multi-MB over
+      // the wire on mobile) just to paint cards; has_itinerary is a
+      // PostgREST computed column replacing the ig_response truthiness
+      // check. The full trip is fetched on card open (onOpenTripById).
+      const TRIP_LIST_COLS =
+        "id,name,destination,start_date,end_date,created_by,origin_city," +
+        "arrival_time,departure_time,created_at,updated_at,arrival_city," +
+        "departure_city,summary,notes,arrival_mode,departure_mode,has_car," +
+        "share_token,ig_count,budget_amount,budget_currency,base_location," +
+        "arrival_airport_iata,departure_airport_iata,has_itinerary";
       const { data: tripsData } = await supabase
         .from("trips")
-        .select("*")
+        .select(TRIP_LIST_COLS)
         .in("id", tripIds)
         .order("created_at", { ascending: false });
 
@@ -310,7 +320,9 @@ export default function Home({
               const status = tripStatus(
                 trip.start_date,
                 trip.end_date,
-                trip.ig_response,
+                // Slim rows carry has_itinerary; old cached full rows (and
+                // any other caller) still pass ig_response.
+                trip.has_itinerary ?? trip.ig_response,
               );
               const days = daysBetween(trip.start_date, trip.end_date);
               return (
@@ -319,7 +331,10 @@ export default function Home({
                   onClick={() =>
                     status.label === "Planning"
                       ? onEditTrip(trip)
-                      : onOpenTrip(trip)
+                      : // Slim list rows lack the trip-screen blobs — fetch
+                        // the full trip on open (slim row as offline
+                        // fallback).
+                        onOpenTripById(trip.id, trip)
                   }
                   style={{
                     background: T.chalk,
