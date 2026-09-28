@@ -89,7 +89,13 @@ serve(async (req) => {
     }).catch(() => {});
 
     const text = msg.content[0]?.type === "text" ? msg.content[0].text : "{}";
-    const parsed = JSON.parse(text);
+    // Fence-safe parse: Haiku intermittently wraps output in ```json fences
+    // despite instructions (same bug hit inbound-email; PostHog issue #11).
+    // Slice from first { to last } so fences and prose never reach the
+    // parser.
+    const parsed = JSON.parse(
+      text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1),
+    );
 
     return new Response(
       JSON.stringify({
