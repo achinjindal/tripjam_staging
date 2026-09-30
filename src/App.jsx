@@ -73,6 +73,7 @@ import {
   _photoCache,
   _usedPhotoUrls,
   _fetchPhoto,
+  placesAuthHeaders,
   attachPhotosToMoreSights,
   setActiveTripId,
   setTripDestination,
@@ -10328,7 +10329,7 @@ export default function App({
       try {
         const res = await fetch(`${PLACES_PROXY}?action=hotel-photo`, {
           method: "POST",
-          headers: PLACES_HEADERS,
+          headers: await placesAuthHeaders(),
           body: JSON.stringify({
             q: h.name,
             city: h.city,

@@ -8,6 +8,7 @@ import {
   PLACES_HEADERS,
 } from "../theme";
 import { CityInput } from "./BoardView.jsx";
+import { placesAuthHeaders } from "../photos";
 
 function DateRangePicker({ startDate, endDate, onChange, isDesktop = false }) {
   const todayISO = new Date().toISOString().slice(0, 10);
@@ -301,11 +302,13 @@ function SetupForm({
 
   // Pre-warm places-proxy edge function so first autocomplete keystroke isn't a cold start
   useEffect(() => {
-    fetch(`${PLACES_PROXY}?action=autocomplete`, {
-      method: "POST",
-      headers: PLACES_HEADERS,
-      body: JSON.stringify({ q: "lo" }),
-    }).catch(() => {});
+    (async () => {
+      fetch(`${PLACES_PROXY}?action=autocomplete`, {
+        method: "POST",
+        headers: await placesAuthHeaders(),
+        body: JSON.stringify({ q: "lo" }),
+      }).catch(() => {});
+    })();
   }, []);
   const igReq = initialTrip?.ig_request || {};
   const prefill = initialTrip
@@ -429,7 +432,7 @@ function SetupForm({
       try {
         const res = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
           method: "POST",
-          headers: PLACES_HEADERS,
+          headers: await placesAuthHeaders(),
           body: JSON.stringify({ q: val }),
           signal: ctrl.signal,
         });
