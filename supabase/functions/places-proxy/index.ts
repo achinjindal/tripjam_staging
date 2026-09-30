@@ -13,6 +13,9 @@ const TRIPADVISOR_KEY = Deno.env.get("TRIPADVISOR_KEY") ?? "";
 // Stock food photos (free tier). No-op when unset → client falls back to emoji.
 const PEXELS_KEY = Deno.env.get("PEXELS_API_KEY") ?? "";
 const PLACES_BASE = "https://places.googleapis.com/v1";
+// Generous vs. real typing (each keystroke burst is debounced + cached), low
+// enough that a scripted loop can't run up a Google bill.
+const AUTOCOMPLETE_DAILY_PER_USER = 500;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -423,6 +426,15 @@ async function checkOverride(
 // ── handlers ─────────────────────────────────────────────────────────────────
 
 async function handleAutocomplete(req: Request): Promise<Response> {
+  // PAID upstream — real user token required. These actions were reachable
+  // with the anon key (public in the client bundle), i.e. a free Google Places
+  // faucet billed to us outside the credits system.
+  const userId = await authenticateUserId(req);
+  if (!userId)
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders },
+    );
   const { q, types } = await req.json();
   if (!q) return Response.json({ error: "q required" }, { status: 400 });
 
@@ -437,8 +449,18 @@ async function handleAutocomplete(req: Request): Promise<Response> {
     incrementUsage("autocomplete", "cache-hit", today()).catch(() => {});
     return Response.json(cached, { headers: corsHeaders });
   }
+  // Defence in depth: a compromised/curious signed-in user still can't turn
+  // this into an unbounded Google bill. Degrades to "no suggestions" rather
+  // than erroring — the field stays usable, just without autocomplete.
+  const perUser = await getUsage("autocomplete", `user:${userId}`, today());
+  if (perUser >= AUTOCOMPLETE_DAILY_PER_USER) {
+    incrementUsage("autocomplete", "user-cap-hit", today()).catch(() => {});
+    return Response.json({ suggestions: [] }, { headers: corsHeaders });
+  }
+
   const data = await autocomplete(q, types);
   incrementUsage("autocomplete", "google", today()).catch(() => {});
+  incrementUsage("autocomplete", `user:${userId}`, today()).catch(() => {});
   // Cache results for 7 days — city/destination autocomplete results are
   // stable. A TTL of null (permanent) would also be safe here.
   cacheSet(cacheKey, "autocomplete", data, "google", 7).catch(() => {});
@@ -446,6 +468,15 @@ async function handleAutocomplete(req: Request): Promise<Response> {
 }
 
 async function handleHotelPhoto(req: Request): Promise<Response> {
+  // PAID upstream — real user token required. These actions were reachable
+  // with the anon key (public in the client bundle), i.e. a free TripAdvisor
+  // faucet billed to us outside the credits system.
+  const userId = await authenticateUserId(req);
+  if (!userId)
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders },
+    );
   const {
     q,
     city,
@@ -563,6 +594,15 @@ async function pexelsVideo(
 }
 
 async function handleCityVideo(req: Request): Promise<Response> {
+  // PAID upstream — real user token required. These actions were reachable
+  // with the anon key (public in the client bundle), i.e. a free media
+  // faucet billed to us outside the credits system.
+  const userId = await authenticateUserId(req);
+  if (!userId)
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders },
+    );
   const { q } = await req.json();
   if (!q)
     return Response.json(
@@ -590,6 +630,15 @@ async function handleCityVideo(req: Request): Promise<Response> {
 }
 
 async function handleFoodPhoto(req: Request): Promise<Response> {
+  // PAID upstream — real user token required. These actions were reachable
+  // with the anon key (public in the client bundle), i.e. a free Pexels
+  // faucet billed to us outside the credits system.
+  const userId = await authenticateUserId(req);
+  if (!userId)
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders },
+    );
   const { q } = await req.json();
   if (!q)
     return Response.json({ url: null, source: null }, { headers: corsHeaders });
@@ -701,6 +750,15 @@ async function nominatimSearch(
 }
 
 async function handleGeocode(req: Request): Promise<Response> {
+  // PAID upstream — real user token required. These actions were reachable
+  // with the anon key (public in the client bundle), i.e. a free geocoding
+  // faucet billed to us outside the credits system.
+  const userId = await authenticateUserId(req);
+  if (!userId)
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders },
+    );
   const { q, city } = await req.json();
   if (!q)
     return Response.json({ lat: null, lng: null }, { headers: corsHeaders });

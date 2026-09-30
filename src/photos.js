@@ -6,6 +6,27 @@ import { E2E_CHEAP } from "./flags.js";
 import { supabase } from "./supabase";
 export { PLACES_PROXY, PLACES_HEADERS };
 
+// Auth header for places-proxy calls that hit PAID upstreams (Google
+// Places, TripAdvisor, Pexels). These were sent with PLACES_HEADERS — the
+// anon key, which is public in the client bundle — so anyone could script
+// the proxy and bill us directly, outside the credits system. The proxy now
+// requires a real user token. Falls back to the anon key so a signed-out
+// caller degrades (proxy 401 -> no photo) rather than throwing.
+export async function placesAuthHeaders() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    if (token)
+      return {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+  } catch {
+    /* fall through to anon */
+  }
+  return PLACES_HEADERS;
+}
+
 export const _photoCache = {};
 export const _usedPhotoUrls = new Set();
 export const _PHOTO_IN_FLIGHT = Symbol("photo-in-flight");
@@ -115,7 +136,7 @@ export function fetchCityVideo(city) {
     try {
       const res = await fetch(`${PLACES_PROXY}?action=city-video`, {
         method: "POST",
-        headers: PLACES_HEADERS,
+        headers: await placesAuthHeaders(),
         body: JSON.stringify({ q: city }),
       });
       const data = await res.json();
@@ -273,7 +294,7 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
     try {
       const res = await fetch(`${PLACES_PROXY}?action=hotel-photo`, {
         method: "POST",
-        headers: PLACES_HEADERS,
+        headers: await placesAuthHeaders(),
         body: JSON.stringify({
           q: geocodeQ,
           city,
@@ -371,7 +392,7 @@ export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
     try {
       const res = await fetch(`${PLACES_PROXY}?action=food-photo`, {
         method: "POST",
-        headers: PLACES_HEADERS,
+        headers: await placesAuthHeaders(),
         body: JSON.stringify({ q: dishHead || dishRaw }),
       });
       const { url: stockUrl } = await res.json();
@@ -760,7 +781,7 @@ export async function geocodePlace(title, city, geocodeHint) {
         const tid = setTimeout(() => ctrl.abort(), 10000);
         const res = await fetch(`${PLACES_PROXY}?action=geocode`, {
           method: "POST",
-          headers: PLACES_HEADERS,
+          headers: await placesAuthHeaders(),
           body: JSON.stringify({ q: placeQ, city: enrichedCity }),
           signal: ctrl.signal,
         });

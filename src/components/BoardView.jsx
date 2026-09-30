@@ -8,6 +8,7 @@ import {
   PLACES_HEADERS,
 } from "../theme";
 import { supabase } from "../supabase";
+import { placesAuthHeaders } from "../photos";
 import { handleGatedResponse, refreshCredits } from "../credits";
 import { logActivity } from "../activity";
 import { showToast, confirmSheet } from "../dialogs";
@@ -2500,7 +2501,7 @@ function CityInput({
         if (types) body.types = types;
         const res = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
           method: "POST",
-          headers: PLACES_HEADERS,
+          headers: await placesAuthHeaders(),
           body: JSON.stringify(body),
           signal: ctrl.signal,
         });

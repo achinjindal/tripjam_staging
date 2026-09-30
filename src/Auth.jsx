@@ -91,6 +91,11 @@ export default function Auth({ initialMode }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // Set when signUp returns a user but NO session — i.e. the project requires
+  // email confirmation (prod). Signup then ends on a "check your inbox"
+  // panel instead of dropping the user into the app.
+  const [confirmSent, setConfirmSent] = useState("");
+  const [resendNote, setResendNote] = useState("");
   // Dead-session guard landed us here — say why. Read WITHOUT clearing:
   // sign-out remounts Auth once at the old URL before the /signin redirect,
   // and a read-and-clear there eats the flag before the real mount. The
@@ -157,6 +162,15 @@ export default function Auth({ initialMode }) {
       return setError(signUpError.message);
     }
 
+    // No session => email confirmation is required. The DB trigger already
+    // created the profile row; the upsert below needs an authenticated
+    // session (RLS) so it must be skipped here.
+    if (data?.user?.id && !data?.session) {
+      setLoading(false);
+      setConfirmSent(cleanEmail);
+      return;
+    }
+
     if (data?.user?.id) {
       // The DB trigger `create_profile_on_auth_signup` already inserted a row
       // using the username we passed in raw_user_meta_data. Upsert here is a
@@ -203,6 +217,118 @@ export default function Auth({ initialMode }) {
   }
 
   const submit = mode === "signin" ? handleSignIn : handleSignUp;
+
+  async function handleResendConfirmation() {
+    setResendNote("");
+    setLoading(true);
+    const { error: resendError } = await supabase.auth.resend({
+      type: "signup",
+      email: confirmSent,
+    });
+    setLoading(false);
+    setResendNote(
+      resendError
+        ? "Couldn't resend just now — wait a minute and try again."
+        : "Sent. Check your inbox (and spam).",
+    );
+  }
+
+  if (confirmSent) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          background: T.bgPage,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "Georgia, serif",
+          padding: 20,
+        }}
+      >
+        <div
+          style={{
+            background: T.chalk,
+            borderRadius: RADIUS.lg,
+            padding: "36px 32px",
+            width: "100%",
+            maxWidth: 380,
+            boxShadow: SHADOW.md,
+            border: `1px solid ${T.border}`,
+            textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: 32, marginBottom: 10 }}>📬</div>
+          <h1
+            style={{
+              color: T.ink,
+              fontSize: 22,
+              fontWeight: 400,
+              margin: 0,
+              fontFamily: "'DM Serif Display', serif",
+            }}
+          >
+            Confirm your email
+          </h1>
+          <p
+            style={{
+              color: T.dusk,
+              fontSize: 14,
+              lineHeight: 1.6,
+              margin: "12px 0 0",
+            }}
+          >
+            We sent a confirmation link to <b>{confirmSent}</b>. Click it and
+            you're in — your trips and credits are waiting.
+          </p>
+          <p style={{ color: T.mist, fontSize: 12, margin: "10px 0 0" }}>
+            Nothing yet? Check spam, or resend below.
+          </p>
+          {resendNote && (
+            <p style={{ color: T.moss, fontSize: 12, margin: "10px 0 0" }}>
+              {resendNote}
+            </p>
+          )}
+          <button
+            onClick={handleResendConfirmation}
+            disabled={loading}
+            style={{
+              marginTop: 18,
+              padding: "11px 20px",
+              borderRadius: RADIUS.md,
+              border: `1px solid ${T.ocean}`,
+              background: T.chalk,
+              color: T.ocean,
+              fontSize: 13,
+              fontFamily: "Georgia, serif",
+              cursor: loading ? "not-allowed" : "pointer",
+              width: "100%",
+            }}
+          >
+            {loading ? "Sending…" : "Resend confirmation email"}
+          </button>
+          <button
+            onClick={() => {
+              setConfirmSent("");
+              setResendNote("");
+              switchMode("signin");
+            }}
+            style={{
+              marginTop: 10,
+              background: "none",
+              border: "none",
+              color: T.mist,
+              fontSize: 12,
+              fontFamily: "Georgia, serif",
+              cursor: "pointer",
+            }}
+          >
+            Back to sign in
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
