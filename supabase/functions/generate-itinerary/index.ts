@@ -165,6 +165,12 @@ async function callOtherProvider(
           generationConfig: {
             maxOutputTokens: maxTokens,
             responseMimeType: "application/json",
+            // Gemini 3.x ships with thinking ON, and thought tokens are
+            // charged as output AND counted against maxOutputTokens — a
+            // trivial probe burned 96 thought tokens and returned a
+            // truncated 3-token body. Day fills would silently emit
+            // unparseable JSON. Same reason Claude 5 gets thinking disabled.
+            thinkingConfig: { thinkingBudget: 0 },
           },
         }),
       },
@@ -178,7 +184,9 @@ async function callOtherProvider(
       text,
       usage: {
         input_tokens: d?.usageMetadata?.promptTokenCount || 0,
-        output_tokens: d?.usageMetadata?.candidatesTokenCount || 0,
+        output_tokens:
+          (d?.usageMetadata?.candidatesTokenCount || 0) +
+          (d?.usageMetadata?.thoughtsTokenCount || 0),
       } as AnthropicUsage,
     };
   }
