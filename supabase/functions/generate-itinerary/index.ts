@@ -853,6 +853,25 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
                 next++;
               }
             };
+            // CACHE PRIMING (cost lever): the N day-fills fire simultaneously,
+            // so every one MISSES the shared SYSTEM_PROMPT cache and pays the
+            // 1.25x write premium — measured 23k write tokens against only
+            // 14k reads, i.e. the cache was barely paying for itself. One tiny
+            // awaited call writes the cache first (~1s), after which all N
+            // fills READ it at 0.1x. Best-effort: on failure we simply fall
+            // back to today's behaviour.
+            try {
+              const warm = await callClaude(
+                igFillModel,
+                fillSystem,
+                "Reply with the single word OK.",
+                1,
+              );
+              fillUsages.push(warm.usage);
+            } catch (e) {
+              console.warn("Cache prime failed (non-fatal):", e.message);
+            }
+
             await Promise.all(
               planDays.map(async (d, i) => {
                 results[i] = await fillOne(d, i);

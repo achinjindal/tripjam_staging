@@ -9815,11 +9815,24 @@ export default function App({
     // on their content — this was 37% of a full suite run's spend.
     if (E2E_CHEAP) return;
     if (pretripRoutes.length === 0) return;
-    if (hasEagerLoadedRef.current) return;
-    hasEagerLoadedRef.current = true;
-    if (!destResearch.hasLoaded && !destResearch.loading) {
+
+    // COST: Inspirations is the most expensive call in the app (Haiku +
+    // web search, ~$0.09 each). It used to pre-warm the moment RG produced
+    // routes — i.e. for everyone merely browsing options, and for everyone
+    // who abandons before ever building a trip. Now it only pre-warms once
+    // an itinerary actually exists (a committed trip). Users who open the
+    // tab earlier still get it: the lazy effect below loads on demand.
+    // hasLoaded/loading already prevent a double load, so this needs no ref
+    // of its own — and must NOT sit behind hasEagerLoadedRef, or the
+    // deferred pre-warm would be swallowed by the RG-time run.
+    if (days.length > 0 && !destResearch.hasLoaded && !destResearch.loading) {
       loadDestinationResearch();
     }
+
+    // Deep-dive pre-load stays at RG time (the Magazine is a pre-trip
+    // browsing surface) and runs once.
+    if (hasEagerLoadedRef.current) return;
+    hasEagerLoadedRef.current = true;
     // Pre-load country-level deep dives (up to 2) as soon as RG completes.
     const countries = resolveCountriesForMagazine({ pendingForm, editingTrip });
     if (countries.length > 0) {
@@ -9838,7 +9851,9 @@ export default function App({
         }
       }
     }
-  }, [pretripRoutes.length]);
+    // days.length is a dependency so the deferred Inspirations pre-warm
+    // actually fires when the itinerary lands, not only at RG time.
+  }, [pretripRoutes.length, days.length]);
 
   // Lazy fallback: fire Inspirations load if the user navigates to the tab
   // before routes have been generated (e.g. opening an existing itinerary

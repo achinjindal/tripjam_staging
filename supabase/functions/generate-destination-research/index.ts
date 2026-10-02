@@ -515,9 +515,14 @@ serve(async (req) => {
         : "");
 
     // Haiku first (cheap, 6 web searches). If it returns an empty digest
-    // (over-refusal), escalate once to Sonnet 4.6 (8 web searches).
+    // (over-refusal), escalate once to Sonnet.
+    // COST: the escalation measured $0.46 in a single call — more than an
+    // entire itinerary — because 8 Sonnet searches dragged 112k input tokens
+    // through a $3/M model. Searches also cost $0.01 each on top. Capped to
+    // 4: the rescue only has to beat an EMPTY digest, and the primary Haiku
+    // pass has already done the broad sweep whose results it can build on.
     const HAIKU_MAX_USES = 6;
-    const SONNET_MAX_USES = 8;
+    const SONNET_MAX_USES = 4;
 
     const haiku = await callResearchLLM(
       MODEL,
