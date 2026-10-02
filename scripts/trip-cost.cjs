@@ -25,9 +25,13 @@ if (!URL || !KEY) {
 
 // $ per token. Cache write = 1.25x input, cache read = 0.10x input.
 const RATES = {
+  // Mirrors RATES in supabase/functions/_shared/credits.ts (2026-10-02).
+  "claude-fable-5": { input: 10 / 1e6, output: 50 / 1e6 },
+  "claude-opus-4-8": { input: 5 / 1e6, output: 25 / 1e6 },
+  "claude-sonnet-5": { input: 2 / 1e6, output: 10 / 1e6 },
   "claude-sonnet-4-6": { input: 3 / 1e6, output: 15 / 1e6 },
-  "claude-haiku-4-5": { input: 0.8 / 1e6, output: 4 / 1e6 },
-  "claude-haiku-4-5-20251001": { input: 0.8 / 1e6, output: 4 / 1e6 },
+  "claude-haiku-4-5": { input: 1 / 1e6, output: 5 / 1e6 },
+  "claude-haiku-4-5-20251001": { input: 1 / 1e6, output: 5 / 1e6 },
 };
 const CACHE_WRITE = 1.25;
 const CACHE_READ = 0.1;

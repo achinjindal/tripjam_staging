@@ -31,11 +31,19 @@ export function runInBackground(work: Promise<unknown>): void {
   }
 }
 
+// Anthropic list prices per MILLION tokens, verified against Anthropic's
+// published rates 2026-10-02. These had drifted badly: Sonnet 5 was billed at
+// Sonnet 4.x's $3/$15 (overcharging users ~50% on every itinerary) while Haiku
+// 4.5 was billed at $0.80/$4 against a real $1/$5 (undercharging ~25%). Keep
+// this table honest — credit deduction, the Admin console and scripts/trip-cost
+// all derive from it. Sonnet 4.6 stays for historical rows priced at its rate.
 const RATES: Record<string, { input: number; output: number }> = {
-  "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
-  "claude-sonnet-5": { input: 3.0, output: 15.0 },
-  "claude-haiku-4-5": { input: 0.8, output: 4.0 },
-  "claude-haiku-4-5-20251001": { input: 0.8, output: 4.0 },
+  "claude-fable-5": { input: 10.0, output: 50.0 },
+  "claude-opus-4-8": { input: 5.0, output: 25.0 },
+  "claude-sonnet-5": { input: 2.0, output: 10.0 },
+  "claude-sonnet-4-6": { input: 3.0, output: 15.0 }, // legacy rows only
+  "claude-haiku-4-5": { input: 1.0, output: 5.0 },
+  "claude-haiku-4-5-20251001": { input: 1.0, output: 5.0 },
 };
 
 // D18: Each credit covers $0.007 of LLM spend (70% of $0.01 user value)
@@ -63,7 +71,10 @@ export function computeLLMCost(
   cacheReadTokens = 0,
   webSearchCount = 0,
 ): number {
-  const r = RATES[model] || RATES["claude-sonnet-4-6"];
+  // Unknown/newly-configured model: bill at the most expensive known rate
+  // rather than a mid-tier guess, so a model swap can never silently
+  // under-charge (over-charging is visible and refundable; the reverse is not).
+  const r = RATES[model] || RATES["claude-fable-5"];
   const inputUsd =
     inputTokens * r.input +
     cacheCreationTokens * r.input * CACHE_WRITE_MULTIPLIER +

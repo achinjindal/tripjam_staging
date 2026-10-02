@@ -221,7 +221,7 @@ supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
 - Route: `/admin` — gated by `is_admin` boolean on profiles table
 - Tabs: Users, Trips, Credits (by function/model), Daily Usage
 - Shows: trip counts, chat counts, IG timing, activity breakdown, token usage, cost estimates
-- Cost rates: Sonnet $3/$15 per M tokens, Haiku $0.80/$4 per M tokens
+- Cost rates (verified 2026-10-02, keep in sync across `_shared/credits.ts`, `Admin.jsx`, `scripts/trip-cost.cjs`): Sonnet 5 $2/$10, Haiku 4.5 $1/$5, Opus 4.8 $5/$25, Fable 5 $10/$50 per M tokens. Cache read = 0.1x input, cache write (5m) = 1.25x input. Web search $10/1k calls.
 
 ## Testing
 

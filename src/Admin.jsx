@@ -2,11 +2,19 @@ import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
 import { T, RADIUS, SHADOW, MOTION } from "./theme";
 
+// Must mirror RATES in supabase/functions/_shared/credits.ts (verified
+// 2026-10-02). Previously missing a claude-sonnet-5 entry entirely, so every
+// Sonnet 5 row fell back to Sonnet 4.x's $3/$15 and the console overstated
+// real spend by ~50%.
 const COST_RATES = {
+  "claude-fable-5": { input: 10 / 1_000_000, output: 50 / 1_000_000 },
+  "claude-opus-4-8": { input: 5 / 1_000_000, output: 25 / 1_000_000 },
+  "claude-sonnet-5": { input: 2 / 1_000_000, output: 10 / 1_000_000 },
   "claude-sonnet-4-6": { input: 3 / 1_000_000, output: 15 / 1_000_000 },
+  "claude-haiku-4-5": { input: 1 / 1_000_000, output: 5 / 1_000_000 },
   "claude-haiku-4-5-20251001": {
-    input: 0.8 / 1_000_000,
-    output: 4 / 1_000_000,
+    input: 1 / 1_000_000,
+    output: 5 / 1_000_000,
   },
 };
 
@@ -23,7 +31,7 @@ function calcCost(
   cacheCreationTokens = 0,
   cacheReadTokens = 0,
 ) {
-  const rate = COST_RATES[model] || COST_RATES["claude-sonnet-4-6"];
+  const rate = COST_RATES[model] || COST_RATES["claude-fable-5"];
   return (
     inputTokens * rate.input +
     cacheCreationTokens * rate.input * CACHE_WRITE_MULTIPLIER +
