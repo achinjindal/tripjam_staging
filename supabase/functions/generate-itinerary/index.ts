@@ -139,6 +139,79 @@ interface AnthropicUsage {
   cache_read_input_tokens?: number;
 }
 
+// Provider adapter for the day-fill A/B. Routes by model-id prefix and
+// normalises every provider's response to Anthropic's {text, usage} shape so
+// callers, billing and llm_usage stay identical. Anthropic is the default
+// path and is untouched — a model id without a gemini-/gpt- prefix never
+// reaches this code.
+async function callOtherProvider(
+  model: string,
+  systemText: string,
+  userMessage: string,
+  maxTokens: number,
+): Promise<{ text: string; usage: AnthropicUsage }> {
+  if (model.startsWith("gemini")) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "x-goog-api-key": Deno.env.get("GEMINI_API_KEY") ?? "",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemText }] },
+          contents: [{ role: "user", parts: [{ text: userMessage }] }],
+          generationConfig: {
+            maxOutputTokens: maxTokens,
+            responseMimeType: "application/json",
+          },
+        }),
+      },
+    );
+    if (!res.ok) throw new Error(`Gemini error: ${await res.text()}`);
+    const d = await res.json();
+    const text = (d?.candidates?.[0]?.content?.parts || [])
+      .map((p: { text?: string }) => p.text || "")
+      .join("");
+    return {
+      text,
+      usage: {
+        input_tokens: d?.usageMetadata?.promptTokenCount || 0,
+        output_tokens: d?.usageMetadata?.candidatesTokenCount || 0,
+      } as AnthropicUsage,
+    };
+  }
+  // OpenAI (GPT-5.x family: max_completion_tokens, no temperature)
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${Deno.env.get("OPENAI_API_KEY") ?? ""}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_completion_tokens: maxTokens,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemText },
+        { role: "user", content: userMessage },
+      ],
+    }),
+  });
+  if (!res.ok) throw new Error(`OpenAI error: ${await res.text()}`);
+  const d = await res.json();
+  return {
+    text: d?.choices?.[0]?.message?.content || "",
+    usage: {
+      input_tokens: d?.usage?.prompt_tokens || 0,
+      output_tokens: d?.usage?.completion_tokens || 0,
+      cache_read_input_tokens:
+        d?.usage?.prompt_tokens_details?.cached_tokens || 0,
+    } as AnthropicUsage,
+  };
+}
+
 // Single non-streamed Anthropic call → text + usage. System passed as blocks
 // so fill calls can share the cached SYSTEM_PROMPT prefix.
 async function callClaude(
@@ -147,6 +220,14 @@ async function callClaude(
   userMessage: string,
   maxTokens: number,
 ): Promise<{ text: string; usage: AnthropicUsage }> {
+  if (model.startsWith("gemini") || model.startsWith("gpt")) {
+    return await callOtherProvider(
+      model,
+      systemBlocks.map((b) => b.text).join("\n\n"),
+      userMessage,
+      maxTokens,
+    );
+  }
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {

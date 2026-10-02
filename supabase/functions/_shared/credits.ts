@@ -44,6 +44,10 @@ const RATES: Record<string, { input: number; output: number }> = {
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 }, // legacy rows only
   "claude-haiku-4-5": { input: 1.0, output: 5.0 },
   "claude-haiku-4-5-20251001": { input: 1.0, output: 5.0 },
+  // Non-Anthropic models (day-fill A/B). Gemini 3.8 Flash's $0.75/$3.75 is
+  // promotional and DOUBLES on 2027-01-01 to $1.50/$7.50 — revisit then.
+  "gemini-3.8-flash": { input: 0.75, output: 3.75 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2 },
 };
 
 // D18: Each credit covers $0.007 of LLM spend (70% of $0.01 user value)
