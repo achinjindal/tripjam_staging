@@ -1,0 +1,1007 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Email P3 — Travel Legs & Add-a-Booking — Design</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --ink: #0f1923;
+        --dusk: #1e2d3d;
+        --ocean: #2563a8;
+        --sky: #4a90d9;
+        --sand: #f0e6d3;
+        --warm: #faf6f0;
+        --terra: #c4622d;
+        --gold: #d4a847;
+        --moss: #3d7a5c;
+        --mist: #587284;
+        --chalk: #fff;
+        --border: #e2ddd5;
+        --bg: #f5f0e8;
+        --success: #16a34a;
+        --skylight: #f0f7ff;
+        --skyborder: #c8dffe;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          14px/1.6 Georgia,
+          serif;
+        padding: 40px 24px 80px;
+      }
+      .wrap {
+        max-width: 1180px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 34px;
+        font-weight: 400;
+        line-height: 1.15;
+      }
+      .sub {
+        color: var(--mist);
+        margin: 10px 0 6px;
+        max-width: 64ch;
+      }
+      .meta {
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--terra);
+        margin-bottom: 8px;
+      }
+      h2 {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 21px;
+        font-weight: 400;
+        margin: 48px 0 6px;
+      }
+      .h2sub {
+        color: var(--mist);
+        font-size: 13px;
+        margin-bottom: 18px;
+        max-width: 64ch;
+      }
+      .frames {
+        display: flex;
+        gap: 28px;
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+      .frame {
+        width: 352px;
+        flex: 0 0 auto;
+      }
+      .frame-label {
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--mist);
+        margin: 0 0 8px 4px;
+      }
+      .phone {
+        background: var(--warm);
+        border: 1px solid var(--border);
+        border-radius: 26px;
+        box-shadow: 0 8px 30px rgba(15, 25, 35, 0.1);
+        padding: 18px 14px 22px;
+        overflow: hidden;
+        position: relative;
+      }
+      .card {
+        background: var(--chalk);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 16px 14px;
+        box-shadow: 0 1px 3px rgba(15, 25, 35, 0.06);
+      }
+      .cardh {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .cardh .t {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 17px;
+      }
+      .cardh .link {
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--ocean);
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .sec {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--mist);
+        margin: 14px 0 7px;
+      }
+      .fieldrow {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .field {
+        flex: 1;
+        background: var(--warm);
+        border: 1.5px solid var(--sand);
+        border-radius: 10px;
+        padding: 8px 11px;
+        font-size: 12.5px;
+        color: var(--dusk);
+      }
+      .field.filled {
+        border-color: var(--ocean);
+      }
+      .aff {
+        font-size: 11.5px;
+        color: var(--ocean);
+        margin: 2px 2px 0;
+      }
+      .aff span {
+        color: var(--mist);
+      }
+      /* leg rows */
+      .leg {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: var(--warm);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px 11px;
+        margin-bottom: 8px;
+      }
+      .leg .ic {
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        background: var(--skylight);
+        border: 1px solid var(--skyborder);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 15px;
+        flex: 0 0 auto;
+      }
+      .leg .b {
+        flex: 1;
+        min-width: 0;
+      }
+      .leg .r {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 15px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .leg .r .arr {
+        color: var(--ocean);
+        padding: 0 2px;
+      }
+      .leg .r .code {
+        font-family: Georgia, serif;
+        font-size: 10.5px;
+        color: var(--mist);
+        letter-spacing: 0.06em;
+        vertical-align: 2px;
+      }
+      .leg .d {
+        font-size: 11px;
+        color: var(--mist);
+        margin-top: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .leg .dots {
+        color: var(--mist);
+        cursor: pointer;
+        padding: 4px 6px;
+      }
+      .pnr {
+        display: inline-block;
+        font-size: 10px;
+        background: var(--sand);
+        border-radius: 6px;
+        padding: 1px 7px;
+        color: var(--dusk);
+        letter-spacing: 0.04em;
+      }
+      .viamail {
+        display: inline-block;
+        font-size: 10px;
+        color: var(--ocean);
+        background: var(--skylight);
+        border: 1px solid var(--skyborder);
+        border-radius: 999px;
+        padding: 1px 7px;
+      }
+      .autofill {
+        font-size: 10.5px;
+        color: var(--moss);
+        margin: -4px 0 10px 45px;
+      }
+      .leg.cxl {
+        opacity: 0.55;
+      }
+      .leg.cxl .r {
+        text-decoration: line-through;
+        color: var(--mist);
+      }
+      .showcxl {
+        font-size: 11px;
+        color: var(--mist);
+        text-align: center;
+        margin: 4px 0 2px;
+        cursor: pointer;
+      }
+      /* bottom sheet */
+      .sheet {
+        position: relative;
+        background: var(--chalk);
+        border: 1px solid var(--border);
+        border-radius: 20px 20px 24px 24px;
+        padding: 18px 16px 20px;
+        box-shadow: 0 8px 30px rgba(15, 25, 35, 0.18);
+      }
+      .grab {
+        width: 36px;
+        height: 4px;
+        border-radius: 999px;
+        background: var(--border);
+        margin: 0 auto 14px;
+      }
+      .sheet h4 {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 18px;
+        font-weight: 400;
+        margin-bottom: 4px;
+      }
+      .sheet .hint {
+        font-size: 12px;
+        color: var(--mist);
+        margin-bottom: 12px;
+      }
+      .cta {
+        display: block;
+        width: 100%;
+        margin-top: 12px;
+        background: var(--ocean);
+        color: #fff;
+        border: none;
+        border-radius: 12px;
+        padding: 12px;
+        font:
+          14px Georgia,
+          serif;
+        cursor: pointer;
+        text-align: center;
+      }
+      .cta.ghost {
+        background: none;
+        color: var(--mist);
+        padding: 8px;
+        font-size: 12px;
+      }
+      /* chooser option cards */
+      .opt {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        border: 1.5px solid var(--border);
+        border-radius: 14px;
+        padding: 13px 12px;
+        margin-bottom: 10px;
+        cursor: pointer;
+        background: var(--warm);
+      }
+      .opt:hover {
+        border-color: var(--ocean);
+      }
+      .opt .oi {
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        background: var(--chalk);
+        border: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 17px;
+        flex: 0 0 auto;
+      }
+      .opt .on {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 15px;
+        margin-bottom: 2px;
+      }
+      .opt .oc {
+        font-size: 11.5px;
+        color: var(--mist);
+        line-height: 1.45;
+      }
+      .addr {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--sand);
+        border-radius: 8px;
+        padding: 3px 9px;
+        font-size: 11px;
+        color: var(--dusk);
+        margin-top: 6px;
+      }
+      .addr b {
+        font-weight: normal;
+        letter-spacing: 0.02em;
+      }
+      .addr .cp {
+        color: var(--ocean);
+        cursor: pointer;
+      }
+      /* parsed preview */
+      .preview {
+        background: var(--skylight);
+        border: 1px solid var(--skyborder);
+        border-radius: 14px;
+        padding: 13px 13px 11px;
+        margin-bottom: 4px;
+      }
+      .preview .k {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 8px;
+      }
+      .preview .k .ic {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        background: var(--chalk);
+        border: 1px solid var(--skyborder);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+      }
+      .preview .k .n {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 16px;
+        line-height: 1.2;
+      }
+      .preview .k .s {
+        font-size: 11px;
+        color: var(--mist);
+      }
+      .kv {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        padding: 4px 2px;
+        border-top: 1px dashed var(--skyborder);
+      }
+      .kv .l {
+        color: var(--mist);
+      }
+      .kv .v {
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+      }
+      .editlink {
+        font-size: 11px;
+        color: var(--ocean);
+        text-align: right;
+        margin-top: 6px;
+        cursor: pointer;
+      }
+      .routed {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12px;
+        color: var(--dusk);
+        margin: 10px 2px 2px;
+      }
+      .routed .chip {
+        background: var(--sand);
+        border-radius: 999px;
+        padding: 2px 10px;
+        font-size: 11px;
+      }
+      .filechip {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11.5px;
+        color: var(--mist);
+        background: var(--warm);
+        border: 1px dashed var(--border);
+        border-radius: 10px;
+        padding: 7px 10px;
+        margin-bottom: 10px;
+      }
+      .done {
+        text-align: center;
+        padding: 18px 0 6px;
+      }
+      .done .big {
+        font-size: 34px;
+        line-height: 1;
+        margin-bottom: 10px;
+      }
+      .done .msg {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 18px;
+      }
+      .done .small {
+        font-size: 12px;
+        color: var(--mist);
+        margin-top: 4px;
+      }
+      /* receipt mock */
+      .mail {
+        background: var(--chalk);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 22px 22px 24px;
+        max-width: 352px;
+      }
+      .mail .brand {
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        color: var(--mist);
+        margin-bottom: 12px;
+      }
+      .mail .mh {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 19px;
+        margin-bottom: 8px;
+      }
+      .mail .ml {
+        font-size: 13px;
+        color: #3a4a58;
+        margin-bottom: 18px;
+      }
+      .mail .btn {
+        display: inline-block;
+        background: var(--ocean);
+        color: #fff;
+        border-radius: 10px;
+        padding: 10px 20px;
+        font-size: 13px;
+      }
+      .mail .env {
+        font-size: 10.5px;
+        color: var(--mist);
+        margin-bottom: 14px;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 10px;
+      }
+      /* annotations */
+      .notes {
+        background: var(--chalk);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 22px 26px;
+        margin-top: 26px;
+      }
+      .notes h3 {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 16px;
+        font-weight: 400;
+        margin-bottom: 10px;
+      }
+      .notes li {
+        margin: 0 0 9px 18px;
+        color: var(--dusk);
+        font-size: 13px;
+      }
+      .notes b {
+        color: var(--ink);
+      }
+      code {
+        background: var(--sand);
+        border-radius: 5px;
+        padding: 0 5px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="meta">TripJam · Design · Email Ingestion P3</div>
+      <h1>Any flight, any train, one front door</h1>
+      <p class="sub">
+        Flight and train confirmations from any carrier or operator worldwide
+        become booked <b>travel legs</b> (new <code>trips.travel_data</code>,
+        mirroring <code>hotels_data</code>). One obvious
+        <b>Add a booking</b> flow: forward the email, or upload a
+        screenshot/PDF.
+      </p>
+
+      <h2>1 · Travel card with booked legs</h2>
+      <p class="h2sub">
+        A “Booked legs” block between the Arriving and Departing editors. Legs
+        arrive from forwarded emails (📩) or uploads (📎). A leg matching the
+        trip's first/last day auto-fills the arrival/departure editors. Unbooked
+        boundaries get a quiet affiliate “Compare flights ↗” link (env-gated,
+        ships dark).
+      </p>
+      <div class="frames">
+        <div class="frame">
+          <div class="frame-label">
+            Board · Travel &amp; Hotels — Italy · May 4–12
+          </div>
+          <div class="phone">
+            <div class="card">
+              <div class="cardh">
+                <span>🧭</span><span class="t">Travel</span
+                ><span class="link">＋ Add a booking</span>
+              </div>
+
+              <div class="sec">Arriving · May 4</div>
+              <div class="fieldrow">
+                <div class="field filled">Rome Fiumicino (FCO)</div>
+                <div class="field filled" style="flex: 0 0 84px">12:10</div>
+              </div>
+
+              <div class="sec">Booked legs</div>
+              <div class="leg">
+                <div class="ic">✈️</div>
+                <div class="b">
+                  <div class="r">
+                    London <span class="code">LHR</span>
+                    <span class="arr">→</span> Rome
+                    <span class="code">FCO</span>
+                  </div>
+                  <div class="d">
+                    British Airways BA 548 · May 4 · dep 08:40 ·
+                    <span class="pnr">REF MX4KQZ</span>
+                    <span class="viamail">📩 email</span>
+                  </div>
+                </div>
+                <div class="dots">⋯</div>
+              </div>
+              <div class="autofill">↳ set your arrival above</div>
+              <div class="leg">
+                <div class="ic">🚆</div>
+                <div class="b">
+                  <div class="r">
+                    Roma Termini <span class="arr">→</span> Firenze S.M.N.
+                  </div>
+                  <div class="d">
+                    Frecciarossa 9528 · May 7 · dep 09:25 · Business ·
+                    <span class="pnr">REF PXK3M9</span>
+                    <span class="viamail">📎 upload</span>
+                  </div>
+                </div>
+                <div class="dots">⋯</div>
+              </div>
+              <div class="leg cxl">
+                <div class="ic">✈️</div>
+                <div class="b">
+                  <div class="r">
+                    Rome <span class="code">FCO</span>
+                    <span class="arr">→</span> Paris
+                    <span class="code">CDG</span>
+                  </div>
+                  <div class="d">
+                    easyJet U2 2707 · Cancelled May 12 ·
+                    <span class="pnr">REF K8DW2R</span>
+                  </div>
+                </div>
+                <div class="dots">⋯</div>
+              </div>
+              <div class="showcxl">hide cancelled (1) ▴</div>
+
+              <div class="sec">Departing · May 12</div>
+              <div class="fieldrow">
+                <div class="field">Florence (FLR)</div>
+                <div class="field" style="flex: 0 0 84px">—</div>
+              </div>
+              <div class="aff">
+                Compare flights ↗ <span>· FLR → LHR, May 12</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h2>2 · Mid-trip legs show up on their day</h2>
+      <p class="h2sub">
+        Trips carry 3–4+ legs — internal trains and hops, not just arrival and
+        departure. A booked leg renders on the itinerary day it happens (matched
+        by date): as a ✓ Booked badge on a matching transit activity when one
+        exists, else as a pinned strip at the top of the day. Derived at render
+        time from <code>travel_data</code> — never inserted into activities, so
+        day regenerates can't touch it.
+      </p>
+      <div class="frames">
+        <div class="frame">
+          <div class="frame-label">
+            Day 4 — badge on matching transit activity
+          </div>
+          <div class="phone">
+            <div
+              style="
+                display: flex;
+                align-items: baseline;
+                gap: 8px;
+                padding: 2px 4px 12px;
+              "
+            >
+              <span
+                style="
+                  font-family: &quot;DM Serif Display&quot;, Georgia, serif;
+                  font-size: 19px;
+                "
+                >Day 4</span
+              ><span style="color: var(--mist); font-size: 12px"
+                >· Rome → Florence</span
+              >
+            </div>
+            <div
+              class="card"
+              style="
+                border-left: 3px solid #7b5ea7;
+                padding: 12px 12px 11px;
+                margin-bottom: 10px;
+              "
+            >
+              <div style="display: flex; align-items: center; gap: 8px">
+                <div
+                  style="
+                    font-family: &quot;DM Serif Display&quot;, Georgia, serif;
+                    font-size: 15px;
+                  "
+                >
+                  Roma Termini
+                  <span style="color: var(--ocean)">→</span> Firenze S.M.N.
+                </div>
+                <span
+                  style="
+                    margin-left: auto;
+                    font-size: 10px;
+                    color: var(--moss);
+                    background: #dcfce7;
+                    border: 1px solid #bbf7d0;
+                    border-radius: 999px;
+                    padding: 1px 8px;
+                    white-space: nowrap;
+                  "
+                  >✓ Booked · PXK3M9</span
+                >
+              </div>
+              <div
+                style="font-size: 11.5px; color: var(--mist); margin-top: 3px"
+              >
+                Frecciarossa 9528 · ⏱ 1h 32m · dep 09:25
+              </div>
+            </div>
+            <div class="card" style="padding: 12px 12px 11px">
+              <div
+                style="
+                  font-size: 11px;
+                  color: var(--mist);
+                  letter-spacing: 0.06em;
+                "
+              >
+                11:30 · SIGHT
+              </div>
+              <div
+                style="
+                  font-family: &quot;DM Serif Display&quot;, Georgia, serif;
+                  font-size: 16px;
+                  margin: 1px 0 2px;
+                "
+              >
+                Duomo &amp; Brunelleschi's Dome
+              </div>
+              <div style="font-size: 12px; color: var(--mist)">
+                Book the dome climb slot ahead
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="frame">
+          <div class="frame-label">
+            Day 6 — pinned strip (no matching activity)
+          </div>
+          <div class="phone">
+            <div
+              style="
+                display: flex;
+                align-items: baseline;
+                gap: 8px;
+                padding: 2px 4px 12px;
+              "
+            >
+              <span
+                style="
+                  font-family: &quot;DM Serif Display&quot;, Georgia, serif;
+                  font-size: 19px;
+                "
+                >Day 6</span
+              ><span style="color: var(--mist); font-size: 12px"
+                >· Florence</span
+              >
+            </div>
+            <div class="leg" style="background: var(--chalk)">
+              <div class="ic">✈️</div>
+              <div class="b">
+                <div class="r">
+                  Florence <span class="code">FLR</span>
+                  <span class="arr">→</span> Barcelona
+                  <span class="code">BCN</span>
+                </div>
+                <div class="d">
+                  Vueling VY 6941 · dep 18:40 ·
+                  <span class="pnr">REF QW83LM</span>
+                  <span style="font-size: 10px; color: var(--moss)"
+                    >✓ Booked</span
+                  >
+                </div>
+              </div>
+            </div>
+            <div class="card" style="padding: 12px 12px 11px; margin-top: 2px">
+              <div
+                style="
+                  font-size: 11px;
+                  color: var(--mist);
+                  letter-spacing: 0.06em;
+                "
+              >
+                09:00 · SIGHT
+              </div>
+              <div
+                style="
+                  font-family: &quot;DM Serif Display&quot;, Georgia, serif;
+                  font-size: 16px;
+                  margin: 1px 0 2px;
+                "
+              >
+                Uffizi Gallery
+              </div>
+              <div style="font-size: 12px; color: var(--mist)">
+                Pre-booked slot beats the queue
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h2>3 · “Add a booking” — the front door</h2>
+      <p class="h2sub">
+        One sheet, two options. No typing, no guessing: forward the email
+        (per-trip address, copy chip) or upload a screenshot/PDF. Upload parses
+        through the existing metered <code>dry_run</code> endpoint; the apply is
+        a client-side RLS write — no new endpoint.
+      </p>
+      <div class="frames">
+        <div class="frame">
+          <div class="frame-label">State 1 — chooser</div>
+          <div
+            class="phone"
+            style="
+              background:
+                linear-gradient(rgba(15, 25, 35, 0.28), rgba(15, 25, 35, 0.28)),
+                #faf6f0;
+              padding-top: 78px;
+            "
+          >
+            <div class="sheet">
+              <div class="grab"></div>
+              <h4>Add a booking</h4>
+              <div class="hint">
+                Hotel, flight or train — we'll read it and file it on this trip.
+              </div>
+              <div class="opt">
+                <div class="oi">📩</div>
+                <div>
+                  <div class="on">Forward the confirmation email</div>
+                  <div class="oc">
+                    Works from Gmail, Outlook, anything. We reply once it's
+                    filed.
+                  </div>
+                  <div class="addr">
+                    <b>bookings+a3f9c2d1@…</b><span class="cp">copy</span>
+                  </div>
+                </div>
+              </div>
+              <div class="opt">
+                <div class="oi">📎</div>
+                <div>
+                  <div class="on">Upload a screenshot or PDF</div>
+                  <div class="oc">
+                    Ticket PDFs, app screenshots, boarding passes.
+                  </div>
+                </div>
+              </div>
+              <button class="cta ghost">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="frame">
+          <div class="frame-label">State 2 — parsed preview (upload)</div>
+          <div
+            class="phone"
+            style="
+              background:
+                linear-gradient(rgba(15, 25, 35, 0.28), rgba(15, 25, 35, 0.28)),
+                #faf6f0;
+              padding-top: 44px;
+            "
+          >
+            <div class="sheet">
+              <div class="grab"></div>
+              <h4>Here's what we read</h4>
+              <div class="hint">Check it before it goes on the trip.</div>
+              <div class="filechip">📎 trenitalia-ticket.pdf · parsed</div>
+              <div class="preview">
+                <div class="k">
+                  <div class="ic">🚆</div>
+                  <div>
+                    <div class="n">
+                      Roma Termini
+                      <span style="color: var(--ocean)">→</span> Firenze S.M.N.
+                    </div>
+                    <div class="s">
+                      Frecciarossa 9528 · Train · Trenitalia · confirmed
+                    </div>
+                  </div>
+                </div>
+                <div class="kv">
+                  <span class="l">Date · departs</span
+                  ><span class="v">May 7 · 09:25</span>
+                </div>
+                <div class="kv">
+                  <span class="l">Class</span><span class="v">Business</span>
+                </div>
+                <div class="kv">
+                  <span class="l">Booking ref</span
+                  ><span class="v">PXK3M9</span>
+                </div>
+                <div class="editlink">Not right? Edit fields</div>
+              </div>
+              <div class="routed">
+                Adding to <span class="chip">Italy · May 4–12</span>
+              </div>
+              <button class="cta">Add to trip</button>
+              <button class="cta ghost">Discard</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="frame">
+          <div class="frame-label">State 3 — done</div>
+          <div
+            class="phone"
+            style="
+              background:
+                linear-gradient(rgba(15, 25, 35, 0.28), rgba(15, 25, 35, 0.28)),
+                #faf6f0;
+              padding-top: 150px;
+            "
+          >
+            <div class="sheet">
+              <div class="grab"></div>
+              <div class="done">
+                <div class="big">🚆</div>
+                <div class="msg">On the trip.</div>
+                <div class="small">
+                  Frecciarossa 9528 is in Travel &amp; Hotels.
+                </div>
+              </div>
+              <button class="cta ghost" style="color: var(--ocean)">
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h2>4 · Receipt — the promise, kept</h2>
+      <p class="h2sub">
+        Today's receipt says flight bookings “land in Travel &amp; Hotels soon.”
+        P3 replaces the promise with the outcome — for flights and trains alike.
+      </p>
+      <div class="frames">
+        <div class="frame">
+          <div class="frame-label">Reply-back receipt (forwarded flight)</div>
+          <div class="mail">
+            <div class="env">
+              From: TripJam &lt;trips@tripjam.co&gt; · Re: Your British Airways
+              booking — MX4KQZ
+            </div>
+            <div class="brand">TRIPJAM</div>
+            <div class="mh">✈️ British Airways BA 548 is on your trip</div>
+            <div class="ml">
+              <b>London (LHR) → Rome (FCO)</b> on May 4, departing 08:40, ref
+              <b>MX4KQZ</b> — saved to <b>Italy</b>'s Travel &amp; Hotels, and
+              your arrival day now shows it.
+            </div>
+            <span class="btn">Open the trip</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="notes">
+        <h3>Behavior notes</h3>
+        <ul>
+          <li>
+            <b>Global trains:</b> parser is operator-agnostic — Amtrak,
+            Eurostar, DB/ICE, SNCF/TGV, Trenitalia, JR, IRCTC, Via Rail.
+            Operator, train number/name, stations and class are kept
+            <i>verbatim from the ticket</i>; vendor quirks (IRCTC 10-digit PNR,
+            Eurostar 6-char refs) are prompt hints, not code paths.
+          </li>
+          <li>
+            <b>Data:</b> one additive migration —
+            <code>trips.travel_data jsonb</code>, array of legs
+            <code
+              >{kind, carrier, number, date, depart_time, arrive_time, from, to,
+              confirmation, class, status, via}</code
+            >. Same pattern as <code>hotels_data</code>.
+          </li>
+          <li>
+            <b>Dedupe/update:</b> leg key = confirmation, else (kind, number,
+            date). Re-forwards and reschedules update in place; cancellations
+            flip <code>status</code> but keep the row.
+          </li>
+          <li>
+            <b>Boundary auto-fill:</b> a booked leg on
+            <code>start_date</code>/<code>end_date</code> fills the
+            arrival/departure editors — only with genuinely parsed times, never
+            overwriting user-typed values.
+          </li>
+          <li>
+            <b>Upload parsing:</b> <code>dry_run</code> gains a
+            <code>file</code> input (image or PDF, base64 ≤4 MB, client
+            downscales screenshots); Haiku reads it with the same parse contract
+            and returns <code>leg_preview</code>. Shares the existing
+            30/user/day meter.
+          </li>
+          <li>
+            <b>Apply is client-side:</b> “Add to trip” writes via the user's own
+            session (RLS) with <code>via:"upload"</code>. No new endpoint, no
+            new auth surface.
+          </li>
+          <li>
+            <b>Affiliate (Part D, ships dark):</b> “Compare flights ↗” on
+            unbooked boundaries only, link template from
+            <code>VITE_FLIGHT_LINK_PREFIX</code> (Travelpayouts recommended —
+            Aviasales/WayAway ~1.1–1.3%, Kiwi ~3%). Never shown on booked legs.
+          </li>
+          <li>
+            <b>Copy honesty rides along:</b> teaching card + send-email footer
+            change “hotel confirmations” → “hotel, flight or train
+            confirmations” in the same release.
+          </li>
+          <li>
+            <b>Dropped:</b> paste-text input (niche — screenshots cover it);
+            wrong-trip move UI (the sheet targets the open trip via its
+            plus-address).
+          </li>
+        </ul>
+      </div>
+    </div>
+  </body>
+</html>

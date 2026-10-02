@@ -1,0 +1,863 @@
+<title>Collab journey gaps — all personas</title>
+<style>
+  :root {
+    --ink: #0f1923;
+    --paper: #faf6f0;
+    --card: #ffffff;
+    --ocean: #2563a8;
+    --gold: #d4a847;
+    --mist: #587284;
+    --border: #e2ddd5;
+    --band: #f5f0e8;
+    --moss: #3d7a5c;
+    --terra: #c4622d;
+    --error: #c53030;
+    --code-bg: #f0ece4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e8e2d8;
+      --paper: #10161d;
+      --card: #1a232e;
+      --ocean: #6aa3dd;
+      --gold: #d4a847;
+      --mist: #8ba5bb;
+      --border: #2c3947;
+      --band: #151d26;
+      --moss: #6db392;
+      --terra: #d98a5f;
+      --error: #e07a7a;
+      --code-bg: #202b37;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #e8e2d8;
+    --paper: #10161d;
+    --card: #1a232e;
+    --ocean: #6aa3dd;
+    --gold: #d4a847;
+    --mist: #8ba5bb;
+    --border: #2c3947;
+    --band: #151d26;
+    --moss: #6db392;
+    --terra: #d98a5f;
+    --error: #e07a7a;
+    --code-bg: #202b37;
+  }
+  :root[data-theme="light"] {
+    --ink: #0f1923;
+    --paper: #faf6f0;
+    --card: #ffffff;
+    --ocean: #2563a8;
+    --gold: #d4a847;
+    --mist: #587284;
+    --border: #e2ddd5;
+    --band: #f5f0e8;
+    --moss: #3d7a5c;
+    --terra: #c4622d;
+    --error: #c53030;
+    --code-bg: #f0ece4;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  .display {
+    font-family: Didot, "Bodoni 72", "Playfair Display", Georgia, serif;
+    font-weight: 400;
+  }
+  .wrap {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 0 20px;
+  }
+  .narrow {
+    max-width: 720px;
+  }
+  .eyebrow {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--mist);
+  }
+  header.doc {
+    padding: 54px 0 6px;
+  }
+  header.doc h1 {
+    font-size: 36px;
+    line-height: 1.12;
+    margin: 10px 0 12px;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 16.5px;
+    color: var(--mist);
+    max-width: 62ch;
+    font-style: italic;
+    margin: 0;
+  }
+  .meta {
+    font-family: -apple-system, sans-serif;
+    font-size: 12px;
+    color: var(--mist);
+    display: flex;
+    gap: 18px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+  h2.section {
+    font-size: 23px;
+    margin: 0 0 6px;
+    text-wrap: balance;
+  }
+  .section-block {
+    padding: 38px 0 4px;
+  }
+  .rule {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 38px 0 0;
+  }
+  p {
+    max-width: 68ch;
+  }
+  code {
+    font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    background: var(--code-bg);
+    padding: 1px 6px;
+    border-radius: 5px;
+  }
+  .muted {
+    color: var(--mist);
+  }
+
+  /* personas */
+  .personas {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+    margin: 22px 0 6px;
+  }
+  .persona {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .persona .pid {
+    font-family: -apple-system, sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--gold);
+  }
+  .persona .pname {
+    font-size: 15px;
+    font-weight: 700;
+    margin: 2px 0 4px;
+  }
+  .persona .pdesc {
+    font-size: 12.5px;
+    color: var(--mist);
+  }
+
+  /* journey table */
+  .journey-scroll {
+    overflow-x: auto;
+    margin: 24px 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  table.journey {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 860px;
+    font-size: 12.5px;
+  }
+  table.journey th,
+  table.journey td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    text-align: left;
+  }
+  table.journey th {
+    font-family: -apple-system, sans-serif;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--mist);
+    background: var(--band);
+    position: sticky;
+    top: 0;
+  }
+  table.journey td:first-child {
+    font-weight: 700;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+  table.journey tr:last-child td {
+    border-bottom: 0;
+  }
+  .ok {
+    color: var(--moss);
+  }
+  .gap {
+    color: var(--terra);
+    font-weight: 700;
+  }
+  .none {
+    color: var(--mist);
+  }
+
+  /* gap cards */
+  .gapcard {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 22px;
+    margin: 16px 0;
+    position: relative;
+  }
+  .gapcard.p0 {
+    border-left: 4px solid var(--terra);
+  }
+  .gapcard.p1 {
+    border-left: 4px solid var(--gold);
+  }
+  .gapcard.p2 {
+    border-left: 4px solid var(--border);
+  }
+  .gaphead {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
+  .prio {
+    font-family: -apple-system, sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 2px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .prio.p0 {
+    background: color-mix(in srgb, var(--terra) 16%, transparent);
+    color: var(--terra);
+  }
+  .prio.p1 {
+    background: color-mix(in srgb, var(--gold) 22%, transparent);
+    color: color-mix(in srgb, var(--gold) 60%, var(--ink));
+  }
+  .prio.p2 {
+    background: var(--band);
+    color: var(--mist);
+  }
+  .gaptitle {
+    font-size: 16.5px;
+    font-weight: 700;
+  }
+  .gapwho {
+    font-family: -apple-system, sans-serif;
+    font-size: 11px;
+    color: var(--mist);
+  }
+  .gapbody {
+    font-size: 13.5px;
+    margin-top: 8px;
+    max-width: 70ch;
+  }
+  .gapbuild {
+    margin-top: 10px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: var(--band);
+    font-size: 13px;
+  }
+  .gapbuild b:first-child {
+    color: var(--ocean);
+  }
+  .evidence {
+    font-family: -apple-system, sans-serif;
+    font-size: 11px;
+    color: var(--mist);
+    margin-top: 8px;
+  }
+
+  .covered {
+    columns: 2;
+    column-gap: 32px;
+    font-size: 13.5px;
+    margin: 16px 0;
+  }
+  .covered li {
+    break-inside: avoid;
+    margin-bottom: 6px;
+  }
+  @media (max-width: 640px) {
+    .covered {
+      columns: 1;
+    }
+  }
+  footer.doc {
+    padding: 28px 0 60px;
+    color: var(--mist);
+    font-family: -apple-system, sans-serif;
+    font-size: 12px;
+  }
+</style>
+
+<div class="wrap narrow">
+  <header class="doc">
+    <div class="eyebrow">TripJam · Collab · Journey analysis</div>
+    <h1 class="display">Where the group-trip journey breaks</h1>
+    <p class="standfirst">
+      Six personas walked through invite → plan → travel. What v1 covers well,
+      and the nine gaps worth building for — ranked by how many trips hit them
+      and how hard they bite.
+    </p>
+    <div class="meta">
+      <span>2026-08-11</span
+      ><span>Grounded in collab-tier2 code + docs/collaboration specs</span>
+    </div>
+  </header>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">The personas</h2>
+    <p>
+      Every shared trip has an organizer; the rest of the cast varies. The
+      journey has to work for all of them — including the two who never open the
+      app enthusiastically.
+    </p>
+    <div class="personas">
+      <div class="persona">
+        <div class="pid">P1</div>
+        <div class="pname">The Organizer</div>
+        <div class="pdesc">
+          Creates the trip, invites everyone, does 80% of the planning, usually
+          pays first. Today's primary persona — best served.
+        </div>
+      </div>
+      <div class="persona">
+        <div class="pid">P2</div>
+        <div class="pname">The Co-planner</div>
+        <div class="pdesc">
+          Opinionated friend who joins, votes, argues in chat, saves a style.
+          Served well once inside; getting them inside is the friction.
+        </div>
+      </div>
+      <div class="persona">
+        <div class="pid">P3</div>
+        <div class="pname">The Passenger</div>
+        <div class="pdesc">
+          Comes along, contributes nothing unprompted. Wants to glance at "where
+          are we staying" — not to plan. Barely served.
+        </div>
+      </div>
+      <div class="persona">
+        <div class="pid">P4</div>
+        <div class="pname">The Non-user invitee</div>
+        <div class="pdesc">
+          Has no TripJam account. Meets the product for the first time via an
+          invite. Their first 90 seconds decide whether the group plans here or
+          on WhatsApp.
+        </div>
+      </div>
+      <div class="persona">
+        <div class="pid">P5</div>
+        <div class="pname">The Late joiner</div>
+        <div class="pdesc">
+          Joins after routes were picked or the itinerary is built. Needs a
+          catch-up and a lever, not a blank chat.
+        </div>
+      </div>
+      <div class="persona">
+        <div class="pid">P6</div>
+        <div class="pname">The Treasurer</div>
+        <div class="pdesc">
+          Tracks who paid what and who owes whom. On group trips this job always
+          exists — currently it lives in Splitwise.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">Journey × persona</h2>
+    <p>
+      Stage by stage: <span class="ok">✓ covered</span> ·
+      <span class="gap">▲ gap</span> ·
+      <span class="none">— not their stage</span>. Gap numbers link to the
+      ranked list below.
+    </p>
+  </section>
+</div>
+
+<div class="wrap">
+  <div class="journey-scroll">
+    <table class="journey">
+      <tr>
+        <th>Stage</th>
+        <th>P1 Organizer</th>
+        <th>P2 Co-planner</th>
+        <th>P3 Passenger</th>
+        <th>P4 Non-user</th>
+        <th>P5 Late joiner</th>
+        <th>P6 Treasurer</th>
+      </tr>
+      <tr>
+        <td>Invite</td>
+        <td>
+          <span class="gap">▲1</span> typed email of a non-user errors;
+          <span class="gap">▲2</span> Share vs Invite confusion
+        </td>
+        <td><span class="ok">✓</span> Home shows pending invite card</td>
+        <td>
+          <span class="gap">▲3</span> nothing pulls them in — invite sits unseen
+          until app open
+        </td>
+        <td>
+          <span class="gap">▲1</span> only the link works; no email ever sent
+        </td>
+        <td class="none">—</td>
+        <td class="none">—</td>
+      </tr>
+      <tr>
+        <td>Join &amp; orient</td>
+        <td class="none">—</td>
+        <td>
+          <span class="ok">✓</span> /join preview → accept; token survives
+          sign-up
+        </td>
+        <td><span class="ok">✓</span> same flow</td>
+        <td>
+          <span class="gap">▲4</span> lands in a full trip UI with zero
+          orientation
+        </td>
+        <td>
+          <span class="gap">▲4</span> no "catch me up" — while-you-were-away has
+          no baseline for them
+        </td>
+        <td class="none">—</td>
+      </tr>
+      <tr>
+        <td>Share style</td>
+        <td><span class="ok">✓</span> form notes auto-count (new)</td>
+        <td><span class="ok">✓</span> sheet + nudge + rebalance chip (new)</td>
+        <td>
+          <span class="gap">▲5</span> free-text is high effort; no one-tap lane
+        </td>
+        <td><span class="ok">✓</span> nudge fires post-join</td>
+        <td>
+          <span class="gap">▲6</span> post-IG style has no lever on the built
+          plan
+        </td>
+        <td class="none">—</td>
+      </tr>
+      <tr>
+        <td>Decide route</td>
+        <td>
+          <span class="gap">▲6</span> selection is unilateral; rework replaces
+          votes
+        </td>
+        <td>
+          <span class="gap">▲6</span> votes are advisory; no consensus
+          checkpoint
+        </td>
+        <td>
+          <span class="gap">▲5</span> won't vote unless it's one tap from a ping
+        </td>
+        <td class="none">—</td>
+        <td><span class="ok">✓</span> rework nudge (new)</td>
+        <td class="none">—</td>
+      </tr>
+      <tr>
+        <td>Build &amp; refine</td>
+        <td><span class="ok">✓</span> IG + shared chat + polls + undo</td>
+        <td>
+          <span class="ok">✓</span> live sync, attributed chat, decisions hub
+        </td>
+        <td><span class="gap">▲5</span> reactions table exists in DB, no UI</td>
+        <td class="none">—</td>
+        <td><span class="gap">▲6</span> chat is their only lever</td>
+        <td>
+          <span class="gap">▲7</span> pool-empty paywall hits whoever triggers
+          it
+        </td>
+      </tr>
+      <tr>
+        <td>Stay in the loop</td>
+        <td><span class="gap">▲3</span> bell is in-app only</td>
+        <td>
+          <span class="gap">▲3</span> no push/email for votes, polls, reworks
+        </td>
+        <td><span class="gap">▲3</span> silence = they never return</td>
+        <td class="none">—</td>
+        <td><span class="gap">▲3</span> same</td>
+        <td><span class="gap">▲3</span> "pool is low" reaches no one</td>
+      </tr>
+      <tr>
+        <td>During trip</td>
+        <td><span class="gap">▲8</span> no day-of mode</td>
+        <td><span class="gap">▲8</span></td>
+        <td>
+          <span class="ok">✓</span> story mode is the right read-only surface
+        </td>
+        <td class="none">—</td>
+        <td class="none">—</td>
+        <td><span class="gap">▲9</span> expense entry has no payer</td>
+      </tr>
+      <tr>
+        <td>After trip</td>
+        <td><span class="gap">▲9</span> no settle-up, no recap</td>
+        <td class="none">—</td>
+        <td class="none">—</td>
+        <td class="none">—</td>
+        <td class="none">—</td>
+        <td><span class="gap">▲9</span> the whole job is unserved</td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<div class="wrap narrow">
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">The gaps, ranked</h2>
+    <p class="muted" style="font-size: 13.5px">
+      P0 = blocks adoption of collab itself · P1 = blunts the value once adopted
+      · P2 = horizon.
+    </p>
+
+    <div class="gapcard p0">
+      <div class="gaphead">
+        <span class="prio p0">P0 · GAP 1</span
+        ><span class="gaptitle">Inviting a non-user by email is a dead end</span
+        ><span class="gapwho">P4, P1</span>
+      </div>
+      <div class="gapbody">
+        The invite field says "username or email", but
+        <code>invite_user_by_handle</code> errors with
+        <code>user_not_found</code> when the email has no account — and no email
+        is ever sent. The organizer's most natural gesture (type a friend's
+        email) fails exactly for the people the feature exists to recruit. The
+        link flow covers it, but only if the organizer understands the
+        distinction.
+      </div>
+      <div class="gapbuild">
+        <b>Build:</b> on <code>user_not_found</code> for a valid email, send an
+        invite email carrying the join link (one Resend template — a thin slice
+        of Phase 4, not the whole notification stack). Until then: change the
+        inline error to "No TripJam account for that email — send them the
+        invite link instead" with a copy button.
+      </div>
+      <div class="evidence">
+        Evidence: members.js invite_user_by_handle contract; v1-scope
+        "email/push explicitly out of scope".
+      </div>
+    </div>
+
+    <div class="gapcard p0">
+      <div class="gaphead">
+        <span class="prio p0">P0 · GAP 3</span
+        ><span class="gaptitle"
+          >No re-engagement loop — silence after the first visit</span
+        ><span class="gapwho">every persona</span>
+      </div>
+      <div class="gapbody">
+        Everything that happens on a shared trip (invite, poll, vote, rework, IG
+        finished, pool low) notifies only via the in-app bell. A group trip is
+        inherently multi-session and multi-person: the moment a co-traveller
+        closes the tab, the trip cannot reach them again. This is the deferred
+        Phase 4, but the journey analysis says it's not a fast-follow — it's the
+        circulatory system of every other collab feature. Polls without pings
+        are polls nobody answers.
+      </div>
+      <div class="gapbuild">
+        <b>Build:</b> Phase 4 minimal slice, in this order: (1) transactional
+        email for invite + "poll opened" + "itinerary ready" (Resend, 3
+        templates); (2) push via the existing Capacitor shell for Android; (3)
+        the daily digest last. <code>notification_prefs</code> is already
+        drafted in migrations.
+      </div>
+      <div class="evidence">
+        Evidence: implementation-plan Phase 4 (deferred);
+        bell/while-you-were-away are in-app only.
+      </div>
+    </div>
+
+    <div class="gapcard p1">
+      <div class="gaphead">
+        <span class="prio p1">P1 · GAP 6</span
+        ><span class="gaptitle"
+          >The trip's biggest decision has no group moment</span
+        ><span class="gapwho">P1, P2, P5</span>
+      </div>
+      <div class="gapbody">
+        Route selection — the single highest-stakes call — is unilateral: one
+        member taps Select and builds, votes are advisory, and the new rework
+        flow (correctly warned) replaces routes and votes wholesale. Meanwhile
+        polls exist for days and activities but deliberately not for routes
+        (Phase 7 deferred). The journey inverts the spec's priority: groups need
+        the decision checkpoint at the route level more than at the activity
+        level. Post-IG, a late joiner's style has no lever at all except chat.
+      </div>
+      <div class="gapbuild">
+        <b>Build:</b> a lightweight consensus checkpoint, not full Phase 7: on
+        shared trips, "Build my itinerary" from a route that others up-voted
+        differently (or with open route votes) shows "2 of 3 haven't weighed in
+        — ask the group / build anyway". One sheet, no new tables (votes exist).
+        Full routes-as-poll + post-IG rebuild stays v1.1.
+      </div>
+      <div class="evidence">
+        Evidence: route select path; Phase 7 deferral rationale "high effort ×
+        rare use" — rare only because votes are currently consequence-free.
+      </div>
+    </div>
+
+    <div class="gapcard p1">
+      <div class="gaphead">
+        <span class="prio p1">P1 · GAP 9</span
+        ><span class="gaptitle"
+          >Expenses have no payer, no split, no settle-up</span
+        ><span class="gapwho">P6, everyone after the trip</span>
+      </div>
+      <div class="gapbody">
+        The expenses widget tracks amounts against the trip, but rows carry no
+        <code>paid_by</code> and no split. "Who owes whom" is the one job every
+        group trip generates without exception — and it's the job that keeps the
+        group returning to the app after the trip ends (the moment TripJam
+        currently loses them). The members infrastructure this needs is now
+        fully built.
+      </div>
+      <div class="gapbuild">
+        <b>Build:</b> add <code>paid_by</code> (member) + even-split-by-default
+        to trip_expenses, a per-member balance line in the widget, and a "settle
+        up" summary. Custom splits and payment links later. Rides entirely on
+        existing members + realtime rails.
+      </div>
+      <div class="evidence">
+        Evidence: BoardView expenses schema — no payer/split fields.
+      </div>
+    </div>
+
+    <div class="gapcard p1">
+      <div class="gaphead">
+        <span class="prio p1">P1 · GAP 5</span
+        ><span class="gaptitle">The Passenger has no one-tap lane</span
+        ><span class="gapwho">P3</span>
+      </div>
+      <div class="gapbody">
+        Every contribution surface asks for typing: a free-text style, a chat
+        message, a poll with options. The least-engaged member of every group —
+        statistically the most common persona — will do none of it, and their
+        silence then reads as consent. A <code>reactions</code> table already
+        exists in the prod schema with no UI on top of it.
+      </div>
+      <div class="gapbuild">
+        <b>Build:</b> (1) quick-tag pills on the style sheet (the spec's
+        original 🏖🥾🍜 tags — cut from v1) so a style is three taps; (2)
+        👍/😍/😬 reactions on route cards and day cards wired to the existing
+        table. Reactions feed Trippy as weak preference signals.
+      </div>
+      <div class="evidence">
+        Evidence: prod table list includes <code>reactions</code>;
+        PreferencesSheet is free-text only "per product decision".
+      </div>
+    </div>
+
+    <div class="gapcard p1">
+      <div class="gaphead">
+        <span class="prio p1">P1 · GAP 4</span
+        ><span class="gaptitle">Joining is an airlock with no briefing</span
+        ><span class="gapwho">P4, P5</span>
+      </div>
+      <div class="gapbody">
+        The /join flow itself is solid (preview → accept, token survives
+        sign-up). But post-accept, a newcomer lands in the full trip UI cold: no
+        explanation of Trippy, routes vs magazine vs board, or what the group
+        has already decided. "While you were away" can't help — it diffs against
+        their last visit, which doesn't exist. First-time non-users (P4) get
+        product onboarding and trip orientation compressed into the same
+        bewildering moment.
+      </div>
+      <div class="gapbuild">
+        <b>Build:</b> a one-time post-accept Trippy briefing in the shared chat,
+        visible only to the joiner: "Welcome — here's the trip so far: 8 days in
+        Ziro, route picked, hotels open. Two things you can do right now: share
+        your style, vote on the open poll." Generated from existing trip state;
+        one prompt, one card.
+      </div>
+      <div class="evidence">
+        Evidence: JoinTrip.jsx accept path drops straight into the trip route.
+      </div>
+    </div>
+
+    <div class="gapcard p1">
+      <div class="gaphead">
+        <span class="prio p1">P1 · GAP 2</span
+        ><span class="gaptitle"
+          >Share and Invite are two doors that look alike</span
+        ><span class="gapwho">P1</span>
+      </div>
+      <div class="gapbody">
+        The header offers Share (public read-only <code>/share/:token</code>)
+        and Invite (membership <code>/join/:token</code>) as sibling
+        affordances. Organizers will hand would-be editors the read-only link —
+        the failure is silent, and the co-traveller concludes "I can see it but
+        can't do anything", which reads as a broken product rather than the
+        wrong link.
+      </div>
+      <div class="gapbuild">
+        <b>Build:</b> one share sheet, two roles: "Invite to plan together —
+        they join the trip" and "Share a view-only link". Same two tokens
+        underneath; purely a chrome merge.
+      </div>
+      <div class="evidence">
+        Evidence: Share button + Invite/avatar-stack coexist in the trip header.
+      </div>
+    </div>
+
+    <div class="gapcard p1">
+      <div class="gaphead">
+        <span class="prio p1">P1 · GAP 7</span
+        ><span class="gaptitle"
+          >Pool money moments are individually awkward</span
+        ><span class="gapwho">P6, P2</span>
+      </div>
+      <div class="gapbody">
+        When the shared pool runs dry, the fork paywall lands on whoever
+        happened to press the button — a co-traveller who may feel it isn't
+        their place to fund the group's AI budget. There's no "ask the group to
+        chip in", no "low pool" signal to anyone else (compounded by Gap 3), and
+        no way for the organizer to pre-commit "I'll cover this trip".
+      </div>
+      <div class="gapbuild">
+        <b>Build:</b> a "Request top-up" action on the fork paywall that posts a
+        card into the shared chat (chat is the one place everyone already is),
+        plus an owner setting "charge my wallet when the pool is empty".
+      </div>
+      <div class="evidence">
+        Evidence: fork-paywall path (<code>emptyTripPool</code>) targets only
+        the triggering user.
+      </div>
+    </div>
+
+    <div class="gapcard p2">
+      <div class="gaphead">
+        <span class="prio p2">P2 · GAP 8</span
+        ><span class="gaptitle">Day-of mode &amp; post-trip close-out</span
+        ><span class="gapwho">all, during/after travel</span>
+      </div>
+      <div class="gapbody">
+        During the trip the app still presents its planning face; the group's
+        needs shrink to "what's next, where, how do we get there, what did we
+        spend". Afterwards there's no recap, no settle-up ceremony, no
+        photo-anchored memory — the natural viral artifact ("look at the trip we
+        planned on TripJam") goes unmade. Story mode is the obvious foundation
+        for both.
+      </div>
+      <div class="gapbuild">
+        <b>Build later:</b> a "travelling now" state (today-centric view,
+        offline-first, expense quick-add) and a post-trip recap built on story
+        mode + the settle-up from Gap 9. Sequenced after P0/P1 gaps.
+      </div>
+      <div class="evidence">
+        Evidence: no date-aware mode switch exists; offline covers cached days
+        only.
+      </div>
+    </div>
+
+    <div class="gapcard p2">
+      <div class="gaphead">
+        <span class="prio p2">P2 · found bug</span
+        ><span class="gaptitle"
+          >Ghost styles: removed members keep steering the AI</span
+        ><span class="gapwho">edge case, but wrong</span>
+      </div>
+      <div class="gapbody">
+        Member removal deletes poll votes but keeps
+        <code>trip_preferences</code> rows. The style pipelines filter rows only
+        by non-empty text and resolve names via the members list — so a removed
+        member's style still feeds RG/IG/chat, attributed to "Traveler". The
+        group plans around a person who isn't coming.
+      </div>
+      <div class="gapbuild">
+        <b>Fix (small, do with next collab commit):</b> filter style lists to
+        current member ids in the three call sites (RG body, IG body, chat
+        preferencesList) — or delete the prefs row in
+        <code>remove_member</code>/<code>leave_trip</code>.
+      </div>
+      <div class="evidence">
+        Evidence: stylesForLLM / preferencesList filter on
+        <code>prefs_text</code> only; spec: removal deletes votes, "everything
+        else stays".
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">What the journey already gets right</h2>
+    <p class="muted" style="font-size: 13.5px">
+      Worth naming, so the gap list reads as prioritization rather than
+      criticism:
+    </p>
+    <ul class="covered">
+      <li>
+        <b>Invite mechanics</b> — link + username hybrid, preview before join,
+        token survives sign-up, revoke, trip-full and expired states.
+      </li>
+      <li>
+        <b>Trust &amp; transparency</b> — activity log on everything, attributed
+        chat, best-effort undo with conflict warnings, while-you-were-away.
+      </li>
+      <li>
+        <b>Money safety</b> — pooled credits with a protected personal wallet;
+        nobody's card is ever surprise-charged for group AI.
+      </li>
+      <li>
+        <b>Live-ness</b> — realtime sync for routes, board, polls, presence of
+        new members.
+      </li>
+      <li>
+        <b>Style loop (this week)</b> — owner auto-counted, save acknowledged,
+        rebalance chip, rework nudge with per-traveller attribution.
+      </li>
+      <li>
+        <b>Group-aware AI</b> — Trippy names who wanted what and proposes
+        compromises; the raw material now flows from every member.
+      </li>
+    </ul>
+    <p>
+      <strong>Suggested build order:</strong> Gap 1's error-copy stopgap + the
+      ghost-styles fix (days) → Phase 4 minimal slice, Gaps 1+3 together (the
+      multiplier for everything else) → route consensus checkpoint (Gap 6) →
+      expense splitting (Gap 9) → passenger lane (Gap 5) → join briefing (Gap 4)
+      → share-sheet merge (Gap 2) → pool top-up requests (Gap 7).
+    </p>
+  </section>
+
+  <footer class="doc">
+    TripJam · 2026-08-11 · personas and stages grounded in collab-tier2 +
+    docs/collaboration; gap evidence cites actual code paths
+  </footer>
+</div>

@@ -1,0 +1,877 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Local Gems Redesign — Design</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --ink: #0f1923;
+        --dusk: #1e2d3d;
+        --ocean: #2563a8;
+        --sky: #4a90d9;
+        --sand: #f0e6d3;
+        --warm: #faf6f0;
+        --terra: #c4622d;
+        --gold: #d4a847;
+        --moss: #3d7a5c;
+        --mist: #587284;
+        --chalk: #fff;
+        --border: #e2ddd5;
+        --bg: #f5f0e8;
+        --success: #16a34a;
+        --skylight: #f0f7ff;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          14px/1.6 Georgia,
+          serif;
+        padding: 40px 24px 80px;
+      }
+      .wrap {
+        max-width: 1180px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 34px;
+        font-weight: 400;
+        line-height: 1.15;
+      }
+      .sub {
+        color: var(--mist);
+        margin: 10px 0 6px;
+        max-width: 62ch;
+      }
+      .meta {
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--terra);
+        margin-bottom: 8px;
+      }
+      h2 {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 21px;
+        font-weight: 400;
+        margin: 48px 0 6px;
+      }
+      .h2sub {
+        color: var(--mist);
+        font-size: 13px;
+        margin-bottom: 18px;
+        max-width: 64ch;
+      }
+      .frames {
+        display: flex;
+        gap: 28px;
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+      .frame {
+        width: 352px;
+        flex: 0 0 auto;
+      }
+      .frame-label {
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--mist);
+        margin: 0 0 8px 4px;
+      }
+      .phone {
+        background: var(--warm);
+        border: 1px solid var(--border);
+        border-radius: 26px;
+        box-shadow: 0 8px 30px rgba(15, 25, 35, 0.1);
+        padding: 18px 14px 22px;
+        overflow: hidden;
+      }
+      /* day card bits */
+      .dayhead {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding: 2px 4px 12px;
+      }
+      .dayhead .d {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 19px;
+      }
+      .dayhead .c {
+        color: var(--mist);
+        font-size: 12px;
+      }
+      .tl {
+        position: relative;
+        padding-left: 26px;
+      }
+      .tl::before {
+        content: "";
+        position: absolute;
+        left: 9px;
+        top: 6px;
+        bottom: 6px;
+        width: 2px;
+        background: var(--sand);
+        border-radius: 2px;
+      }
+      .act {
+        position: relative;
+        background: var(--chalk);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 12px 12px 11px;
+        margin-bottom: 10px;
+        box-shadow: 0 1px 3px rgba(15, 25, 35, 0.06);
+      }
+      .act::before {
+        content: "";
+        position: absolute;
+        left: -22px;
+        top: 18px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--ocean);
+        border: 2px solid var(--warm);
+      }
+      .act .t {
+        font-size: 11px;
+        color: var(--mist);
+        letter-spacing: 0.06em;
+      }
+      .act .n {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 16px;
+        margin: 1px 0 2px;
+      }
+      .act .g {
+        font-size: 12px;
+        color: var(--mist);
+      }
+      .act.new {
+        border-color: #bbf7d0;
+        background: #fdfefb;
+      }
+      .act.new::before {
+        background: var(--moss);
+      }
+      .badge-new {
+        display: inline-block;
+        font-size: 10px;
+        color: var(--moss);
+        background: #dcfce7;
+        border: 1px solid #bbf7d0;
+        border-radius: 999px;
+        padding: 1px 8px;
+        margin-left: 6px;
+        font-family: Georgia, serif;
+        vertical-align: 2px;
+      }
+      /* inline gem */
+      .gem {
+        position: relative;
+        margin: -2px 0 12px 14px;
+        background: #fcf7ec;
+        border: 1px dashed var(--gold);
+        border-radius: 12px;
+        padding: 9px 10px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .gem::before {
+        content: "";
+        position: absolute;
+        left: -27px;
+        top: 50%;
+        width: 16px;
+        height: 2px;
+        background: var(--sand);
+      }
+      .gem .thumb {
+        width: 40px;
+        height: 40px;
+        border-radius: 9px;
+        background: linear-gradient(135deg, #d8c8a8, #b8a47e);
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 17px;
+      }
+      .gem .body {
+        flex: 1;
+        min-width: 0;
+      }
+      .gem .name {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 14px;
+        line-height: 1.25;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .gem .walk {
+        display: inline-block;
+        font-size: 10px;
+        color: var(--mist);
+        background: var(--chalk);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 1px 7px;
+        margin-top: 2px;
+      }
+      .gem .add {
+        border: none;
+        background: none;
+        color: var(--ocean);
+        font:
+          13px Georgia,
+          serif;
+        font-weight: bold;
+        cursor: pointer;
+        padding: 6px 4px;
+        white-space: nowrap;
+      }
+      .gem .x {
+        border: 1px solid var(--border);
+        background-color: var(--chalk);
+        color: #3a4a58;
+        font-size: 0;
+        cursor: pointer;
+        width: 26px;
+        height: 26px;
+        border-radius: 999px;
+        flex: 0 0 auto;
+        padding: 0;
+        background-image:
+          radial-gradient(circle, currentColor 1.4px, transparent 1.7px),
+          radial-gradient(circle, currentColor 1.4px, transparent 1.7px),
+          radial-gradient(circle, currentColor 1.4px, transparent 1.7px);
+        background-repeat: no-repeat;
+        background-position:
+          calc(50% - 5px) 50%,
+          50% 50%,
+          calc(50% + 5px) 50%;
+      }
+      .actnote {
+        display: flex;
+        justify-content: flex-end;
+        gap: 14px;
+        font-size: 10.5px;
+        color: var(--mist);
+        margin: -8px 4px 12px 0;
+      }
+      .actnote span::before {
+        content: "↑ ";
+        color: var(--gold);
+      }
+      /* gem ⋯ menu */
+      .menuwrap {
+        position: relative;
+      }
+      .gmenu {
+        position: absolute;
+        right: 6px;
+        top: calc(100% - 8px);
+        z-index: 3;
+        background: var(--chalk);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: 0 8px 30px rgba(15, 25, 35, 0.18);
+        min-width: 170px;
+        overflow: hidden;
+      }
+      .gmenu .mi {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 11px 14px;
+        font-size: 13px;
+        color: var(--ink);
+        cursor: pointer;
+      }
+      .gmenu .mi + .mi {
+        border-top: 1px solid var(--border);
+      }
+      .gmenu .mi.danger {
+        color: #c53030;
+      }
+      .gmenu .mi svg {
+        flex: 0 0 auto;
+        display: block;
+      }
+      .gem.spin .add {
+        color: var(--mist);
+        font-weight: normal;
+        font-style: italic;
+      }
+      .gem .sparkle {
+        position: absolute;
+        top: -8px;
+        left: 10px;
+        font-size: 11px;
+        background: var(--warm);
+        padding: 0 4px;
+        color: var(--gold);
+      }
+      .more {
+        margin: -6px 0 12px 14px;
+        font-size: 11px;
+        color: var(--mist);
+      }
+      .more a {
+        color: var(--ocean);
+        text-decoration: none;
+      }
+      /* undo toast */
+      .toast {
+        margin: 14px 4px 0;
+        background: var(--dusk);
+        color: #edf2f7;
+        border-radius: 12px;
+        padding: 11px 14px;
+        font-size: 12.5px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        box-shadow: 0 4px 16px rgba(15, 25, 35, 0.18);
+      }
+      .toast .u {
+        margin-left: auto;
+        color: #9cc4ee;
+        font-weight: bold;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      /* also-nearby strip */
+      .strip {
+        margin-top: 6px;
+        padding: 12px 4px 4px;
+        border-top: 1px solid var(--border);
+      }
+      .strip .sh {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--mist);
+        margin: 0 0 8px 2px;
+      }
+      .cards {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding-bottom: 6px;
+      }
+      .mini {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: var(--chalk);
+        border: 1px solid var(--border);
+        border-radius: 11px;
+        padding: 7px 9px;
+        max-width: 200px;
+      }
+      .mini .mt {
+        width: 30px;
+        height: 30px;
+        border-radius: 7px;
+        background: linear-gradient(135deg, #c9d6c0, #93ac8b);
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+      }
+      .mini .mn {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 12.5px;
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .mini .mx {
+        border: none;
+        color: var(--mist);
+        cursor: pointer;
+        font-size: 0;
+        width: 18px;
+        height: 18px;
+        padding: 0;
+        flex: 0 0 auto;
+        background-color: transparent;
+        background-image:
+          radial-gradient(circle, currentColor 1.2px, transparent 1.5px),
+          radial-gradient(circle, currentColor 1.2px, transparent 1.5px),
+          radial-gradient(circle, currentColor 1.2px, transparent 1.5px);
+        background-repeat: no-repeat;
+        background-position:
+          calc(50% - 4px) 50%,
+          50% 50%,
+          calc(50% + 4px) 50%;
+      }
+      /* annotations */
+      .notes {
+        background: var(--chalk);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 22px 26px;
+        margin-top: 26px;
+      }
+      .notes h3 {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 16px;
+        font-weight: 400;
+        margin-bottom: 10px;
+      }
+      .notes li {
+        margin: 0 0 9px 18px;
+        color: var(--dusk);
+        font-size: 13px;
+      }
+      .notes b {
+        color: var(--ink);
+      }
+      .tag {
+        display: inline-block;
+        background: var(--skylight);
+        border: 1px solid #c8dffe;
+        color: var(--ocean);
+        border-radius: 999px;
+        font-size: 10px;
+        padding: 1px 8px;
+        vertical-align: 1px;
+      }
+      .before {
+        opacity: 0.62;
+        filter: saturate(0.85);
+      }
+      .old-section {
+        background: var(--chalk);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 12px;
+        margin-top: 8px;
+      }
+      .old-section .oh {
+        font-size: 13px;
+        font-family: "DM Serif Display", Georgia, serif;
+        margin-bottom: 8px;
+      }
+      .oldgem {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        padding: 8px 0;
+        border-top: 1px solid var(--border);
+      }
+      .oldgem .ot {
+        width: 56px;
+        height: 56px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #d8c8a8, #b8a47e);
+        flex: 0 0 auto;
+      }
+      .oldgem .dots {
+        margin-left: auto;
+        color: var(--mist);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="meta">TripJam · Design · Local Gems Redesign</div>
+      <h1>Gems live where you'll be standing</h1>
+      <p class="sub">
+        Local gems move from a bottom-of-day list into the timeline itself —
+        each gem sits directly under the activity it's near (the
+        <code>near</code> field already links them), with one-tap Add and
+        Dismiss. Adding is a direct insert, not a chat round-trip.
+      </p>
+
+      <h2>1 · Before → after</h2>
+      <p class="h2sub">
+        Today all gems pool at the end of the day, three scrolls away from the
+        place they relate to. After: the gem interrupts you exactly when you're
+        reading the anchor activity.
+      </p>
+      <div class="frames">
+        <div class="frame before">
+          <div class="frame-label">Before — end-of-day dump</div>
+          <div class="phone">
+            <div class="dayhead">
+              <span class="d">Day 2</span><span class="c">· Tokyo</span>
+            </div>
+            <div class="tl">
+              <div class="act">
+                <div class="t">09:00 · SIGHT</div>
+                <div class="n">Senso-ji Temple</div>
+                <div class="g">
+                  Tokyo's oldest temple, incense &amp; lanterns
+                </div>
+              </div>
+              <div class="act">
+                <div class="t">11:30 · FOOD</div>
+                <div class="n">Tsukiji Outer Market lunch</div>
+                <div class="g">Stand-up sushi counters</div>
+              </div>
+              <div class="act">
+                <div class="t">14:00 · SIGHT</div>
+                <div class="n">teamLab Planets</div>
+                <div class="g">Barefoot digital art museum</div>
+              </div>
+            </div>
+            <div class="old-section">
+              <div class="oh">✨ Local gems · 3 nearby</div>
+              <div class="oldgem">
+                <div class="ot"></div>
+                <div>
+                  <div
+                    style="
+                      font-family: &quot;DM Serif Display&quot;;
+                      font-size: 14px;
+                    "
+                  >
+                    Denboin Garden
+                  </div>
+                  <div style="font-size: 11px; color: var(--mist)">
+                    📍 Near Senso-ji Temple
+                  </div>
+                </div>
+                <div class="dots">⋯</div>
+              </div>
+              <div class="oldgem">
+                <div
+                  class="ot"
+                  style="background: linear-gradient(135deg, #c9d6c0, #93ac8b)"
+                ></div>
+                <div>
+                  <div
+                    style="
+                      font-family: &quot;DM Serif Display&quot;;
+                      font-size: 14px;
+                    "
+                  >
+                    Namiyoke Inari Shrine
+                  </div>
+                  <div style="font-size: 11px; color: var(--mist)">
+                    📍 Near Tsukiji Outer Market
+                  </div>
+                </div>
+                <div class="dots">⋯</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="frame">
+          <div class="frame-label">After — anchored inline</div>
+          <div class="phone">
+            <div class="dayhead">
+              <span class="d">Day 2</span><span class="c">· Tokyo</span>
+            </div>
+            <div class="tl">
+              <div class="act">
+                <div class="t">09:00 · SIGHT</div>
+                <div class="n">Senso-ji Temple</div>
+                <div class="g">
+                  Tokyo's oldest temple, incense &amp; lanterns
+                </div>
+              </div>
+              <div class="gem">
+                <span class="sparkle">✨ nearby</span>
+                <div class="thumb">🌿</div>
+                <div class="body">
+                  <div class="name">Denboin Garden</div>
+                  <span class="walk">6 min walk</span>
+                </div>
+                <button class="add">+ Add</button>
+                <button class="x">⋯</button>
+              </div>
+              <div class="actnote">
+                <span>add to day</span><span>more</span>
+              </div>
+              <div class="act">
+                <div class="t">11:30 · FOOD</div>
+                <div class="n">Tsukiji Outer Market lunch</div>
+                <div class="g">Stand-up sushi counters</div>
+              </div>
+              <div class="gem">
+                <span class="sparkle">✨ nearby</span>
+                <div class="thumb">⛩️</div>
+                <div class="body">
+                  <div class="name">Namiyoke Inari Shrine</div>
+                  <span class="walk">3 min walk</span>
+                </div>
+                <button class="add">+ Add</button>
+                <button class="x">⋯</button>
+              </div>
+              <div class="act">
+                <div class="t">14:00 · SIGHT</div>
+                <div class="n">teamLab Planets</div>
+                <div class="g">Barefoot digital art museum</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h2>2 · Add flow — instant, undoable</h2>
+      <p class="h2sub">
+        Tap Add → ~1s direct insert (verify-place → activities row → optimistic
+        splice). No LLM, no credits. The gem becomes an untimed ✨ activity
+        right after its anchor; a system-undo message offers one-tap revert.
+      </p>
+      <div class="frames">
+        <div class="frame">
+          <div class="frame-label">Adding (transient)</div>
+          <div class="phone">
+            <div class="tl">
+              <div class="act">
+                <div class="t">09:00 · SIGHT</div>
+                <div class="n">Senso-ji Temple</div>
+                <div class="g">
+                  Tokyo's oldest temple, incense &amp; lanterns
+                </div>
+              </div>
+              <div class="gem spin">
+                <span class="sparkle">✨ nearby</span>
+                <div class="thumb">🌿</div>
+                <div class="body">
+                  <div class="name">Denboin Garden</div>
+                  <span class="walk">6 min walk</span>
+                </div>
+                <button class="add">Adding…</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="frame">
+          <div class="frame-label">Added — gem is now an activity</div>
+          <div class="phone">
+            <div class="tl">
+              <div class="act">
+                <div class="t">09:00 · SIGHT</div>
+                <div class="n">Senso-ji Temple</div>
+                <div class="g">
+                  Tokyo's oldest temple, incense &amp; lanterns
+                </div>
+              </div>
+              <div class="act new">
+                <div class="t">✨ ADDED BY YOU · 45M</div>
+                <div class="n">
+                  Denboin Garden<span class="badge-new">new</span>
+                </div>
+                <div class="g">Right after Senso-ji — 6 min walk</div>
+              </div>
+              <div class="act">
+                <div class="t">11:30 · FOOD</div>
+                <div class="n">Tsukiji Outer Market lunch</div>
+                <div class="g">Stand-up sushi counters</div>
+              </div>
+            </div>
+            <div class="toast">
+              ✨ Added <b>&nbsp;Denboin Garden&nbsp;</b> to Day 2
+              <span class="u">Undo</span>
+            </div>
+          </div>
+        </div>
+        <div class="frame">
+          <div class="frame-label">⋯ menu open</div>
+          <div class="phone">
+            <div class="tl">
+              <div class="act">
+                <div class="t">09:00 · SIGHT</div>
+                <div class="n">Senso-ji Temple</div>
+                <div class="g">
+                  Tokyo's oldest temple, incense &amp; lanterns
+                </div>
+              </div>
+              <div class="menuwrap">
+                <div class="gem">
+                  <span class="sparkle">✨ nearby</span>
+                  <div class="thumb">🌿</div>
+                  <div class="body">
+                    <div class="name">Denboin Garden</div>
+                    <span class="walk">6 min walk</span>
+                  </div>
+                  <button class="add">+ Add</button>
+                  <button
+                    class="x"
+                    style="border-color: var(--ocean); color: var(--ocean)"
+                  >
+                    ⋯
+                  </button>
+                </div>
+                <div class="gmenu">
+                  <div class="mi">💬 Tell me more</div>
+                  <div class="mi">
+                    <svg
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <defs>
+                        <clipPath id="gpin">
+                          <path
+                            d="M12 1.5c-4.7 0-8.5 3.8-8.5 8.5 0 6.4 8.5 12.5 8.5 12.5S20.5 16.4 20.5 10C20.5 5.3 16.7 1.5 12 1.5z"
+                          />
+                        </clipPath>
+                      </defs>
+                      <g clip-path="url(#gpin)">
+                        <path fill="#EA4335" d="M12 10 0 -2h24z" />
+                        <path fill="#4285F4" d="M12 10 24 -2v24z" />
+                        <path fill="#34A853" d="M12 10 24 22H0z" />
+                        <path fill="#FBBC04" d="M12 10 0 22V-2z" />
+                      </g>
+                      <circle cx="12" cy="9.6" r="3" fill="#fff" />
+                    </svg>
+                    Open in Google Maps
+                  </div>
+                  <div class="mi danger">✕ Dismiss</div>
+                </div>
+              </div>
+              <div class="act" style="margin-top: 110px">
+                <div class="t">11:30 · FOOD</div>
+                <div class="n">Tsukiji Outer Market lunch</div>
+                <div class="g">Stand-up sushi counters</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="frame">
+          <div class="frame-label">
+            Dismissed (⋯ → Dismiss) — row gone, undoable
+          </div>
+          <div class="phone">
+            <div class="tl">
+              <div class="act">
+                <div class="t">09:00 · SIGHT</div>
+                <div class="n">Senso-ji Temple</div>
+                <div class="g">
+                  Tokyo's oldest temple, incense &amp; lanterns
+                </div>
+              </div>
+              <div class="act">
+                <div class="t">11:30 · FOOD</div>
+                <div class="n">Tsukiji Outer Market lunch</div>
+                <div class="g">Stand-up sushi counters</div>
+              </div>
+            </div>
+            <div class="toast">
+              Dismissed <b>&nbsp;Denboin Garden&nbsp;</b>
+              <span class="u">Undo</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h2>3 · “Also nearby” — the fallback strip</h2>
+      <p class="h2sub">
+        Gems whose <code>near</code> anchor no longer exists (day rewritten by
+        chat, fuzzy-match miss) degrade into one compact horizontal strip at the
+        end of the day — never lost, never a wall.
+      </p>
+      <div class="frames">
+        <div class="frame">
+          <div class="frame-label">End of day card</div>
+          <div class="phone">
+            <div class="tl">
+              <div class="act">
+                <div class="t">17:30 · SIGHT</div>
+                <div class="n">Shibuya Sky at sunset</div>
+                <div class="g">Rooftop view over the crossing</div>
+              </div>
+            </div>
+            <div class="strip">
+              <div class="sh">✨ Also nearby</div>
+              <div class="cards">
+                <div class="mini">
+                  <div class="mt">🍜</div>
+                  <div class="mn">Nonbei Yokocho alley</div>
+                  <button class="mx">✕</button>
+                </div>
+                <div class="mini">
+                  <div class="mt">📚</div>
+                  <div class="mn">Daikanyama T-Site</div>
+                  <button class="mx">✕</button>
+                </div>
+                <div class="mini">
+                  <div class="mt">☕</div>
+                  <div class="mn">Chatei Hatou kissaten</div>
+                  <button class="mx">✕</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="notes">
+        <h3>Behavior notes</h3>
+        <ul>
+          <li>
+            <b>Anchoring:</b> group <code>day.wishlist</code> by
+            <code>gem.near</code> ↔ activity title (trimmed, case-insensitive).
+            Matched → inline row after that activity; unmatched → Also-nearby
+            strip. Max 2 inline per activity, extras behind “＋N more nearby”.
+            <span class="tag">no migration</span>
+          </li>
+          <li>
+            <b>Add:</b> verify-place ladder (non-blocking on failure) → insert
+            <code>activities</code> row (type sight, 45m, untimed, icon ✨,
+            position anchor+0.5) → mark gem <code>dismissed+promoted</code> →
+            system-undo chat message. Replaces today's chat-delegated add.
+          </li>
+          <li>
+            <b>Row actions:</b> <code>+ Add</code> is the one visible action;
+            everything else lives behind <code>⋯</code> —
+            <b>Tell me more</b> (opens Trippy chat pre-sent with “Tell me more
+            about {gem} near {anchor}” — existing Ask Trippy path),
+            <b>Open in Maps</b>, and <b>Dismiss</b> (unchanged
+            <code>dismissGemPersist</code> + undo). Row body tap also opens
+            Maps.
+          </li>
+          <li>
+            <b>Suggestion, not itinerary:</b> gem rows are sand-tinted with a
+            dashed gold border and hang off the rail by a stub connector —
+            visually subordinate to activity cards.
+          </li>
+          <li>
+            <b>Dedupe guard:</b> a gem whose title already exists as an activity
+            in the day is hidden.
+          </li>
+          <li>
+            <b>Rides along:</b> dismissed-gem leak fixed in deep-dive roll-up +
+            brainstorm highlights; dead compact-count code deleted; the old
+            4-item GemCard menu shrinks to this 3-item one (Add promoted out of
+            it).
+          </li>
+          <li>
+            <b>Prompt nudge:</b> generate-itinerary <code>near</code> rule
+            tightened to “verbatim title from THIS day, else the gem is
+            demoted”.
+          </li>
+        </ul>
+      </div>
+    </div>
+  </body>
+</html>

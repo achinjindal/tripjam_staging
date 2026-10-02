@@ -1,0 +1,1486 @@
+<title>Routes Lens — exhaustive design (Rev 6)</title>
+<style>
+  :root {
+    --ink: #0f1923;
+    --paper: #faf6f0;
+    --card: #ffffff;
+    --ocean: #2563a8;
+    --gold: #d4a847;
+    --mist: #587284;
+    --border: #e2ddd5;
+    --band: #f5f0e8;
+    --moss: #3d7a5c;
+    --terra: #c4622d;
+    --code-bg: #f0ece4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e8e2d8;
+      --paper: #10161d;
+      --card: #1a232e;
+      --ocean: #6aa3dd;
+      --gold: #d4a847;
+      --mist: #8ba5bb;
+      --border: #2c3947;
+      --band: #151d26;
+      --moss: #6db392;
+      --terra: #d98a5f;
+      --code-bg: #202b37;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #e8e2d8;
+    --paper: #10161d;
+    --card: #1a232e;
+    --ocean: #6aa3dd;
+    --gold: #d4a847;
+    --mist: #8ba5bb;
+    --border: #2c3947;
+    --band: #151d26;
+    --moss: #6db392;
+    --terra: #d98a5f;
+    --code-bg: #202b37;
+  }
+  :root[data-theme="light"] {
+    --ink: #0f1923;
+    --paper: #faf6f0;
+    --card: #ffffff;
+    --ocean: #2563a8;
+    --gold: #d4a847;
+    --mist: #587284;
+    --border: #e2ddd5;
+    --band: #f5f0e8;
+    --moss: #3d7a5c;
+    --terra: #c4622d;
+    --code-bg: #f0ece4;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Georgia, serif;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  .display {
+    font-family: Didot, "Bodoni 72", Georgia, serif;
+    font-weight: 400;
+  }
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 0 20px;
+  }
+  .eyebrow {
+    font-family: -apple-system, sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--mist);
+  }
+  header.doc {
+    padding: 54px 0 6px;
+  }
+  header.doc h1 {
+    font-size: 36px;
+    line-height: 1.12;
+    margin: 10px 0 12px;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 16.5px;
+    color: var(--mist);
+    font-style: italic;
+    max-width: 62ch;
+    margin: 0;
+  }
+  .meta {
+    font-family: -apple-system, sans-serif;
+    font-size: 12px;
+    color: var(--mist);
+    display: flex;
+    gap: 18px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+  h2.section {
+    font-size: 23px;
+    margin: 0 0 6px;
+  }
+  h3 {
+    font-size: 16px;
+    margin: 22px 0 6px;
+    font-family: Didot, "Bodoni 72", Georgia, serif;
+    font-weight: 400;
+  }
+  .section-block {
+    padding: 36px 0 4px;
+  }
+  .rule {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 36px 0 0;
+  }
+  p,
+  li {
+    max-width: 68ch;
+  }
+  code {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    background: var(--code-bg);
+    padding: 1px 6px;
+    border-radius: 5px;
+  }
+  pre {
+    background: var(--code-bg);
+    border-radius: 10px;
+    padding: 12px 16px;
+    overflow-x: auto;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+  }
+
+  .mock-band {
+    background: var(--band);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 26px 20px 22px;
+    margin: 22px 0;
+  }
+  .mock-band-label {
+    font-family: -apple-system, sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--mist);
+    text-align: center;
+    margin-bottom: 16px;
+  }
+  .mock-row {
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .phone {
+    width: 330px;
+    max-width: 100%;
+    background: #faf6f0;
+    border: 1px solid #d8d2c8;
+    border-radius: 22px;
+    box-shadow: 0 8px 30px rgba(15, 25, 35, 0.14);
+    overflow: hidden;
+    color: #0f1923;
+    font-size: 12px;
+    position: relative;
+    flex-shrink: 0;
+    height: 560px;
+  }
+  .phone * {
+    line-height: 1.45;
+  }
+  .marker {
+    position: absolute;
+    width: 21px;
+    height: 21px;
+    border-radius: 50%;
+    background: #d4a847;
+    color: #0f1923;
+    font-family: -apple-system, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 6px rgba(15, 25, 35, 0.3);
+    z-index: 30;
+  }
+  .notes {
+    width: 250px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 6px;
+  }
+  .note {
+    display: grid;
+    grid-template-columns: 21px 1fr;
+    gap: 10px;
+    align-items: start;
+  }
+  .note .marker {
+    position: static;
+    margin-top: 2px;
+  }
+  .note-text {
+    font-size: 13px;
+  }
+  .note-text .sub {
+    color: var(--mist);
+    font-size: 12px;
+    display: block;
+    margin-top: 2px;
+  }
+
+  .app-day {
+    margin: 9px 12px;
+    background: #fff;
+    border: 1px solid #e2ddd5;
+    border-radius: 14px;
+    padding: 11px 13px;
+  }
+  .app-day .dl {
+    font-family: Didot, "Bodoni 72", Georgia, serif;
+    font-size: 14px;
+  }
+  .app-day .da {
+    font-size: 11px;
+    color: #587284;
+    margin-top: 3px;
+  }
+  .overview {
+    background: #1e2d3d;
+    color: #faf6f0;
+    padding: 10px 13px 11px;
+    border-radius: 0 0 16px 16px;
+    box-shadow: 0 3px 12px rgba(15, 25, 35, 0.18);
+  }
+  .overview .r1 {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: Didot, "Bodoni 72", Georgia, serif;
+    font-size: 13.5px;
+  }
+  .pill {
+    background: #d4a847;
+    color: #0f1923;
+    border-radius: 5px;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 6px;
+    font-family: -apple-system, sans-serif;
+  }
+  .segbar {
+    display: flex;
+    gap: 4px;
+    margin-top: 7px;
+  }
+  .seg {
+    flex: 1;
+    background: rgba(250, 246, 240, 0.12);
+    border-radius: 7px;
+    padding: 4px 6px;
+    min-width: 0;
+  }
+  .seg .c {
+    font-size: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .seg .n {
+    font-size: 8.5px;
+    color: #8ba5bb;
+  }
+  .ovactions {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 7px;
+    font-size: 9.5px;
+    color: #8ba5bb;
+  }
+  .chatbar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 53px;
+    background: #fff;
+    border-top: 1px solid #e2ddd5;
+    padding: 8px 12px;
+    font-size: 11px;
+    color: #587284;
+  }
+  .tabbar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 53px;
+    background: #fff;
+    border-top: 1px solid #e2ddd5;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    font-size: 9.5px;
+    color: #587284;
+  }
+  .tabbar .on {
+    color: #2563a8;
+    font-weight: 700;
+  }
+
+  .sheet {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: 96px;
+    background: #faf6f0;
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -10px 34px rgba(15, 25, 35, 0.3);
+    padding: 8px 0 0;
+  }
+  .sheet .grab {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: #c4bdb3;
+    margin: 0 auto 7px;
+  }
+  .sheet-h {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 0 15px 4px;
+  }
+  .sheet-h .t {
+    font-family: Didot, "Bodoni 72", Georgia, serif;
+    font-size: 16px;
+  }
+  .ledger {
+    font-size: 10px;
+    padding: 0 15px 8px;
+  }
+  .ledger .ok {
+    color: #3d7a5c;
+  }
+  .ledger .over {
+    color: #c4622d;
+    font-weight: 700;
+  }
+  .stoprow {
+    margin: 0 12px 7px;
+    background: #fff;
+    border: 1px solid #e2ddd5;
+    border-radius: 11px;
+    padding: 8px 11px;
+    font-size: 11px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+  }
+  .stoprow.edited {
+    border: 1px dashed #2563a8;
+    background: #f0f7ff;
+  }
+  .stoprow.new {
+    border: 1px dashed #3d7a5c;
+    background: #f0faf4;
+  }
+  .stoprow .step {
+    color: #587284;
+    font-size: 10.5px;
+    white-space: nowrap;
+  }
+  .mv {
+    color: #8ba5bb;
+    font-size: 10px;
+    letter-spacing: 1px;
+  }
+  .pending {
+    margin: 4px 12px 8px;
+    padding: 8px 11px;
+    background: #fff;
+    border: 1px solid #e2ddd5;
+    border-radius: 11px;
+    font-size: 10px;
+    color: #587284;
+  }
+  .applybtn {
+    margin: 0 12px;
+    width: calc(100% - 24px);
+    padding: 10px;
+    border-radius: 12px;
+    border: none;
+    background: #2563a8;
+    color: #fff;
+    font-family: Didot, "Bodoni 72", Georgia, serif;
+    font-size: 13px;
+  }
+  .applybtn.disabled {
+    background: #c4bdb3;
+  }
+  .helper {
+    text-align: center;
+    font-size: 9.5px;
+    color: #8ba5bb;
+    margin-top: 5px;
+  }
+  .warnrow {
+    margin: 0 12px 7px;
+    padding: 6px 11px;
+    background: #fef3c7;
+    border: 1px solid #fed7aa;
+    border-radius: 9px;
+    font-size: 10px;
+    color: #92400e;
+  }
+
+  table.spec {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 16px 0 6px;
+    font-size: 13px;
+  }
+  table.spec th {
+    font-family: -apple-system, sans-serif;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--mist);
+    text-align: left;
+    font-weight: 600;
+    padding: 7px 12px 7px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  table.spec td {
+    padding: 8px 12px 8px 0;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  table.spec td:first-child {
+    font-weight: 700;
+    width: 168px;
+  }
+  .flow {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin: 14px 0;
+    font-size: 13.5px;
+  }
+  .flow b.step {
+    color: var(--ocean);
+  }
+  .verdict {
+    display: inline-block;
+    font-family: -apple-system, sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    border-radius: 5px;
+    padding: 1px 7px;
+  }
+  .v-cut {
+    background: var(--terra);
+    color: #fff;
+  }
+  footer.doc {
+    padding: 28px 0 60px;
+    color: var(--mist);
+    font-family: -apple-system, sans-serif;
+    font-size: 12px;
+  }
+  @media (max-width: 760px) {
+    .notes {
+      width: 100%;
+    }
+    header.doc h1 {
+      font-size: 30px;
+    }
+  }
+</style>
+
+<div class="wrap">
+  <header class="doc">
+    <div class="eyebrow">TripJam · Routes Lens · Exhaustive Design</div>
+    <h1 class="display">Your route, first — and endlessly editable</h1>
+    <p class="standfirst">
+      The itinerary opens at altitude: the chosen route as its table of
+      contents, editable stop by stop, rebuilt in one deliberate costed step.
+      Alternatives stay in "Explore other plans." This document specifies every
+      state, flow, edge, and string — corrected against an adversarial
+      design-manager review that verified each reuse claim in the codebase.
+    </p>
+    <div class="meta">
+      <span>2026-08-13 · Rev 6</span
+      ><span>Design-manager review: 6 blockers found → all resolved below</span>
+    </div>
+  </header>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">1 · Decisions log</h2>
+    <div class="scrollwrap">
+      <table class="spec">
+        <tr>
+          <th>Rev</th>
+          <th>Decision</th>
+          <th>Why</th>
+        </tr>
+        <tr>
+          <td>R1 → R2</td>
+          <td>
+            Bottom-docked peek strip → top placement; tap-first interactions
+          </td>
+          <td>
+            Mobile bottom edge already carries tab bar + persistent chat bar;
+            app has no drag-gesture system
+          </td>
+        </tr>
+        <tr>
+          <td>R2 → R3</td>
+          <td>
+            One-line strip → full Route Overview block as the itinerary's opener
+          </td>
+          <td>
+            Founder: the route is the FIRST thing users want to see — shape
+            before schedule
+          </td>
+        </tr>
+        <tr>
+          <td>R3 → R4</td>
+          <td>
+            Sheet = comparison/switch → sheet = route EDITOR; alternatives
+            remain in Explore other plans
+          </td>
+          <td>
+            Founder: "see their route and edit it endlessly"; browsing other
+            shapes is a separate, existing journey
+          </td>
+        </tr>
+        <tr>
+          <td>R4 → R5</td>
+          <td>Nights ledger + add-a-stop mechanics formalized</td>
+          <td>Exhaustiveness pass</td>
+        </tr>
+        <tr>
+          <td>R5 → R6</td>
+          <td>
+            Structured <code>data.stops</code> model + derivation ladder; nights
+            = days − 1 fixed everywhere; tap-to-move replaces drag; shared-trip
+            v1 = notify-only (no poll); credit number dropped from Apply;
+            estimate re-based
+          </td>
+          <td>
+            Independent review verified claims in code: two "reusable" items
+            didn't exist (votedItems shape write-back, pre-IG cost estimator),
+            stored routes have no per-stop structure, and the flagship mock's
+            arithmetic was off by one
+          </td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">
+      2 · Information architecture &amp; permissions
+    </h2>
+    <p>
+      <b>New surfaces (additive):</b> the Route Overview block (top of the
+      Itinerary tab) and the Route Editor sheet. <b>Untouched:</b> "Explore
+      other plans" (alternatives, Select flow, Show-me-more — linked from the
+      overview, otherwise exactly as today), Magazine, day cards, chat bar, tab
+      bars, Story mode. <b>Nothing is removed.</b>
+    </p>
+    <p>
+      <b>Ownership rule:</b>
+      <i
+        >the overview/editor own the CHOSEN route; Explore other plans owns the
+        alternatives. The two never render each other's content.</i
+      >
+    </p>
+    <p>
+      <b>Permissions:</b> editing requires write access to
+      <code>brainstorm_items</code>. On prod today that is <b>owner-only</b>;
+      member co-edit arrives with the pending co-edit migration (PR #1). Until
+      it lands: members see the overview normally, and "✎ Edit route" opens the
+      sheet <b>read-only</b> (steppers/move/remove hidden, footer: "Only {owner}
+      can edit the route for now"). Never render an Apply that would silently
+      no-op — that is the known bare-write hazard. After co-edit lands, all
+      members edit; no viewer role in v1.
+    </p>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">3 · Data model (the load-bearing section)</h2>
+    <h3>3.1 What exists today</h3>
+    <p>
+      A route row in <code>brainstorm_items</code> stores <code>city</code> (one
+      display string) and <code>data.days</code> — an array of free-text day
+      strings with <code>**bold**</code> city prefixes.
+      <b>There is no per-stop structure and no nights field.</b> Everything
+      below has to create one.
+    </p>
+    <h3>3.2 The new structured field</h3>
+    <pre><code>data.stops = [
+  { city: "Ziro Town",     nights: 2 },   // order = route order
+  { city: "Hapoli",        nights: 1 },
+  { city: "Hong &amp; Siiro",  nights: 3 },   // free text OK — combined stops pass through
+  { city: "Kile Pakho",    nights: 2 }
+]</code></pre>
+    <p>
+      Written by: (a) the editor's Apply (always), and (b) RG going forward —
+      the RG prompt adds a machine-readable stops array per route so new trips
+      are structured from day one. <code>city</code> strings are free text;
+      autocomplete-picked cities also carry <code>{lat, lng}</code> when
+      geocoded (for the distance warning only — never required).
+    </p>
+    <h3>3.3 Derivation ladder for existing routes (no migration)</h3>
+    <p>
+      On trip open, if the selected route has no <code>data.stops</code>:
+      <b>(1)</b> parse the <code>**bold**</code> prefixes of
+      <code>data.days</code> into a stop chain — consecutive same-prefix days
+      collapse into one stop; nights inferred from run length, with the trip's
+      final day contributing 0. <b>(2)</b> If parsing yields ≥1 stop whose
+      nights sum exactly to trip nights, render it (derived in memory, not
+      persisted). <b>(3)</b> Otherwise the overview hides entirely for that trip
+      — no guessing from the generated days table. The editor persists the real
+      structure on first Apply. The rejected alternative (deriving from
+      generated days) would seed the editor with a chain the user never chose,
+      since IG deviates from outlines routinely.
+    </p>
+    <h3>3.4 The nights model — defined once, used everywhere</h3>
+    <p>
+      <b>Budget = trip nights = trip days − 1.</b> Oct 3–Oct 11 is 9 days,
+      <b>8 nights</b>. The final day belongs to the last stop's D-range but
+      consumes no night (departure day). Stepper minimum 1 night — the editor
+      models <b>overnight bases only</b>; day-trips and pass-through stops ("4
+      hours in Nara en route") remain IG's job inside a base's days, as RG
+      already writes them. Stop count 1–8 (8 is our product cap; RG's prompt
+      only says "realistic for the duration").
+      <b>Two sources of truth, deliberately:</b> D-ranges in the overview derive
+      from the <i>actual generated days</i> (ground truth for "which day am I
+      on"); nights in the editor come from <code>data.stops</code> (ground truth
+      for the budget). When IG deviates from the outline, D-ranges stay honest
+      and nights stay editable — the two are labeled distinctly and never summed
+      against each other.
+    </p>
+    <h3>3.5 Write-back (net-new, atomic)</h3>
+    <p>
+      One explicit update to the selected route row, fired <b>only</b> when the
+      user accepts the replace confirmation, in the same action that starts the
+      rebuild: <code>city</code> (regenerated display chain "Ziro Town → Hapoli
+      → …"), <code>data.stops</code>, <code>data.days</code> (outline
+      regenerated from stops as "**City** — N nights" lines so legacy readers
+      stay coherent), <code>last_modified_by</code>,
+      <code>last_modified_at</code>. Never on editor close, never at
+      checkpoint/Pre-IG. The chat <code>edit_route</code> action must also start
+      stamping <code>last_modified_*</code> (today it omits them — a
+      pre-existing gap this feature closes). IG receives the edited chain
+      through its normal route-payload path.
+      <b>No reliance on the votedItems ride</b> — verified in code: that path
+      only syncs the <code>selected</code> flag on existing trips, it never
+      writes shape.
+    </p>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">4 · State catalog</h2>
+
+    <div class="mock-band">
+      <div class="mock-band-label">
+        S1 · Route Overview — itinerary opener · 9 days / 8 nights
+      </div>
+      <div class="mock-row">
+        <div class="phone">
+          <div style="padding: 9px 13px 5px">
+            <div
+              style="
+                font-family: Didot, &quot;Bodoni 72&quot;, Georgia, serif;
+                font-size: 14px;
+              "
+            >
+              Ziro · Oct 3–Oct 11
+            </div>
+            <div style="font-size: 9.5px; color: #587284">
+              Itinerary · 9 days
+            </div>
+          </div>
+          <div class="overview">
+            <div class="marker" style="top: 112px; right: 8px">1</div>
+            <div class="r1">
+              <span class="pill">P1</span> Ziro Festival + Villages
+            </div>
+            <div class="segbar">
+              <div class="seg" style="flex: 2">
+                <div class="c">Ziro Town</div>
+                <div class="n">D1–2 · 2N</div>
+              </div>
+              <div class="seg" style="flex: 1">
+                <div class="c">Hapoli</div>
+                <div class="n">D3 · 1N</div>
+              </div>
+              <div class="seg" style="flex: 3">
+                <div class="c">Hong &amp; Siiro</div>
+                <div class="n">D4–6 · 3N</div>
+              </div>
+              <div class="seg" style="flex: 2">
+                <div class="c">Kile Pakho</div>
+                <div class="n">D7–9 · 2N</div>
+              </div>
+            </div>
+            <div class="ovactions">
+              <span>✎ Edit route</span><span>Explore other plans →</span>
+            </div>
+          </div>
+          <div class="app-day">
+            <div class="dl">Day 1 · Ziro Town</div>
+            <div class="da">
+              Arrive · check in at Siiro Resort · market walk
+            </div>
+          </div>
+          <div class="app-day">
+            <div class="dl">Day 2 · Old Ziro</div>
+            <div class="da">Ziro Music Festival grounds · evening sets</div>
+          </div>
+          <div class="app-day" style="opacity: 0.55">
+            <div class="dl">Day 3 · Hapoli</div>
+            <div class="da">Festival day 2 · craft market</div>
+          </div>
+          <div class="chatbar">💬 Ask Trippy anything…</div>
+          <div class="tabbar">
+            <span>📖 Inspirations</span><span class="on">🗓 Itinerary</span
+            ><span>🗺 Map</span><span>📋 Board</span>
+          </div>
+        </div>
+        <div class="notes">
+          <div class="note">
+            <span class="marker">1</span
+            ><span class="note-text"
+              ><b>Segment bar = table of contents.</b> Width ∝ nights; D-ranges
+              from actual days, nights from <code>data.stops</code>. The final
+              day (D9) sits in the last segment's range but adds no night —
+              2+1+3+2 = 8 ✓. Tap a segment → scroll to that stop's first day.
+              <span class="sub"
+                >~120px, dusk-navy chrome. Scroll past → 44px sticky strip (pill
+                + name + chain; tap re-expands at top). Active-trip window:
+                auto-collapsed, list opens at today.
+                <b>Single-stop routes:</b> segbar hidden — title strip + actions
+                only (a one-segment TOC is noise).
+                <b>&gt;6 stops / long names:</b> 34px min segment width, labels
+                ellipsize, bar scrolls horizontally in its own container.
+                <b>Offline or underivable:</b> block hides silently; itinerary
+                renders exactly as today. Chat + tab bars untouched.</span
+              ></span
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mock-band">
+      <div class="mock-band-label">
+        S2 · Route Editor — clean open · with pending edits (over budget)
+      </div>
+      <div class="mock-row">
+        <div class="phone">
+          <div style="padding: 9px 13px; opacity: 0.3">
+            <div
+              style="
+                font-family: Didot, &quot;Bodoni 72&quot;, Georgia, serif;
+                font-size: 14px;
+              "
+            >
+              Ziro · Oct 3–Oct 11
+            </div>
+          </div>
+          <div class="sheet">
+            <div class="grab"></div>
+            <div class="sheet-h">
+              <span class="t">Your route</span
+              ><span style="color: #587284">✕</span>
+            </div>
+            <div class="ledger">
+              <span class="ok">8 nights · balanced ✓</span>
+              <span
+                class="marker"
+                style="
+                  display: inline-flex;
+                  position: static;
+                  width: 17px;
+                  height: 17px;
+                  font-size: 10px;
+                "
+                >1</span
+              >
+            </div>
+            <div class="stoprow">
+              <span class="mv">⌃⌄</span
+              ><span style="flex: 1"><b>Ziro Town</b> · arrival base</span
+              ><span class="step">− 2 nights +</span>
+            </div>
+            <div class="stoprow">
+              <span class="mv">⌃⌄</span
+              ><span style="flex: 1"><b>Hapoli</b> · festival</span
+              ><span class="step">− 1 night + &nbsp;✕</span>
+            </div>
+            <div class="stoprow">
+              <span class="mv">⌃⌄</span
+              ><span style="flex: 1"><b>Hong &amp; Siiro</b> · villages</span
+              ><span class="step">− 3 nights + &nbsp;✕</span>
+            </div>
+            <div class="stoprow">
+              <span class="mv">⌃⌄</span
+              ><span style="flex: 1"><b>Kile Pakho</b> · viewpoint</span
+              ><span class="step">− 2 nights + &nbsp;✕</span>
+            </div>
+            <div
+              class="stoprow"
+              style="
+                border-style: dashed;
+                color: #587284;
+                justify-content: center;
+              "
+            >
+              ＋ Add a stop
+            </div>
+            <div style="padding: 2px 12px 8px">
+              <button class="applybtn disabled" disabled>
+                Rebuild itinerary
+              </button>
+              <div class="helper">
+                No changes yet — tinker freely. Uses credits when you rebuild.
+              </div>
+              <div class="helper">
+                Different shape entirely? <u>Explore other plans</u>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="phone">
+          <div style="padding: 9px 13px; opacity: 0.3">
+            <div
+              style="
+                font-family: Didot, &quot;Bodoni 72&quot;, Georgia, serif;
+                font-size: 14px;
+              "
+            >
+              Ziro · Oct 3–Oct 11
+            </div>
+          </div>
+          <div class="sheet">
+            <div class="grab"></div>
+            <div class="sheet-h">
+              <span class="t">Your route</span
+              ><span style="color: #587284">✕</span>
+            </div>
+            <div class="ledger">
+              <span class="over">10 assigned · 2 nights over</span>
+              <span
+                class="marker"
+                style="
+                  display: inline-flex;
+                  position: static;
+                  width: 17px;
+                  height: 17px;
+                  font-size: 10px;
+                "
+                >2</span
+              >
+            </div>
+            <div class="stoprow">
+              <span class="mv">⌃⌄</span
+              ><span style="flex: 1"><b>Ziro Town</b></span
+              ><span class="step">− 2 nights +</span>
+            </div>
+            <div class="stoprow edited">
+              <span class="mv">⌃⌄</span
+              ><span style="flex: 1"><b>Hapoli</b></span
+              ><span class="step" style="color: #2563a8">− 2 nights +</span>
+            </div>
+            <div class="stoprow">
+              <span class="mv">⌃⌄</span
+              ><span style="flex: 1"><b>Hong &amp; Siiro</b></span
+              ><span class="step">− 3 nights +</span>
+            </div>
+            <div class="stoprow">
+              <span class="mv">⌃⌄</span
+              ><span style="flex: 1"><b>Kile Pakho</b></span
+              ><span class="step">− 2 nights +</span>
+            </div>
+            <div class="stoprow new">
+              <span class="mv">⌃⌄</span
+              ><span style="flex: 1"
+                ><b>Talley Valley</b>
+                <span style="color: #3d7a5c; font-size: 9px">NEW</span></span
+              ><span class="step">− 1 night + &nbsp;✕</span>
+            </div>
+            <div class="warnrow">
+              ⚠ Talley Valley adds a rough 4×4 leg — allow extra travel
+              time.<span
+                class="marker"
+                style="
+                  display: inline-flex;
+                  position: static;
+                  width: 17px;
+                  height: 17px;
+                  font-size: 10px;
+                  float: right;
+                "
+                >3</span
+              >
+            </div>
+            <div class="pending">
+              <b style="color: #0f1923">2 edits:</b> Hapoli 1→2N · + Talley
+              Valley 1N
+            </div>
+            <div style="padding: 0 12px">
+              <button class="applybtn disabled" disabled>
+                Balance nights to rebuild (2 over)
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="notes">
+          <div class="note">
+            <span class="marker">1</span
+            ><span class="note-text"
+              ><b>Nights ledger</b> — dates fixed, nights are a budget (days −
+              1). Apply enables only with changes AND balance; the disabled
+              label carries the reason, the invitation to tinker lives in helper
+              text (a disabled button that invites action reads as
+              broken).</span
+            >
+          </div>
+          <div class="note">
+            <span class="marker">2</span
+            ><span class="note-text"
+              ><b>Over-budget</b>: terra, counts the excess, button says exactly
+              what to do. Under-budget mirrors it ("1 night unassigned"). No
+              auto-rebalancing, ever — trade-offs are the user's.</span
+            >
+          </div>
+          <div class="note">
+            <span class="marker">3</span
+            ><span class="note-text"
+              ><b>Tap-to-move</b> (⌃⌄) in v1 — no drag, consistent with the R2
+              decision; drag inside a scrollable sheet is deferred. New stops
+              (moss dashed) via region-biased autocomplete; edited rows sky
+              dashed; warnings inline, never blocking.</span
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">5 · Flows, exhaustively</h2>
+
+    <h3>5.1 Glance &amp; zoom (no cost)</h3>
+    <div class="flow">
+      Open trip → <b class="step">S1 overview</b> → tap segment → scroll to that
+      stop's first day → scroll past overview → sticky strip → tap strip →
+      re-expand at top. Active-trip window: auto-collapsed, list opens at today.
+    </div>
+
+    <h3>5.2 Edit &amp; rebuild (costed, solo trip)</h3>
+    <div class="flow">
+      <b class="step">S1</b> "✎ Edit route" →
+      <b class="step">S2 editor</b> (snapshot of the stored route taken on open)
+      → free edits, ledger enforcing balance →
+      <b class="step">Apply</b> "Rebuild itinerary from this route" (helper:
+      "uses credits" — no invented number; the estimator is v2) → editor closes
+      → <b class="step">Pre-IG sheet</b> (existing) →
+      <b class="step">Replace confirmation</b> with the existing parameter diff
+      plus a route-shape line ("Route: 4 stops → 5 stops · +Talley Valley ·
+      Hapoli 1→2N") → on accept, the §3.5 write-back fires and
+      <b class="step">IG rebuilds</b> (existing streaming UI owns progress;
+      overview hides during streaming, re-renders when days land) → activity:
+      <code>route_edited</code> row + existing
+      <code>itinerary_generated</code> milestone.
+    </div>
+
+    <h3>5.3 Shared trip variant (v1: notify, don't poll)</h3>
+    <div class="flow">
+      Same funnel; the checkpoint appears with rebuild-flavored copy ("Rebuild
+      the itinerary around the edited route? Your group's plan will be replaced
+      — everyone will see the change.") offering
+      <b class="step">Rebuild now</b> / Cancel —
+      <b>no "Ask the group" poll in v1</b>. Reason (review blocker): pending
+      edits live only in the proposer's session, so a poll would reference a
+      route no one else can see and would dangle if the proposer leaves.
+      Co-members learn via realtime route-row update (overview refreshes),
+      <code>route_edited</code> + <code>itinerary_generated</code> in the feed
+      and while-you-were-away digest. The poll returns in v2 by persisting the
+      proposal as a <code>data.pending_edit</code> draft on the route row
+      (survives sessions, renderable in the poll card). A successful rebuild
+      refreshes the rework-nudge marker (counts as incorporating member styles).
+    </div>
+
+    <h3>5.4 Abandon, failure &amp; concurrency</h3>
+    <div class="scrollwrap">
+      <table class="spec">
+        <tr>
+          <th>Path</th>
+          <th>Behavior</th>
+        </tr>
+        <tr>
+          <td>Close with pending edits</td>
+          <td>
+            Confirm sheet: "Discard route edits? Your itinerary hasn't changed."
+            Discard / Keep editing. ESC / Android back / scrim all route through
+            it.
+          </td>
+        </tr>
+        <tr>
+          <td>Cancel at Pre-IG or Replace step</td>
+          <td>
+            Funnel aborts; nothing persisted (write-back fires only at
+            replace-accept). Editor reopens with pending edits intact (session
+            memory).
+          </td>
+        </tr>
+        <tr>
+          <td>402 at rebuild</td>
+          <td>
+            Existing credit paths: personal → paywall; shared pool empty → fork
+            paywall (incl. Ask-the-group top-up). Write-back has already fired
+            (it rides replace-accept), so the route row keeps the new shape and
+            the recovery row below applies once credits exist. Edits are no
+            longer "pending" — they're the route.
+          </td>
+        </tr>
+        <tr>
+          <td>IG fails / times out</td>
+          <td>
+            Existing IG failure handling. Route row carries the new shape;
+            overview renders the new chain with "Rebuild didn't finish —
+            <u>Try again</u>" (tappable; re-enters IG with the same parameters,
+            no re-confirm).
+          </td>
+        </tr>
+        <tr>
+          <td>Editor during IG streaming</td>
+          <td>
+            "✎ Edit route" disabled, labeled "Rebuilding…". In the zero-days
+            recovery state the editor opens normally — editing the route is a
+            legitimate recovery move.
+          </td>
+        </tr>
+        <tr>
+          <td>Concurrent editors (shared)</td>
+          <td>
+            v1: last completed rebuild wins; the feed narrates both. The editor
+            writes <code>last_modified_by/at</code> so v2's stale-snapshot
+            banner ("{name} just changed this route — reopen to see the latest")
+            lands on real data; the banner itself is deferred while realtime
+            tiers are dark.
+          </td>
+        </tr>
+        <tr>
+          <td>Autocomplete offline / geocode fail</td>
+          <td>
+            Add-a-stop accepts free text (IG handles names); the geo-warning
+            simply doesn't render. No hard Places dependency.
+          </td>
+        </tr>
+        <tr>
+          <td>Overview data unavailable</td>
+          <td>
+            No <code>data.stops</code> and derivation fails → hides. Offline
+            (route rows aren't localStorage-cached) → hides. Legacy no-routes
+            trips → hides. Always silently; the itinerary renders exactly as
+            today.
+          </td>
+        </tr>
+      </table>
+    </div>
+
+    <h3>5.5 Add a stop, precisely</h3>
+    <p>
+      Tap ＋ → inline row with region-biased city autocomplete (Places proxy) →
+      chosen city appends as a NEW row (moss dashed), 1 night, ⌃⌄ controls →
+      ledger goes over → user rebalances → optional inline geo-distance warning
+      when the city geocodes far from the route centroid (warn-only; km, the
+      app's convention). Free text allowed when autocomplete fails. Combined
+      stops ("Hong &amp; Siiro") pass through untouched — the model never splits
+      or validates city strings. The stop has no real existence until Apply: IG
+      invents its days, hotel, and both transit legs during the rebuild. Min 1
+      stop after removals; max 8.
+    </p>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">6 · Rules reference</h2>
+    <div class="scrollwrap">
+      <table class="spec">
+        <tr>
+          <th>Rule</th>
+          <th>Spec</th>
+        </tr>
+        <tr>
+          <td>Placement</td>
+          <td>
+            Overview at top of Itinerary tab content (mobile + desktop center
+            column). Sticky-collapse at 44px. Hidden in Story mode; Story's Plan
+            toggle returns to it.
+          </td>
+        </tr>
+        <tr>
+          <td>Data source</td>
+          <td>
+            <code>data.stops</code> on the <code>selected=true</code> row via
+            the §3.3 ladder; own fetch on trip open (solo trips never hydrate
+            route state post-IG today). D-ranges from actual days; nights from
+            stops.
+          </td>
+        </tr>
+        <tr>
+          <td>Chosen-route identity</td>
+          <td>
+            <code>selected=true</code> row; P-label derived from stored
+            <code>position</code>, consistent with the existing loader.
+          </td>
+        </tr>
+        <tr>
+          <td>Nights ledger</td>
+          <td>
+            §3.4. Balance required to Apply. Steppers min 1; stops 1–8;
+            overnight bases only.
+          </td>
+        </tr>
+        <tr>
+          <td>Cost honesty</td>
+          <td>
+            Helper text "uses credits"; no invented number (v2: estimator from
+            <code>llm_usage</code> history by trip length). Free actions never
+            mention cost.
+          </td>
+        </tr>
+        <tr>
+          <td>Write-back atomicity</td>
+          <td>
+            §3.5 — only at replace-accept, atomically with rebuild start; stamps
+            <code>last_modified_by/at</code>; chat <code>edit_route</code> gets
+            the same stamps.
+          </td>
+        </tr>
+        <tr>
+          <td>Sheet mechanics</td>
+          <td>
+            ~80% height, scrim, 220ms ease-out (reduced-motion → fade),
+            drag-down/scrim/✕/ESC/Android-back dismiss (history-entry push on
+            open), <code>aria-modal</code> + focus trap, safe-area bottom
+            padding. Sits above the chat bar via z-index (chat 900, sheets 1500+
+            — the existing pattern; nothing "hidden").
+          </td>
+        </tr>
+        <tr>
+          <td>Map</td>
+          <td>
+            Map tab unchanged (day pins). Desktop live preview of the pending
+            chain: v2. The inline warning row covers the sanity need in v1.
+          </td>
+        </tr>
+        <tr>
+          <td>Analytics</td>
+          <td>
+            <code>route_overview_seen</code> (once/open),
+            <code>route_seg_to_day</code>, <code>route_editor_open</code>,
+            <code>route_edit</code> {op: nights|reorder|add|remove},
+            <code>route_rebuild_started/confirmed/completed</code>,
+            <code>route_editor_discarded</code>.
+          </td>
+        </tr>
+        <tr>
+          <td>Activity/feed</td>
+          <td>
+            New action <code>route_edited</code>: feed label mapping ("{name}
+            edited the route — {summary}"), away-digest grouping into the
+            plan-changed cluster with <code>itinerary_generated</code>. Info
+            row, no undo.
+          </td>
+        </tr>
+        <tr>
+          <td>First-run</td>
+          <td>
+            First post-ship open: one-time 600ms pulse on the overview; no
+            tooltip.
+          </td>
+        </tr>
+        <tr>
+          <td>i18n/truncation</td>
+          <td>
+            Segment labels ellipsize at 34px min-width; stop-row city names one
+            line + ellipsis; all ledger/button strings are {N}-templates (§7).
+          </td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">7 · Copy deck</h2>
+    <div class="scrollwrap">
+      <table class="spec">
+        <tr>
+          <th>Slot</th>
+          <th>String</th>
+        </tr>
+        <tr>
+          <td>Overview actions</td>
+          <td>"✎ Edit route" · "Explore other plans →"</td>
+        </tr>
+        <tr>
+          <td>Sheet title</td>
+          <td>"Your route"</td>
+        </tr>
+        <tr>
+          <td>Ledger</td>
+          <td>
+            "{N} nights · balanced ✓" · "{M} assigned · {D} night(s) over" ·
+            "{M} assigned · {D} night(s) unassigned"
+          </td>
+        </tr>
+        <tr>
+          <td>Apply (enabled)</td>
+          <td>"Rebuild itinerary from this route"</td>
+        </tr>
+        <tr>
+          <td>Apply (disabled, no changes)</td>
+          <td>
+            Button: "Rebuild itinerary" · helper: "No changes yet — tinker
+            freely. Uses credits when you rebuild."
+          </td>
+        </tr>
+        <tr>
+          <td>Apply (disabled, unbalanced)</td>
+          <td>"Balance nights to rebuild ({D} over)" / "…({D} unassigned)"</td>
+        </tr>
+        <tr>
+          <td>Pending summary</td>
+          <td>"{K} edits: {compact list}"</td>
+        </tr>
+        <tr>
+          <td>Read-only footer</td>
+          <td>"Only {owner} can edit the route for now"</td>
+        </tr>
+        <tr>
+          <td>Discard confirm</td>
+          <td>
+            "Discard route edits?" / "Your itinerary hasn't changed." / Discard
+            · Keep editing
+          </td>
+        </tr>
+        <tr>
+          <td>Shared checkpoint (v1)</td>
+          <td>
+            "Rebuild the itinerary around the edited route?" / "Your group's
+            plan will be replaced — everyone will see the change." / Rebuild now
+            · Cancel
+          </td>
+        </tr>
+        <tr>
+          <td>Replace-diff route line</td>
+          <td>
+            "Route: {old} stops → {new} stops · {adds/removes/night changes,
+            compact}"
+          </td>
+        </tr>
+        <tr>
+          <td>Editing disabled during IG</td>
+          <td>"Rebuilding…"</td>
+        </tr>
+        <tr>
+          <td>Rebuild-failed overview</td>
+          <td>
+            "Rebuild didn't finish — <u>Try again</u>" (link; same params, no
+            re-confirm)
+          </td>
+        </tr>
+        <tr>
+          <td>Geo warning</td>
+          <td>"⚠ {city} is ~{km} km from the rest of your route"</td>
+        </tr>
+        <tr>
+          <td>Feed row</td>
+          <td>
+            "{name} edited the route — {compact summary}" · action
+            <code>route_edited</code>
+          </td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">8 · Desktop</h2>
+    <p>
+      Overview: same component at the top of the center itinerary column.
+      Editor: the same bottom sheet sized to the center column (not
+      full-window), scrim over the column only; the right-bottom chat cell dims
+      (non-interactive) while open. Keyboard: segments and stop rows tabbable;
+      steppers respond to ←/→; ⌃⌄ controls respond to Enter; ESC follows the
+      discard rule. Live map preview of the pending chain: v2.
+    </p>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">9 · Build plan (re-based after review)</h2>
+    <p>
+      <b>Verified-reusable</b> (each checked in code by the reviewer): route
+      persistence + <code>selected</code> flag, consensus checkpoint, Pre-IG
+      sheet, replace confirmation + diff builder, Places autocomplete + geocode
+      pipeline, activity/feed plumbing, realtime route patch-by-id (flag-dark),
+      rework-nudge marker, Story-mode toggle, sheet z-index pattern.
+      <b>Removed after review (didn't exist):</b> votedItems shape write-back,
+      pre-IG credit estimator.
+    </p>
+    <p>
+      <b>Net-new v1:</b> <code>data.stops</code> schema + derivation ladder + RG
+      prompt addition; overview block (own fetch, sticky collapse, seg-to-day,
+      single-stop/overflow/hide rules); editor sheet shell (scrim, focus trap,
+      back-guard, safe-area, read-only mode); ledger + steppers + add/remove +
+      tap-to-move; atomic write-back incl. <code>last_modified_*</code> (plus
+      the chat <code>edit_route</code> stamp fix); funnel wiring + route-diff
+      line + rebuild-flavored checkpoint; <code>route_edited</code> activity +
+      feed label + digest grouping; desktop column-scoped sheet; E2E (overview
+      from stored route; derivation ladder on a legacy trip; seg-to-day; balance
+      gate; discard; read-only member mode; apply reaches Pre-IG without LLM
+      spend).
+    </p>
+    <p>
+      <b>Estimate: 5–6 days v1</b> (the review priced the uncut Rev 5 at 8–11
+      days; the cuts below close the gap). Phasing: (1) data model + overview;
+      (2) editor read-only → editable + ledger; (3) funnel wiring + write-back +
+      activity; (4) shared-trip copy, desktop, polish, E2E.
+    </p>
+    <div class="scrollwrap">
+      <table class="spec">
+        <tr>
+          <th>Deferred to v2</th>
+          <th>Why</th>
+        </tr>
+        <tr>
+          <td>Drag-reorder <span class="verdict v-cut">CUT</span></td>
+          <td>
+            Tap-to-move covers it; drag inside a scrollable sheet ≈ 1 day alone
+          </td>
+        </tr>
+        <tr>
+          <td>Credit number on Apply <span class="verdict v-cut">CUT</span></td>
+          <td>
+            No estimator exists; "uses credits" is honest today, estimator from
+            <code>llm_usage</code> later
+          </td>
+        </tr>
+        <tr>
+          <td>
+            "Ask the group" route poll <span class="verdict v-cut">CUT</span>
+          </td>
+          <td>
+            Needs persisted <code>data.pending_edit</code> drafts; v1 notifies
+            via feed + realtime
+          </td>
+        </tr>
+        <tr>
+          <td>Stale-snapshot banner <span class="verdict v-cut">CUT</span></td>
+          <td>
+            Realtime tiers still dark; v1 stamps <code>last_modified_*</code> so
+            the banner lands on real data later
+          </td>
+        </tr>
+        <tr>
+          <td>
+            Desktop live map preview <span class="verdict v-cut">CUT</span>
+          </td>
+          <td>Warning row covers the sanity need</td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">
+      10 · Review appendix — what the design manager found
+    </h2>
+    <p>
+      The independent review (adversarial, with codebase verification) returned
+      NEEDS REWORK on Rev 5. Every finding is incorporated above.
+    </p>
+    <div class="scrollwrap">
+      <table class="spec">
+        <tr>
+          <th>Blocker</th>
+          <th>Resolution</th>
+        </tr>
+        <tr>
+          <td>No structured route data exists</td>
+          <td>§3.2 schema + §3.3 derivation ladder + RG prompt addition</td>
+        </tr>
+        <tr>
+          <td>Nights arithmetic off by one</td>
+          <td>§3.4 model (nights = days − 1); both mockups corrected</td>
+        </tr>
+        <tr>
+          <td>Credit estimator doesn't exist</td>
+          <td>Number dropped; "uses credits" helper; estimator → v2</td>
+        </tr>
+        <tr>
+          <td>votedItems write-back claim false</td>
+          <td>§3.5 explicit atomic write-back, owned as net-new</td>
+        </tr>
+        <tr>
+          <td>Drag contradicted own decisions log</td>
+          <td>Tap-to-move v1; drag → v2</td>
+        </tr>
+        <tr>
+          <td>Group poll referenced an invisible route</td>
+          <td>v1 notify-only; poll → v2 with persisted drafts</td>
+        </tr>
+      </table>
+    </div>
+    <p>
+      Gaps adopted: single-stop routes, 8-stop/long-name overflow,
+      editor-during-IG, D-range vs nights sources of truth,
+      permissions/read-only member mode, day-trip stance, offline, combined
+      stops, feed label mapping. "Shaky" claims corrected in place:
+      <code>last_modified_at</code> exists but nothing writes it yet (the editor
+      and chat both will); the 8-stop cap is ours, not RG's. Kept verbatim on
+      the reviewer's recommendation: the ownership rule, the single costed
+      funnel exit, and disabled-with-reason Apply.
+    </p>
+  </section>
+
+  <footer class="doc">
+    TripJam · 2026-08-13 · Rev 6 · mockups use production color tokens (type
+    approximated) · reuse claims verified in code by independent review; two
+    false claims removed
+  </footer>
+</div>

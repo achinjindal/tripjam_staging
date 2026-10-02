@@ -1,0 +1,123 @@
+# Routes Lens v1 — Implementation Plan (v2, post-engineering-review)
+
+Target spec: `routes-lens-design.html` Rev 6. Target codebase: `/Users/achinjindal/Documents/Code/tj-p56-wt` (branch `collab-tier2`, head `063abbd`).
+Ship dark behind `VITE_ROUTES_LENS_ENABLED`.
+**v1 of this plan went through independent engineering review (verdict: NEEDS REWORK, 5 blockers). All findings are incorporated below; blocker fixes are marked ⚑.**
+
+## 0 · Scope recap
+
+- **Route Overview block** at top of Itinerary tab: segment bar of the chosen route (width ∝ nights, D-ranges from actual days), sticky-collapse to 44px strip, auto-collapsed in the active-trip window, hidden when `storyActive`, single-stop segbar hidden, hides silently when underivable/offline.
+- **Route Editor sheet**: nights steppers (min 1), tap-to-move, add stop (CityInput + free-text fallback), remove (1–8 stops), nights ledger (budget = days − 1) gating one costed **Rebuild** through checkpoint → Pre-IG → replace-confirm → IG. Read-only for non-owners until co-edit RLS confirmed on prod.
+- **Write-back** (`city`, `data.stops`, `data.days`, `last_modified_by/at`) only at replace-accept, atomic with IG start.
+- **Not in v1**: drag-reorder, credit-number estimator, group poll, stale-snapshot banner, desktop live map preview.
+
+## 1 · Ground-truth anchors (corrected after review)
+
+| Integration point                                                                    | Location                                                                                                                | Review note                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openPreIgSheet` + `skipConsensus`                                                   | `App.jsx:8065` (guard at 8070)                                                                                          | holds                                                                                                                                                                                                                                       |
+| Pre-IG Generate → replace-confirm                                                    | `App.jsx:15392–15396`                                                                                                   | gated on `editingTrip?.ig_response` — **null on plain trip open** (⚑ B1)                                                                                                                                                                    |
+| Replace-confirm diff + accept handler                                                | `App.jsx:15676–15746`, accept `15891–15916` → `handleBuildFromBrainstorm(voted, mergedForm)`                            | holds                                                                                                                                                                                                                                       |
+| IG request assembly                                                                  | `App.jsx:9299–9370`                                                                                                     | **no `votedRoute` field**; route rides as `igDestinations` (= selected `city` split on **commas**, 9304) + full `votedItems` array; edge fn regex-parses `days` (`generate-itinerary/index.ts:351–435`) into night-by-night bases (⚑ B2/B3) |
+| Saved `ig_request` shape                                                             | `App.jsx:9612–9629`                                                                                                     | no votedRoute — diff's `oldRoute` falls back to `ig_response.name`                                                                                                                                                                          |
+| Day scroll                                                                           | `scrollToDay(idx)` at `App.jsx:9999` (scrollRef.scrollTo + pill sync + `isJumping` guard)                               | use this, NOT raw scrollIntoView                                                                                                                                                                                                            |
+| `dayRefs`                                                                            | `App.jsx:8576`, assigned `14017`                                                                                        | holds                                                                                                                                                                                                                                       |
+| `loadSavedBrainstorm` (P-labels from position among non-dismissed tier-1, 2177–2188) | `App.jsx:2141–2196`                                                                                                     | single-row fetch can't derive P-label — fetch all tier-1                                                                                                                                                                                    |
+| RG client save paths (data whitelist) — **two of them**                              | `App.jsx:2510–2528` (post-stream) and `9737–9756` (trip-save insert)                                                    | both need `stops` passthrough                                                                                                                                                                                                               |
+| votedItems sync (selected-flag only)                                                 | `App.jsx:9762–9781`                                                                                                     | never writes shape — not a write-back vehicle                                                                                                                                                                                               |
+| Chat `edit_route`                                                                    | `App.jsx:10394–10421`                                                                                                   | rewrites `data` wholesale → would **drop `data.stops`** (⚑ B5)                                                                                                                                                                              |
+| `last_modified_by/at` columns                                                        | migration `20260721000001` (idempotent)                                                                                 | verify applied on prod before flag flip                                                                                                                                                                                                     |
+| CityInput                                                                            | `BoardView.jsx:2451` (exported :3563); props `{value,onChange,placeholder,inputStyle,airportOnly,hotelCity,openUpward}` | `pick()` (2515) returns **text only** — bias + geocode are net-new work                                                                                                                                                                     |
+| `confirmSheet` / `showToast`                                                         | `dialogs.jsx:20,39`                                                                                                     | use confirmSheet for the shared-trip rebuild confirm                                                                                                                                                                                        |
+| `logActivity({tripId,userId,action,entityType,entityId,summary,undoPayload})`        | `activity.js`                                                                                                           | holds                                                                                                                                                                                                                                       |
+| Story gate                                                                           | `storyActive = itineraryMode === "story" && storyAvailable` (`App.jsx:7798`)                                            | gate on `storyActive`, not `itineraryMode !== 'plan'`                                                                                                                                                                                       |
+| Edit-Details state init (pattern for funnel context)                                 | `App.jsx:13421–13455`                                                                                                   | reuse for Apply + "Explore other plans"                                                                                                                                                                                                     |
+| extract-preferences called unconditionally in `openPreIgSheet`                       | `App.jsx:8115–8130` (Haiku, unbilled but real spend)                                                                    | E2E must not open Pre-IG, or `page.route()`-block it                                                                                                                                                                                        |
+| realtime brainstorm_items patch-by-id                                                | `realtime.js:10,29` (flag-dark)                                                                                         | holds                                                                                                                                                                                                                                       |
+
+## 2 · New modules
+
+- **`src/routeStops.js`** — pure helpers, no React:
+  - `deriveStops(routeRow, tripNights)` → `{stops, source}` — Rev 6 §3.3 ladder (bold-prefix parse, runs collapse, last day = 0 nights, exact-sum check; validates stored `stops`: array 1–8, positive int nights, sum === tripNights).
+  - `ledger(stops, tripNights)` → `{assigned, delta, balanced}`.
+  - `cityChain(stops)` → **comma-joined** `"Ziro Town, Hapoli, …"` ⚑ B2 — `city` is split on commas by `igDestinations` (App.jsx:9304), the IG edge fn (index.ts:363–366), and the map plot. The " → " arrow chain is UI-only.
+  - `outlineDays(stops)` → **one line per night**: `["**Ziro Town** — night 1", "**Ziro Town** — night 2", "**Hapoli** — night 3", …]` so legacy readers of `data.days` (incl. the current IG regex ladder) stay per-day-correct. (The authoritative IG path won't need it — see §3 Phase 1.3 — but `days` must never lie.)
+  - `dRanges(days)` → per-stop day indices from actual generated days.
+  - `editSummary(beforeStops, afterStops)` → diff string; **before comes from the editor's open-snapshot**, never from `ig_request` (no votedRoute exists there).
+  - `routeCentroid(coords[])` + warn-distance check (haversine already in `photos.js`).
+- **`src/components/RouteOverview.jsx`** — presentational only.
+- **`src/components/RouteEditorSheet.jsx`** — sheet shell + rows + ledger + Apply; local editing state; zero persistence.
+- **Flag plumbing**: `ROUTES_LENS_ENABLED` exported from `members.js`-style module (put it in a new `src/flags.js` or alongside `INVITE_ENABLED` — decide by file fit); flag added to `.env` (staging on), Vercel prod env (off until QA), CLAUDE.md note. E2E skip-guard when flag off (collab-invite.spec.ts pattern).
+
+No DB migration (JSONB additive; `last_modified_*` exist). **Ops pre-flight before any prod flag flip:** confirm `20260721000001` and `20260730000003` (co-edit RLS) applied on prod.
+
+## 3 · Phases
+
+### Phase 1 — Data model + IG/RG contract + funnel spike (1.5 d) ⚑ de-risked first, per review
+
+1. `src/routeStops.js` (above).
+2. **⚑ B3 — `generate-itinerary` learns `stops`:** in `generate-itinerary/index.ts` (~351–435), when the selected voted item carries a **valid top-level `stops` array**, expand `{city, nights}` directly into the NON-NEGOTIABLE Night-N base lines and skip the regex ladder; else fall back to today's parsing. **Also handle the DAY-BY-DAY TEMPLATE block (index.ts:424–425):** when `stops` is valid, synthesize the per-day template from stops (or omit it) — otherwise per-night `days` lines print as a wrong-length "traveler agreed to this flow" day list. Deploy **staging + prod** (additive, inert until a payload carries stops).
+3. RG prompt (`generate-brainstorm/index.ts`): add machine-readable `stops:[{city,nights}]` per route (nights sum = trip days − 1; MINIFIED rule intact; ~30 tokens/route within max_tokens 9000). Thread `stops` through **both** client save whitelists (`App.jsx:2510–2528` and `9737–9756`). Validation + ladder fallback — never trust LLM shape.
+4. **⚑ Funnel spike (0.5 d, inside this phase):** on staging, hard-code one edited route through Apply → write-back → IG and inspect the constraint block the model receives (edge-fn logs). This retires the plan's highest risk before any UI exists.
+
+### Phase 2 — Route Overview (1–1.5 d)
+
+1. App.jsx: `routeLens` state `{row, stops, source, pLabel} | null`. Effect on trip open (`ROUTES_LENS_ENABLED && trip?.ig_response`): fetch **all tier-1 non-dismissed rows** (cheap; P-label needs position order per 2177–2188), pick `selected=true`, run `deriveStops`.
+2. Render `<RouteOverview>` above the day list; seg tap → **`scrollToDay(firstDayIdx)`** (App.jsx:9999).
+3. Sticky collapse (IntersectionObserver on sentinel; fallback scroll-threshold — the itinerary scrolls in `scrollRef`, not the viewport). Auto-collapse when today ∈ trip dates. Hide when `storyActive` (7798). Hide during IG streaming; refresh when days land and on realtime route-row patch.
+4. "Explore other plans →" handler: reuse the Edit-Details init (`App.jsx:13421–13455` — `setEditingTrip(trip)`, `pendingForm` from `ig_request`, `setScreen("brainstorm")`). Named work item, not free.
+5. Analytics: `route_overview_seen`, `route_seg_to_day`.
+
+### Phase 3 — Route Editor sheet (1.5 d)
+
+1. Sheet shell: ~80% height, scrim, 220ms ease-out (reduced-motion fade), z 1500+, safe-area, `aria-modal` + focus trap, Android-back/ESC via history push (MembersSheet pattern).
+2. Editing model: snapshot on open; dirty = deep-inequality. Steppers (min 1), ⌃⌄ move, ✕ remove (min 1), ＋ add via CityInput. **CityInput extension (net-new):** a destination-bias context param (hotelCity-style query suffixing) and a post-`pick()` geocode via places-proxy to capture `{lat,lng}` (pick returns text only). Geo warning: geocode is best-effort; centroid uses whatever stop coords exist (new stops' geocodes + trip destination geocode as seed); if none, warning silently absent.
+3. Ledger + Apply gating per spec copy deck; helper text "uses credits".
+4. Read-only mode: owner-only until co-edit confirmed on prod (single const next to the flag). Discard via `confirmSheet`. Edit CTA disabled during IG ("Rebuilding…").
+5. Analytics: `route_editor_open`, `route_edit {op}`, `route_editor_discarded`.
+
+### Phase 4 — Funnel wiring + write-back (1.5–2 d)
+
+0. **⚑ B1 — context init on Apply (the load-bearing step):** plain trip open has `editingTrip = null`, `pendingForm = null`, `pretripRoutes = []`. On Apply: replicate Edit-Details init (`setEditingTrip(trip)`, `pendingForm` from `trip.ig_request` — restores destinations/dates/travelers so `numDays` etc. are real), and construct the voted array **explicitly and FLATTENED** — every consumer reads top-level fields (`cr.city` App.jsx:9304; `r.city`/`r.days` index.ts:363,367), so the edits must NOT be nested inside `data`: `pendingRouteEdit = {stops, summary, votedItems: [{...routeLensRow, ...routeLensRow.data, city: cityChain(stops), days: outlineDays(stops), stops, tier: 1, vote: 1}]}` (the `{...row, ...row.data}` convention used everywhere). Never rely on `pretripRoutes` being hydrated. `pendingRouteEdit` is held in App state and **survives IG retry** (the Try-again path re-uses it until a rebuild completes). Re-verified in code: `setEditingTrip(trip)` mid-trip-view is benign — `isEditing` makes the save path update-in-place (correct for rebuild), Magazine resolvers see identical destination, setup/brainstorm branches never mount (`screen` stays "itinerary"), and IG completion nulls both (9871–9872). **Cancel-path cleanup:** cancels at checkpoint/Pre-IG/replace-confirm must also clear `editingTrip`/`pendingForm` (existing cancel handlers, e.g. 15944–15949, only close sheets) — clear them explicitly rather than accepting Edit-Details-style residue.
+1. Checkpoint: **use `confirmSheet`** (dialogs.jsx), not `consensusPrompt` (that component is poll-wired, 17237–17256 — forking it costs more than a confirm). Shared trips (`INVITE_ENABLED && members>1`): "Rebuild the itinerary around the edited route? Your group's plan will be replaced — everyone will see the change." Rebuild now / Cancel. Solo: skip. Then `openPreIgSheet({skipConsensus: true, routeEdit: true})`.
+2. Replace-confirm: `editingTrip.ig_response` is now truthy (B1 init) so Generate routes into it natively. When `pendingRouteEdit` present, unshift the Route diff line from `editSummary(snapshot, edited)`.
+3. On replace-accept: if `pendingRouteEdit` — atomic write-back with **`.select()` + row-count check** (bare-write hazard): `{city: cityChain, data: {...data, stops, days: outlineDays}, last_modified_by, last_modified_at}`. Failure → toast + abort (no IG spend against an unsaved route). Success → `logActivity(route_edited)`, update local route state, call `handleBuildFromBrainstorm(pendingRouteEdit.votedItems, mergedForm)`. Clear `pendingRouteEdit` only on IG completion (retry durability).
+4. **⚑ B5 — chat `edit_route` fix** (App.jsx:10394–10421): spread existing `data` instead of the wholesale field-list rewrite; when `days` change, **delete `data.stops`** (stale stops disagreeing with edited days are worse than absent — ladder re-derives); add `last_modified_by/at` stamps + `logActivity(route_edited)` for parity.
+5. Feed: label mapping for `route_edited` + away-digest grouping with `itinerary_generated` (locate the resolver — review pointed at feed label resolution — at build time).
+6. Failure rows per spec §5.4 (402 paths untouched; IG-fail → overview shows new chain + "Try again" reusing `pendingRouteEdit.votedItems`).
+7. Analytics: `route_rebuild_started` (Apply), `route_rebuild_confirmed` (replace-accept), `route_rebuild_completed` (IG done).
+
+### Phase 5 — Desktop, polish, E2E (1–1.5 d)
+
+1. Desktop: overview in center column; editor sheet column-scoped; keyboard (tab, ←/→ steppers, Enter on ⌃⌄, ESC → discard rule).
+2. First-run 600ms pulse (localStorage one-shot).
+3. E2E (`e2e/routes-lens.spec.ts` + `e2e/criteria/18-routes-lens.md`), all skip-guarded on the flag:
+   - overview renders from stored `data.stops`; hidden when flag off; hidden on underivable legacy fixture; derivation ladder renders for a bold-prefix legacy route.
+   - seg tap lands the right day (scrollToDay).
+   - editor: balance gate labels (over/under), tap-to-move, add-stop free text, min/max enforcement, read-only member mode (second QA user).
+   - discard confirm; **shared-trip Apply stops at the checkpoint/`pendingRouteEdit` assertion**. ⚑ B4 nuance: **solo trips have no checkpoint** — Apply goes straight into `openPreIgSheet`, which unconditionally calls extract-preferences (a real Haiku call), so solo-fixture Apply tests `page.route()`-block the extract-preferences URL **as the norm**, not the exception.
+   - cosmetic follow-up (polish): route-card rendering of per-night `days` shows "Day N · **City** — night N" with one fewer row than trip days — acceptable; consider "Night N" labels or stops-aware card rendering in Phase 5 if time allows.
+4. `npm run check`; deploy functions staging → QA → prod; flag on in staging `.env`, prod Vercel flag stays off until tested.
+
+## 4 · Risks & mitigations
+
+| Risk                                                      | Mitigation                                                                                                   |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Funnel context wrong/missing (was invisible until review) | Phase 4.0 explicit init + Phase 1.4 spike retires it first                                                   |
+| Edited nights reach the model wrong                       | IG edge fn consumes `stops` natively (Phase 1.2); per-night `outlineDays` keeps every legacy reader truthful |
+| Bare-write silent no-op                                   | `.select()` + count check; abort funnel on failure                                                           |
+| Chat edit_route ↔ stops divergence                        | B5 fix: spread + delete-stops-on-days-change                                                                 |
+| RG reliability regression from new JSON field             | Validation + ladder fallback; staging probe on 3 destinations incl. one obscure                              |
+| App.jsx merge friction                                    | 3 new files; ~150-line App.jsx wiring; Edit-tool with unique anchors only (no python patching)               |
+| Sticky jank in scrollRef container                        | IO with scroll-threshold fallback; test on APK viewport                                                      |
+| CI LLM spend                                              | Tests stop pre-Pre-IG or route-block extract-preferences                                                     |
+
+## 5 · Sequencing & estimate
+
+Phases strictly 1→5; every phase leaves the app shippable (flag off). **Estimate: 7–9 days** (review re-based from my 5–6: funnel-context init, IG edge-fn stops path + dual deploys, and CityInput extension are real work). Deploys: edge functions to staging with each phase as needed; prod functions deploy at the end of Phase 4 (additive/inert); frontend ships dark throughout; flag flips staging-first, prod after QA.
+
+## 6 · Review appendix
+
+Re-verification of plan v2: **APPROVED WITH CHANGES** — all 5 blocker fixes confirmed buildable, all corrections applied faithfully; both risky fixes verified safe in code (`setEditingTrip` mid-trip-view benign; per-night `outlineDays` safe for all reachable readers). Remaining amendments (now folded in): flattened votedItems shape (consumers read top-level fields, not `data.*`), DAY-BY-DAY TEMPLATE handling in the IG edge fn, explicit funnel-cancel cleanup of `editingTrip`/`pendingForm`, solo-fixture E2E route-blocking as the norm, cosmetic route-card note.
+
+Original review of plan v1: **NEEDS REWORK** — 5 blockers, all fixed above: (B1) funnel entered from Itinerary tab had null `editingTrip`/`pendingForm`/`pretripRoutes` → Phase 4.0 context init + explicit votedItems; (B2) arrow-joined `city` broke three comma-splitting consumers → comma chain; (B3) per-stop `data.days` corrupted the IG night-constraint regex → IG consumes `stops` natively + per-night outline; (B4) "no-spend" E2E actually triggered extract-preferences → tests stop at Apply / route-block; (B5) chat `edit_route` wholesale `data` rewrite dropped `stops` → spread + invalidate. Plus corrections: `confirmSheet` over `consensusPrompt`, `scrollToDay` over scrollIntoView, `storyActive` gate, tier-1 fetch for P-labels, both RG save whitelists, snapshot-based `editSummary`, CityInput bias/geocode as net-new. Verified-strong and kept: pure `routeStops.js`, dumb components with App.jsx persistence, ship-dark flag, migration-free JSONB.

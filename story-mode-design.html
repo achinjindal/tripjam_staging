@@ -1,0 +1,1716 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TripJam — Itinerary Story Mode</title>
+    <style>
+      /* DM Serif Display inlined so this file needs no network for type (artifact-safe) */
+      @font-face {
+        font-family: "DM Serif Display";
+        font-style: normal;
+        font-weight: 400;
+        src: url(data:font/woff2;base64,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)
+          format("woff2");
+      }
+
+      /* ---- TripJam tokens (theme.js) ---- */
+      :root {
+        --ink: #0f1923;
+        --dusk: #1e2d3d;
+        --ocean: #2563a8;
+        --sky: #4a90d9;
+        --sand: #f0e6d3;
+        --warm: #faf6f0;
+        --page: #f5f0e8;
+        --terra: #c4622d;
+        --gold: #d4a847;
+        --moss: #3d7a5c;
+        --mist: #587284;
+        --mist-dark: #8ba5bb;
+        --chalk: #ffffff;
+        --border: #e2ddd5;
+        --display: "DM Serif Display", Georgia, serif;
+        --body: Georgia, serif;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        font-family: var(--body);
+        background: var(--page);
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+      }
+      img {
+        max-width: 100%;
+        display: block;
+      }
+      a {
+        color: inherit;
+      }
+
+      /* ================= Top bar: wordmark + Story|Plan toggle ================= */
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 16px;
+        background: rgba(245, 240, 232, 0.88);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border-bottom: 1px solid rgba(226, 221, 213, 0.7);
+      }
+      .wordmark {
+        font-family: var(--display);
+        font-size: 18px;
+        letter-spacing: 0.2px;
+      }
+      .wordmark span {
+        color: var(--ocean);
+      }
+
+      .mode-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        background: var(--sand);
+        border-radius: 9999px;
+        padding: 3px;
+      }
+      .mode-toggle button {
+        font-family: var(--body);
+        font-size: 12px;
+        letter-spacing: 0.6px;
+        border: 0;
+        background: transparent;
+        color: var(--mist);
+        padding: 6px 16px;
+        border-radius: 9999px;
+        cursor: pointer;
+        transition:
+          background 0.15s ease,
+          color 0.15s ease;
+      }
+      .mode-toggle button[aria-pressed="true"] {
+        background: var(--ink);
+        color: var(--warm);
+        box-shadow: 0 1px 3px rgba(15, 25, 35, 0.2);
+      }
+      .mode-toggle button:focus-visible {
+        outline: 2px solid var(--ocean);
+        outline-offset: 2px;
+      }
+
+      /* ================= Trip cover / masthead ================= */
+      .masthead {
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 52px 24px 34px;
+        text-align: center;
+      }
+      .eyebrow {
+        font-family: var(--body);
+        font-size: 11px;
+        letter-spacing: 2.2px;
+        text-transform: uppercase;
+        color: var(--mist);
+      }
+      .masthead .eyebrow::before,
+      .masthead .eyebrow::after {
+        content: " ✦ ";
+        color: var(--gold);
+        letter-spacing: 0;
+      }
+      .masthead h1 {
+        font-family: var(--display);
+        font-size: clamp(38px, 9vw, 56px);
+        line-height: 1.05;
+        margin: 10px 0 12px;
+        text-wrap: balance;
+      }
+      .masthead .route {
+        font-size: 14px;
+        font-style: italic;
+        color: var(--mist);
+        line-height: 1.5;
+      }
+      .masthead .rule {
+        width: 54px;
+        height: 2px;
+        background: var(--gold);
+        margin: 22px auto 0;
+      }
+
+      /* ================= Day chapter ================= */
+      .day {
+        margin: 0 0 8px;
+      }
+
+      /* --- Hero --- */
+      .hero {
+        position: relative;
+        height: 68vh;
+        min-height: 420px;
+        max-height: 600px;
+        overflow: hidden;
+        background: var(--dusk);
+      }
+      .hero img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .hero .scrim {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          180deg,
+          rgba(15, 25, 35, 0.28) 0%,
+          rgba(15, 25, 35, 0) 30%,
+          rgba(15, 25, 35, 0) 45%,
+          rgba(15, 25, 35, 0.62) 82%,
+          rgba(15, 25, 35, 0.78) 100%
+        );
+      }
+      .hero .hero-text {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 0 24px 34px;
+      }
+      .hero .eyebrow {
+        color: rgba(255, 255, 255, 0.85);
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+      }
+      .hero h2 {
+        font-family: var(--display);
+        font-weight: 400;
+        font-size: clamp(34px, 8.5vw, 52px);
+        line-height: 1.06;
+        color: var(--chalk);
+        margin-top: 8px;
+        text-wrap: balance;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+        max-width: 14ch;
+      }
+
+      /* --- Hero gallery: swipe through the day's photos --- */
+      .gallery {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        overflow-x: auto;
+        scroll-snap-type: x mandatory;
+        scrollbar-width: none;
+      }
+      .gallery::-webkit-scrollbar {
+        display: none;
+      }
+      .gallery .slide {
+        flex: 0 0 100%;
+        scroll-snap-align: start;
+        scroll-snap-stop: always;
+      }
+      .gallery .slide img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .hero {
+        scroll-margin-top: 64px;
+      }
+      /* overlays always stack above gallery slides (slides use z-index 1–2) */
+      .hero .gallery {
+        z-index: 1;
+      }
+      .hero .scrim {
+        z-index: 3;
+      }
+      .hero .hero-text {
+        z-index: 4;
+      }
+      .hero .chip,
+      .hero .gal-arrow {
+        z-index: 5;
+      }
+      .hero .scrim,
+      .hero .hero-text {
+        pointer-events: none;
+      }
+      .hero .hero-text a,
+      .hero .hero-text button {
+        pointer-events: auto;
+      }
+      .chip-caption {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        pointer-events: none;
+        font-variant-numeric: tabular-nums;
+      }
+      .gal-arrow {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 36px;
+        height: 36px;
+        justify-content: center;
+        padding: 0;
+        font-size: 18px;
+        font-family: var(--body);
+        display: none;
+      }
+      .gal-prev {
+        left: 14px;
+      }
+      .gal-next {
+        right: 14px;
+      }
+      @media (min-width: 1024px) {
+        .gal-arrow {
+          display: inline-flex;
+        }
+      }
+      .stop[data-slide] {
+        cursor: pointer;
+      }
+      .stop[data-slide]:hover .title,
+      .stop.active .title {
+        color: var(--ocean);
+      }
+      .stop.active .time::before {
+        box-shadow: 0 0 0 3px rgba(37, 99, 168, 0.16);
+      }
+
+      /* frosted chips on photo (Magazine.jsx glass language) */
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--body);
+        font-size: 11.5px;
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.68);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 0;
+        border-radius: 9999px;
+        padding: 7px 13px;
+        cursor: pointer;
+        text-decoration: none;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+      }
+      .hero .chip-share {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+      }
+      .hero .chip-info {
+        position: absolute;
+        right: 14px;
+        bottom: 14px;
+        width: 26px;
+        height: 26px;
+        justify-content: center;
+        padding: 0;
+        font-size: 13px;
+        font-style: italic;
+        font-family: var(--display);
+        color: var(--dusk);
+        opacity: 0.85;
+      }
+
+      /* --- Paper sheet with folio numeral --- */
+      .sheet {
+        position: relative;
+        background: var(--warm);
+        max-width: 640px;
+        margin: -26px auto 0;
+        border-radius: 18px 18px 0 0;
+        padding: 34px 26px 10px;
+        box-shadow: 0 -8px 30px rgba(15, 25, 35, 0.1);
+      }
+      .folio {
+        position: absolute;
+        top: -44px;
+        right: 22px;
+        font-family: var(--display);
+        font-size: 96px;
+        line-height: 1;
+        color: var(--warm);
+        text-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+        user-select: none;
+      }
+      .folio small {
+        display: block;
+        font-family: var(--body);
+        font-size: 10px;
+        letter-spacing: 2.4px;
+        text-transform: uppercase;
+        text-align: right;
+        color: rgba(255, 255, 255, 0.8);
+        margin-bottom: -6px;
+      }
+
+      /* --- Narrative --- */
+      .narrative {
+        font-size: 16.5px;
+        line-height: 1.75;
+        font-style: italic;
+        color: var(--dusk);
+        max-width: 58ch;
+      }
+      .narrative::first-letter {
+        font-family: var(--display);
+        font-style: normal;
+        font-size: 54px;
+        float: left;
+        line-height: 0.85;
+        padding: 6px 10px 0 0;
+        color: var(--ocean);
+      }
+
+      /* --- Timeline (contact-sheet rows: thumb + gloss) --- */
+      .timeline {
+        margin-top: 26px;
+      }
+      .stop {
+        display: grid;
+        grid-template-columns: 64px 1fr auto;
+        gap: 3px 14px;
+        align-items: start;
+        padding: 14px 0;
+        border-top: 1px solid var(--sand);
+      }
+      .stop .thumb,
+      .stop .thumb-f {
+        width: 64px;
+        height: 64px;
+        border-radius: 10px;
+        grid-row: 1 / span 3;
+        grid-column: 1;
+        object-fit: cover;
+      }
+      .stop .thumb-f {
+        background: var(--sand);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: var(--display);
+        font-size: 24px;
+        color: var(--mist-dark);
+      }
+      .stop .time {
+        grid-column: 2;
+        margin-top: 3px;
+        font-size: 11px;
+        letter-spacing: 1.4px;
+        color: var(--mist);
+        font-variant-numeric: tabular-nums;
+        position: relative;
+        padding-left: 12px;
+      }
+      .stop .time::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--ocean);
+      }
+      .stop.food .time::before {
+        background: var(--terra);
+      }
+      .stop.hotel .time::before {
+        background: var(--gold);
+      }
+      .stop .title {
+        grid-column: 2 / 4;
+        font-family: var(--display);
+        font-size: 18px;
+        line-height: 1.25;
+      }
+      .stop .dur {
+        grid-column: 3;
+        margin-top: 3px;
+        font-size: 11px;
+        color: var(--mist-dark);
+        letter-spacing: 0.6px;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      .stop .gloss {
+        grid-column: 2 / 4;
+        font-size: 13px;
+        font-style: italic;
+        color: var(--mist);
+        line-height: 1.55;
+        max-width: 52ch;
+      }
+
+      .interlude {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 13px 0;
+        border-top: 1px solid var(--sand);
+        font-size: 12.5px;
+        color: var(--mist);
+        letter-spacing: 0.3px;
+      }
+      .interlude::before {
+        content: "→";
+        color: var(--gold);
+        font-size: 15px;
+      }
+      .interlude em {
+        font-style: normal;
+        color: var(--dusk);
+      }
+      .interlude .fare {
+        margin-left: auto;
+        color: var(--mist-dark);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* --- Day footer --- */
+      .dayfoot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-top: 1px solid var(--sand);
+        margin-top: 4px;
+        padding: 16px 0 24px;
+      }
+      .dayfoot a {
+        font-size: 13px;
+        color: var(--ocean);
+        text-decoration: none;
+      }
+      .dayfoot a:hover {
+        text-decoration: underline;
+      }
+      .dayfoot .chip {
+        background: var(--sand);
+        box-shadow: none;
+        color: var(--dusk);
+      }
+
+      /* ================= No-photo editorial cover ================= */
+      .hero.editorial {
+        background:
+          radial-gradient(
+            120% 90% at 15% 0%,
+            rgba(74, 144, 217, 0.14) 0%,
+            rgba(74, 144, 217, 0) 55%
+          ),
+          linear-gradient(160deg, var(--dusk) 0%, var(--ink) 78%);
+        height: 52vh;
+        min-height: 360px;
+        max-height: 480px;
+      }
+      .hero.editorial .ghost {
+        position: absolute;
+        top: 50%;
+        right: -12px;
+        transform: translateY(-58%);
+        font-family: var(--display);
+        font-size: clamp(220px, 55vw, 330px);
+        line-height: 1;
+        color: transparent;
+        -webkit-text-stroke: 1.5px rgba(139, 165, 187, 0.28);
+        user-select: none;
+      }
+      .hero.editorial .hero-text {
+        padding-bottom: 40px;
+      }
+      .hero.editorial .eyebrow {
+        color: var(--mist-dark);
+        text-shadow: none;
+      }
+      .hero.editorial h2 {
+        text-shadow: none;
+      }
+      .hero.editorial .goldrule {
+        width: 44px;
+        height: 2px;
+        background: var(--gold);
+        margin-top: 16px;
+      }
+
+      /* ================= Spec annotations (mockup only) ================= */
+      .spec {
+        max-width: 640px;
+        margin: 26px auto;
+        padding: 10px 16px;
+        border: 1px dashed var(--border);
+        border-radius: 10px;
+        font-size: 11px;
+        letter-spacing: 1.2px;
+        text-transform: uppercase;
+        color: var(--mist-dark);
+        text-align: center;
+        background: rgba(255, 255, 255, 0.4);
+      }
+
+      /* ================= Ending stub ================= */
+      .ending {
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 44px 24px 80px;
+        text-align: center;
+      }
+      .ending .rule {
+        width: 54px;
+        height: 2px;
+        background: var(--gold);
+        margin: 0 auto 20px;
+      }
+      .ending p {
+        font-style: italic;
+        color: var(--mist);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      .ending a {
+        color: var(--ocean);
+      }
+
+      /* ================= Desktop ≥ 1024: magazine spreads ================= */
+      @media (min-width: 1024px) {
+        .masthead {
+          padding-top: 72px;
+          max-width: 760px;
+        }
+
+        .day {
+          max-width: 1180px;
+          margin: 0 auto 64px;
+          padding: 0 40px;
+        }
+
+        .spread {
+          display: grid;
+          grid-template-columns: 7fr 5fr;
+          gap: 0;
+          background: var(--warm);
+          border-radius: 20px;
+          overflow: hidden;
+          box-shadow: 0 8px 30px rgba(15, 25, 35, 0.12);
+        }
+        .day.flip .spread {
+          grid-template-columns: 5fr 7fr;
+        }
+        .day.flip .hero {
+          order: 2;
+        }
+        .day.flip .sheet {
+          order: 1;
+        }
+
+        .hero {
+          height: auto;
+          min-height: 620px;
+          max-height: none;
+        }
+        .hero h2 {
+          font-size: 46px;
+        }
+        .hero .hero-text {
+          padding: 0 34px 38px;
+        }
+
+        .sheet {
+          margin: 0;
+          border-radius: 0;
+          box-shadow: none;
+          padding: 46px 44px 18px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
+        /* On desktop the folio joins the column flow (no overlap with narrative) */
+        .folio {
+          position: static;
+          order: -1;
+          align-self: flex-end;
+          font-size: 64px;
+          color: var(--sand);
+          text-shadow: none;
+          text-align: right;
+          margin-bottom: 14px;
+        }
+        .folio small {
+          color: var(--mist-dark);
+        }
+        .day.flip .folio {
+          align-self: flex-start;
+          text-align: left;
+        }
+
+        .hero.editorial {
+          height: auto;
+          min-height: 560px;
+          max-height: none;
+        }
+        .hero.editorial .ghost {
+          right: 8px;
+        }
+
+        .ending {
+          padding-bottom: 120px;
+        }
+      }
+
+      /* ================= Variant B: vertical scroll-sync (scrollytelling) ================= */
+      body.scrolly .gallery {
+        overflow: hidden;
+      }
+      /* photos slip in like a turned page: incoming sheet slides over the previous one */
+      body.scrolly .gallery .slide {
+        position: absolute;
+        inset: 0;
+        visibility: hidden;
+        transform: translateY(103%);
+        transition: transform 0.55s cubic-bezier(0.22, 0.61, 0.36, 1);
+        box-shadow: 0 -12px 30px rgba(15, 25, 35, 0.25);
+      }
+      body.scrolly .gallery .slide.prev {
+        visibility: visible;
+        transform: none;
+        transition: none;
+        z-index: 1;
+      }
+      body.scrolly .gallery .slide.on {
+        visibility: visible;
+        transform: none;
+        z-index: 2;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        body.scrolly .gallery .slide {
+          transition: none;
+        }
+      }
+      body.scrolly .gal-arrow {
+        display: none;
+      }
+
+      /* focus deck: the activity in the scroll's focus band takes the spotlight */
+      body.scrolly .spread:has(.gallery) .timeline .stop {
+        opacity: 0.28;
+        filter: saturate(0.35);
+        transform: scale(0.96);
+        transform-origin: left center;
+        transition:
+          opacity 0.32s ease,
+          transform 0.32s ease,
+          filter 0.32s ease;
+      }
+      body.scrolly .spread:has(.gallery) .timeline .stop.active {
+        opacity: 1;
+        filter: none;
+        transform: scale(1.015);
+      }
+      body.scrolly .spread:has(.gallery) .timeline .stop.active .title {
+        color: var(--ocean);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        body.scrolly .spread:has(.gallery) .timeline .stop {
+          transition: none;
+          transform: none;
+        }
+      }
+
+      @media (max-width: 1023px) {
+        /* photo pins as a band on top; the timeline slides underneath it */
+        body.scrolly .hero:not(.editorial) {
+          position: sticky;
+          top: 50px;
+          z-index: 2;
+          height: 38vh;
+          min-height: 280px;
+          max-height: 380px;
+          border-radius: 0 0 18px 18px;
+          box-shadow: 0 10px 26px rgba(15, 25, 35, 0.22);
+        }
+        body.scrolly .hero:not(.editorial) .hero-text {
+          padding-bottom: 20px;
+        }
+        body.scrolly .hero:not(.editorial) h2 {
+          font-size: 27px;
+        }
+        body.scrolly .sheet {
+          position: relative;
+          z-index: 1;
+          margin-top: 0;
+          border-radius: 0;
+          box-shadow: none;
+        }
+        body.scrolly .folio {
+          display: none;
+        }
+      }
+      @media (min-width: 1024px) {
+        body.scrolly .spread {
+          overflow: visible;
+          align-items: start;
+        }
+        body.scrolly .spread .hero {
+          position: sticky;
+          top: 76px;
+          height: calc(100vh - 100px);
+          min-height: 480px;
+          border-radius: 20px;
+          overflow: hidden;
+        }
+        body.scrolly .spread .hero:not(.editorial) {
+          max-height: none;
+        }
+        body.scrolly .spread .sheet {
+          border-radius: 20px;
+        }
+      }
+
+      .variant-toggle {
+        display: inline-flex;
+        gap: 6px;
+        margin-left: 10px;
+        vertical-align: middle;
+      }
+      .vbtn {
+        font-family: var(--body);
+        font-size: 10.5px;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--mist);
+        border-radius: 9999px;
+        padding: 4px 12px;
+        cursor: pointer;
+        transition:
+          background 0.15s ease,
+          color 0.15s ease;
+      }
+      .vbtn[aria-pressed="true"] {
+        background: var(--dusk);
+        border-color: var(--dusk);
+        color: var(--warm);
+      }
+      .vbtn:focus-visible {
+        outline: 2px solid var(--ocean);
+        outline-offset: 2px;
+      }
+
+      /* ================= Plan mode (today's timeline, for toggle demo) ================= */
+      .plan-wrap {
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 18px 16px 90px;
+      }
+      .plan-trip-head {
+        padding: 16px 4px 14px;
+      }
+      .plan-trip-head h1 {
+        font-family: var(--display);
+        font-size: 24px;
+      }
+      .plan-trip-head .sub {
+        font-size: 12.5px;
+        color: var(--mist);
+        margin-top: 3px;
+      }
+      .plan-day {
+        background: #ffffff;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-bottom: 12px;
+        box-shadow: 0 1px 3px rgba(15, 25, 35, 0.06);
+      }
+      .plan-day-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .plan-day-pill {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        color: var(--ocean);
+        background: #ebf3fd;
+        border-radius: 9999px;
+        padding: 3px 10px;
+        white-space: nowrap;
+      }
+      .plan-day-city {
+        font-family: var(--display);
+        font-size: 16px;
+      }
+      .plan-day-date {
+        font-size: 11.5px;
+        color: var(--mist-dark);
+        margin-left: auto;
+        white-space: nowrap;
+      }
+      .plan-day-head .chev {
+        color: var(--mist-dark);
+        font-size: 11px;
+      }
+      .plan-compact-line {
+        font-size: 13px;
+        color: var(--mist);
+        line-height: 1.7;
+        margin-top: 8px;
+      }
+      .plan-compact-line b {
+        color: var(--dusk);
+        font-weight: 400;
+      }
+      .plan-tip {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        font-size: 12px;
+        color: #7b5ea7;
+        background: #f5f0fa;
+        border-radius: 10px;
+        padding: 8px 12px;
+        margin-top: 12px;
+        line-height: 1.5;
+      }
+      .prow {
+        display: flex;
+        align-items: flex-start;
+        gap: 11px;
+        padding: 12px 0 2px;
+        margin-top: 10px;
+        border-top: 1px solid var(--sand);
+      }
+      .picon {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        background: #ebf3fd;
+      }
+      .prow.food .picon {
+        background: #fff4e8;
+      }
+      .prow .pbody {
+        flex: 1;
+        min-width: 0;
+      }
+      .prow .pmeta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11.5px;
+        color: var(--mist);
+      }
+      .prow .ptype {
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.9px;
+        color: var(--ocean);
+        background: #ebf3fd;
+        padding: 2px 8px;
+        border-radius: 9999px;
+      }
+      .prow.food .ptype {
+        color: var(--terra);
+        background: #fff4e8;
+      }
+      .prow .ptitle {
+        font-family: var(--display);
+        font-size: 16.5px;
+        line-height: 1.25;
+        margin: 3px 0 2px;
+      }
+      .prow .pnote {
+        font-size: 12px;
+        font-style: italic;
+        color: var(--mist);
+        line-height: 1.5;
+      }
+      .prow .pdots {
+        color: var(--mist-dark);
+        font-size: 16px;
+        padding: 2px 6px;
+        cursor: pointer;
+      }
+      .ptrans {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin: 10px 0 0 47px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--moss);
+        background: #e8f5ee;
+        border-radius: 9999px;
+        padding: 4px 11px;
+      }
+      .view-hidden {
+        display: none !important;
+      }
+
+      /* ================= Motion ================= */
+      @media (prefers-reduced-motion: no-preference) {
+        .day,
+        .masthead {
+          animation: rise 0.6s ease both;
+        }
+        @keyframes rise {
+          from {
+            opacity: 0;
+            transform: translateY(14px);
+          }
+          to {
+            opacity: 1;
+            transform: none;
+          }
+        }
+      }
+    </style>
+  </head>
+  <body class="scrolly">
+    <header class="topbar">
+      <div class="wordmark">Trip<span>Jam</span></div>
+      <div class="mode-toggle" role="group" aria-label="Itinerary view mode">
+        <button id="btn-story" aria-pressed="true">✦ Story</button>
+        <button id="btn-plan" aria-pressed="false">Plan</button>
+      </div>
+    </header>
+
+    <div id="storyView">
+      <section class="masthead">
+        <div class="eyebrow">The Story · Oct 12 – 19, 2026</div>
+        <h1>Autumn in Japan</h1>
+        <div class="route">
+          Kyoto · Kanazawa · Tokyo — eight days, three cities,<br />one very
+          fast train.
+        </div>
+        <div class="rule"></div>
+      </section>
+
+      <div class="spec">
+        Photo browsing variant:
+        <span class="variant-toggle">
+          <button class="vbtn" data-variant="swipe" aria-pressed="false">
+            ⟷ Swipe gallery
+          </button>
+          <button class="vbtn" data-variant="scrolly" aria-pressed="true">
+            ↕ Scroll-synced
+          </button>
+        </span>
+      </div>
+
+      <!-- ================= DAY 3 — photo hero ================= -->
+      <article class="day">
+        <div class="spread">
+          <div class="hero">
+            <div
+              class="gallery"
+              data-caps='["Fushimi Inari Taisha","Nishiki Market","Kinkaku-ji","Arashiyama Bamboo Grove","Pontocho"]'
+              data-links='["https://commons.wikimedia.org/wiki/File:Torii_path_with_lantern_at_Fushimi_Inari_Taisha_Shrine,_Kyoto,_Japan.jpg","https://commons.wikimedia.org/wiki/File:Nishiki_Ichiba_by_matsuyuki.jpg","https://commons.wikimedia.org/wiki/File:Golden_Pavilion_Kinkaku-ji_water_mirror_2024.jpg","https://commons.wikimedia.org/wiki/File:Arashiyama,_Part_II_-_Arashiyama7534.jpg","https://commons.wikimedia.org/wiki/File:Pontocho_by_Wolfiewolf_in_Nabeyacho,_Kyoto.jpg"]'
+            >
+              <div class="slide">
+                <img
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/Torii_path_with_lantern_at_Fushimi_Inari_Taisha_Shrine%2C_Kyoto%2C_Japan.jpg/1280px-Torii_path_with_lantern_at_Fushimi_Inari_Taisha_Shrine%2C_Kyoto%2C_Japan.jpg"
+                  alt="Torii gate path at Fushimi Inari Taisha, Kyoto"
+                />
+              </div>
+              <div class="slide">
+                <img
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/Nishiki_Ichiba_by_matsuyuki.jpg/1280px-Nishiki_Ichiba_by_matsuyuki.jpg"
+                  alt="Covered arcade of Nishiki Market, Kyoto"
+                  loading="lazy"
+                />
+              </div>
+              <div class="slide">
+                <img
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/0f/Golden_Pavilion_Kinkaku-ji_water_mirror_2024.jpg/1280px-Golden_Pavilion_Kinkaku-ji_water_mirror_2024.jpg"
+                  alt="Kinkaku-ji reflected in its pond"
+                  loading="lazy"
+                />
+              </div>
+              <div class="slide">
+                <img
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Arashiyama%2C_Part_II_-_Arashiyama7534.jpg/1280px-Arashiyama%2C_Part_II_-_Arashiyama7534.jpg"
+                  alt="Arashiyama bamboo grove path"
+                  loading="lazy"
+                />
+              </div>
+              <div class="slide">
+                <img
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/6/68/Pontocho_by_Wolfiewolf_in_Nabeyacho%2C_Kyoto.jpg/1280px-Pontocho_by_Wolfiewolf_in_Nabeyacho%2C_Kyoto.jpg"
+                  alt="Lantern-lit Pontocho alley at night"
+                  loading="lazy"
+                />
+              </div>
+            </div>
+            <div class="scrim"></div>
+            <span class="chip chip-caption">1 / 5 · Fushimi Inari Taisha</span>
+            <button class="chip chip-share" title="Share this day">
+              ↗&nbsp; Share day
+            </button>
+            <button class="chip gal-arrow gal-prev" aria-label="Previous photo">
+              ‹
+            </button>
+            <button class="chip gal-arrow gal-next" aria-label="Next photo">
+              ›
+            </button>
+            <a
+              class="chip chip-info"
+              href="https://commons.wikimedia.org/wiki/File:Torii_path_with_lantern_at_Fushimi_Inari_Taisha_Shrine,_Kyoto,_Japan.jpg"
+              title="Photo credit — Wikimedia Commons"
+              target="_blank"
+              rel="noreferrer"
+              >i</a
+            >
+            <div class="hero-text">
+              <div class="eyebrow">Day 3 · Kyoto · Tue 14 Oct</div>
+              <h2>Vermilion at Dawn</h2>
+            </div>
+          </div>
+          <div class="sheet">
+            <div class="folio"><small>Day</small>03</div>
+            <p class="narrative">
+              Kyoto keeps its promises early. Climb through ten thousand torii
+              gates before the city wakes, drift north to a pavilion sheathed in
+              gold, and let evening carry you into the lantern-lit lanes of
+              Pontocho, where dinner is decided by whoever is behind the
+              counter.
+            </p>
+            <div class="timeline">
+              <div class="stop" data-slide="0">
+                <img
+                  class="thumb"
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/Torii_path_with_lantern_at_Fushimi_Inari_Taisha_Shrine%2C_Kyoto%2C_Japan.jpg/500px-Torii_path_with_lantern_at_Fushimi_Inari_Taisha_Shrine%2C_Kyoto%2C_Japan.jpg"
+                  alt=""
+                />
+                <div class="time">07:30</div>
+                <div class="dur">2 h</div>
+                <div class="title">Fushimi Inari Taisha</div>
+                <div class="gloss">
+                  A mountain path threaded through thousands of vermilion gates.
+                </div>
+              </div>
+              <div class="stop food" data-slide="1">
+                <img
+                  class="thumb"
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/Nishiki_Ichiba_by_matsuyuki.jpg/500px-Nishiki_Ichiba_by_matsuyuki.jpg"
+                  alt=""
+                />
+                <div class="time">10:30</div>
+                <div class="dur">1 h 30 m</div>
+                <div class="title">Nishiki Market</div>
+                <div class="gloss">
+                  Kyoto's 400-year-old kitchen — five covered blocks of food
+                  stalls.
+                </div>
+              </div>
+              <div class="stop" data-slide="2">
+                <img
+                  class="thumb"
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/0f/Golden_Pavilion_Kinkaku-ji_water_mirror_2024.jpg/500px-Golden_Pavilion_Kinkaku-ji_water_mirror_2024.jpg"
+                  alt=""
+                />
+                <div class="time">13:00</div>
+                <div class="dur">1 h 15 m</div>
+                <div class="title">Kinkaku-ji, the Golden Pavilion</div>
+                <div class="gloss">
+                  A Zen pavilion sheathed in gold leaf, doubled in its mirror
+                  pond.
+                </div>
+              </div>
+              <div class="interlude">
+                <em>Randen tram</em> to Arashiyama · 22 min
+                <span class="fare">¥250</span>
+              </div>
+              <div class="stop" data-slide="3">
+                <img
+                  class="thumb"
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Arashiyama%2C_Part_II_-_Arashiyama7534.jpg/500px-Arashiyama%2C_Part_II_-_Arashiyama7534.jpg"
+                  alt=""
+                />
+                <div class="time">15:30</div>
+                <div class="dur">1 h 30 m</div>
+                <div class="title">Arashiyama Bamboo Grove</div>
+                <div class="gloss">
+                  Green light and towering bamboo on the city's western edge.
+                </div>
+              </div>
+              <div class="stop food" data-slide="4">
+                <img
+                  class="thumb"
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/6/68/Pontocho_by_Wolfiewolf_in_Nabeyacho%2C_Kyoto.jpg/500px-Pontocho_by_Wolfiewolf_in_Nabeyacho%2C_Kyoto.jpg"
+                  alt=""
+                />
+                <div class="time">19:00</div>
+                <div class="dur">2 h</div>
+                <div class="title">Counter dinner in Pontocho</div>
+                <div class="gloss">
+                  A lantern-lit alley of tiny restaurants, one paper door after
+                  another.
+                </div>
+              </div>
+            </div>
+            <div class="dayfoot">
+              <a href="#" class="to-plan">Open this day in Plan →</a>
+              <button class="chip">↗&nbsp; Share day</button>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <div class="spec">
+        Day without a usable photo — editorial cover, first-class variant
+      </div>
+
+      <!-- ================= DAY 4 — editorial no-photo cover ================= -->
+      <article class="day flip">
+        <div class="spread">
+          <div class="hero editorial">
+            <div class="ghost">04</div>
+            <button class="chip chip-share" title="Share this day">
+              ↗&nbsp; Share day
+            </button>
+            <div class="hero-text">
+              <div class="eyebrow">Day 4 · Kanazawa · Wed 15 Oct</div>
+              <h2 style="color: var(--warm)">The Quiet Coast</h2>
+              <div class="goldrule"></div>
+            </div>
+          </div>
+          <div class="sheet">
+            <div class="folio"><small>Day</small>04</div>
+            <p class="narrative">
+              A travel day that doesn't feel like one. The Thunderbird hums
+              north through rice country to a town of samurai lanes and gold
+              leaf, where the market serves breakfast over rice and the garden
+              has been rehearsing for four hundred years.
+            </p>
+            <div class="timeline">
+              <div class="interlude">
+                <em>Limited Express Thunderbird</em> · Kyoto → Kanazawa · 2 h 15
+                m <span class="fare">¥7,790</span>
+              </div>
+              <div class="stop food">
+                <div class="thumb-f">O</div>
+                <div class="time">11:00</div>
+                <div class="dur">1 h</div>
+                <div class="title">Omicho Market</div>
+                <div class="gloss">
+                  Kanazawa's covered seafood market, feeding the town since
+                  1721.
+                </div>
+              </div>
+              <div class="stop">
+                <img
+                  class="thumb"
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/31/Stone_lantern_Kenrokuen.jpg/500px-Stone_lantern_Kenrokuen.jpg"
+                  alt=""
+                />
+                <div class="time">13:00</div>
+                <div class="dur">2 h</div>
+                <div class="title">Kenroku-en Garden</div>
+                <div class="gloss">
+                  One of Japan's three perfect gardens, four centuries in the
+                  tending.
+                </div>
+              </div>
+              <div class="stop">
+                <div class="thumb-f">H</div>
+                <div class="time">16:00</div>
+                <div class="dur">1 h 30 m</div>
+                <div class="title">Higashi Chaya District</div>
+                <div class="gloss">
+                  Preserved geisha teahouse lanes, latticed wood and gold leaf.
+                </div>
+              </div>
+              <div class="stop food">
+                <div class="thumb-f">I</div>
+                <div class="time">19:30</div>
+                <div class="dur">2 h</div>
+                <div class="title">Izakaya in Katamachi</div>
+                <div class="gloss">
+                  Smoky counters, Ishikawa sake, and blackthroat perch off the
+                  grill.
+                </div>
+              </div>
+            </div>
+            <div class="dayfoot">
+              <a href="#" class="to-plan">Open this day in Plan →</a>
+              <button class="chip">↗&nbsp; Share day</button>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <div class="spec">
+        Desktop alternates photo side per day · mobile stacks hero → sheet
+      </div>
+
+      <!-- ================= DAY 5 — photo hero, flipped on desktop ================= -->
+      <article class="day">
+        <div class="spread">
+          <div class="hero">
+            <div
+              class="gallery"
+              data-caps='["Sensō-ji","Shibuya Crossing"]'
+              data-links='["https://commons.wikimedia.org/wiki/File:Sensoji_2023.jpg","https://commons.wikimedia.org/wiki/File:Shibuya_Crossing,_Aerial.jpg"]'
+            >
+              <div class="slide">
+                <img
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/Sensoji_2023.jpg/1280px-Sensoji_2023.jpg"
+                  alt="Sensō-ji temple gate at dusk, Tokyo"
+                />
+              </div>
+              <div class="slide">
+                <img
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/Shibuya_Crossing%2C_Aerial.jpg/1280px-Shibuya_Crossing%2C_Aerial.jpg"
+                  alt="Aerial view of Shibuya Crossing"
+                  loading="lazy"
+                />
+              </div>
+            </div>
+            <div class="scrim"></div>
+            <span class="chip chip-caption">1 / 2 · Sensō-ji</span>
+            <button class="chip chip-share" title="Share this day">
+              ↗&nbsp; Share day
+            </button>
+            <button class="chip gal-arrow gal-prev" aria-label="Previous photo">
+              ‹
+            </button>
+            <button class="chip gal-arrow gal-next" aria-label="Next photo">
+              ›
+            </button>
+            <a
+              class="chip chip-info"
+              href="https://commons.wikimedia.org/wiki/File:Sensoji_2023.jpg"
+              title="Photo credit — Wikimedia Commons"
+              target="_blank"
+              rel="noreferrer"
+              >i</a
+            >
+            <div class="hero-text">
+              <div class="eyebrow">Day 5 · Tokyo · Thu 16 Oct</div>
+              <h2>Neon &amp; Incense</h2>
+            </div>
+          </div>
+          <div class="sheet">
+            <div class="folio"><small>Day</small>05</div>
+            <p class="narrative">
+              Tokyo doesn't ease you in, and you shouldn't want it to. Morning
+              incense at the city's oldest temple, ramen in a backstreet that
+              seats eight, an afternoon inside an artwork, and by blue hour
+              you're one of three thousand people crossing the same street at
+              once.
+            </p>
+            <div class="timeline">
+              <div class="stop" data-slide="0">
+                <img
+                  class="thumb"
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/Sensoji_2023.jpg/500px-Sensoji_2023.jpg"
+                  alt=""
+                />
+                <div class="time">09:00</div>
+                <div class="dur">1 h 30 m</div>
+                <div class="title">Sensō-ji &amp; Nakamise-dori</div>
+                <div class="gloss">
+                  Tokyo's oldest temple, wreathed in incense since the year 645.
+                </div>
+              </div>
+              <div class="stop food">
+                <div class="thumb-f">R</div>
+                <div class="time">11:30</div>
+                <div class="dur">45 m</div>
+                <div class="title">Backstreet ramen, Asakusa</div>
+                <div class="gloss">
+                  Eight seats, one broth, a ticket machine at the door.
+                </div>
+              </div>
+              <div class="interlude">
+                <em>Ginza Line</em> to Toyosu · 28 min
+                <span class="fare">¥210</span>
+              </div>
+              <div class="stop">
+                <div class="thumb-f">T</div>
+                <div class="time">14:00</div>
+                <div class="dur">2 h</div>
+                <div class="title">teamLab Planets</div>
+                <div class="gloss">
+                  An artwork you walk through — barefoot, ankle-deep in light.
+                </div>
+              </div>
+              <div class="stop" data-slide="1">
+                <img
+                  class="thumb"
+                  src="https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/Shibuya_Crossing%2C_Aerial.jpg/500px-Shibuya_Crossing%2C_Aerial.jpg"
+                  alt=""
+                />
+                <div class="time">17:30</div>
+                <div class="dur">1 h</div>
+                <div class="title">Shibuya Crossing at blue hour</div>
+                <div class="gloss">
+                  Three thousand people, one green light, perfect choreography.
+                </div>
+              </div>
+              <div class="stop food">
+                <div class="thumb-f">Y</div>
+                <div class="time">20:00</div>
+                <div class="dur">2 h</div>
+                <div class="title">Yakitori under the Yurakucho tracks</div>
+                <div class="gloss">
+                  Charcoal smoke and cold beer under the rattle of passing
+                  trains.
+                </div>
+              </div>
+            </div>
+            <div class="dayfoot">
+              <a href="#" class="to-plan">Open this day in Plan →</a>
+              <button class="chip">↗&nbsp; Share day</button>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <footer class="ending">
+        <div class="rule"></div>
+        <p>
+          Days 6 – 8 continue the story…<br />
+          Switch to <a href="#" class="to-plan">Plan</a> anytime to edit times,
+          swap activities, or navigate on the ground.
+        </p>
+      </footer>
+    </div>
+    <!-- /storyView -->
+
+    <!-- ================= PLAN MODE (today's timeline — unchanged; all editing lives here) ================= -->
+    <div id="planView" class="view-hidden">
+      <div class="plan-wrap">
+        <div class="spec" style="margin-top: 8px">
+          Plan mode — the existing timeline, unchanged · all editing &amp;
+          collab UI stays here
+        </div>
+        <div class="plan-trip-head">
+          <h1>Autumn in Japan</h1>
+          <div class="sub">Oct 12 – 19, 2026 · Kyoto · Kanazawa · Tokyo</div>
+        </div>
+
+        <!-- Day 3 — expanded, full detail -->
+        <div class="plan-day">
+          <div class="plan-day-head">
+            <span class="plan-day-pill">Day 3</span>
+            <span class="plan-day-city">Kyoto</span>
+            <span class="plan-day-date">Tue 14 Oct · 5 activities</span>
+            <span class="chev">▲</span>
+          </div>
+          <div class="plan-tip">
+            🚇
+            <span
+              >Get an ICOCA card · Keihan Line to Fushimi Inari · buses ¥230
+              flat</span
+            >
+          </div>
+
+          <div class="prow">
+            <div class="picon">⛩️</div>
+            <div class="pbody">
+              <div class="pmeta">
+                <b>07:30</b> <span class="ptype">SIGHT</span> <span>⏱ 2 h</span>
+              </div>
+              <div class="ptitle">Fushimi Inari Taisha</div>
+              <div class="pnote">
+                💬 Start before 8 am — upper paths stay empty
+              </div>
+            </div>
+            <div class="pdots">⋯</div>
+          </div>
+          <div class="ptrans">🚶 12 min walk</div>
+
+          <div class="prow food">
+            <div class="picon">🍜</div>
+            <div class="pbody">
+              <div class="pmeta">
+                <b>10:30</b> <span class="ptype">FOOD</span>
+                <span>⏱ 1 h 30 m</span>
+              </div>
+              <div class="ptitle">Nishiki Market</div>
+              <div class="pnote">💬 Tamagoyaki + soy-milk doughnuts</div>
+            </div>
+            <div class="pdots">⋯</div>
+          </div>
+          <div class="ptrans">🚗 18 min drive</div>
+
+          <div class="prow">
+            <div class="picon">🏯</div>
+            <div class="pbody">
+              <div class="pmeta">
+                <b>13:00</b> <span class="ptype">SIGHT</span>
+                <span>⏱ 1 h 15 m</span>
+              </div>
+              <div class="ptitle">Kinkaku-ji, the Golden Pavilion</div>
+              <div class="pnote">💬 Mirror-pond photo from the east bank</div>
+            </div>
+            <div class="pdots">⋯</div>
+          </div>
+          <div class="ptrans">🚊 22 min · Randen tram</div>
+
+          <div class="prow">
+            <div class="picon">🎋</div>
+            <div class="pbody">
+              <div class="pmeta">
+                <b>15:30</b> <span class="ptype">SIGHT</span>
+                <span>⏱ 1 h 30 m</span>
+              </div>
+              <div class="ptitle">Arashiyama Bamboo Grove</div>
+              <div class="pnote">💬 Detour to Okochi Sanso for the view</div>
+            </div>
+            <div class="pdots">⋯</div>
+          </div>
+
+          <div class="prow food">
+            <div class="picon">🍶</div>
+            <div class="pbody">
+              <div class="pmeta">
+                <b>19:00</b> <span class="ptype">FOOD</span> <span>⏱ 2 h</span>
+              </div>
+              <div class="ptitle">Counter dinner in Pontocho</div>
+              <div class="pnote">💬 Omakase — book the 7 pm seating</div>
+            </div>
+            <div class="pdots">⋯</div>
+          </div>
+        </div>
+
+        <!-- Days 4 & 5 — compact cards (app default) -->
+        <div class="plan-day">
+          <div class="plan-day-head">
+            <span class="plan-day-pill">Day 4</span>
+            <span class="plan-day-city">Kanazawa</span>
+            <span class="plan-day-date">Wed 15 Oct</span>
+            <span class="chev">▼</span>
+          </div>
+          <div class="plan-compact-line">
+            🚄 Thunderbird → Kanazawa · <b>Omicho Market</b> →
+            <b>Kenroku-en</b> → <b>Higashi Chaya</b> →
+            <b>Izakaya in Katamachi</b>
+          </div>
+        </div>
+
+        <div class="plan-day">
+          <div class="plan-day-head">
+            <span class="plan-day-pill">Day 5</span>
+            <span class="plan-day-city">Tokyo</span>
+            <span class="plan-day-date">Thu 16 Oct</span>
+            <span class="chev">▼</span>
+          </div>
+          <div class="plan-compact-line">
+            ⛩️ <b>Sensō-ji</b> → 🍜 <b>Backstreet ramen</b> →
+            <b>teamLab Planets</b> → <b>Shibuya Crossing</b> → 🍢
+            <b>Yurakucho yakitori</b>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        var storyBtn = document.getElementById("btn-story");
+        var planBtn = document.getElementById("btn-plan");
+        var storyView = document.getElementById("storyView");
+        var planView = document.getElementById("planView");
+
+        function setMode(mode) {
+          var story = mode === "story";
+          storyView.classList.toggle("view-hidden", !story);
+          planView.classList.toggle("view-hidden", story);
+          storyBtn.setAttribute("aria-pressed", String(story));
+          planBtn.setAttribute("aria-pressed", String(!story));
+          window.scrollTo({
+            top: 0,
+            behavior: "instant" in window ? "instant" : "auto",
+          });
+        }
+
+        storyBtn.addEventListener("click", function () {
+          setMode("story");
+        });
+        planBtn.addEventListener("click", function () {
+          setMode("plan");
+        });
+        Array.prototype.forEach.call(
+          document.querySelectorAll(".to-plan"),
+          function (a) {
+            a.addEventListener("click", function (e) {
+              e.preventDefault();
+              setMode("plan");
+            });
+          },
+        );
+
+        /* --- Hero photo galleries (Variant A: swipe · Variant B: scroll-synced) --- */
+        function isScrolly() {
+          return document.body.classList.contains("scrolly");
+        }
+
+        Array.prototype.forEach.call(
+          document.querySelectorAll(".gallery"),
+          function (gal) {
+            var hero = gal.parentElement;
+            var caps = JSON.parse(gal.getAttribute("data-caps"));
+            var links = JSON.parse(gal.getAttribute("data-links"));
+            var capEl = hero.querySelector(".chip-caption");
+            var infoEl = hero.querySelector(".chip-info");
+            var slides = Array.prototype.slice.call(gal.children);
+            var rows = gal
+              .closest(".spread")
+              .querySelectorAll(".stop[data-slide]");
+            var n = slides.length;
+
+            function apply(i) {
+              i = Math.max(0, Math.min(n - 1, i));
+              var prev = gal._current == null ? i : gal._current;
+              gal._current = i;
+              capEl.textContent = i + 1 + " / " + n + " · " + caps[i];
+              if (infoEl && links[i]) infoEl.href = links[i];
+              Array.prototype.forEach.call(rows, function (r) {
+                r.classList.toggle(
+                  "active",
+                  Number(r.getAttribute("data-slide")) === i,
+                );
+              });
+              if (isScrolly() && prev !== i) {
+                /* page-slip: previous photo stays put, the new one slides over it */
+                slides.forEach(function (s, j) {
+                  s.classList.remove("prev");
+                  if (j !== i) s.classList.remove("on");
+                  if (j === prev) s.classList.add("prev");
+                });
+                var target = slides[i];
+                var dir = i > prev ? 1 : -1;
+                target.style.transition = "none";
+                target.style.transform = "translateY(" + dir * 103 + "%)";
+                void target.offsetHeight; /* flush so the slide starts off-screen */
+                target.style.transition = "";
+                target.style.transform = "";
+                target.classList.add("on");
+              } else {
+                slides.forEach(function (s, j) {
+                  s.classList.toggle("on", j === i);
+                  s.classList.remove("prev");
+                  s.style.transform = "";
+                  s.style.transition = "";
+                });
+              }
+            }
+            gal._apply = apply;
+
+            gal.addEventListener("scroll", function () {
+              if (isScrolly()) return;
+              requestAnimationFrame(function () {
+                apply(Math.round(gal.scrollLeft / gal.clientWidth));
+              });
+            });
+            var prev = hero.querySelector(".gal-prev");
+            var next = hero.querySelector(".gal-next");
+            if (prev)
+              prev.addEventListener("click", function () {
+                gal.scrollBy({ left: -gal.clientWidth, behavior: "smooth" });
+              });
+            if (next)
+              next.addEventListener("click", function () {
+                gal.scrollBy({ left: gal.clientWidth, behavior: "smooth" });
+              });
+            apply(0);
+          },
+        );
+
+        /* Tap an activity row → its photo takes the hero */
+        Array.prototype.forEach.call(
+          document.querySelectorAll(".stop[data-slide]"),
+          function (row) {
+            row.addEventListener("click", function () {
+              var spread = row.closest(".spread");
+              var gal = spread && spread.querySelector(".gallery");
+              if (!gal) return;
+              var i = Number(row.getAttribute("data-slide"));
+              if (isScrolly()) {
+                gal._apply(i);
+                return;
+              }
+              gal.scrollTo({ left: gal.clientWidth * i, behavior: "smooth" });
+              gal.parentElement.scrollIntoView({
+                behavior: "smooth",
+                block: "nearest",
+              });
+            });
+          },
+        );
+
+        /* Variant B: rows crossing the viewport's focus band drive the pinned hero */
+        var observer = new IntersectionObserver(
+          function (entries) {
+            if (!isScrolly()) return;
+            entries.forEach(function (e) {
+              if (!e.isIntersecting) return;
+              var gal = e.target.closest(".spread").querySelector(".gallery");
+              if (gal) gal._apply(Number(e.target.getAttribute("data-slide")));
+            });
+          },
+          { rootMargin: "-35% 0px -55% 0px" },
+        );
+        Array.prototype.forEach.call(
+          document.querySelectorAll(".stop[data-slide]"),
+          function (row) {
+            observer.observe(row);
+          },
+        );
+
+        /* Variant toggle */
+        var vbtns = document.querySelectorAll(".vbtn");
+        Array.prototype.forEach.call(vbtns, function (btn) {
+          btn.addEventListener("click", function () {
+            var scrolly = btn.getAttribute("data-variant") === "scrolly";
+            document.body.classList.toggle("scrolly", scrolly);
+            Array.prototype.forEach.call(vbtns, function (b) {
+              b.setAttribute(
+                "aria-pressed",
+                String(
+                  (b.getAttribute("data-variant") === "scrolly") === scrolly,
+                ),
+              );
+            });
+            Array.prototype.forEach.call(
+              document.querySelectorAll(".gallery"),
+              function (gal) {
+                var i = gal._current || 0;
+                if (!scrolly) gal.scrollTo({ left: gal.clientWidth * i });
+                gal._apply(i);
+              },
+            );
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>

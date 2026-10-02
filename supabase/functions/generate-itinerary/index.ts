@@ -313,7 +313,24 @@ serve(async (req) => {
     let lastDayNote = "";
     if (departureTime) {
       const [h, m] = departureTime.split(":").map(Number);
-      const cutoffMins = h * 60 + m - departureBuffer;
+      // BUG (fixed 2026-10-02): departureBuffer was used as BOTH the journey
+      // time to the port AND the check-in allowance, so the generated transit
+      // landed the traveller at the airport exactly at departure time
+      // ("transit 15:30, duration 150min" for an 18:00 flight). The two are
+      // now separate: be AT the port portArrivalBuffer before departure, and
+      // the journey finishes before that.
+      const portArrivalBuffers: Record<string, number> = {
+        flight: 120,
+        train: 30,
+        bus: 20,
+        road: 0,
+      };
+      const portArrivalBuffer =
+        portArrivalBuffers[departureMode ?? "flight"] ?? 120;
+      const arriveByMins = h * 60 + m - portArrivalBuffer;
+      const arrHH = String(Math.floor(arriveByMins / 60) % 24).padStart(2, "0");
+      const arrMM = String(arriveByMins % 60).padStart(2, "0");
+      const cutoffMins = arriveByMins - departureBuffer;
       const cutHH = String(Math.floor(cutoffMins / 60) % 24).padStart(2, "0");
       const cutMM = String(cutoffMins % 60).padStart(2, "0");
       const depCity = departureCity || destinations[destinations.length - 1];
@@ -324,7 +341,7 @@ serve(async (req) => {
           bus: "bus station",
           road: "",
         }[departureMode ?? "flight"] ?? "";
-      lastDayNote = `LAST DAY CONSTRAINT (ABSOLUTE HARD RULE): ${departureDesc.charAt(0).toUpperCase() + departureDesc.slice(1)} at ${departureTime} from ${depCity}. Every sightseeing/food activity on the last day MUST end by ${cutHH}:${cutMM}. The LAST activity of the last day MUST be a transit activity (type:"transit") to the ${depPort || "departure point"} — e.g. title "Transit to ${depCity}${depPort ? " " + depPort : ""}", time "${cutHH}:${cutMM}", duration "${departureBuffer}min". This departure transit is MANDATORY — the itinerary must end with it. No hotel check-in on the last day.`;
+      lastDayNote = `LAST DAY CONSTRAINT (ABSOLUTE HARD RULE): ${departureDesc.charAt(0).toUpperCase() + departureDesc.slice(1)} at ${departureTime} from ${depCity}. The traveler MUST BE AT the ${depPort || "departure point"} by ${arrHH}:${arrMM} — ${portArrivalBuffer} minutes before departure, non-negotiable. Work backwards from it: the LAST activity of the last day MUST be a transit activity (type:"transit") to the ${depPort || "departure point"} whose start time PLUS its real travel duration is ${arrHH}:${arrMM} or EARLIER. Use the TRUE journey time for that leg (a 2-hour drive is 2 hours — never compress it); if the departure point is in another city the transit may need to start hours earlier, and that is correct. Every sightseeing/food activity must end before that transit starts (around ${cutHH}:${cutMM} for a typical ${departureBuffer}-minute transfer, earlier if the journey is longer). This departure transit is MANDATORY — the itinerary must end with it. No hotel check-in on the last day.`;
     }
 
     const notesNote = notes
@@ -641,19 +658,44 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       // at igModel rates for the whole batch; when the plan model is cheaper,
       // the ~2k plan tokens are slightly overcharged, never undercharged.
       const igPlanModel = Deno.env.get("IG_PLAN_MODEL") || igModel;
+      // Cost lever: the per-day fills are ~85% of IG's tokens, so their model
+      // is selectable independently. Defaults to igModel (no behaviour
+      // change). A/B on 2026-10-02 showed Haiku fills cut cost 72% but
+      // hallucinated hotels and restaurants badly — see the IG model note in
+      // CLAUDE.md before flipping this.
+      const igFillModel = Deno.env.get("IG_FILL_MODEL") || igModel;
       const totalStart = Date.now();
-      const planRes = await callClaude(
+      const planBlocks = [
+        {
+          type: "text",
+          text: PLAN_SYSTEM,
+          cache_control: { type: "ephemeral" as const },
+        },
+      ];
+      const planMaxTokens = Math.min(12000, numDays * 350 + 2500);
+      let planRes = await callClaude(
         igPlanModel,
-        [
-          {
-            type: "text",
-            text: PLAN_SYSTEM,
-            cache_control: { type: "ephemeral" },
-          },
-        ],
+        planBlocks,
         userMessage,
-        Math.min(12000, numDays * 350 + 2500),
+        planMaxTokens,
       );
+      let planParsed: unknown = null;
+      let planRetryUsage: AnthropicUsage | null = null;
+      try {
+        planParsed = JSON.parse(stripFences(planRes.text));
+      } catch {
+        // The day fills already retry; the plan did not — so one malformed
+        // plan response 500'd the whole generation and the user paid again
+        // on re-run. Observed live.
+        console.warn("Plan parse failed — retrying once");
+        planRetryUsage = planRes.usage; // the failed attempt was still billed
+        planRes = await callClaude(
+          igPlanModel,
+          planBlocks,
+          userMessage,
+          planMaxTokens,
+        );
+      }
       let plan: {
         name?: string;
         summary?: string;
@@ -661,7 +703,8 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
         plan?: PlanDay[];
       };
       try {
-        plan = JSON.parse(stripFences(planRes.text));
+        plan = (planParsed ??
+          JSON.parse(stripFences(planRes.text))) as typeof plan;
       } catch (e) {
         console.error(
           "Plan parse error:",
@@ -698,7 +741,11 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
         { type: "text", text: DAYFILL_OVERRIDE },
       ];
 
-      const allUsages: AnthropicUsage[] = [planRes.usage];
+      // Per phase: plan and fill may be different models, so summing them
+      // and billing at one rate would mis-charge.
+      const planUsages: AnthropicUsage[] = [planRes.usage];
+      if (planRetryUsage) planUsages.push(planRetryUsage);
+      const fillUsages: AnthropicUsage[] = [];
       const fillErrors: { day: string; error: string }[] = [];
 
       async function fillOne(day: PlanDay, i: number): Promise<any> {
@@ -720,12 +767,12 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
           skeleton +
           `\n\n──── YOUR TASK ────\nProduce ONLY the detailed day object for ${day.label} in ${day.city}. Expand THIS day's anchors (${titles}) into a full schedule. NEVER use any place the plan assigns to a different day — this includes meals and connective stops you add yourself: if a venue is named anywhere in the plan for another day, pick a different one. ${baseNote}`;
         const attempt = async () => {
-          const res = await callClaude(igModel, fillSystem, dayUser, 4500);
+          const res = await callClaude(igFillModel, fillSystem, dayUser, 4500);
           let parsed = JSON.parse(stripFences(res.text));
           if (Array.isArray(parsed?.days)) parsed = parsed.days[0];
           if (!parsed || !Array.isArray(parsed.activities))
             throw new Error("day object missing activities");
-          allUsages.push(res.usage);
+          fillUsages.push(res.usage);
           parsed.label = day.label;
           parsed.wishlist = Array.isArray(parsed.wishlist)
             ? parsed.wishlist
@@ -821,14 +868,40 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
               .catch(() => {});
             await writer.close().catch(() => {});
 
-            const sum = (fn: (u: AnthropicUsage) => number | undefined) =>
-              allUsages.reduce((acc, u) => acc + (fn(u) || 0), 0);
-            const inputTokens = sum((u) => u.input_tokens);
-            const outputTokens = sum((u) => u.output_tokens);
-            const cacheCreationTokens = sum(
-              (u) => u.cache_creation_input_tokens,
+            const tally = (list: AnthropicUsage[]) => ({
+              inputTokens: list.reduce((a, u) => a + (u.input_tokens || 0), 0),
+              outputTokens: list.reduce(
+                (a, u) => a + (u.output_tokens || 0),
+                0,
+              ),
+              cacheCreationTokens: list.reduce(
+                (a, u) => a + (u.cache_creation_input_tokens || 0),
+                0,
+              ),
+              cacheReadTokens: list.reduce(
+                (a, u) => a + (u.cache_read_input_tokens || 0),
+                0,
+              ),
+            });
+            // One bucket per distinct model; merged when plan and fill match
+            // so the common case still writes a single llm_usage row.
+            const phases =
+              igPlanModel === igFillModel
+                ? [{ model: igModel, ...tally([...planUsages, ...fillUsages]) }]
+                : [
+                    { model: igPlanModel, ...tally(planUsages) },
+                    { model: igFillModel, ...tally(fillUsages) },
+                  ];
+            const inputTokens = phases.reduce((a, p) => a + p.inputTokens, 0);
+            const outputTokens = phases.reduce((a, p) => a + p.outputTokens, 0);
+            const cacheCreationTokens = phases.reduce(
+              (a, p) => a + p.cacheCreationTokens,
+              0,
             );
-            const cacheReadTokens = sum((u) => u.cache_read_input_tokens);
+            const cacheReadTokens = phases.reduce(
+              (a, p) => a + p.cacheReadTokens,
+              0,
+            );
             if (fillErrors.length) {
               console.error("Fill errors:", JSON.stringify(fillErrors));
               await captureException(
@@ -850,36 +923,41 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
             const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
             runInBackground(
               (async () => {
-                await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    apikey: supabaseKey,
-                    Authorization: `Bearer ${supabaseKey}`,
-                  },
-                  body: JSON.stringify({
-                    trip_id: tripId || null,
-                    function_name: "generate-itinerary",
-                    model: igModel,
-                    input_tokens: inputTokens,
-                    output_tokens: outputTokens,
-                    cache_creation_tokens: cacheCreationTokens,
-                    cache_read_tokens: cacheReadTokens,
-                    duration_ms: Date.now() - totalStart,
-                  }),
-                }).catch(() => {});
+                // One row + one deduction per model actually used, so a
+                // mixed plan/fill run bills each phase at its true rate.
+                for (const p of phases) {
+                  if (!p.inputTokens && !p.outputTokens) continue;
+                  await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      apikey: supabaseKey,
+                      Authorization: `Bearer ${supabaseKey}`,
+                    },
+                    body: JSON.stringify({
+                      trip_id: tripId || null,
+                      function_name: "generate-itinerary",
+                      model: p.model,
+                      input_tokens: p.inputTokens,
+                      output_tokens: p.outputTokens,
+                      cache_creation_tokens: p.cacheCreationTokens,
+                      cache_read_tokens: p.cacheReadTokens,
+                      duration_ms: Date.now() - totalStart,
+                    }),
+                  }).catch(() => {});
 
-                await deductCredits({
-                  userId: user.id,
-                  model: igModel,
-                  inputTokens,
-                  outputTokens,
-                  cacheCreationTokens,
-                  cacheReadTokens,
-                  functionName: "generate-itinerary",
-                  tripId: tripId || null,
-                  source,
-                });
+                  await deductCredits({
+                    userId: user.id,
+                    model: p.model,
+                    inputTokens: p.inputTokens,
+                    outputTokens: p.outputTokens,
+                    cacheCreationTokens: p.cacheCreationTokens,
+                    cacheReadTokens: p.cacheReadTokens,
+                    functionName: "generate-itinerary",
+                    tripId: tripId || null,
+                    source,
+                  });
+                }
               })(),
             );
           }

@@ -26,7 +26,8 @@
       "Bash(curl -s -X POST 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode' -H 'Content-Type: application/json' -d '{\"q\":\"Hotel Casa San Agustin, Cartagena, Colombia\",\"city\":\"Cartagena\"}')",
       "Bash(curl -s -X POST 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode' -H 'Content-Type: application/json' -d '{\"q\":\"Hotel Grande Bretagne, Syntagma, Athens\",\"city\":\"Syntagma\"}')",
       "Bash(curl -s -X POST 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode' -H 'Content-Type: application/json' -d '{\"q\":\"CCTV Tower, CBD, Chaoyang, Beijing\",\"city\":\"Chaoyang\"}')",
-      "Bash(curl -s -X POST 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode' -H 'Content-Type: application/json' -d '{\"q\":\"Forbidden City, Beijing\",\"city\":\"Dongcheng\"}')"
+      "Bash(curl -s -X POST 'https://viyvdqwwnbbqjuwiuzbh.supabase.co/functions/v1/places-proxy?action=geocode' -H 'Content-Type: application/json' -d '{\"q\":\"Forbidden City, Beijing\",\"city\":\"Dongcheng\"}')",
+      "Bash(python3 -c ' *)"
     ]
   }
 }

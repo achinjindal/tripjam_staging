@@ -1,0 +1,1273 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Place Peek (RG) — design prototype, Rev 6</title>
+    <style>
+      :root {
+        --ink: #0f1923;
+        --dusk: #1e2d3d;
+        --paper: #faf6f0;
+        --card: #ffffff;
+        --ocean: #2563a8;
+        --sky-light: #f0f7ff;
+        --sky-border: #c8dfee;
+        --gold: #d4a847;
+        --moss: #3d7a5c;
+        --success-light: #dcfce7;
+        --warning: #92400e;
+        --warning-light: #fef3c7;
+        --mist: #587284;
+        --sand: #f0e6d3;
+        --border: #e2ddd5;
+        --band: #f5f0e8;
+        --scrim: rgba(15, 25, 35, 0.45);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ink: #e8e2d8;
+          --dusk: #223140;
+          --paper: #10161d;
+          --card: #1a232e;
+          --ocean: #6aa3dd;
+          --sky-light: #1b2836;
+          --sky-border: #2c4258;
+          --gold: #d4a847;
+          --moss: #6db392;
+          --success-light: #1d3328;
+          --warning: #d9a05f;
+          --warning-light: #33291a;
+          --mist: #8ba5bb;
+          --sand: #2c3947;
+          --border: #2c3947;
+          --band: #151d26;
+          --scrim: rgba(0, 0, 0, 0.55);
+        }
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+      }
+      body {
+        background: var(--paper);
+        color: var(--ink);
+        font-family: Georgia, serif;
+        line-height: 1.55;
+        padding: 32px 20px 80px;
+      }
+      .wrap {
+        max-width: 1060px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 30px;
+        font-weight: 400;
+      }
+      h2 {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 21px;
+        font-weight: 400;
+        margin: 48px 0 6px;
+        padding-top: 24px;
+        border-top: 1px solid var(--border);
+      }
+      .sub {
+        color: var(--mist);
+        font-size: 13.5px;
+        margin-bottom: 18px;
+        max-width: 72ch;
+      }
+      .note {
+        background: var(--sky-light);
+        border: 1px solid var(--sky-border);
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 12.5px;
+        color: var(--mist);
+        margin: 14px 0;
+        max-width: 72ch;
+      }
+      .note b {
+        color: var(--ink);
+      }
+      .cols {
+        display: flex;
+        gap: 28px;
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+
+      /* ── Phone frame ── */
+      .phone {
+        width: 375px;
+        height: 740px;
+        flex-shrink: 0;
+        background: var(--paper);
+        border: 1px solid var(--border);
+        border-radius: 28px;
+        overflow: hidden;
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 8px 28px rgba(15, 25, 35, 0.14);
+      }
+      /* App chrome — mirrors the real pretrip Route screen */
+      .app-head {
+        padding: 14px 16px 0;
+        background: var(--card);
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+      }
+      .app-title {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 17px;
+      }
+      .app-dates {
+        font-size: 10.5px;
+        color: var(--mist);
+        margin: 1px 0 8px;
+      }
+      .app-tabs {
+        display: flex;
+        gap: 18px;
+      }
+      .app-tab {
+        font-size: 12.5px;
+        color: var(--mist);
+        padding: 6px 2px 8px;
+      }
+      .app-tab.on {
+        color: var(--ocean);
+        font-weight: 700;
+        border-bottom: 2.5px solid var(--ocean);
+      }
+      .app-sub {
+        font-size: 11px;
+        color: var(--mist);
+        padding: 10px 16px 0;
+      }
+      .phone-scroll {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px 14px 16px;
+      }
+      .app-cta {
+        flex-shrink: 0;
+        padding: 10px 14px 18px;
+        background: var(--paper);
+        border-top: 1px solid var(--border);
+      }
+      .app-cta button {
+        width: 100%;
+        background: var(--ocean);
+        color: #fff;
+        border: none;
+        border-radius: 12px;
+        padding: 13px;
+        font-family: Georgia, serif;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      /* ── Route card (mirrors RouteCard full mode) ── */
+      .rcard {
+        background: var(--card);
+        border: 2px solid var(--sand);
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-bottom: 12px;
+        position: relative;
+      }
+      .rcard.selected {
+        border-color: var(--moss);
+      }
+      .rhead {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        margin-bottom: 10px;
+      }
+      .ricon {
+        font-size: 24px;
+      }
+      .rlabel {
+        background: var(--dusk);
+        color: #fff;
+        font-size: 9px;
+        font-weight: 600;
+        border-radius: 4px;
+        padding: 1px 5px;
+        letter-spacing: 0.3px;
+        opacity: 0.8;
+        vertical-align: 2px;
+        margin-right: 6px;
+      }
+      @media (prefers-color-scheme: dark) {
+        .rlabel {
+          background: #3a4c5f;
+        }
+      }
+      .rtitle {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 16px;
+        display: inline;
+      }
+      .rtag {
+        font-size: 10px;
+        color: var(--warning);
+        background: var(--warning-light);
+        border-radius: 999px;
+        padding: 1px 7px;
+        font-weight: 600;
+      }
+      .dayrow {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 4px;
+        padding-left: 4px;
+      }
+      .daylbl {
+        font-size: 10px;
+        color: var(--mist);
+        font-weight: 600;
+        min-width: 38px;
+        margin-top: 2px;
+      }
+      .daytxt {
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      /* Rev 6: dual affordance. In-text links = the READ path — first mention of
+     any city-list town, matched from structured data (never from bolding).
+     Inherits weight + color: bold stays pure emphasis, the dotted underline
+     alone means "tappable". Chips remain the complete INDEX path below. */
+      .place-link {
+        font-weight: inherit;
+        color: inherit;
+        cursor: pointer;
+        text-decoration: underline dotted;
+        text-decoration-thickness: 1.5px;
+        text-underline-offset: 3px;
+        text-decoration-color: color-mix(in srgb, var(--mist) 55%, transparent);
+      }
+      .place-link:hover {
+        text-decoration-style: solid;
+      }
+
+      /* Stops chips row */
+      .stops {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin: 10px 0 2px;
+        padding-top: 9px;
+        border-top: 1px solid var(--sand);
+      }
+      .stops-lbl {
+        font-size: 9.5px;
+        color: var(--mist);
+        letter-spacing: 0.6px;
+        width: 100%;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        border: 1px solid var(--sky-border);
+        background: var(--sky-light);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 11px;
+        color: var(--ocean);
+        cursor: pointer;
+        line-height: 1.3;
+      }
+      .chip:hover {
+        border-color: var(--ocean);
+      }
+      .chip .n {
+        color: var(--mist);
+        font-size: 10px;
+      }
+      /* Day-trip chip: same tap target, visually lighter than a base */
+      .chip.trip {
+        background: transparent;
+        border-style: dashed;
+        color: var(--mist);
+      }
+      .chip.trip:hover {
+        border-color: var(--ocean);
+        color: var(--ocean);
+      }
+      .pts {
+        border-top: 1px solid var(--sand);
+        padding-top: 8px;
+        margin-top: 8px;
+      }
+      .pt {
+        display: flex;
+        gap: 6px;
+        font-size: 11px;
+        margin-bottom: 3px;
+      }
+      .pt .g {
+        color: var(--ocean);
+      }
+      .pt .b {
+        color: var(--warning);
+      }
+
+      /* ── Bottom sheet (inside phone) ── */
+      .scrim {
+        position: absolute;
+        inset: 0;
+        background: var(--scrim);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.22s ease;
+        z-index: 5;
+      }
+      .sheet {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 6;
+        background: var(--card);
+        border-radius: 20px 20px 0 0;
+        transform: translateY(105%);
+        transition: transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1);
+        max-height: 82%;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 -6px 30px rgba(15, 25, 35, 0.25);
+      }
+      .phone.open .scrim {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .phone.open .sheet {
+        transform: translateY(0);
+      }
+      .grab {
+        width: 36px;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--border);
+        margin: 8px auto 0;
+        flex-shrink: 0;
+      }
+      .sheet-x {
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: none;
+        background: var(--band);
+        color: var(--mist);
+        font-size: 14px;
+        cursor: pointer;
+        line-height: 1;
+        z-index: 2;
+      }
+      .sheet-body {
+        overflow-y: auto;
+        padding: 10px 18px 20px;
+      }
+
+      .peek-hero {
+        height: 128px;
+        border-radius: 12px;
+        margin-bottom: 12px;
+        position: relative;
+        overflow: hidden;
+        background: linear-gradient(135deg, #2563a8 0%, #3d7a5c 100%);
+      }
+      .peek-hero img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .peek-hero .credit {
+        position: absolute;
+        right: 6px;
+        bottom: 5px;
+        font-size: 8.5px;
+        color: #fff;
+        background: rgba(15, 25, 35, 0.55);
+        border-radius: 4px;
+        padding: 1px 6px;
+      }
+      .peek-title {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-size: 20px;
+        margin-bottom: 2px;
+      }
+      .peek-kind {
+        font-size: 11px;
+        color: var(--mist);
+        margin-bottom: 10px;
+      }
+      .peek-extract {
+        font-size: 13px;
+        line-height: 1.6;
+        margin-bottom: 6px;
+      }
+      .peek-attrib {
+        font-size: 10px;
+        color: var(--mist);
+        margin-bottom: 12px;
+      }
+      .peek-attrib a {
+        color: var(--ocean);
+      }
+
+      .trip-ctx {
+        background: var(--band);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 9px 12px;
+        margin-bottom: 14px;
+      }
+      .trip-ctx .h {
+        font-size: 9.5px;
+        letter-spacing: 0.6px;
+        color: var(--mist);
+        margin-bottom: 4px;
+      }
+      .trip-ctx .row {
+        font-size: 12px;
+        display: flex;
+        gap: 7px;
+        align-items: baseline;
+        margin-bottom: 2px;
+      }
+      .trip-ctx .pl {
+        background: var(--dusk);
+        color: #fff;
+        font-size: 9px;
+        font-weight: 600;
+        border-radius: 4px;
+        padding: 1px 5px;
+        opacity: 0.8;
+      }
+      @media (prefers-color-scheme: dark) {
+        .trip-ctx .pl {
+          background: #3a4c5f;
+        }
+      }
+
+      .cta-row {
+        display: flex;
+        gap: 8px;
+      }
+      .cta {
+        flex: 1;
+        text-align: center;
+        border-radius: 10px;
+        padding: 10px 8px;
+        font-size: 12.5px;
+        cursor: pointer;
+        font-family: Georgia, serif;
+        line-height: 1.3;
+      }
+      .cta.primary {
+        background: var(--ocean);
+        color: #fff;
+        border: none;
+      }
+      .cta.secondary {
+        background: transparent;
+        color: var(--ocean);
+        border: 1.5px solid var(--sky-border);
+      }
+
+      /* ── Desktop popover demo ── */
+      .desk {
+        flex: 1;
+        min-width: 420px;
+        background: var(--band);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 22px;
+        position: relative;
+        overflow: hidden;
+      }
+      .popover {
+        position: absolute;
+        width: 330px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: 0 10px 34px rgba(15, 25, 35, 0.18);
+        padding: 14px 16px;
+        z-index: 4;
+      }
+      .popover::before {
+        content: "";
+        position: absolute;
+        top: -6px;
+        left: 34px;
+        width: 10px;
+        height: 10px;
+        background: var(--card);
+        border-left: 1px solid var(--border);
+        border-top: 1px solid var(--border);
+        transform: rotate(45deg);
+      }
+      .pop-hero {
+        height: 92px;
+      }
+      .pop-hero.peek-hero {
+        margin-bottom: 10px;
+      }
+      .popover .peek-title {
+        font-size: 17px;
+      }
+      .popover .peek-extract {
+        font-size: 12px;
+      }
+
+      /* states row */
+      .states {
+        display: flex;
+        gap: 18px;
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+      .state-card {
+        width: 330px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 14px 16px;
+      }
+      .state-lbl {
+        font-size: 10px;
+        letter-spacing: 0.8px;
+        color: var(--mist);
+        margin-bottom: 10px;
+        text-transform: uppercase;
+      }
+      .skel {
+        border-radius: 8px;
+        background: linear-gradient(
+          90deg,
+          var(--band) 25%,
+          var(--sand) 50%,
+          var(--band) 75%
+        );
+        background-size: 200% 100%;
+        animation: sh 1.4s infinite;
+      }
+      @keyframes sh {
+        to {
+          background-position: -200% 0;
+        }
+      }
+
+      .spec {
+        font-size: 13px;
+        max-width: 76ch;
+      }
+      .spec li {
+        margin-bottom: 8px;
+      }
+      .spec code {
+        background: var(--band);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 0 5px;
+        font-size: 12px;
+      }
+      .tag {
+        display: inline-block;
+        font-size: 10px;
+        border: 1px solid var(--border);
+        color: var(--mist);
+        border-radius: 999px;
+        padding: 1px 8px;
+        margin-left: 8px;
+        vertical-align: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>
+        Place Peek — Route Generation <span class="tag">Rev 6 · prototype</span>
+      </h1>
+      <p class="sub">
+        In-context "what is this place?" for route cards. Two tap paths, one
+        source of truth — the route's structured
+        <code style="font-family: monospace">stops</code>/<code
+          style="font-family: monospace"
+          >city</code
+        >
+        data: the <b>first mention</b> of each town in the day text is
+        dotted-underlined (read path), and a <b>"Places on this route"</b> chip
+        row indexes every town with nights/day-trip metadata (index path).
+        Tapping either opens a peek: Wikipedia lead image + first paragraph
+        (free, no LLM), a trip-context line computed from the routes, and two
+        escapes (Trippy · Magazine). Bold stays pure emphasis — the underline
+        alone means tappable. Try it:
+        <b>tap an underlined town or a chip in the phone.</b>
+      </p>
+
+      <h2>1 · Route card affordances + mobile bottom sheet</h2>
+      <p class="sub">
+        Tap the first mention of a town (dotted underline) or any chip. Galle
+        Fort, Coconut Tree Hill and Temple of the Tooth stay plain — POIs aren't
+        peekable at RG, and re-mentions ("back to Galle") aren't underlined.
+      </p>
+
+      <div class="cols">
+        <div class="phone" id="phone">
+          <div class="app-head">
+            <div class="app-title">
+              Sri Lanka South &amp; Hills · Aug 25–Sep 1
+            </div>
+            <div class="app-dates">2026-08-25 → 2026-09-01</div>
+            <div class="app-tabs">
+              <div class="app-tab on">🛣 Route</div>
+              <div class="app-tab">✨ Inspirations</div>
+              <div class="app-tab">📖 Magazine</div>
+            </div>
+          </div>
+          <div class="app-sub">Pick a route, then build your itinerary</div>
+          <div class="phone-scroll">
+            <div class="rcard selected">
+              <div class="rhead">
+                <div class="ricon">🏖️</div>
+                <div>
+                  <span class="rlabel">P1</span
+                  ><span class="rtitle">South Coast Loop</span>
+                  <div
+                    style="
+                      font-size: 11px;
+                      color: var(--ocean);
+                      margin-top: 2px;
+                    "
+                  >
+                    Minimal travel, best beaches
+                  </div>
+                </div>
+              </div>
+              <div class="dayrow">
+                <div class="daylbl">Day 1</div>
+                <div class="daytxt">
+                  Colombo →
+                  <strong
+                    ><span class="place-link" data-p="galle"
+                      >Galle</span
+                    ></strong
+                  >
+                  (2.5h drive)
+                </div>
+              </div>
+              <div class="dayrow">
+                <div class="daylbl">Day 2</div>
+                <div class="daytxt">
+                  <strong>Galle Fort</strong> walk and
+                  <strong
+                    ><span class="place-link" data-p="unawatuna"
+                      >Unawatuna</span
+                    ></strong
+                  >
+                  beach
+                </div>
+              </div>
+              <div class="dayrow">
+                <div class="daylbl">Day 3</div>
+                <div class="daytxt">
+                  Day trip to
+                  <strong
+                    ><span class="place-link" data-p="hikkaduwa"
+                      >Hikkaduwa</span
+                    ></strong
+                  >
+                  for scuba diving, back to Galle
+                </div>
+              </div>
+              <div class="dayrow">
+                <div class="daylbl">Day 4</div>
+                <div class="daytxt">
+                  Galle →
+                  <strong
+                    ><span class="place-link" data-p="mirissa"
+                      >Mirissa</span
+                    ></strong
+                  >, beach day and <strong>Coconut Tree Hill</strong> at sunset
+                </div>
+              </div>
+              <div class="dayrow">
+                <div class="daylbl">Day 5</div>
+                <div class="daytxt">Drive back to Colombo (2.5h)</div>
+              </div>
+
+              <div class="stops">
+                <div class="stops-lbl">PLACES ON THIS ROUTE</div>
+                <span class="chip" data-p="galle"
+                  >Galle <span class="n">· 3 nights</span></span
+                >
+                <span class="chip" data-p="mirissa"
+                  >Mirissa <span class="n">· 1 night</span></span
+                >
+                <span class="chip trip" data-p="unawatuna"
+                  >Unawatuna <span class="n">· day trip</span></span
+                >
+                <span class="chip trip" data-p="hikkaduwa"
+                  >Hikkaduwa <span class="n">· day trip</span></span
+                >
+              </div>
+
+              <div class="pts">
+                <div class="pt">
+                  <span class="g">✓</span
+                  ><span
+                    >Hikkaduwa has excellent scuba sites for all levels</span
+                  >
+                </div>
+                <div class="pt">
+                  <span class="g">✓</span
+                  ><span>Least time in transit of all routes</span>
+                </div>
+                <div class="pt">
+                  <span class="b">✗</span
+                  ><span>No wildlife or hill country</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="rcard">
+              <div class="rhead">
+                <div class="ricon">🍃</div>
+                <div>
+                  <span class="rlabel">P2</span
+                  ><span class="rtitle">Hills + Beach</span>
+                  <div
+                    style="
+                      font-size: 11px;
+                      color: var(--ocean);
+                      margin-top: 2px;
+                    "
+                  >
+                    Culture, tea country, then coast
+                  </div>
+                </div>
+              </div>
+              <div class="dayrow">
+                <div class="daylbl">Day 1</div>
+                <div class="daytxt">
+                  Colombo →
+                  <strong
+                    ><span class="place-link" data-p="kandy"
+                      >Kandy</span
+                    ></strong
+                  >
+                  (3h)
+                </div>
+              </div>
+              <div class="dayrow">
+                <div class="daylbl">Day 2</div>
+                <div class="daytxt">
+                  Kandy: <strong>Temple of the Tooth</strong> + lake walk
+                </div>
+              </div>
+              <div class="dayrow">
+                <div class="daylbl">Day 3</div>
+                <div class="daytxt">
+                  Kandy →
+                  <strong
+                    ><span class="place-link" data-p="nuwara"
+                      >Nuwara Eliya</span
+                    ></strong
+                  >, tea estates
+                </div>
+              </div>
+              <div class="dayrow">
+                <div class="daylbl">Day 4</div>
+                <div class="daytxt">
+                  Nuwara Eliya →
+                  <strong
+                    ><span class="place-link" data-p="bentota"
+                      >Bentota</span
+                    ></strong
+                  >
+                  (4.5h drive)
+                </div>
+              </div>
+              <div class="dayrow">
+                <div class="daylbl">Day 5</div>
+                <div class="daytxt">Bentota beach + back to Colombo</div>
+              </div>
+              <div class="stops">
+                <div class="stops-lbl">PLACES ON THIS ROUTE</div>
+                <span class="chip" data-p="kandy"
+                  >Kandy <span class="n">· 2 nights</span></span
+                >
+                <span class="chip" data-p="nuwara"
+                  >Nuwara Eliya <span class="n">· 1 night</span></span
+                >
+                <span class="chip" data-p="bentota"
+                  >Bentota <span class="n">· 1 night</span></span
+                >
+              </div>
+            </div>
+          </div>
+          <div class="app-cta">
+            <button>Build my itinerary from P1 →</button>
+          </div>
+
+          <div class="scrim" onclick="closePeek()"></div>
+          <div class="sheet">
+            <div class="grab"></div>
+            <button class="sheet-x" onclick="closePeek()" aria-label="Close">
+              ✕
+            </button>
+            <div class="sheet-body" id="sheetBody"><!-- filled by JS --></div>
+          </div>
+        </div>
+
+        <div style="flex: 1; min-width: 300px">
+          <div class="note">
+            <b>What's peekable (Rev 6 — two paths, one source).</b> A place gets
+            a peek only if understanding it could change
+            <i>which route you pick</i>:
+            <b>overnight bases and day-trip destinations</b> — the route's
+            <code style="font-family: monospace">stops</code> /
+            <code style="font-family: monospace">city</code> fields. Two ways
+            in, same list: the <b>read path</b> — the <i>first mention</i> of
+            each town in the day text is dotted- underlined, so curiosity is
+            served mid-sentence — and the <b>index path</b> — the chips row, one
+            chip per town with nights / day-trip metadata. Linking is matched
+            from the city list (word-boundary, case/diacritic-insensitive),
+            <b>never from bolding</b>: bold stays pure emphasis, the underline
+            alone means tappable, and a linked town inherits whatever weight its
+            sentence gave it. Re-mentions ("back to Galle") stay plain — repeat
+            taps are what chips are for. POI highlights (Coconut Tree Hill,
+            Galle Fort) and hotels are not peekable here — they're the route's
+            evidence, not its skeleton; their moment is the itinerary stage.
+          </div>
+          <div class="note">
+            <b>Sheet in context.</b> The peek overlays the whole Route screen —
+            scrim covers header, tabs and the Build CTA; the sheet caps at 82%
+            height so the screen behind stays visible. <b>Three exits:</b> ✕
+            button (top-right), scrim tap, swipe-down on the grab handle.
+            Nothing behind is disturbed on close — scroll position, selection
+            and vote state persist.
+          </div>
+          <div class="note">
+            <b>Interaction rules.</b> Route cards are click-to-vote — text links
+            and chips call <b>stopPropagation</b> so a tap never toggles the
+            vote. Opening fires <b>posthog place_peek_open</b> { place, source:
+            text | chip, kind: base | day_trip, route_id, wiki_hit } — source
+            tells us which path earns its keep.
+          </div>
+          <div class="note">
+            <b>Magazine prefetch (Rev 2).</b> The <b>first</b> peek open for a
+            city fires
+            <code style="font-family: monospace">loadCityDeepDive(city)</code>
+            in the background — fire-and-forget, deduped by the existing cache.
+            By the time the user taps "More in Magazine" the deep dive is warm
+            and the tab opens instantly, anchored at that city. Since only towns
+            are peekable, every peek maps 1:1 to a deep dive.
+          </div>
+          <div class="note">
+            <b>Why city-list matching, not bold-driven linking?</b> RG bolds
+            sparingly (first mention only, sometimes the hotel instead of the
+            town), so bold-anchored links would have arbitrary coverage — a
+            3-night base could lack any tap point in the text. Matching against
+            the city list makes coverage principled: every town gets exactly one
+            text link (its first mention, wherever and however it appears) plus
+            exactly one chip. If a town somehow never appears in prose by name,
+            the chip still guarantees access.
+          </div>
+          <div class="note">
+            <b>Content source.</b> Wikipedia REST <b>page/summary</b> via the
+            existing serialized queue in photos.js (2 concurrent / 400ms) — the
+            same call the photo pipeline already makes, we just stop discarding
+            <b>extract</b>. Lookup tries "Ella" → "Ella, Sri Lanka" (suffix from
+            trip destination), rejects disambiguation pages, caches in module +
+            localStorage. Zero LLM cost, works offline once cached.
+          </div>
+        </div>
+      </div>
+
+      <h2>2 · Peek states</h2>
+      <p class="sub">
+        All three side by side for review. The fallback promotes Trippy — never
+        a dead end, never a broken sheet.
+      </p>
+
+      <div class="states">
+        <div class="state-card">
+          <div class="state-lbl">A · Wikipedia hit (default)</div>
+          <div class="peek-hero">
+            <img
+              src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/00/Fort_Galle.jpg/640px-Fort_Galle.jpg"
+              alt=""
+              onerror="this.remove()"
+            /><span class="credit">Wikimedia Commons</span>
+          </div>
+          <div class="peek-title">Galle</div>
+          <div class="peek-kind">City · Southern Province, Sri Lanka</div>
+          <div class="peek-extract">
+            Galle is a major city on the southwest coast of Sri Lanka, best
+            known for Galle Fort — the fortified old town founded by Portuguese
+            colonists and extensively rebuilt by the Dutch in the 17th century,
+            now a UNESCO World Heritage Site of cobbled lanes, ramparts and
+            cafés.
+          </div>
+          <div class="peek-attrib">
+            From <a href="#">Wikipedia</a> · CC BY-SA
+          </div>
+          <div class="trip-ctx">
+            <div class="h">ON YOUR ROUTES</div>
+            <div class="row">
+              <span class="pl">P1</span><span>Overnight base · 3 nights</span>
+            </div>
+            <div class="row">
+              <span class="pl">P2</span><span>Not visited</span>
+            </div>
+          </div>
+          <div class="cta-row">
+            <button class="cta secondary">💬 Ask Trippy</button>
+            <button class="cta primary">📖 More in Magazine</button>
+          </div>
+        </div>
+
+        <div class="state-card">
+          <div class="state-lbl">B · Wikipedia miss (rare — obscure town)</div>
+          <div class="peek-title">Pitawella</div>
+          <div class="peek-kind">Village · near Ella</div>
+          <div
+            class="peek-extract"
+            style="color: var(--mist); font-style: italic"
+          >
+            This little place keeps a low profile — no encyclopedia entry.
+            Trippy and the Magazine know it, though.
+          </div>
+          <div class="trip-ctx">
+            <div class="h">ON YOUR ROUTES</div>
+            <div class="row">
+              <span class="pl">P3</span><span>Overnight base · 1 night</span>
+            </div>
+          </div>
+          <div class="cta-row">
+            <button class="cta secondary">💬 Ask Trippy</button>
+            <button class="cta primary">📖 More in Magazine</button>
+          </div>
+          <div style="font-size: 10.5px; color: var(--mist); margin-top: 9px">
+            With towns-only linking this state is an edge case, not a designed
+            destination. Magazine still works — deep dives are our own content,
+            not Wikipedia's.
+          </div>
+        </div>
+
+        <div class="state-card">
+          <div class="state-lbl">C · Loading (&lt;1s typical)</div>
+          <div class="skel" style="height: 128px; margin-bottom: 12px"></div>
+          <div class="peek-title">Hikkaduwa</div>
+          <div
+            class="skel"
+            style="height: 12px; width: 90%; margin-bottom: 7px"
+          ></div>
+          <div
+            class="skel"
+            style="height: 12px; width: 96%; margin-bottom: 7px"
+          ></div>
+          <div
+            class="skel"
+            style="height: 12px; width: 60%; margin-bottom: 14px"
+          ></div>
+          <div class="trip-ctx">
+            <div class="h">ON YOUR ROUTES</div>
+            <div class="row">
+              <span class="pl">P1</span
+              ><span>Day trip on Day 3 · scuba diving</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="note" style="margin-top: 18px">
+        <b>Title renders instantly</b> from the tapped name plus the
+        trip-context block (computed locally from the routes) — only the image
+        and paragraph stream in. The sheet never opens empty. "More in Magazine"
+        jumps to the Magazine tab anchored at that city — and thanks to the
+        first-tap prefetch it lands on loaded content, not a spinner.
+      </div>
+
+      <h2>3 · Desktop — anchored popover</h2>
+      <p class="sub">
+        Same content, no sheet: a popover anchored to whatever was tapped — text
+        link or chip (routes list is the left column on desktop; the map stays
+        visible). Esc / outside-click dismisses.
+      </p>
+
+      <div class="cols">
+        <div class="desk" style="min-height: 390px">
+          <div class="rcard" style="max-width: 420px">
+            <div class="rhead">
+              <div class="ricon">🏖️</div>
+              <div>
+                <span class="rlabel">P1</span
+                ><span class="rtitle">South Coast Loop</span>
+              </div>
+            </div>
+            <div class="dayrow">
+              <div class="daylbl">Day 1</div>
+              <div class="daytxt">
+                Colombo →
+                <strong
+                  ><span class="place-link" data-p="galle">Galle</span></strong
+                >
+                (2.5h drive)
+              </div>
+            </div>
+            <div class="dayrow">
+              <div class="daylbl">Day 2</div>
+              <div class="daytxt">
+                <strong>Galle Fort</strong> walk and
+                <strong
+                  ><span class="place-link" data-p="unawatuna"
+                    >Unawatuna</span
+                  ></strong
+                >
+                beach
+              </div>
+            </div>
+            <div class="dayrow">
+              <div class="daylbl">Day 3</div>
+              <div class="daytxt">
+                Day trip to <strong>Hikkaduwa</strong> for scuba diving
+              </div>
+            </div>
+            <div class="stops">
+              <div class="stops-lbl">PLACES ON THIS ROUTE</div>
+              <span class="chip">Galle <span class="n">· 3 nights</span></span>
+              <span class="chip" style="border-color: var(--ocean)"
+                >Unawatuna <span class="n">· day trip</span></span
+              >
+              <span class="chip trip"
+                >Hikkaduwa <span class="n">· day trip</span></span
+              >
+            </div>
+          </div>
+          <div class="popover" style="left: 150px; top: 212px">
+            <div class="peek-hero pop-hero">
+              <img
+                src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/00/Fort_Galle.jpg/640px-Fort_Galle.jpg"
+                alt=""
+                onerror="this.remove()"
+              /><span class="credit">Wikimedia Commons</span>
+            </div>
+            <div class="peek-title">Unawatuna</div>
+            <div class="peek-kind">Beach town · near Galle</div>
+            <div class="peek-extract">
+              Unawatuna is a coastal town in Galle district, known for its
+              sheltered banana-shaped beach and coral reef — one of Sri Lanka's
+              most popular swimming beaches, a short tuk-tuk ride from Galle
+              Fort.
+            </div>
+            <div class="peek-attrib">
+              From <a href="#">Wikipedia</a> · CC BY-SA
+            </div>
+            <div class="cta-row">
+              <button class="cta secondary">💬 Ask Trippy</button>
+              <button class="cta primary">📖 Magazine</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="flex: 1; min-width: 300px">
+          <div class="note">
+            <b>Anchoring.</b> Popover clamps inside the routes column; below the
+            chip by default, flips above near the bottom. One open at a time —
+            tapping another chip moves the popover rather than stacking. The
+            active chip keeps a solid ocean border while its popover is open.
+          </div>
+          <div class="note">
+            <b>Out of v1</b> (unchanged from the approved plan): map-marker
+            peeks, compact 2-column cards, any LLM-generated primer, RG prompt
+            changes. Telemetry decides what earns Tier 2.
+          </div>
+        </div>
+      </div>
+
+      <h2>4 · Build spec (v1)</h2>
+      <ul class="spec">
+        <li>
+          <b>src/places.js</b> —
+          <code>fetchPlaceSummary(name, destinationContext)</code>: Wikipedia
+          REST summary through the exported photos.js queue; candidate order
+          <code>[name, `${name}, ${destination}`]</code>; reject
+          <code>type:"disambiguation"</code> / "may refer to"; module +
+          localStorage cache; returns
+          <code>{ title, extract, image, url } | null</code>.
+        </li>
+        <li>
+          <b>src/PlacePeek.jsx</b> — sheet (mobile) / popover (desktop via
+          useViewport); props:
+          <code
+            >{ place, tripContext, onAskTrippy, onOpenMagazine, anchorEl }</code
+          >. Instant open with title + context, extract/image stream in.
+        </li>
+        <li>
+          <b>RouteCard chips (index path)</b>: one chip per peekable town. Base
+          chips from <code>item.stops</code> (nights), day-trip chips from
+          <code>city − stops</code> (dashed style). Falls back to parsing
+          <code>item.city</code> alone for pre-stops saved routes (all chips
+          unlabeled then).
+        </li>
+        <li>
+          <b>RouteCard text links (read path)</b>: after the existing
+          <code>**</code> bold split, scan the plain segments AND bold segments
+          for city-list town names (word-boundary regex per town,
+          case/diacritic-normalized); wrap the <b>first match per card</b> per
+          town in a tappable span that inherits weight/color and adds only the
+          dotted underline. Later mentions untouched. Both links and chips call
+          <code>stopPropagation</code> (cards are click-to-vote).
+        </li>
+        <li>
+          <b>Trip context</b> — computed in BrainstormView from all undismissed
+          tier-1 items: for each route, is this place a base (nights from
+          <code>stops</code>), a day-trip / highlight (named in
+          <code>days</code> text), or absent.
+        </li>
+        <li>
+          <b>Magazine prefetch</b> — first peek open per city calls
+          <code>loadCityDeepDive(city)</code> fire-and-forget (existing cache
+          dedupes repeats); non-city highlights resolve to their parent city via
+          the route's <code>city</code> list. "More in Magazine" then opens
+          warm.
+        </li>
+        <li>
+          <b>Telemetry</b> — <code>place_peek_open</code> { place, source,
+          route_id, wiki_hit } · <code>place_peek_cta</code> { cta: trippy |
+          magazine }.
+        </li>
+        <li>
+          <b>No</b> DB changes, edge functions, migrations, or RG prompt
+          changes. Works on already-saved routes.
+        </li>
+      </ul>
+    </div>
+
+    <script>
+      const PLACES = {
+        galle: {
+          title: "Galle",
+          kind: "City · Southern Province, Sri Lanka",
+          img: "https://upload.wikimedia.org/wikipedia/commons/thumb/0/00/Fort_Galle.jpg/640px-Fort_Galle.jpg",
+          extract:
+            "Galle is a major city on the southwest coast of Sri Lanka, best known for Galle Fort — the fortified old town founded by Portuguese colonists and extensively rebuilt by the Dutch in the 17th century, now a UNESCO World Heritage Site of cobbled lanes, ramparts and cafés.",
+          ctx: [
+            ["P1", "Overnight base · 3 nights"],
+            ["P2", "Not visited"],
+          ],
+        },
+        unawatuna: {
+          title: "Unawatuna",
+          kind: "Beach town · near Galle",
+          img: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9d/Unawatuna_Beach%2C_Sri_Lanka.jpg/640px-Unawatuna_Beach%2C_Sri_Lanka.jpg",
+          extract:
+            "Unawatuna is a coastal town in Galle district, known for its sheltered banana-shaped beach and coral reef. One of Sri Lanka's most popular swimming beaches, a short tuk-tuk ride from Galle Fort.",
+          ctx: [["P1", "Day 2 afternoon · beach"]],
+        },
+        hikkaduwa: {
+          title: "Hikkaduwa",
+          kind: "Resort town · Southern coast",
+          img: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/Hikkaduwa_beach.jpg/640px-Hikkaduwa_beach.jpg",
+          extract:
+            "Hikkaduwa is a seaside resort town famous for its shallow coral sanctuary, surf breaks and diving schools. Its reef and wreck dive sites suit beginners and experienced divers alike.",
+          ctx: [["P1", "Day trip on Day 3 · scuba diving"]],
+        },
+        mirissa: {
+          title: "Mirissa",
+          kind: "Beach town · Southern coast",
+          img: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/Mirissa_Beach_Panorama.jpg/640px-Mirissa_Beach_Panorama.jpg",
+          extract:
+            "Mirissa is a small beach town on Sri Lanka's south coast and one of the island's main whale- and dolphin-watching harbours (November–April). Its crescent beach is framed by palm-topped headlands.",
+          ctx: [["P1", "Overnight base · 1 night"]],
+        },
+        kandy: {
+          title: "Kandy",
+          kind: "City · Central Province, Sri Lanka",
+          img: "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e9/Kandy_Lake%2C_Sri_Lanka.jpg/640px-Kandy_Lake%2C_Sri_Lanka.jpg",
+          extract:
+            "Kandy is a large hill city and the last capital of the ancient kings of Sri Lanka, set around a scenic lake. It is home to the Temple of the Sacred Tooth Relic and gateway to the tea country.",
+          ctx: [
+            ["P2", "Overnight base · 2 nights"],
+            ["P1", "Not visited"],
+          ],
+        },
+        nuwara: {
+          title: "Nuwara Eliya",
+          kind: "Hill town · tea country",
+          img: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Nuwara_Eliya_Town.jpg/640px-Nuwara_Eliya_Town.jpg",
+          extract:
+            "Nuwara Eliya, 'Little England', is a hill town at 1,868 m surrounded by tea plantations. Its cool climate, colonial bungalows and rolling estates make it the heart of Ceylon tea country.",
+          ctx: [["P2", "Overnight base · 1 night"]],
+        },
+        bentota: {
+          title: "Bentota",
+          kind: "Beach resort · Southwest coast",
+          img: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8e/Bentota_Beach.jpg/640px-Bentota_Beach.jpg",
+          extract:
+            "Bentota is a resort town on Sri Lanka's southwest coast, known for its long calm beach at the river mouth, water sports on the Bentota Ganga, and Ayurveda retreats — a swimming beach, not a dive spot.",
+          ctx: [["P2", "Overnight base · 1 night"]],
+        },
+      };
+
+      const phone = document.getElementById("phone");
+      const body = document.getElementById("sheetBody");
+
+      function openPeek(key) {
+        const p = PLACES[key];
+        if (!p) return;
+        const ctx = p.ctx
+          .map(
+            ([l, t]) =>
+              `<div class="row"><span class="pl">${l}</span><span>${t}</span></div>`,
+          )
+          .join("");
+        body.innerHTML = p.fallback
+          ? `<div class="peek-title">${p.title}</div>
+         <div class="peek-kind">${p.kind}</div>
+         <div class="peek-extract" style="color:var(--mist);font-style:italic;">A local spot Trippy picked for this route — no encyclopedia entry, which usually means it's a local favourite rather than a landmark.</div>
+         <div class="trip-ctx"><div class="h">ON YOUR ROUTES</div>${ctx}</div>
+         <div class="cta-row"><button class="cta primary" onclick="closePeek()">💬 Ask Trippy about this place</button></div>`
+          : `<div class="peek-hero"><img src="${p.img}" alt="" onerror="this.remove()" /><span class="credit">Wikimedia Commons</span></div>
+         <div class="peek-title">${p.title}</div>
+         <div class="peek-kind">${p.kind}</div>
+         <div class="peek-extract">${p.extract}</div>
+         <div class="peek-attrib">From <a href="#" onclick="return false;">Wikipedia</a> · CC BY-SA</div>
+         <div class="trip-ctx"><div class="h">ON YOUR ROUTES</div>${ctx}</div>
+         <div class="cta-row">
+           <button class="cta secondary" onclick="closePeek()">💬 Ask Trippy</button>
+           <button class="cta primary" onclick="closePeek()">📖 More in Magazine</button>
+         </div>`;
+        phone.classList.add("open");
+      }
+      function closePeek() {
+        phone.classList.remove("open");
+      }
+
+      document
+        .querySelectorAll("#phone .place-link, #phone .chip")
+        .forEach((el) => {
+          el.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openPeek(el.dataset.p);
+          });
+        });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,1070 @@
+<title>Closing the loop on "Your kind of trip"</title>
+<style>
+  :root {
+    --ink: #0f1923;
+    --paper: #faf6f0;
+    --card: #ffffff;
+    --ocean: #2563a8;
+    --ocean-deep: #1e529a;
+    --gold: #d4a847;
+    --mist: #587284;
+    --border: #e2ddd5;
+    --band: #f5f0e8;
+    --moss: #3d7a5c;
+    --terra: #c4622d;
+    --code-bg: #f0ece4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e8e2d8;
+      --paper: #10161d;
+      --card: #1a232e;
+      --ocean: #6aa3dd;
+      --ocean-deep: #8ab8e8;
+      --gold: #d4a847;
+      --mist: #8ba5bb;
+      --border: #2c3947;
+      --band: #151d26;
+      --moss: #6db392;
+      --terra: #d98a5f;
+      --code-bg: #202b37;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #e8e2d8;
+    --paper: #10161d;
+    --card: #1a232e;
+    --ocean: #6aa3dd;
+    --ocean-deep: #8ab8e8;
+    --gold: #d4a847;
+    --mist: #8ba5bb;
+    --border: #2c3947;
+    --band: #151d26;
+    --moss: #6db392;
+    --terra: #d98a5f;
+    --code-bg: #202b37;
+  }
+  :root[data-theme="light"] {
+    --ink: #0f1923;
+    --paper: #faf6f0;
+    --card: #ffffff;
+    --ocean: #2563a8;
+    --ocean-deep: #1e529a;
+    --gold: #d4a847;
+    --mist: #587284;
+    --border: #e2ddd5;
+    --band: #f5f0e8;
+    --moss: #3d7a5c;
+    --terra: #c4622d;
+    --code-bg: #f0ece4;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  .display {
+    font-family: Didot, "Bodoni 72", "Playfair Display", Georgia, serif;
+    font-weight: 400;
+    letter-spacing: 0.005em;
+  }
+  .wrap {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 20px;
+  }
+  .eyebrow {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--mist);
+  }
+
+  header.doc {
+    padding: 56px 0 8px;
+  }
+  header.doc h1 {
+    font-size: 38px;
+    line-height: 1.12;
+    margin: 10px 0 14px;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 17px;
+    color: var(--mist);
+    max-width: 60ch;
+    margin: 0 0 6px;
+    font-style: italic;
+  }
+  .meta {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 12px;
+    color: var(--mist);
+    display: flex;
+    gap: 18px;
+    margin-top: 18px;
+    flex-wrap: wrap;
+  }
+
+  h2.section {
+    font-size: 24px;
+    margin: 0 0 4px;
+    text-wrap: balance;
+  }
+  .section-block {
+    padding: 40px 0 8px;
+  }
+  .rule {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 40px 0 0;
+  }
+
+  p {
+    max-width: 65ch;
+  }
+  strong {
+    font-weight: 700;
+  }
+  .muted {
+    color: var(--mist);
+  }
+
+  /* trace: what happened */
+  .trace {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 26px 0 10px;
+    max-width: 560px;
+  }
+  .trace-step {
+    display: grid;
+    grid-template-columns: 26px 1fr auto;
+    gap: 12px;
+    align-items: baseline;
+    padding: 10px 14px;
+    background: var(--card);
+    border: 1px solid var(--border);
+  }
+  .trace-step + .trace-step {
+    border-top: 0;
+  }
+  .trace-step:first-child {
+    border-radius: 10px 10px 0 0;
+  }
+  .trace-step:last-child {
+    border-radius: 0 0 10px 10px;
+  }
+  .trace-ok {
+    color: var(--moss);
+    font-weight: 700;
+  }
+  .trace-bad {
+    color: var(--terra);
+    font-weight: 700;
+  }
+  .trace-what {
+    font-size: 14px;
+  }
+  .trace-det {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px;
+    color: var(--mist);
+    text-align: right;
+  }
+  .trace-step.broken {
+    background: color-mix(in srgb, var(--terra) 7%, var(--card));
+  }
+
+  blockquote.plan {
+    margin: 22px 0;
+    padding: 14px 20px;
+    border-left: 3px solid var(--gold);
+    background: var(--band);
+    border-radius: 0 10px 10px 0;
+    font-style: italic;
+    color: var(--mist);
+    max-width: 58ch;
+    font-size: 14px;
+  }
+  blockquote.plan cite {
+    display: block;
+    margin-top: 8px;
+    font-style: normal;
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* phase headers */
+  .phase-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--paper);
+    background: var(--ocean);
+    padding: 5px 12px;
+    border-radius: 999px;
+    margin-bottom: 12px;
+  }
+  :root[data-theme="dark"] .phase-tag,
+  [data-theme="dark"] .phase-tag {
+    color: #10161d;
+  }
+  .phase-tag.follow {
+    background: var(--gold);
+    color: #0f1923;
+  }
+
+  /* mockup band */
+  .mock-band {
+    background: var(--band);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 30px 24px 26px;
+    margin: 26px 0;
+  }
+  .mock-band-label {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--mist);
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  .mock-row {
+    display: flex;
+    gap: 28px;
+    justify-content: center;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  /* ── The phone frame: everything inside is pinned LIGHT (it depicts the app) ── */
+  .phone {
+    width: 360px;
+    max-width: 100%;
+    background: #faf6f0;
+    border: 1px solid #d8d2c8;
+    border-radius: 22px;
+    box-shadow: 0 8px 30px rgba(15, 25, 35, 0.14);
+    overflow: hidden;
+    color: #0f1923;
+    font-size: 13px;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .phone,
+  .phone * {
+    line-height: 1.5;
+  }
+
+  /* annotation markers */
+  .marker {
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #d4a847;
+    color: #0f1923;
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 6px rgba(15, 25, 35, 0.3);
+    z-index: 5;
+  }
+  .notes {
+    width: 250px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-top: 8px;
+  }
+  .note {
+    display: grid;
+    grid-template-columns: 22px 1fr;
+    gap: 10px;
+    align-items: start;
+  }
+  .note .marker {
+    position: static;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .note-text {
+    font-size: 13px;
+    color: var(--ink);
+  }
+  .note-text .sub {
+    color: var(--mist);
+    font-size: 12px;
+    display: block;
+    margin-top: 2px;
+  }
+
+  /* in-app atoms (light, fixed) */
+  .app-toast {
+    margin: 14px 14px 0;
+    padding: 11px 16px;
+    background: #1e2d3d;
+    color: #faf6f0;
+    border-radius: 12px;
+    font-size: 12.5px;
+    box-shadow: 0 4px 16px rgba(15, 25, 35, 0.25);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .app-sheet {
+    padding: 18px 16px 20px;
+  }
+  .app-sheet-title {
+    font-family: Didot, "Bodoni 72", Georgia, serif;
+    font-size: 19px;
+    color: #0f1923;
+  }
+  .app-sheet-sub {
+    font-size: 11.5px;
+    color: #587284;
+    margin: 2px 0 12px;
+  }
+  .app-textarea {
+    border: 1px solid #e2ddd5;
+    border-radius: 14px;
+    background: #ffffff;
+    padding: 11px 13px;
+    font-size: 12.5px;
+    color: #0f1923;
+    font-family: Georgia, serif;
+    min-height: 84px;
+  }
+  .app-btn {
+    margin-top: 14px;
+    padding: 12px;
+    border-radius: 14px;
+    text-align: center;
+    background: linear-gradient(135deg, #2563a8, #1e2d3d);
+    color: #ffffff;
+    font-family: Didot, "Bodoni 72", Georgia, serif;
+    font-size: 15px;
+  }
+  .app-count {
+    font-size: 10.5px;
+    color: #587284;
+    text-align: center;
+    margin-top: 10px;
+  }
+
+  .chat-head {
+    background: #1e2d3d;
+    color: #faf6f0;
+    padding: 12px 16px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    font-family: Didot, "Bodoni 72", Georgia, serif;
+    font-size: 15px;
+  }
+  .chat-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #d4a847;
+    color: #0f1923;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+  }
+  .chat-body {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .bubble-user {
+    align-self: flex-end;
+    max-width: 84%;
+    background: #2563a8;
+    color: #ffffff;
+    padding: 9px 13px;
+    border-radius: 14px 14px 4px 14px;
+    font-size: 12.5px;
+  }
+  .bubble-user .author {
+    font-size: 10px;
+    opacity: 0.75;
+    display: block;
+    margin-bottom: 2px;
+  }
+  .bubble-trippy {
+    align-self: flex-start;
+    max-width: 92%;
+    background: #ffffff;
+    border-left: 3px solid #2563a8;
+    padding: 10px 14px;
+    border-radius: 4px 14px 14px 14px;
+    font-size: 12.5px;
+    color: #0f1923;
+    box-shadow: 0 1px 3px rgba(15, 25, 35, 0.06);
+  }
+  .bubble-trippy em {
+    color: #587284;
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    padding: 2px 14px 16px;
+  }
+  .chip {
+    border: 1.5px solid #2563a8;
+    color: #2563a8;
+    background: #ffffff;
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+  .chip.seeded {
+    background: #f0f7ff;
+    border-style: solid;
+    box-shadow: 0 0 0 3px rgba(37, 99, 168, 0.12);
+  }
+
+  .route-head {
+    padding: 14px 16px 0;
+  }
+  .route-title {
+    font-family: Didot, "Bodoni 72", Georgia, serif;
+    font-size: 17px;
+    color: #0f1923;
+  }
+  .route-sub {
+    font-size: 11px;
+    color: #587284;
+    margin-top: 1px;
+  }
+  .nudge {
+    margin: 12px 14px;
+    padding: 12px 14px;
+    background: #f0f7ff;
+    border: 1px solid #c8dffe;
+    border-radius: 14px;
+  }
+  .nudge-title {
+    font-size: 12.5px;
+    color: #0f1923;
+    font-weight: 700;
+  }
+  .nudge-sub {
+    font-size: 11.5px;
+    color: #587284;
+    margin: 3px 0 9px;
+  }
+  .nudge-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .nudge-btn {
+    background: #2563a8;
+    color: #fff;
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 11.5px;
+  }
+  .nudge-btn.ghost {
+    background: transparent;
+    color: #587284;
+  }
+  .route-card {
+    margin: 0 14px 12px;
+    padding: 13px 15px;
+    background: #ffffff;
+    border: 1px solid #e2ddd5;
+    border-radius: 16px;
+  }
+  .route-card .rt {
+    font-family: Didot, "Bodoni 72", Georgia, serif;
+    font-size: 14.5px;
+  }
+  .route-card .pill {
+    display: inline-block;
+    background: #f0e6d3;
+    border-radius: 6px;
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 1px 6px;
+    margin-right: 6px;
+    font-family: -apple-system, sans-serif;
+    color: #0f1923;
+  }
+  .route-card .rd {
+    font-size: 11px;
+    color: #587284;
+    margin-top: 3px;
+  }
+  .route-points {
+    margin-top: 7px;
+    font-size: 11px;
+  }
+  .route-points div {
+    margin-top: 2px;
+  }
+  .pt-good::before {
+    content: "✓ ";
+    color: #16a34a;
+  }
+  .pt-for {
+    color: #3d7a5c;
+  }
+
+  /* spec tables */
+  table.spec {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 20px 0 8px;
+    font-size: 13.5px;
+  }
+  table.spec th {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--mist);
+    text-align: left;
+    font-weight: 600;
+    padding: 8px 14px 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  table.spec td {
+    padding: 10px 14px 10px 0;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  table.spec td:first-child {
+    white-space: nowrap;
+    font-weight: 700;
+    width: 130px;
+  }
+  code {
+    font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    background: var(--code-bg);
+    padding: 1px 6px;
+    border-radius: 5px;
+  }
+
+  .decision {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 22px;
+    margin: 18px 0;
+  }
+  .decision-q {
+    font-weight: 700;
+    font-size: 14.5px;
+  }
+  .decision-a {
+    font-size: 13.5px;
+    color: var(--mist);
+    margin-top: 4px;
+  }
+  .decision-a b {
+    color: var(--ink);
+  }
+
+  footer.doc {
+    padding: 30px 0 60px;
+    color: var(--mist);
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 12px;
+  }
+
+  @media (max-width: 760px) {
+    .notes {
+      width: 100%;
+    }
+    header.doc h1 {
+      font-size: 30px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition: none !important;
+    }
+  }
+</style>
+
+<div class="wrap">
+  <header class="doc">
+    <div class="eyebrow">TripJam · Collab · UX Recommendation</div>
+    <h1 class="display">Closing the loop on &ldquo;Your kind of trip&rdquo;</h1>
+    <p class="standfirst">
+      A co-traveller shares their travel style and the app says nothing back.
+      Two-phase fix: acknowledge and route to value now, feed styles into route
+      generation next.
+    </p>
+    <div class="meta">
+      <span>2026-08-10</span>
+      <span>Branch: collab-tier2</span>
+      <span>Observed on the Ziro trip, user "tripman"</span>
+    </div>
+  </header>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">What happened</h2>
+    <p>
+      The second traveller on the Ziro trip opened
+      <strong>Your kind of trip</strong>, wrote a real, useful style —
+      <em
+        >&ldquo;I want to spend at least 5–6 days in the festival and also some
+        quiet villages&rdquo;</em
+      >
+      — and saved. Every backend step worked. Nothing visible changed.
+    </p>
+
+    <div class="trace">
+      <div class="trace-step">
+        <span class="trace-ok">✓</span>
+        <span class="trace-what"
+          >Style saved to <code>trip_preferences</code></span
+        >
+        <span class="trace-det">verified on staging, 12:40 UTC</span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-ok">✓</span>
+        <span class="trace-what">Style attached to every chat request</span>
+        <span class="trace-det">client → <code>preferences[]</code></span>
+      </div>
+      <div class="trace-step">
+        <span class="trace-ok">✓</span>
+        <span class="trace-what"
+          >Trippy's prompt gains a per-traveller block</span
+        >
+        <span class="trace-det">chat fn, dynamicContext</span>
+      </div>
+      <div class="trace-step broken">
+        <span class="trace-bad">✗</span>
+        <span class="trace-what"><strong>User sees any of this</strong></span>
+        <span class="trace-det">sheet closes, routes unchanged</span>
+      </div>
+    </div>
+
+    <p>
+      This is working as designed — the design just stops one step short. The
+      Phase 5 plan scoped v1 to chat-only:
+    </p>
+
+    <blockquote class="plan">
+      &ldquo;D-P2 — Does IG use prefs too? Feed prefs into itinerary generation
+      for shared trips (higher value, more work), or chat-only for v1
+      <b>[recommend chat-only first, IG as fast-follow]</b>.&rdquo;
+      <cite>phase5-6-plan.md</cite>
+    </blockquote>
+
+    <p>
+      The value exists but is <strong>latent</strong> — it only surfaces if the
+      traveller happens to chat with Trippy afterwards. Saving a form and
+      receiving silence reads as a bug even when it isn't one. Both phases below
+      attack that gap; neither changes the save-is-a-plain-DB-write
+      architecture.
+    </p>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <div class="phase-tag">Phase A · ship now</div>
+    <h2 class="display section">Acknowledge, then route to the value</h2>
+    <p>
+      The style already changes what Trippy will say — so the cheapest honest
+      fix is to <strong>tell the traveller that</strong>, and put the payoff one
+      tap away. Two touchpoints, both purely frontend, no new LLM spend until
+      the user opts in by tapping.
+    </p>
+
+    <div class="mock-band">
+      <div class="mock-band-label">Mock A1 — after tapping Save</div>
+      <div class="mock-row">
+        <div class="phone">
+          <div class="marker" style="top: 18px; left: -11px">1</div>
+          <div class="app-toast">
+            ✓ &nbsp;Saved — Trippy now plans for both of you
+          </div>
+          <div class="app-sheet">
+            <div class="app-sheet-title">Your kind of trip</div>
+            <div class="app-sheet-sub">
+              Trippy plans for everyone on the trip.
+            </div>
+            <div class="app-textarea">
+              I want to spend at least 5-6 days in the festival and also some
+              quiet villages away from the crowds.
+            </div>
+            <div class="app-btn">Save</div>
+            <div class="app-count" style="position: relative">
+              <span class="marker" style="top: -4px; right: 28px">2</span>
+              2 of 2 travellers shared their style
+            </div>
+          </div>
+        </div>
+        <div class="notes">
+          <div class="note">
+            <span class="marker">1</span>
+            <span class="note-text"
+              >Toast names the consequence, not the mechanism — &ldquo;Trippy
+              now plans for both of you&rdquo; instead of today's inert
+              &ldquo;Travel style saved&rdquo;.
+              <span class="sub"
+                >Copy varies with count: solo trips keep the plain save
+                toast.</span
+              >
+            </span>
+          </div>
+          <div class="note">
+            <span class="marker">2</span>
+            <span class="note-text"
+              >Counter already lands at 2 of 2 here (owner's setup-form notes
+              count as theirs — shipped in <code>55c50a8</code>).</span
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mock-band">
+      <div class="mock-band-label">
+        Mock A2 — chat, immediately after the sheet closes
+      </div>
+      <div class="mock-row">
+        <div class="phone">
+          <div class="chat-head">
+            <span class="chat-avatar">🧳</span> Travel with Trippy
+          </div>
+          <div class="chat-body">
+            <div class="bubble-trippy">
+              I've put together some trip plans for you. Ask me anything —
+              compare plans, tweak a specific one, or tell me what matters most
+              to you.
+            </div>
+          </div>
+          <div class="chips" style="position: relative">
+            <div class="marker" style="top: -6px; left: 2px">3</div>
+            <span class="chip seeded"
+              >✨ Rebalance the plans for everyone's style</span
+            >
+            <span class="chip">Which plan fits us both best?</span>
+          </div>
+        </div>
+        <div class="notes">
+          <div class="note">
+            <span class="marker">3</span>
+            <span class="note-text"
+              >A <b>seeded suggestion chip</b> appears once per style change,
+              first in the row, visually raised.
+              <span class="sub"
+                >Tapping sends the prompt through the normal chat flow — the
+                user chooses to spend, nothing fires on its own.</span
+              >
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mock-band">
+      <div class="mock-band-label">
+        Mock A3 — what tapping the chip returns (real prompt mechanics,
+        illustrative reply)
+      </div>
+      <div class="mock-row">
+        <div class="phone">
+          <div class="chat-head">
+            <span class="chat-avatar">🧳</span> Travel with Trippy
+          </div>
+          <div class="chat-body">
+            <div class="bubble-user">
+              <span class="author">tripman</span>Rebalance the plans for
+              everyone's style
+            </div>
+            <div class="bubble-trippy" style="position: relative">
+              <div class="marker" style="top: -8px; right: -8px">4</div>
+              Looking at both your styles:
+              <em
+                >tripman wants 5–6 festival days plus quiet villages; Achin
+                asked for slow mornings and local food.</em
+              ><br /><br />
+              <b>Ziro Festival + Villages</b> fits you both best — I'd stretch
+              the festival block to Days 2–6 for tripman and keep the Hong &amp;
+              Siiro village mornings unhurried for Achin. Want me to modify P1
+              that way?
+            </div>
+          </div>
+          <div class="chips">
+            <span class="chip">Yes, modify P1</span>
+            <span class="chip">Show the trade-offs</span>
+          </div>
+        </div>
+        <div class="notes">
+          <div class="note">
+            <span class="marker">4</span>
+            <span class="note-text"
+              >No new prompt work — the existing
+              <code>PER-TRAVELER PREFERENCES</code> block already produces
+              attribution like this. The chip just makes someone ask.
+              <span class="sub"
+                >Reply flows into the existing modify-route action, so the loop
+                ends in a changed plan.</span
+              >
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <table class="spec">
+      <tr>
+        <th>Item</th>
+        <th>Spec</th>
+      </tr>
+      <tr>
+        <td>Trigger</td>
+        <td>
+          Successful <code>savePreferences</code> on a shared trip (<code
+            >members &gt; 1</code
+          >). Solo trips keep today's behavior exactly.
+        </td>
+      </tr>
+      <tr>
+        <td>Toast copy</td>
+        <td>
+          &ldquo;Saved — Trippy now plans for both of you&rdquo; (2 travellers)
+          / &ldquo;…for all N of you&rdquo; (3+).
+        </td>
+      </tr>
+      <tr>
+        <td>Seeded chip</td>
+        <td>
+          &ldquo;✨ Rebalance the plans for everyone's style&rdquo;. Shown once
+          per style save (dismiss on tap, on send, or on next trip open).
+          Pre-trip: targets routes. Post-IG: &ldquo;Rebalance the
+          itinerary…&rdquo; targets days.
+        </td>
+      </tr>
+      <tr>
+        <td>Cost</td>
+        <td>
+          Zero until tapped; then one normal chat turn on the existing
+          pooled-credit path.
+        </td>
+      </tr>
+      <tr>
+        <td>Touched code</td>
+        <td>
+          <code>PreferencesSheet.jsx</code> (toast + onSaved payload), chat
+          suggestions array in <code>App.jsx</code>. No backend change.
+        </td>
+      </tr>
+      <tr>
+        <td>Effort</td>
+        <td>~half a day including the E2E assertion.</td>
+      </tr>
+    </table>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <div class="phase-tag follow">Phase B · fast-follow</div>
+    <h2 class="display section">Styles reach the route generator</h2>
+    <p>
+      Phase A makes the existing value visible. Phase B is the value the
+      traveller actually expected:
+      <strong>the plans themselves respond</strong>. This is the D-P2
+      fast-follow the plan already anticipated — thread
+      <code>preferences[]</code> into RG and IG for shared trips, and nudge a
+      regeneration when a new style lands after plans exist.
+    </p>
+
+    <div class="mock-band">
+      <div class="mock-band-label">
+        Mock B1 — route list when a style arrives after routes were generated
+      </div>
+      <div class="mock-row">
+        <div class="phone">
+          <div class="route-head">
+            <div class="route-title">Ziro</div>
+            <div class="route-sub">Pick a route, then build your itinerary</div>
+          </div>
+          <div class="nudge" style="position: relative">
+            <div class="marker" style="top: -9px; left: -9px">5</div>
+            <div class="nudge-title">tripman shared their travel style</div>
+            <div class="nudge-sub">
+              These plans were drafted before it. Rework them around both
+              travellers?
+            </div>
+            <div class="nudge-actions">
+              <span class="nudge-btn">Rework the plans</span>
+              <span class="nudge-btn ghost">Keep as is</span>
+            </div>
+          </div>
+          <div class="route-card">
+            <div class="rt">
+              <span class="pill">P1</span>🎵 Ziro Festival + Villages
+            </div>
+            <div class="rd">Festival energy, then Apatani village life</div>
+            <div class="route-points">
+              <div class="pt-good pt-for" style="position: relative">
+                <span class="marker" style="top: -2px; right: -6px">6</span>
+                5–6 festival days — what tripman asked for
+              </div>
+              <div class="pt-good pt-for">
+                Unhurried village mornings for Achin
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="notes">
+          <div class="note">
+            <span class="marker">5</span>
+            <span class="note-text"
+              >Nudge appears only when a style is saved <b>after</b> routes
+              exist, names who shared, and is dismissible — unilateral-edit
+              model stays intact, nothing regenerates on its own.
+              <span class="sub"
+                >&ldquo;Rework the plans&rdquo; = existing regenerate flow, with
+                prefs in the request.</span
+              >
+            </span>
+          </div>
+          <div class="note">
+            <span class="marker">6</span>
+            <span class="note-text"
+              >RG's <code>points[]</code> already supports requirement
+              call-outs; with prefs in the prompt they become
+              <b>per-traveller attributions</b> on each route card — the visible
+              proof the styles were heard.</span
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <table class="spec">
+      <tr>
+        <th>Item</th>
+        <th>Spec</th>
+      </tr>
+      <tr>
+        <td>RG request</td>
+        <td>
+          <code>generate-brainstorm</code> body gains
+          <code>preferences: [{name, prefs_text}]</code> (shared trips only).
+          Prompt: per-traveller block + rule &ldquo;each route's
+          <code>points</code> must address each named traveller's stated
+          needs&rdquo; — same shape as the existing traveller-notes rule.
+        </td>
+      </tr>
+      <tr>
+        <td>IG request</td>
+        <td>
+          Same block into <code>generate-itinerary</code>; day text may
+          attribute (&ldquo;quiet Siiro morning — Achin's pace&rdquo;).
+        </td>
+      </tr>
+      <tr>
+        <td>Nudge trigger</td>
+        <td>
+          Realtime <code>trip_preferences</code> insert/update where tier-1
+          routes exist and author ≠ viewer, or on next trip open. One live nudge
+          at a time; dismiss persists per (trip, style version).
+        </td>
+      </tr>
+      <tr>
+        <td>Cost</td>
+        <td>
+          One RG run per accepted nudge — normal pooled-credit charge, ~6
+          credits. Declining costs nothing.
+        </td>
+      </tr>
+      <tr>
+        <td>Prompt caching</td>
+        <td>
+          Prefs go in the user message (uncached), never the cached system
+          prefix — mirrors how chat does it.
+        </td>
+      </tr>
+      <tr>
+        <td>Effort</td>
+        <td>~2 days: prompt work + nudge UI + regenerate threading + E2E.</td>
+      </tr>
+    </table>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="section-block">
+    <h2 class="display section">Guard-rails, both phases</h2>
+    <p>
+      <strong>No surprise spend.</strong> Every LLM call stays behind an
+      explicit tap. The failed alternative — Trippy proactively posting in the
+      group chat on every save — was considered and dropped: it charges the pool
+      for a message nobody asked for, and three travellers editing styles in one
+      evening would make Trippy spam the thread.
+    </p>
+    <p>
+      <strong>Idempotent nudging.</strong> Chip and nudge key on
+      <code>(trip_id, user_id, updated_at)</code> of the style row — re-saving
+      the same text doesn't re-arm them.
+    </p>
+    <p>
+      <strong>Solo trips stay byte-identical.</strong> Everything here gates on
+      <code>isSharedTrip</code>, consistent with the rest of the collab stack.
+    </p>
+
+    <div class="decision">
+      <div class="decision-q">Decisions needed</div>
+      <div class="decision-a">
+        <b>1.</b> Ship Phase A on collab-tier2 now? (frontend-only, no
+        migration)
+      </div>
+      <div class="decision-a">
+        <b>2.</b> Phase B nudge default: propose <b>batched</b> — one nudge per
+        trip-open summarising all new styles, not one per save.
+      </div>
+      <div class="decision-a">
+        <b>3.</b> Phase B copy: &ldquo;Rework the plans&rdquo; vs
+        &ldquo;Rebalance&rdquo; — mock uses <b>Rework</b>;
+        &ldquo;rebalance&rdquo; reads more technical.
+      </div>
+    </div>
+  </section>
+
+  <footer class="doc">
+    TripJam · prepared 2026-08-10 · mockups use production design tokens
+    (theme.js) · Trippy replies in mocks are illustrative; prompt mechanics are
+    as shipped on collab-tier2
+  </footer>
+</div>
