@@ -56,18 +56,32 @@ jobs:
             case "$code" in 200|401) note "$env REST: $code" ;; *) hard "$env REST gateway: HTTP $code" ;; esac
           done
 
-          # ── 3. Edge functions (prod, anon-reachable) ────────────────
-          code=$(curl -s -o /dev/null -w "%{http_code}" "$PROD_URL/functions/v1/places-proxy?action=city-video" \
-            -H "apikey: $PROD_ANON" -H "Authorization: Bearer $PROD_ANON" \
-            -H "Content-Type: application/json" -d '{"q":"Kyoto"}' --max-time 20)
-          [ "$code" = "200" ] && note "prod edge fn (places-proxy): 200" || hard "prod places-proxy: HTTP $code"
-
-          # ── 4. Prod auth sign-in (probe account) ────────────────────
+          # ── 3. Prod auth sign-in (probe account) ────────────────────
+          # Must precede the edge-function probe: places-proxy's paid actions
+          # require a real user token (abuse hardening 47987b7).
           PTOKEN=$(curl -s "$PROD_URL/auth/v1/token?grant_type=password" -H "apikey: $PROD_ANON" \
             -H "Content-Type: application/json" \
             -d "{\"email\":\"health-probe@tripjam.app\",\"password\":\"$PROBE_PW\"}" --max-time 15 \
             | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))" || true)
           [ -n "$PTOKEN" ] && note "prod sign-in: ok" || hard "prod sign-in failed for probe account"
+
+          # ── 4. Edge functions (prod) ────────────────────────────────
+          # Probe the path real users take: a signed-in token must get 200.
+          if [ -n "$PTOKEN" ]; then
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$PROD_URL/functions/v1/places-proxy?action=city-video" \
+              -H "apikey: $PROD_ANON" -H "Authorization: Bearer $PTOKEN" \
+              -H "Content-Type: application/json" -d '{"q":"Kyoto"}' --max-time 20)
+            [ "$code" = "200" ] && note "prod edge fn (places-proxy, authed): 200" || hard "prod places-proxy (authed): HTTP $code"
+          else
+            hard "prod places-proxy probe skipped — no sign-in token"
+          fi
+          # Invariant: the anon key (public in the client bundle) must NOT buy
+          # paid Google/TripAdvisor/Pexels calls. Guards against a regression
+          # that reopens the billing faucet.
+          code=$(curl -s -o /dev/null -w "%{http_code}" "$PROD_URL/functions/v1/places-proxy?action=city-video" \
+            -H "apikey: $PROD_ANON" -H "Authorization: Bearer $PROD_ANON" \
+            -H "Content-Type: application/json" -d '{"q":"Kyoto"}' --max-time 20)
+          [ "$code" = "401" ] && note "places-proxy anon guard: 401 (correct)" || hard "places-proxy accepts the ANON key (HTTP $code) — paid-API faucet is open"
 
           # ── 5. LLM balance (staging qa user, unbilled Haiku call) ───
           QTOKEN=$(curl -s "$STAGING_URL/auth/v1/token?grant_type=password" -H "apikey: $STAGING_ANON" \
