@@ -11,6 +11,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import html2canvas from "html2canvas";
 import posthog from "posthog-js";
 import { T } from "../theme";
@@ -272,7 +273,15 @@ function dayCoverPhoto(day) {
  * moment of the plan, not just the photogenic ones. Hotels keep their
  * photo-only rule: a hotel without a photo stays Plan-only entirely. */
 function buildFrames(trip, days) {
-  const frames = [{ type: "cover", key: "cover" }];
+  // Cover borrows Day 1's hero (falls back to the first photographed day)
+  const coverDay = days.find((d) => dayCoverPhoto(d));
+  const frames = [
+    {
+      type: "cover",
+      key: "cover",
+      photoUrl: coverDay ? dayCoverPhoto(coverDay) : null,
+    },
+  ];
   days.forEach((day, i) => {
     frames.push({
       type: "day",
@@ -1291,7 +1300,11 @@ export default function StoryView({
   // Session-level claims for freshly fetched URLs (url → activity id)
   const claimRef = useRef(new Map());
 
-  const [playerOpen, setPlayerOpen] = useState(false);
+  // Days snapshot handed to the player, or null when closed. Photos the
+  // layout resolved this session live only in useDayPhotos state + claimRef
+  // (the DB write never flows back into `days`), so merge them in — otherwise
+  // every frame of a freshly generated trip plays photo-less.
+  const [playerDays, setPlayerDays] = useState(null);
   // {frame, credit, editorialFallback} while a share render is in flight
   const [shareJob, setShareJob] = useState(null);
   const shareStageRef = useRef(null);
@@ -1314,7 +1327,17 @@ export default function StoryView({
   const onFirstDaySettled = useCallback(() => setCurtain(false), []);
 
   const openPlayer = () => {
-    setPlayerOpen(true);
+    const sessionUrl = new Map();
+    for (const [url, actId] of claimRef.current)
+      if (!sessionUrl.has(actId)) sessionUrl.set(actId, url);
+    setPlayerDays(
+      days.map((d) => ({
+        ...d,
+        activities: (d.activities || []).map((a) =>
+          sessionUrl.has(a.id) ? { ...a, photo_url: sessionUrl.get(a.id) } : a,
+        ),
+      })),
+    );
     posthog.capture("story_player_opened", {
       trip_id: trip?.id,
       num_days: days.length,
@@ -1486,14 +1509,19 @@ export default function StoryView({
             </p>
           </div>
         </div>
-        {playerOpen && (
-          <StoryPlayer
-            trip={trip}
-            days={days}
-            onClose={() => setPlayerOpen(false)}
-            onShareFrame={shareFrame}
-          />
-        )}
+        {/* Portaled: inside the itinerary pane, ancestor stacking contexts
+            let the map's Leaflet controls and the header avatar paint over
+            the fixed full-screen player. */}
+        {playerDays &&
+          createPortal(
+            <StoryPlayer
+              trip={trip}
+              days={playerDays}
+              onClose={() => setPlayerDays(null)}
+              onShareFrame={shareFrame}
+            />,
+            document.body,
+          )}
         {shareJob && (
           <div
             className="sv-share-stage"
