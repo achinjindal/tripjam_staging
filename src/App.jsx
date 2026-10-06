@@ -9662,13 +9662,22 @@ export default function App({
   // loadDestinationResearch accepts optional params for the "Load more" flow:
   //   refinement  — free-text focus (e.g. "hiking blogs", "budget travel")
   //   append      — if true, new items are merged onto the existing list
-  //   bypassCache — if true, skip the 30-day server cache (used for unrefined
-  //                 Load-more so the user gets a fresh batch, not the same set)
+  //   bypassCache — if true, skip the 90-day server cache. No longer used by
+  //                 Load-more (that now sends a batch ordinal, so each extra
+  //                 batch is cacheable instead of regenerated per user); kept
+  //                 as an escape hatch for forcing a genuinely fresh digest.
   const loadDestinationResearch = async ({
     refinement = "",
     append = false,
     bypassCache = false,
   } = {}) => {
+    // "Load more" asks the server for the NEXT batch rather than telling it to
+    // skip the cache. Same user-visible behaviour (a fresh set of finds), but
+    // batch 2 becomes a cacheable, shareable entry instead of a full-price
+    // regeneration for every user. ~6 items per batch, matching the prompt.
+    const batch = append
+      ? Math.floor((destResearch.digest?.inspirations?.length || 0) / 6) + 1
+      : 1;
     if (destResearch.loading) return;
     const destinations = resolveInspirationDestinations({
       pendingForm,
@@ -9697,6 +9706,7 @@ export default function App({
             startDate: trip?.start_date || pendingForm?.startDate || null,
             tripId: trip?.id || editingTrip?.id || null,
             refinement,
+            batch,
             bypass_cache: bypassCache,
             ...(quickPass ? { quick: true } : {}),
           }),
@@ -14807,7 +14817,6 @@ export default function App({
                             loadDestinationResearch({
                               refinement,
                               append: true,
-                              bypassCache: !refinement,
                             })
                           }
                         />
@@ -16225,7 +16234,6 @@ export default function App({
                             loadDestinationResearch({
                               refinement,
                               append: true,
-                              bypassCache: !refinement,
                             })
                           }
                         />
