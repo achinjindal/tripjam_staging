@@ -1,4 +1,11 @@
 import { captureException } from "../_shared/errortrack.ts";
+import {
+  callLLM,
+  modelFor,
+  suggestCap,
+  providerOf,
+  type JSONSchema,
+} from "../_shared/llm.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { deductCredits } from "../_shared/credits.ts";
 
@@ -276,18 +283,29 @@ function postEscalateCheck(
 
 // ── Google Places lookup (Feature 8 — chains + bad hints + escalation fallback) ─
 
+// Outcome is discriminated on purpose: "miss" (Google answered and knows no
+// such place) is a CONCLUSIVE negative and may be cached for a long time,
+// while "error" (no key, transport failure, HTTP error) means we never got an
+// answer and must be retried soon. Collapsing both to null — as this used to
+// — made every unresolvable name re-run the whole paid ladder weekly forever.
+type GoogleLookup =
+  | {
+      outcome: "hit";
+      lat: number;
+      lng: number;
+      place_id: string;
+      business_status?: string;
+      display_name?: string | null;
+    }
+  | { outcome: "miss" }
+  | { outcome: "error"; reason: string };
+
 async function googleFindPlace(
   name: string,
   city: string | null,
   type?: string,
-): Promise<{
-  lat: number;
-  lng: number;
-  place_id: string;
-  business_status?: string;
-  display_name?: string;
-} | null> {
-  if (!PLACES_KEY) return null;
+): Promise<GoogleLookup> {
+  if (!PLACES_KEY) return { outcome: "error", reason: "no_api_key" };
   const query = city ? `${name}, ${city}` : name;
   const body: Record<string, unknown> = {
     textQuery: query,
@@ -295,24 +313,39 @@ async function googleFindPlace(
     maxResultCount: 1,
   };
   if (type) body.includedType = type; // e.g., "lodging" for hotels
-  const res = await fetch(`${PLACES_BASE}/places:searchText`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": PLACES_KEY,
-      "X-Goog-FieldMask":
-        "places.id,places.location,places.businessStatus,places.displayName",
-    },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${PLACES_BASE}/places:searchText`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": PLACES_KEY,
+        "X-Goog-FieldMask":
+          "places.id,places.location,places.businessStatus,places.displayName",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    console.warn("googleFindPlace transport error:", (e as Error).message);
+    return { outcome: "error", reason: "transport" };
+  }
   if (!res.ok) {
     console.warn("googleFindPlace error:", res.status, await res.text());
-    return null;
+    return { outcome: "error", reason: `http_${res.status}` };
   }
-  const data: any = await res.json();
+  let data: any;
+  try {
+    data = await res.json();
+  } catch {
+    return { outcome: "error", reason: "bad_json" };
+  }
   const place = data?.places?.[0];
-  if (!place?.location?.latitude || !place?.location?.longitude) return null;
+  // Google responded successfully with no usable result → conclusive miss.
+  if (!place?.location?.latitude || !place?.location?.longitude) {
+    return { outcome: "miss" };
+  }
   return {
+    outcome: "hit",
     lat: place.location.latitude,
     lng: place.location.longitude,
     place_id: place.id,
@@ -326,7 +359,18 @@ async function googleFindPlace(
 // `costToCreditsPassthrough` uses user-value rate ($0.01/credit) not LLM-budget rate ($0.007/credit)
 // so the founder breaks even (no margin) on Google API calls.
 
-const GOOGLE_PLACES_CALL_USD = 0.017;
+// Zeroed 2026-10-05. This was charging users $0.017 per verify as a
+// break-even pass-through, but our actual Google bill is $0: the field mask
+// puts these calls on Text Search Pro, whose free tier is 5,000/month against
+// ~675 lifetime calls. Users had been charged ~1,154 credits (~$11.54) for
+// calls Google never invoiced. The 0.017 figure was stale Find Place pricing;
+// current overage starts near $2.83/1,000 anyway.
+//
+// Env-overridable so it can be switched back on if monthly volume ever
+// approaches the free-tier ceiling — set GOOGLE_PLACES_CALL_USD=0.00283.
+const GOOGLE_PLACES_CALL_USD = parseFloat(
+  Deno.env.get("GOOGLE_PLACES_CALL_USD") || "0",
+);
 const USER_VALUE_PER_CREDIT = 0.01;
 
 function costToCreditsPassthrough(usd: number): number {
@@ -992,8 +1036,14 @@ async function handleLookupPlace(req: Request): Promise<Response> {
 
   // 4. Call Google
   const result = await googleFindPlace(name, city, type);
-  if (!result) {
-    incrementUsage("lookup-place", "google-miss", today()).catch(() => {});
+  if (result.outcome !== "hit") {
+    // Both a conclusive miss and a failed call return the same shape to the
+    // caller (unchanged behaviour); only the counter distinguishes them.
+    incrementUsage(
+      "lookup-place",
+      result.outcome === "miss" ? "google-miss" : "google-error",
+      today(),
+    ).catch(() => {});
     return Response.json(
       { lat: null, lng: null, source: null, confidence: "low" },
       { headers: corsHeaders },
@@ -1127,14 +1177,43 @@ async function handleResolveCoords(req: Request): Promise<Response> {
 // (Photon returning a US consulate for a Westin search). Cached aggressively
 // against the ORIGINAL name so repeat hallucinations cost 0 credits.
 
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+// Tier-3 repair model. Haiku by default; LLM_MODEL_REPAIR (or the global
+// LLM_MODEL_DEFAULT) moves it. Resolved once per isolate.
+const REPAIR_MODEL = modelFor("REPAIR", "claude-haiku-4-5-20251001");
 const NAME_SIM_THRESHOLD = 0.5; // Tier 1/2 acceptance threshold
 
 // Cache TTLs (days)
+//
+// Successes stay at 90 days because that window is set by STALENESS, not cost
+// — a restaurant that closes needs re-checking, and Google's free tier (5,000
+// Text Search Pro calls/month vs our ~675 lifetime) means re-verifying is
+// free anyway. Extending it would only widen the window where we pin a
+// closed venue.
+//
+// Conclusive negatives get the SAME 90 days: a name Google has never heard of
+// is almost always a hallucination, and retrying it weekly re-ran the entire
+// paid ladder forever. It is not infinite only because a genuinely new venue
+// can get indexed later.
+//
+// Transient failures (no API key, HTTP/transport error, or user out of
+// credits before we even asked) keep the short retry — we never got an answer,
+// so caching a "no" would be caching our own outage.
 const VERIFY_TTL_DAYS = 90;
+const VERIFY_NEGATIVE_TTL_DAYS = 90;
+const VERIFY_TRANSIENT_TTL_DAYS = 1;
 const HAIKU_REPAIR_TTL_DAYS = 30;
-const HAIKU_ALTS_TTL_DAYS = 7;
+
+// Mirrors REPAIR_SYSTEM_PROMPT's declared shape. `canonical` is nullable by
+// design — "no real equivalent" is a real verdict, not a missing field.
+const REPAIR_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["canonical", "reason"],
+  properties: {
+    canonical: { type: ["string", "null"] },
+    reason: { type: "string", description: "under 120 characters" },
+  },
+} as const;
 
 const REPAIR_SYSTEM_PROMPT = `You are a place-name verification assistant. Given a place name claimed to be in a specific city, decide if it refers to a real place.
 
@@ -1149,17 +1228,6 @@ Rules:
 - The canonical name must be specific enough to geocode (e.g. "The Westin Rusutsu Resort" not "a Westin in Japan").
 - Keep reason under 120 characters.`;
 
-const ALTS_SYSTEM_PROMPT = `You are a place-name alternative-suggestion assistant. Given a place name in a city that we could not verify, suggest 2-3 real, specific alternatives in the same category (hotel/sight/restaurant) in the same city or nearby.
-
-Return strict JSON ONLY (no markdown, no code fences):
-{"alternatives": [{"name": "...", "hint": "...", "reason": "..."}, ...]}
-
-Rules:
-- Each "name" must be specific enough to geocode (e.g. "JR Tower Hotel Nikko Sapporo" not "a tower hotel in Sapporo").
-- "hint" is a fully-qualified place description for geocoding: "<name>, <neighborhood>, <city>, <country>".
-- "reason" is a 1-line "why this is a good fit" (under 80 chars). Mention category match and locality.
-- 2-3 alternatives only. Quality over quantity.`;
-
 // Anthropic Haiku call wrapper. Logs llm_usage + deducts credits.
 // Returns parsed JSON or null on failure.
 async function callHaiku(args: {
@@ -1167,41 +1235,40 @@ async function callHaiku(args: {
   tripId: string | null;
   functionTag: string; // e.g. "verify-place:repair"
   systemPrompt: string;
+  schema?: JSONSchema;
   userMessage: string;
   maxTokens: number;
 }): Promise<{ json: any; inputTokens: number; outputTokens: number } | null> {
-  const apiKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
-  if (!apiKey) {
+  // Provider-specific key check, so a missing key skips the call instead of
+  // burning a round trip on a guaranteed 401.
+  const keyEnv = {
+    anthropic: "ANTHROPIC_API_KEY",
+    google: "GEMINI_API_KEY",
+    openai: "OPENAI_API_KEY",
+  }[providerOf(REPAIR_MODEL)];
+  if (!Deno.env.get(keyEnv)) {
     console.warn(
-      `[${args.functionTag}] ANTHROPIC_API_KEY missing — skipping Haiku call`,
+      `[${args.functionTag}] ${keyEnv} missing — skipping ${REPAIR_MODEL} call`,
     );
     return null;
   }
   try {
-    const res = await fetch(ANTHROPIC_URL, {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: HAIKU_MODEL,
-        max_tokens: args.maxTokens,
-        system: args.systemPrompt,
-        messages: [{ role: "user", content: args.userMessage }],
-      }),
+    // The caller's cap is tuned for Haiku, which answers this prompt in ~32
+    // tokens. gpt-6-luna averaged 160 and peaked at 553 on the same 12 cases
+    // — 4 of them silently truncated to unparseable JSON at the old literal
+    // cap, and all 4 were the hard judgement calls. suggestCap's additive
+    // floor is what makes a small-output site like this safe to switch.
+    const res = await callLLM({
+      model: REPAIR_MODEL,
+      system: args.systemPrompt,
+      user: args.userMessage,
+      maxTokens: suggestCap(REPAIR_MODEL, args.maxTokens),
+      json: true,
+      schema: args.schema,
     });
-    if (!res.ok) {
-      console.warn(
-        `[${args.functionTag}] Anthropic ${res.status}: ${await res.text()}`,
-      );
-      return null;
-    }
-    const data: any = await res.json();
-    const text = data?.content?.[0]?.text?.trim() ?? "";
-    const inputTokens = data?.usage?.input_tokens || 0;
-    const outputTokens = data?.usage?.output_tokens || 0;
+    const text = res.text.trim();
+    const inputTokens = res.usage.input_tokens;
+    const outputTokens = res.usage.output_tokens;
 
     // Log llm_usage (fire-and-forget)
     fetch(`${REST}/llm_usage`, {
@@ -1210,9 +1277,12 @@ async function callHaiku(args: {
       body: JSON.stringify({
         trip_id: args.tripId,
         function_name: `places-proxy:${args.functionTag}`,
-        model: HAIKU_MODEL,
+        model: REPAIR_MODEL,
         input_tokens: inputTokens,
         output_tokens: outputTokens,
+        cache_creation_tokens: res.usage.cache_creation_input_tokens,
+        cache_read_tokens: res.usage.cache_read_input_tokens,
+        duration_ms: res.ms,
       }),
     }).catch(() => {});
 
@@ -1220,9 +1290,11 @@ async function callHaiku(args: {
     if (args.userId) {
       deductCredits({
         userId: args.userId,
-        model: HAIKU_MODEL,
+        model: REPAIR_MODEL,
         inputTokens,
         outputTokens,
+        cacheCreationTokens: res.usage.cache_creation_input_tokens,
+        cacheReadTokens: res.usage.cache_read_input_tokens,
         functionName: `places-proxy:${args.functionTag}`,
         tripId: args.tripId,
       }).catch(() => {});
@@ -1233,6 +1305,9 @@ async function callHaiku(args: {
       .replace(/^```(?:json)?\s*/i, "")
       .replace(/\s*```$/i, "")
       .trim();
+    // Schema-guaranteed when a schema was passed; the slice below stays for
+    // the degraded prompt-only path.
+    if (res.parsed) return { json: res.parsed, inputTokens, outputTokens };
     const match = stripped.match(/\{[\s\S]*\}/);
     if (!match) return { json: null, inputTokens, outputTokens };
     try {
@@ -1268,6 +1343,7 @@ ${args.city ? `City: "${args.city}"` : ""}`;
     tripId: args.tripId,
     functionTag: "verify-place:repair",
     systemPrompt: REPAIR_SYSTEM_PROMPT,
+    schema: REPAIR_SCHEMA as unknown as JSONSchema,
     userMessage,
     maxTokens: 200,
   });
@@ -1296,50 +1372,6 @@ ${args.city ? `City: "${args.city}"` : ""}`;
 }
 
 // Tier 5: ask Haiku for 2-3 alternatives we can render in a picker.
-async function haikuAlternatives(args: {
-  name: string;
-  city: string | null;
-  userId: string | null;
-  tripId: string | null;
-}): Promise<Array<{ name: string; hint: string; reason: string }>> {
-  const cacheKey = `haiku-alternatives:${args.name.trim().toLowerCase()}|${(args.city || "").toLowerCase()}`;
-  const cached = await cacheGet(cacheKey);
-  if (cached && Array.isArray(cached.alternatives)) {
-    return cached.alternatives;
-  }
-
-  const userMessage = `Place we could not verify: "${args.name}"
-${args.city ? `City: "${args.city}"` : ""}`;
-
-  const result = await callHaiku({
-    userId: args.userId,
-    tripId: args.tripId,
-    functionTag: "verify-place:alts",
-    systemPrompt: ALTS_SYSTEM_PROMPT,
-    userMessage,
-    maxTokens: 400,
-  });
-
-  if (!result?.json || !Array.isArray(result.json.alternatives)) return [];
-  const alts: Array<{ name: string; hint: string; reason: string }> = [];
-  for (const a of result.json.alternatives.slice(0, 3)) {
-    if (typeof a?.name !== "string" || !a.name.trim()) continue;
-    alts.push({
-      name: a.name.trim(),
-      hint: typeof a.hint === "string" ? a.hint.trim() : a.name.trim(),
-      reason: typeof a.reason === "string" ? a.reason.slice(0, 120) : "",
-    });
-  }
-  cacheSet(
-    cacheKey,
-    "haiku-alternatives",
-    { alternatives: alts },
-    "anthropic-haiku",
-    HAIKU_ALTS_TTL_DAYS,
-  ).catch(() => {});
-  return alts;
-}
-
 // Resolve city bias via Nominatim/cache. Returns null on failure.
 async function resolveCityBias(
   city: string | null,
@@ -1417,12 +1449,20 @@ async function nominatimSearchNamed(
   }
 }
 
-// Verify-place orchestrator. Runs the 5-tier ladder.
+// Verify-place orchestrator. Runs the 4-tier ladder (Photon → Nominatim →
+// Haiku name-repair → Google with strict validation).
 //
 // Response shapes:
 //   Success:        { lat, lng, source, confidence, corrected_from?, place_id?, business_status?, repaired? }
-//   Needs picker:   { status: "needs_user_choice", alternatives: [{ name, hint, reason }], reason }
-//   Unresolved:     { status: "unresolved", reason }
+//   Unresolved:     { status: "unresolved", reason, conclusive }
+//
+// `conclusive: true` means Google answered and the name is not a usable place
+// there — i.e. a probable hallucination, cached for 90d. `false` means we
+// never got an answer (outage / no credits), cached for 1d and retried.
+//
+// There used to be a 5th tier that asked Haiku for alternative venues and
+// returned { status: "needs_user_choice", alternatives }. No UI ever consumed
+// it, so it was pure spend; removed 2026-10-03.
 async function handleVerifyPlace(req: Request): Promise<Response> {
   const { name, city, hint, type, tripId, skip_paid_tiers } = await req.json();
   if (!name) {
@@ -1630,15 +1670,22 @@ async function handleVerifyPlace(req: Request): Promise<Response> {
   const balance = await getUserCredits(userId);
   const googleCredits = costToCreditsPassthrough(GOOGLE_PLACES_CALL_USD);
 
+  // Tracks whether the terminal "unresolved" below is a CONCLUSIVE negative
+  // (Google answered and the name is not a real place there) or merely
+  // transient (we never got an answer). Only the former earns a long TTL.
+  let negativeIsConclusive = false;
+
   if (balance >= googleCredits) {
     try {
       const result = await googleFindPlace(googleQuery, city || null, type);
-      if (result) {
-        // Need displayName for validation — re-call with a fuller field mask
-        // OR rely on what googleFindPlace returns. Currently googleFindPlace
-        // returns place_id but not displayName as a separate field; the
-        // FieldMask includes places.displayName so we can extend. For now
-        // validate with what we have (business_status + distance).
+      if (result.outcome === "miss") {
+        // Google answered and knows no such place — the strongest hallucination
+        // signal the ladder produces. Don't charge: a miss costs us nothing.
+        negativeIsConclusive = true;
+        incrementUsage("verify-place", "tier4-google-miss", today()).catch(
+          () => {},
+        );
+      } else if (result.outcome === "hit") {
         const validation = validateGoogleResult({
           query: googleQuery,
           displayName: result.display_name ?? null,
@@ -1688,9 +1735,21 @@ async function handleVerifyPlace(req: Request): Promise<Response> {
           );
           return Response.json(payload, { headers: corsHeaders });
         }
-        // Google returned something but it failed validation — fall to Tier 5
+        // Google returned a place but it failed validation (wrong location,
+        // wrong type, or permanently closed). Google answered, so this is also
+        // conclusive — the name does not denote a usable place here.
+        negativeIsConclusive = true;
+        incrementUsage("verify-place", "tier4-google-rejected", today()).catch(
+          () => {},
+        );
         console.log(
           `[verify-place] Google validation rejected "${googleQuery}": ${validation.reason}`,
+        );
+      } else {
+        // outcome === "error" — no key, transport failure, or HTTP error. We
+        // never got an answer, so leave negativeIsConclusive false.
+        incrementUsage("verify-place", "tier4-google-error", today()).catch(
+          () => {},
         );
       }
     } catch (e) {
@@ -1698,44 +1757,35 @@ async function handleVerifyPlace(req: Request): Promise<Response> {
         `[verify-place] Google call exception: ${(e as Error).message}`,
       );
     }
-  }
-
-  // ── Tier 5: Haiku alternatives → user picker ──
-  const alts = await haikuAlternatives({
-    name,
-    city: city || null,
-    userId,
-    tripId: tripId || null,
-  });
-  if (alts.length > 0) {
-    const payload = {
-      status: "needs_user_choice" as const,
-      alternatives: alts,
-      reason: repair.reason || "Could not verify automatically — please pick.",
-    };
-    // Cache the "needs picker" outcome too, with a shorter TTL — if user picks one,
-    // selectHotel-style replace will trigger a fresh verify on the new name.
-    cacheSet(
-      cacheKey,
-      "verify-place",
-      payload,
-      "needs-picker",
-      HAIKU_ALTS_TTL_DAYS,
-    ).catch(() => {});
-    incrementUsage("verify-place", "tier5-alternatives", today()).catch(
+  } else {
+    // Out of credits before we could ask — explicitly transient.
+    incrementUsage("verify-place", "tier4-skipped-no-credits", today()).catch(
       () => {},
     );
-    return Response.json(payload, { headers: corsHeaders });
   }
 
-  // ── Fallback: unresolved ──
+  // ── Terminal: unresolved ──
+  // Cache lifetime depends on WHY we failed. A conclusive negative is held as
+  // long as a success (90d) so a hallucinated name stops re-running the whole
+  // paid ladder; a transient failure is retried tomorrow so a Google outage
+  // can't poison the shared cache.
   const fallback = {
     status: "unresolved" as const,
     reason: repair.reason || "Could not resolve this place.",
+    conclusive: negativeIsConclusive,
   };
-  // Short TTL on unresolved so we re-try in a few hours (transient API failures).
-  cacheSet(cacheKey, "verify-place", fallback, "unresolved", 1).catch(() => {});
-  incrementUsage("verify-place", "unresolved", today()).catch(() => {});
+  cacheSet(
+    cacheKey,
+    "verify-place",
+    fallback,
+    negativeIsConclusive ? "unresolved-confirmed" : "unresolved-transient",
+    negativeIsConclusive ? VERIFY_NEGATIVE_TTL_DAYS : VERIFY_TRANSIENT_TTL_DAYS,
+  ).catch(() => {});
+  incrementUsage(
+    "verify-place",
+    negativeIsConclusive ? "unresolved-confirmed" : "unresolved-transient",
+    today(),
+  ).catch(() => {});
   return Response.json(fallback, { headers: corsHeaders });
 }
 

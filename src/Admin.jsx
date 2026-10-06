@@ -16,6 +16,23 @@ const COST_RATES = {
     input: 1 / 1_000_000,
     output: 5 / 1_000_000,
   },
+  // Verified 2026-10-05: Sonnet 5.5 is priced identically to Sonnet 5;
+  // Opus 5.5 is cheaper than Opus 5.
+  "claude-sonnet-5-5": { input: 2 / 1_000_000, output: 10 / 1_000_000 },
+  "claude-opus-5-5": { input: 4 / 1_000_000, output: 20 / 1_000_000 },
+  // Non-Anthropic models (verified 2026-10-03). These were absent entirely,
+  // so every Gemini/GPT row fell back to fable-5's $10/$50 and the console
+  // overstated their spend by up to 100×.
+  // PROMOTIONAL rate that DOUBLES on 2027-01-01. Date-conditional so the
+  // console cannot keep reporting the old price after the rise.
+  "gemini-3.8-flash":
+    Date.now() >= Date.UTC(2027, 0, 1)
+      ? { input: 1.5 / 1_000_000, output: 7.5 / 1_000_000 }
+      : { input: 0.75 / 1_000_000, output: 3.75 / 1_000_000 },
+  "gemini-3.5-flash-lite": { input: 0.3 / 1_000_000, output: 2.5 / 1_000_000 },
+  "gpt-5.6-luna": { input: 0.2 / 1_000_000, output: 1.2 / 1_000_000 },
+  "gpt-5.4-nano": { input: 0.2 / 1_000_000, output: 1.25 / 1_000_000 },
+  "gpt-6-luna": { input: 0.1 / 1_000_000, output: 0.5 / 1_000_000 },
 };
 
 // Anthropic prompt-caching multipliers relative to the base input rate:
@@ -24,19 +41,37 @@ const COST_RATES = {
 const CACHE_WRITE_MULTIPLIER = 1.25;
 const CACHE_READ_MULTIPLIER = 0.1;
 
+// Per-search fees, mirroring computeLLMCost. Omitting these made the console
+// under-state Inspirations — the single largest line item — by roughly a
+// third, because Anthropic web_search is billed per call on top of tokens.
+// Analysing spend through a lens that hides the dominant term is how the
+// 2026-10-03 "venue reality" conclusion had to be retracted.
+const WEB_SEARCH_COST_USD = 0.01;
+const GOOGLE_GROUNDING_COST_USD = 0.014;
+// Anthropic cache reads are 0.10x input; Google context cache reads are 0.25x.
+const GOOGLE_CACHE_READ_MULTIPLIER = 0.25;
+
 function calcCost(
   model,
   inputTokens,
   outputTokens,
   cacheCreationTokens = 0,
   cacheReadTokens = 0,
+  webSearchCount = 0,
 ) {
   const rate = COST_RATES[model] || COST_RATES["claude-fable-5"];
+  const cacheReadMult = String(model).startsWith("gemini")
+    ? GOOGLE_CACHE_READ_MULTIPLIER
+    : CACHE_READ_MULTIPLIER;
+  const perSearch = String(model).startsWith("gemini")
+    ? GOOGLE_GROUNDING_COST_USD
+    : WEB_SEARCH_COST_USD;
   return (
     inputTokens * rate.input +
     cacheCreationTokens * rate.input * CACHE_WRITE_MULTIPLIER +
-    cacheReadTokens * rate.input * CACHE_READ_MULTIPLIER +
-    outputTokens * rate.output
+    cacheReadTokens * rate.input * cacheReadMult +
+    outputTokens * rate.output +
+    webSearchCount * perSearch
   );
 }
 
@@ -152,6 +187,7 @@ export default function AdminConsole({ session, onHome }) {
           row.output_tokens,
           row.cache_creation_tokens || 0,
           row.cache_read_tokens || 0,
+          row.web_search_count || 0,
         );
       });
       setDailyUsage(
@@ -235,6 +271,7 @@ export default function AdminConsole({ session, onHome }) {
           u.output_tokens,
           u.cache_creation_tokens || 0,
           u.cache_read_tokens || 0,
+          u.web_search_count || 0,
         ),
       0,
     );
@@ -312,6 +349,7 @@ export default function AdminConsole({ session, onHome }) {
         u.output_tokens,
         u.cache_creation_tokens || 0,
         u.cache_read_tokens || 0,
+        u.web_search_count || 0,
       ),
     0,
   );
@@ -706,6 +744,7 @@ export default function AdminConsole({ session, onHome }) {
                                   u.output_tokens,
                                   u.cache_creation_tokens || 0,
                                   u.cache_read_tokens || 0,
+                                  u.web_search_count || 0,
                                 ),
                               )}
                             </td>
@@ -749,6 +788,7 @@ export default function AdminConsole({ session, onHome }) {
                             r.output_tokens,
                             r.cache_creation_tokens || 0,
                             r.cache_read_tokens || 0,
+                            r.web_search_count || 0,
                           ),
                         0,
                       );
@@ -818,7 +858,15 @@ export default function AdminConsole({ session, onHome }) {
                     .filter((u) => u.trip_id === t.id)
                     .reduce(
                       (s, u) =>
-                        s + calcCost(u.model, u.input_tokens, u.output_tokens),
+                        s +
+                        calcCost(
+                          u.model,
+                          u.input_tokens,
+                          u.output_tokens,
+                          u.cache_creation_tokens || 0,
+                          u.cache_read_tokens || 0,
+                          u.web_search_count || 0,
+                        ),
                       0,
                     );
                   return (
@@ -897,6 +945,7 @@ export default function AdminConsole({ session, onHome }) {
                         u.output_tokens,
                         u.cache_creation_tokens || 0,
                         u.cache_read_tokens || 0,
+                        u.web_search_count || 0,
                       );
                     });
                     return Object.values(grouped)

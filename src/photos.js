@@ -831,8 +831,8 @@ function _verifyPlaceName(activity) {
 
 // Returns one of:
 //   { status: "verified", coords: { lat, lng }, source, correctedFrom?, correctedTo?, repairReason? }
-//   { status: "alternatives", alternatives: [{ name, hint, reason }], reason? }
-//   { status: "unresolved", reason? }
+//   { status: "unresolved", reason?, conclusive }  — conclusive=true means
+//     Google answered and the place isn't real there (probable hallucination)
 //   { status: "skipped", reason }  — no auth / hotel without name / etc.
 export async function verifyActivity(activity, city, session, tripId) {
   if (!activity?.id) return { status: "skipped", reason: "no activity id" };
@@ -924,31 +924,13 @@ export async function verifyActivity(activity, city, session, tripId) {
       };
     }
 
-    // Alternatives case — picker UX
-    if (
-      resolved?.status === "needs_user_choice" &&
-      Array.isArray(resolved.alternatives)
-    ) {
-      // Mark verified_at so we don't re-run on every render. lat stays null
-      // — the UI uses (verified_at IS NOT NULL && lat IS NULL) as the
-      // "tried and failed automatic verification" signal.
-      const update = { geocode_verified_at: new Date().toISOString() };
-      supabase
-        .from("activities")
-        .update(update)
-        .eq("id", activity.id)
-        .then(
-          () => {},
-          () => {},
-        );
-      return {
-        status: "alternatives",
-        alternatives: resolved.alternatives,
-        reason: resolved.reason || null,
-      };
-    }
-
-    // Unresolved — also mark verified_at to avoid re-spamming
+    // Unresolved — mark verified_at to avoid re-spamming. lat stays null; the
+    // UI uses (verified_at IS NOT NULL && lat IS NULL) as the "tried and
+    // failed automatic verification" signal.
+    //
+    // This also absorbs the retired "needs_user_choice" shape: the server no
+    // longer emits it, but a stale place_cache row can until it expires, and
+    // the handling is identical either way.
     const update = { geocode_verified_at: new Date().toISOString() };
     supabase
       .from("activities")
@@ -958,7 +940,11 @@ export async function verifyActivity(activity, city, session, tripId) {
         () => {},
         () => {},
       );
-    return { status: "unresolved", reason: resolved?.reason || null };
+    return {
+      status: "unresolved",
+      reason: resolved?.reason || null,
+      conclusive: resolved?.conclusive === true,
+    };
   })();
 
   _verifyInFlight.set(activity.id, promise);

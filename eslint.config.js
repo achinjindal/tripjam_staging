@@ -24,6 +24,10 @@ export default [
       "playwright-report/**",
       "e2e/screenshots/**",
       "supabase/functions/**",
+      // Deno-run benchmark/verification harnesses. They import the edge
+      // functions' Deno modules directly, so they follow supabase/functions
+      // out of the browser/Node lint scope rather than into it.
+      "scripts/bench/**",
       "itinerary-builder.jsx",
       "public/**",
       // Untracked scratch copies of the repo + agent worktrees — not real code

@@ -1,4 +1,10 @@
 import { captureException } from "../_shared/errortrack.ts";
+import {
+  callLLM,
+  modelFor,
+  suggestCap,
+  type JSONSchema,
+} from "../_shared/llm.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   authenticateUser,
@@ -14,6 +20,44 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
+
+// Schema-constrained decoding: the shape below is enforced by the provider,
+// so a malformed or mis-keyed response is not possible. The enums also pin
+// `category` and `due_date` to the exact strings the UI groups by — free-text
+// drift ("Health/Safety", "one month before") used to land items in no group.
+const TODOS_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    required: ["text", "category", "due_date"],
+    properties: {
+      text: { type: "string", description: "specific, actionable task" },
+      category: {
+        type: "string",
+        enum: [
+          "Bookings",
+          "Documents",
+          "Packing",
+          "Health & safety",
+          "Money",
+          "Day of travel",
+        ],
+      },
+      due_date: {
+        type: "string",
+        enum: [
+          "2 months before",
+          "1 month before",
+          "2 weeks before",
+          "1 week before",
+          "Day before",
+          "Day of travel",
+        ],
+      },
+    },
+  },
+} as const;
 
 const SYSTEM_PROMPT = `You are a travel planning assistant. Generate a practical pre-trip to-do checklist tailored to the specific trip.
 
@@ -83,24 +127,25 @@ serve(async (req) => {
 - Style: ${(trip.styles || []).join(", ") || "mixed"}
 - Travel mode: ${trip.arrival_mode || "flight"}${travelMonth ? `\n- Travel dates: ${travelMonth}` : ""}${trip.notes ? `\n- Notes: ${trip.notes}` : ""}`;
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 1024,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      }),
+    // Top-level JSON ARRAY. With a schema, expectArray also tells the adapter
+    // to wrap the array root for OpenAI (which 400s on one) and unwrap it on
+    // the way back, so every provider hands us a bare array.
+    const model = modelFor("TODOS", "claude-haiku-4-5-20251001");
+    const result = await callLLM({
+      model,
+      system: SYSTEM_PROMPT,
+      user: userMessage,
+      // 1500, not 1024: the prompt demands 15-20 items and Haiku measured
+      // 809 output tokens against the old cap (79% of it), gpt-6-luna 938 —
+      // and the schema now forces all three fields on every item, pushing it
+      // higher. A truncation retry bills BOTH attempts (2,560 output tokens,
+      // 3.2x the normal cost), while raising max_tokens costs nothing on any
+      // provider. Strictly dominant.
+      maxTokens: suggestCap(model, 1500),
+      json: true,
+      expectArray: true,
+      schema: TODOS_SCHEMA as unknown as JSONSchema,
     });
-
-    if (!response.ok) throw new Error(`Anthropic error: ${response.status}`);
-    const data = await response.json();
-    const text = data.content[0].text.trim();
 
     // Log LLM usage (fire-and-forget)
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -115,31 +160,38 @@ serve(async (req) => {
       body: JSON.stringify({
         trip_id: trip?.id || null,
         function_name: "generate-todos",
-        model: "claude-haiku-4-5-20251001",
-        input_tokens: data.usage?.input_tokens || 0,
-        output_tokens: data.usage?.output_tokens || 0,
+        model,
+        input_tokens: result.usage.input_tokens,
+        output_tokens: result.usage.output_tokens,
+        cache_creation_tokens: result.usage.cache_creation_input_tokens,
+        cache_read_tokens: result.usage.cache_read_input_tokens,
+        duration_ms: result.ms,
       }),
     }).catch(() => {});
 
     // Day 7: meter credit deduction for this previously-unmetered Haiku call.
     deductCredits({
       userId: user.id,
-      model: "claude-haiku-4-5-20251001",
-      inputTokens: data.usage?.input_tokens || 0,
-      outputTokens: data.usage?.output_tokens || 0,
+      model,
+      inputTokens: result.usage.input_tokens,
+      outputTokens: result.usage.output_tokens,
+      cacheCreationTokens: result.usage.cache_creation_input_tokens,
+      cacheReadTokens: result.usage.cache_read_input_tokens,
       functionName: "generate-todos",
       tripId: trip?.id || null,
       source,
     });
 
-    let items = [];
-    try {
-      const start = text.indexOf("[");
-      const end = text.lastIndexOf("]");
-      items = JSON.parse(text.slice(start, end + 1));
-    } catch {
-      items = [];
-    }
+    // Guaranteed by the schema. The only residual failure is truncation
+    // (callLLM already retries once at 1.5x), which is loud rather than
+    // silent — an empty list here means the model never produced JSON.
+    const items = Array.isArray(result.parsed) ? result.parsed : [];
+    if (!items.length)
+      console.error(
+        `[todos] empty after schema parse (truncated=${result.truncated}, ` +
+          `schemaUnsupported=${result.schemaUnsupported}): ` +
+          result.text.slice(0, 200),
+      );
 
     return new Response(JSON.stringify({ items }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

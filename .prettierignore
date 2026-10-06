@@ -8,3 +8,6 @@ e2e/screenshots/
 
 package-lock.json
 supabase/functions/deno.lock
+
+# Generated benchmark records (machine-written, not source)
+scripts/bench/out/

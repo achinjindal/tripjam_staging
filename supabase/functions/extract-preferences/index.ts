@@ -1,4 +1,10 @@
 import { captureException } from "../_shared/errortrack.ts";
+import {
+  callLLM,
+  modelFor,
+  suggestCap,
+  type JSONSchema,
+} from "../_shared/llm.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { authenticateUser, unauthorized } from "../_shared/credits.ts";
 
@@ -7,6 +13,29 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
+
+// All three fields are required but nullable — "no clue in the notes" is a
+// real answer the IG pre-sheet relies on, and a nullable union expresses it
+// on every provider (OpenAI strict would 400 on an omitted key).
+const PREFS_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["budget", "morningStart", "pace"],
+  properties: {
+    budget: {
+      type: ["string", "null"],
+      enum: ["budget", "mid", "luxury", null],
+    },
+    morningStart: {
+      type: ["string", "null"],
+      enum: ["early", "mid", "late", null],
+    },
+    pace: {
+      type: ["string", "null"],
+      enum: ["active", "moderate", "relaxed", null],
+    },
+  },
+} as const;
 
 const SYSTEM_PROMPT = `You extract travel preferences from user notes and chat history.
 
@@ -58,16 +87,21 @@ serve(async (req) => {
       );
     }
 
-    const Anthropic = (await import("npm:@anthropic-ai/sdk")).default;
-    const client = new Anthropic({
-      apiKey: Deno.env.get("ANTHROPIC_API_KEY")!,
-    });
-
-    const msg = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 100,
+    // Was the npm Anthropic SDK; the shared adapter replaces it (one less
+    // cold-start import, and this call can now run any provider).
+    //
+    // The 100-token cap is the reason suggestCap has an ADDITIVE floor: a
+    // reasoning model spends more than 100 tokens thinking before it emits
+    // the first character of JSON, so a pure multiplier (160) would return an
+    // empty string and every preference would silently fall back to default.
+    const model = modelFor("PREFS", "claude-haiku-4-5-20251001");
+    const msg = await callLLM({
+      model,
       system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: parts.join("\n\n") }],
+      user: parts.join("\n\n"),
+      maxTokens: suggestCap(model, 100),
+      json: true,
+      schema: PREFS_SCHEMA as unknown as JSONSchema,
     });
 
     // Log LLM usage (fire-and-forget)
@@ -83,20 +117,23 @@ serve(async (req) => {
       body: JSON.stringify({
         trip_id: tripId || null,
         function_name: "extract-preferences",
-        model: "claude-haiku-4-5-20251001",
-        input_tokens: msg.usage?.input_tokens || 0,
-        output_tokens: msg.usage?.output_tokens || 0,
+        model,
+        input_tokens: msg.usage.input_tokens,
+        output_tokens: msg.usage.output_tokens,
+        cache_creation_tokens: msg.usage.cache_creation_input_tokens,
+        cache_read_tokens: msg.usage.cache_read_input_tokens,
+        duration_ms: msg.ms,
       }),
     }).catch(() => {});
 
-    const text = msg.content[0]?.type === "text" ? msg.content[0].text : "{}";
-    // Fence-safe parse: Haiku intermittently wraps output in ```json fences
-    // despite instructions (same bug hit inbound-email; PostHog issue #11).
-    // Slice from first { to last } so fences and prose never reach the
-    // parser.
-    const parsed = JSON.parse(
-      text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1),
-    );
+    // Schema-guaranteed shape — this used to need a fence-safe slice because
+    // Haiku intermittently wrapped output in ```json fences despite the
+    // instructions (same bug hit inbound-email; PostHog issue #11). The enum
+    // re-check below is kept deliberately: it is the safety net for the
+    // degraded prompt-only path when a model does not support schemas.
+    // Typed as string for the enum checks below; a schema-returned null simply
+    // fails `includes` and maps to null, which is the intended "no clue" answer.
+    const parsed = (msg.parsed ?? {}) as Record<string, string>;
 
     return new Response(
       JSON.stringify({

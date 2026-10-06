@@ -1,3 +1,5 @@
+import { captureException } from "./errortrack.ts";
+
 // Shared credit-system helpers for edge functions.
 //
 // Pricing model (Day 2 rebuild — D11-D18 + D24):
@@ -37,17 +39,41 @@ export function runInBackground(work: Promise<unknown>): void {
 // 4.5 was billed at $0.80/$4 against a real $1/$5 (undercharging ~25%). Keep
 // this table honest — credit deduction, the Admin console and scripts/trip-cost
 // all derive from it. Sonnet 4.6 stays for historical rows priced at its rate.
-const RATES: Record<string, { input: number; output: number }> = {
+export const RATES: Record<string, { input: number; output: number }> = {
   "claude-fable-5": { input: 10.0, output: 50.0 },
   "claude-opus-4-8": { input: 5.0, output: 25.0 },
   "claude-sonnet-5": { input: 2.0, output: 10.0 },
+  // Verified 2026-10-05. Sonnet 5.5 matches Sonnet 5's price exactly and has a
+  // 512-token cache minimum (vs 1024), so it is a no-cost upgrade path.
+  // Opus 5.5 is CHEAPER than Opus 5 ($4/$20 vs $5/$25). Both are listed here
+  // pre-emptively: without an entry, pointing a function at either would hit
+  // the fable-5 fallback and over-bill 5x on input / 2.5x on output.
+  // NOTE: Opus 5.5 reads cache at 0.05x base input (not the 0.1x applied
+  // below) and Fable 5.1 at 0.025x — revisit CACHE_READ_MULTIPLIER before
+  // routing anything to those two.
+  "claude-sonnet-5-5": { input: 2.0, output: 10.0 },
+  "claude-opus-5-5": { input: 4.0, output: 20.0 },
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 }, // legacy rows only
   "claude-haiku-4-5": { input: 1.0, output: 5.0 },
   "claude-haiku-4-5-20251001": { input: 1.0, output: 5.0 },
-  // Non-Anthropic models (day-fill A/B). Gemini 3.8 Flash's $0.75/$3.75 is
-  // promotional and DOUBLES on 2027-01-01 to $1.50/$7.50 — revisit then.
-  "gemini-3.8-flash": { input: 0.75, output: 3.75 },
+  // Non-Anthropic models. Verified against published rates 2026-10-03.
+  // PROMOTIONAL rate that DOUBLES to $1.50/$7.50 on 2027-01-01. Date-
+  // conditional rather than a diary note: RG and IG both default to this
+  // model now, so a stale entry would silently under-bill the two
+  // highest-volume calls in the product by 2x — and the BILLING ALARM
+  // cannot catch it, because the entry exists, it is just wrong.
+  "gemini-3.8-flash":
+    Date.now() >= Date.UTC(2027, 0, 1)
+      ? { input: 1.5, output: 7.5 }
+      : { input: 0.75, output: 3.75 },
+  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
   "gpt-5.6-luna": { input: 0.2, output: 1.2 },
+  "gpt-5.4-nano": { input: 0.2, output: 1.25 },
+  // Cheapest tier benchmarked 2026-10-03 and the Phase-2 migration target.
+  // MUST stay present: without it the unknown-model fallback below bills at
+  // fable-5's $10/$50 — a ~100x over-charge (a $0.0017 day-fill would bill
+  // $0.17 ≈ 24.9 credits instead of 0.25, draining a new user in 4 calls).
+  "gpt-6-luna": { input: 0.1, output: 0.5 },
 };
 
 // D18: Each credit covers $0.007 of LLM spend (70% of $0.01 user value)
@@ -62,10 +88,21 @@ export const EXTERNAL_API_USER_VALUE = 0.01;
 export const CACHE_WRITE_MULTIPLIER = 1.25;
 export const CACHE_READ_MULTIPLIER = 0.1;
 
-// Anthropic web_search server tool: $10 per 1,000 searches, billed on top
-// of token costs. Omitting this undercharged every Inspirations call by
-// ~40% of its true cost.
+// Server-side search fees, billed on top of token costs. Omitting these
+// undercharged every Inspirations call by ~40% of its true cost.
+// Verified against provider pricing pages 2026-10-05:
+//   Anthropic web_search        $10 / 1,000 searches
+//   OpenAI web search           $10 / 1,000 searches
+//   Google Search grounding     5,000 free/month, then $14 / 1,000
+export const GOOGLE_CACHE_READ_MULTIPLIER = 0.25;
 export const WEB_SEARCH_COST_USD = 0.01;
+// Google is billed at its PAID rate even while the 5,000/month free tier is
+// almost certainly covering us. That deliberately over-states cost rather
+// than under-stating it: the free allowance is an org-wide monthly pool this
+// function cannot observe from a single call, and the house rule is that
+// over-charging is visible and refundable while the reverse is not. Revisit
+// if Inspirations volume ever approaches ~1,600 calls/month.
+export const GOOGLE_GROUNDING_COST_USD = 0.014;
 
 export function computeLLMCost(
   model: string,
@@ -78,14 +115,44 @@ export function computeLLMCost(
   // Unknown/newly-configured model: bill at the most expensive known rate
   // rather than a mid-tier guess, so a model swap can never silently
   // under-charge (over-charging is visible and refundable; the reverse is not).
-  const r = RATES[model] || RATES["claude-fable-5"];
+  //
+  // The fallback used to be SILENT, which is how a model flip could ship a
+  // ~100x over-charge unnoticed. Always make it loud: a model missing from
+  // RATES is a billing incident, not a shrug.
+  const known = RATES[model];
+  if (!known) {
+    console.error(
+      `BILLING ALARM: model "${model}" is absent from RATES — billing at ` +
+        `fable-5 ($10/$50). Add it to _shared/credits.ts, src/Admin.jsx, ` +
+        `scripts/trip-cost.cjs and CLAUDE.md.`,
+    );
+    void captureException(new Error(`unknown_model_rate: ${model}`), {
+      model,
+      inputTokens,
+      outputTokens,
+    });
+  }
+  const r = known || RATES["claude-fable-5"];
+  // CACHE_READ_MULTIPLIER (0.1x) is ANTHROPIC's discount. Google's context
+  // cache reads at 0.25x of input, so applying 0.1x there would under-bill
+  // cached input by 2.5x — the unacceptable direction per the house rule
+  // above. Currently latent (Gemini cache reads are 0), but it goes live the
+  // moment anyone makes Gemini caching work, so encode it now.
+  const cacheReadMult = model.startsWith("gemini")
+    ? GOOGLE_CACHE_READ_MULTIPLIER
+    : CACHE_READ_MULTIPLIER;
   const inputUsd =
     inputTokens * r.input +
     cacheCreationTokens * r.input * CACHE_WRITE_MULTIPLIER +
-    cacheReadTokens * r.input * CACHE_READ_MULTIPLIER;
+    cacheReadTokens * r.input * cacheReadMult;
+  // Search fees are provider-specific, so derive from the model id rather
+  // than assuming Anthropic's rate for every provider.
+  const perSearch = model.startsWith("gemini")
+    ? GOOGLE_GROUNDING_COST_USD
+    : WEB_SEARCH_COST_USD;
   return (
     (inputUsd + outputTokens * r.output) / 1_000_000 +
-    webSearchCount * WEB_SEARCH_COST_USD
+    webSearchCount * perSearch
   );
 }
 

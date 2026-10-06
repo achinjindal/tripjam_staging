@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { captureException } from "../_shared/errortrack.ts";
+import { traitsOf } from "../_shared/llm.ts";
 import {
   authenticateUser,
   unauthorized,
@@ -329,9 +330,12 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
       model: chatModel,
       max_tokens: 8192,
       // Claude 5 family: thinking is on by default and its tokens count
-      // against max_tokens (see generate-itinerary) — disable for chat.
-      ...(chatModel.startsWith("claude-sonnet-5")
-        ? { thinking: { type: "disabled" } }
+      // against max_tokens (see generate-itinerary) — turn it off for chat.
+      // The SHAPE is model-specific (Sonnet 5.5 rejects "disabled" and wants
+      // "between_tools"), so take it from the adapter's trait table rather
+      // than a prefix test that would silently 400 on a newer model.
+      ...(traitsOf(chatModel).thinkingBody
+        ? { thinking: traitsOf(chatModel).thinkingBody }
         : {}),
       stream: true,
       // Static instructions are cached; per-call context is not.

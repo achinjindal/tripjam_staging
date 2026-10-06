@@ -1,4 +1,10 @@
 import { captureException } from "../_shared/errortrack.ts";
+import {
+  callLLM,
+  modelFor,
+  suggestCap,
+  type JSONSchema,
+} from "../_shared/llm.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   authenticateUser,
@@ -14,6 +20,42 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
+
+const WISHLIST_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["wishlists"],
+  properties: {
+    wishlists: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["label", "items"],
+        properties: {
+          label: { type: "string" },
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["title", "geocode", "note", "icon"],
+              properties: {
+                title: { type: "string" },
+                geocode: {
+                  type: "string",
+                  description: "shortest plain name for Maps, no descriptors",
+                },
+                note: { type: "string", description: "max 9 words, no quotes" },
+                icon: { type: "string", description: "single emoji" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
 
 const SYSTEM_PROMPT = `You are a local travel expert. For each day of a trip, suggest exactly 3 local gems the traveller might enjoy if they have a spare moment.
 
@@ -71,29 +113,18 @@ ${daysSummary}
 
 Already in the itinerary (exclude these): ${allActivities}`;
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 2000,
-        temperature: 0.8,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      }),
+    const model = modelFor("WISHLIST", "claude-haiku-4-5-20251001");
+    const data = await callLLM({
+      model,
+      system: SYSTEM_PROMPT,
+      user: userMessage,
+      maxTokens: suggestCap(model, 2000),
+      json: true,
+      // Honoured only by pre-Claude-5 Anthropic models; the adapter drops it
+      // everywhere else rather than risking a 400 on an unsupported param.
+      temperature: 0.8,
+      schema: WISHLIST_SCHEMA as unknown as JSONSchema,
     });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Anthropic error: ${err}`);
-    }
-
-    const data = await response.json();
-    const text = data.content[0].text;
 
     // Log LLM usage (fire-and-forget)
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -108,29 +139,35 @@ Already in the itinerary (exclude these): ${allActivities}`;
       body: JSON.stringify({
         trip_id: tripId || null,
         function_name: "generate-wishlist",
-        model: "claude-haiku-4-5-20251001",
-        input_tokens: data.usage?.input_tokens || 0,
-        output_tokens: data.usage?.output_tokens || 0,
+        model,
+        input_tokens: data.usage.input_tokens,
+        output_tokens: data.usage.output_tokens,
+        cache_creation_tokens: data.usage.cache_creation_input_tokens,
+        cache_read_tokens: data.usage.cache_read_input_tokens,
+        duration_ms: data.ms,
       }),
     }).catch(() => {});
 
     deductCredits({
       userId: user.id,
-      model: "claude-haiku-4-5-20251001",
-      inputTokens: data.usage?.input_tokens || 0,
-      outputTokens: data.usage?.output_tokens || 0,
+      model,
+      inputTokens: data.usage.input_tokens,
+      outputTokens: data.usage.output_tokens,
+      cacheCreationTokens: data.usage.cache_creation_input_tokens,
+      cacheReadTokens: data.usage.cache_read_input_tokens,
       functionName: "generate-wishlist",
       tripId: tripId || null,
       source,
     });
 
-    const jsonMatch = text
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```$/i, "")
-      .trim()
-      .match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON in response");
-    const result = JSON.parse(jsonMatch[0]);
+    // Schema-guaranteed; the fence-stripping regex this replaces existed
+    // because Haiku wrapped output in ```json despite being told not to.
+    const result = data.parsed;
+    if (!result)
+      throw new Error(
+        `No JSON in response (truncated=${data.truncated}, ` +
+          `schemaUnsupported=${data.schemaUnsupported})`,
+      );
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

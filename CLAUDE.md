@@ -10,7 +10,11 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 
 - **Frontend:** React 18 (JSX) + Vite 8, single-page app, no router library (History API for URL routing)
 - **Backend:** Supabase (Postgres, Auth, Edge Functions, RLS, Realtime)
-- **AI:** Anthropic Claude API — Sonnet 5 for RG/IG (+ research escalation), Haiku 4.5 for chat/todos/expenses/deep-dives/preferences/inspirations/booking-parse. Model env overrides: RG_MODEL / IG_MODEL / CHAT_MODEL (CHAT_MODEL is set to Haiku on both envs). Claude 5 family calls must send thinking:{type:"disabled"} and no temperature.
+- **AI:** Multi-provider (Anthropic / Google / OpenAI) via the shared adapter `supabase/functions/_shared/llm.ts`. Currently live: **Sonnet 5.5** for RG/IG (upgraded from Sonnet 5 on 2026-10-05 — same $2/$10, Jun-2026 knowledge, 512-token cache minimum), **gpt-6-luna** for Magazine deep-dives (8x cheaper AND more accurate than Haiku — see `bench-results-2026-10-05.md`), Haiku 4.5 for chat/todos/expenses/preferences/inspirations/booking-parse (+ Inspirations research escalation on **Sonnet 5.5**, overridable via `INSPIRATIONS_ESCALATION_MODEL` — Anthropic-only, since that path needs the `web_search` server tool).
+  - **Always call LLMs through `_shared/llm.ts`** (`callLLM` / `streamLLM`). It routes by model-id prefix and encodes every provider quirk in one place; a model swap becomes a string change rather than an integration. Never hand-roll a provider fetch in a function.
+  - **Per-function model selection:** `modelFor("<KEY>", default)` reads `LLM_MODEL_<KEY>` first, then legacy names (`IG_MODEL`, `IG_FILL_MODEL`, `RG_MODEL`, `CHAT_MODEL`). Each function can sit on a different model independently.
+  - **Provider quirks the adapter handles** (all discovered the hard way — do not re-litigate): Claude 5 family needs `thinking:{type:"disabled"}` and rejects `temperature`; Gemini 3.x needs `thinkingConfig:{thinkingBudget:0}` or thought tokens eat `maxOutputTokens`, **but** Gemini ≥3.5 flash-lite and `*-latest` reject that flag with a 400 (adapter retries without it); OpenAI's `response_format:{type:"json_object"}` **cannot emit a top-level JSON array**, so array-returning prompts (RG, todos, expenses) must pass `expectArray: true`; Gemini `thoughtsTokenCount` and OpenAI reasoning tokens are billed as **output**; OpenAI `prompt_tokens` **includes** cached tokens so they must be subtracted or cached input is billed twice.
+  - **Verbose models truncate at caps tuned for terse ones.** Use `suggestCap(model, baseline)` instead of a literal `max_tokens`; `callLLM` also retries once at 1.5x on truncation and bills both attempts.
 - **Maps:** Leaflet + react-leaflet, Photon/Nominatim geocoding (with trip destination enrichment)
 - **Photos:** Wikipedia/Wikimedia Commons (free, serialized queue 2 concurrent / 400ms)
 - **Places:** Google Places API (autocomplete, hotel search with lodging type)
@@ -221,7 +225,14 @@ supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
 - Route: `/admin` — gated by `is_admin` boolean on profiles table
 - Tabs: Users, Trips, Credits (by function/model), Daily Usage
 - Shows: trip counts, chat counts, IG timing, activity breakdown, token usage, cost estimates
-- Cost rates (verified 2026-10-02, keep in sync across `_shared/credits.ts`, `Admin.jsx`, `scripts/trip-cost.cjs`): Sonnet 5 $2/$10, Haiku 4.5 $1/$5, Opus 4.8 $5/$25, Fable 5 $10/$50 per M tokens. Cache read = 0.1x input, cache write (5m) = 1.25x input. Web search $10/1k calls.
+- Cost rates (verified 2026-10-03, keep in sync across `_shared/credits.ts`, `Admin.jsx`, `scripts/trip-cost.cjs`, and this file) per M tokens:
+  - Anthropic: Sonnet 5 $2/$10, Sonnet 5.5 $2/$10, Haiku 4.5 $1/$5, Opus 5.5 $4/$20, Opus 4.8 $5/$25, Fable 5 $10/$50 (re-verified 2026-10-05; Sonnet 5's $2/$10 intro price is now permanent — the scheduled $3/$15 rise was cancelled)
+  - Google: Gemini 3.8 Flash $0.75/$3.75 (**promotional — DOUBLES to $1.50/$7.50 on 2027-01-01**), Gemini 3.5 Flash-Lite $0.30/$2.50
+  - OpenAI: GPT-6 Luna $0.10/$0.50, GPT-5.6 Luna $0.20/$1.20, GPT-5.4 Nano $0.20/$1.25
+  - Cache read = 0.1x input, cache write (5m) = 1.25x input, (1h) = 2x. Web search $10/1k calls. Batch API = 50% off both directions.
+  - **Cache-read exceptions `computeLLMCost` does NOT yet model:** Opus 5.5 reads at 0.05x and Fable 5.1 at 0.025x, not 0.1x. Over-bills (safe direction) — fix before routing anything to either.
+  - **Minimum cacheable prefix is model-dependent and fails SILENTLY:** Haiku 4.5 needs 4,096 tokens, Sonnet 5 needs 1,024, Sonnet 5.5/Opus 5/Opus 5.5 need 512. Below it, `cache_control` is ignored with no error — verify via `cache_creation_input_tokens`/`cache_read_input_tokens` both being 0. No Haiku call site in this codebase clears 4,096, so caching is impossible there as written.
+- **A model missing from `RATES` is a billing incident, not a shrug.** The unknown-model fallback bills at Fable 5 ($10/$50) so a swap can never under-charge — which means a missing entry over-bills by up to ~100x (an IG day-fill costing $0.0017 would bill $0.17 ≈ 25 credits). `computeLLMCost` now logs `BILLING ALARM` and files a PostHog exception when it hits the fallback. Add every new model to all four files above before pointing any function at it.
 
 ## Testing
 

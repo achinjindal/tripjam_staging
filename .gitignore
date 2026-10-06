@@ -59,3 +59,9 @@ pitch/
 /collab-decisions-design.html
 /collab-feed-credits-design.html
 /collab-invites-design.html
+
+# Generated benchmark records (machine-written, not source)
+scripts/bench/out/
+
+# Stray artifact from running `deno check` outside supabase/functions/
+/deno.lock

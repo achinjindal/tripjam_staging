@@ -1,6 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { captureException } from "../_shared/errortrack.ts";
 import {
+  callLLM,
+  modelFor,
+  suggestCap,
+  type JSONSchema,
+} from "../_shared/llm.ts";
+import {
   authenticateUser,
   unauthorized,
   rateLimit,
@@ -14,6 +20,59 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
+
+// Mirrors the field list in SYSTEM_PROMPT, enforced by the provider. This is
+// the call most exposed to truncation (it is the longest single JSON object we
+// generate), and a half-written object used to surface as the Magazine deep
+// dive silently rendering empty — now it fails loudly instead.
+const DEEPDIVE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "writeup",
+    "foodSpecialties",
+    "weather",
+    "gettingAround",
+    "etiquette",
+    "didYouKnow",
+    "moreSights",
+  ],
+  properties: {
+    writeup: { type: "string" },
+    foodSpecialties: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "note", "icon"],
+        properties: {
+          name: { type: "string" },
+          note: { type: "string" },
+          icon: { type: "string" },
+        },
+      },
+    },
+    weather: { type: "string" },
+    gettingAround: { type: "string" },
+    etiquette: { type: "array", items: { type: "string" } },
+    didYouKnow: { type: "string" },
+    moreSights: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "geocode", "note", "icon", "photo_query"],
+        properties: {
+          title: { type: "string" },
+          geocode: { type: "string" },
+          note: { type: "string" },
+          icon: { type: "string" },
+          photo_query: { type: "string" },
+        },
+      },
+    },
+  },
+} as const;
 
 const SYSTEM_PROMPT = `You are a travel expert writing a deep-dive guide for a specific destination. The traveler is already planning a trip there — your job is to give them colour, context, and practical tips that don't fit in the main itinerary.
 
@@ -84,35 +143,40 @@ Trip context: ${tripDays ? `${tripDays} day${tripDays > 1 ? "s" : ""} in this ci
 Style: ${(styles || []).join(", ") || "general"}, ${budget || "mid-range"} budget.
 ${notes ? `Traveler notes: ${notes}` : ""}`;
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 2048,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      }),
+    // Default moved Haiku 4.5 -> gpt-6-luna on 2026-10-05, on measured data
+    // from the 14-trip bench (bench-results-2026-10-05.md): per deep-dive call
+    //   haiku-4.5   $0.00916   39-57% of sights resolve to the named place
+    //   gpt-6-luna  $0.00115   86% resolve, and it returns MORE sights/call
+    // i.e. 8x cheaper AND more accurate — Haiku's Feb-2025 knowledge cutoff
+    // shows up badly on a "does this venue exist" task.
+    //
+    // TRADE-OFF: gpt-6-luna takes ~23.8s/call vs Haiku's ~15.7s, and deep
+    // dives are lazy-loaded when the user opens Magazine, so this is visible
+    // latency. If that matters more than cost, gpt-5.6-luna is the middle
+    // option (~15.7s, 4.7x cheaper, lowest substitution rate at 5%) — set
+    // LLM_MODEL_DEEPDIVE rather than editing this default.
+    //
+    // 2048 is the Haiku-tuned baseline; suggestCap scales it per model
+    // (gpt-6-luna measured 1623-2048 output here, i.e. it truncated AT the
+    // old literal cap).
+    const model = modelFor("DEEPDIVE", "gpt-6-luna");
+    const result = await callLLM({
+      model,
+      system: SYSTEM_PROMPT,
+      user: userMessage,
+      maxTokens: suggestCap(model, 2048),
+      json: true,
+      schema: DEEPDIVE_SCHEMA as unknown as JSONSchema,
     });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Anthropic error: ${err}`);
-    }
-
-    const result = await response.json();
-    const accumulated = result.content[0].text;
 
     // Deduct credits and log usage (both fire-and-forget)
     deductCredits({
       userId: user.id,
-      model: "claude-haiku-4-5-20251001",
-      inputTokens: result.usage?.input_tokens || 0,
-      outputTokens: result.usage?.output_tokens || 0,
+      model,
+      inputTokens: result.usage.input_tokens,
+      outputTokens: result.usage.output_tokens,
+      cacheCreationTokens: result.usage.cache_creation_input_tokens,
+      cacheReadTokens: result.usage.cache_read_input_tokens,
       functionName: "city-deep-dive",
       tripId: tripId || null,
       source,
@@ -130,19 +194,29 @@ ${notes ? `Traveler notes: ${notes}` : ""}`;
       body: JSON.stringify({
         trip_id: tripId || null,
         function_name: "city-deep-dive",
-        model: "claude-haiku-4-5-20251001",
-        input_tokens: result.usage?.input_tokens || 0,
-        output_tokens: result.usage?.output_tokens || 0,
+        model,
+        input_tokens: result.usage.input_tokens,
+        output_tokens: result.usage.output_tokens,
+        cache_creation_tokens: result.usage.cache_creation_input_tokens,
+        cache_read_tokens: result.usage.cache_read_input_tokens,
+        duration_ms: result.ms,
       }),
     }).catch(() => {});
 
-    const start = accumulated.indexOf("{");
-    const end = accumulated.lastIndexOf("}");
-    let data: any = {};
-    try {
-      data = JSON.parse(accumulated.slice(start, end + 1));
-    } catch {
-      data = { error: "parse_failed", raw: accumulated };
+    // Schema-guaranteed. parse_failed is now reachable only if the response
+    // was cut off even after callLLM's 1.5x retry, so it gets logged rather
+    // than quietly handed to the UI as a shape it cannot render.
+    const data = (result.parsed ?? null) as Record<string, unknown> | null;
+    if (!data) {
+      console.error(
+        `[deep-dive] unparseable (truncated=${result.truncated}, ` +
+          `schemaUnsupported=${result.schemaUnsupported}): ` +
+          result.text.slice(0, 300),
+      );
+      return new Response(
+        JSON.stringify({ error: "parse_failed", raw: result.text }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     return new Response(JSON.stringify(data), {

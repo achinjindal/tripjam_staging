@@ -1,4 +1,10 @@
 import { captureException } from "../_shared/errortrack.ts";
+import {
+  callLLM,
+  modelFor,
+  suggestCap,
+  type JSONSchema,
+} from "../_shared/llm.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
@@ -15,6 +21,42 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
+
+// The ids are echoed back from our own payload, so the schema pins the
+// envelope while the id-membership filter below still guards against
+// hallucinated ids — a schema constrains shape, never truthfulness.
+const NARRATIVES_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["days", "activities"],
+  properties: {
+    days: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "story_title", "narrative"],
+        properties: {
+          id: { type: "string" },
+          story_title: { type: "string" },
+          narrative: { type: "string" },
+        },
+      },
+    },
+    activities: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "gloss"],
+        properties: {
+          id: { type: "string" },
+          gloss: { type: "string" },
+        },
+      },
+    },
+  },
+} as const;
 
 const SYSTEM_PROMPT = `You are a travel-magazine editor writing story content for an existing trip itinerary.
 
@@ -129,35 +171,26 @@ serve(async (req) => {
     const userMessage = `Write story content for every day with needs_story:true and a gloss for every activity with needs_gloss:true. Trip days:
 ${JSON.stringify(payload)}`;
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        // Measured ~520 output tokens/day (uuid keys + narrative); headroom on top.
-        max_tokens: Math.min(16000, days.length * 800 + 1000),
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      }),
+    const model = modelFor("NARRATIVES", "claude-haiku-4-5-20251001");
+    // Measured ~520 output tokens/day (uuid keys + narrative); headroom on top.
+    // The 16000 ceiling stays: it is an edge-function wall-clock guard, not a
+    // model-verbosity figure, so suggestCap scales the per-day budget only.
+    const result = await callLLM({
+      model,
+      system: SYSTEM_PROMPT,
+      user: userMessage,
+      maxTokens: Math.min(16000, suggestCap(model, days.length * 800 + 1000)),
+      json: true,
+      schema: NARRATIVES_SCHEMA as unknown as JSONSchema,
     });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Anthropic error: ${err}`);
-    }
-
-    const result = await response.json();
-    const accumulated = result.content[0].text;
 
     deductCredits({
       userId: user.id,
-      model: "claude-haiku-4-5-20251001",
-      inputTokens: result.usage?.input_tokens || 0,
-      outputTokens: result.usage?.output_tokens || 0,
+      model,
+      inputTokens: result.usage.input_tokens,
+      outputTokens: result.usage.output_tokens,
+      cacheCreationTokens: result.usage.cache_creation_input_tokens,
+      cacheReadTokens: result.usage.cache_read_input_tokens,
       functionName: "generate-day-narratives",
       tripId,
       source,
@@ -175,20 +208,24 @@ ${JSON.stringify(payload)}`;
       body: JSON.stringify({
         trip_id: tripId,
         function_name: "generate-day-narratives",
-        model: "claude-haiku-4-5-20251001",
-        input_tokens: result.usage?.input_tokens || 0,
-        output_tokens: result.usage?.output_tokens || 0,
+        model,
+        input_tokens: result.usage.input_tokens,
+        output_tokens: result.usage.output_tokens,
+        cache_creation_tokens: result.usage.cache_creation_input_tokens,
+        cache_read_tokens: result.usage.cache_read_input_tokens,
+        duration_ms: result.ms,
       }),
     }).catch(() => {});
 
-    const start = accumulated.indexOf("{");
-    const end = accumulated.lastIndexOf("}");
-    let parsed: any = { days: [], activities: [] };
-    try {
-      parsed = JSON.parse(accumulated.slice(start, end + 1));
-    } catch {
-      throw new Error("parse_failed");
-    }
+    // Loose element typing to match the id-membership filters below, which
+    // are what actually guard this data (a schema pins shape, not truth).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const parsed = result.parsed as { days?: any[]; activities?: any[] } | null;
+    if (!parsed)
+      throw new Error(
+        `parse_failed (truncated=${result.truncated}, ` +
+          `schemaUnsupported=${result.schemaUnsupported})`,
+      );
 
     // Only write rows whose ids we fetched ourselves (hallucinated ids dropped),
     // and never overwrite existing content.

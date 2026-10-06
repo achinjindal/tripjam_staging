@@ -25,29 +25,52 @@ if (!URL || !KEY) {
 
 // $ per token. Cache write = 1.25x input, cache read = 0.10x input.
 const RATES = {
-  // Mirrors RATES in supabase/functions/_shared/credits.ts (2026-10-02).
+  // Mirrors RATES in supabase/functions/_shared/credits.ts (2026-10-03).
   "claude-fable-5": { input: 10 / 1e6, output: 50 / 1e6 },
   "claude-opus-4-8": { input: 5 / 1e6, output: 25 / 1e6 },
   "claude-sonnet-5": { input: 2 / 1e6, output: 10 / 1e6 },
+  "claude-sonnet-5-5": { input: 2 / 1e6, output: 10 / 1e6 },
+  "claude-opus-5-5": { input: 4 / 1e6, output: 20 / 1e6 },
   "claude-sonnet-4-6": { input: 3 / 1e6, output: 15 / 1e6 },
   "claude-haiku-4-5": { input: 1 / 1e6, output: 5 / 1e6 },
   "claude-haiku-4-5-20251001": { input: 1 / 1e6, output: 5 / 1e6 },
+  // Gemini 3.8 Flash's rate DOUBLES on 2027-01-01 — date-conditional so this
+  // script keeps matching what users were actually billed.
+  "gemini-3.8-flash":
+    Date.now() >= Date.UTC(2027, 0, 1)
+      ? { input: 1.5 / 1e6, output: 7.5 / 1e6 }
+      : { input: 0.75 / 1e6, output: 3.75 / 1e6 },
+  "gemini-3.5-flash-lite": { input: 0.3 / 1e6, output: 2.5 / 1e6 },
+  "gpt-5.6-luna": { input: 0.2 / 1e6, output: 1.2 / 1e6 },
+  "gpt-5.4-nano": { input: 0.2 / 1e6, output: 1.25 / 1e6 },
+  "gpt-6-luna": { input: 0.1 / 1e6, output: 0.5 / 1e6 },
 };
 const CACHE_WRITE = 1.25;
 const CACHE_READ = 0.1;
+// Google context cache reads are 0.25x input, not Anthropic's 0.10x.
+const GOOGLE_CACHE_READ = 0.25;
+// Per-search fees. Omitting these under-stated Inspirations — the largest
+// line item — by ~36%, because web_search is billed per call on top of tokens.
+const WEB_SEARCH_COST_USD = 0.01;
+const GOOGLE_GROUNDING_COST_USD = 0.014;
 const CREDIT_LLM_BUDGET_USD = 0.007;
 
 function rowCost(r) {
-  const rate = RATES[r.model] || RATES["claude-sonnet-4-6"];
+  // Match credits.ts: unknown models fall back to the MOST expensive rate so
+  // this script never understates what a swap actually billed.
+  const rate = RATES[r.model] || RATES["claude-fable-5"];
   const inTok = r.input_tokens || 0;
   const outTok = r.output_tokens || 0;
   const cw = r.cache_creation_tokens || 0;
   const cr = r.cache_read_tokens || 0;
+  const isGoogle = String(r.model || "").startsWith("gemini");
   return (
     inTok * rate.input +
     cw * rate.input * CACHE_WRITE +
-    cr * rate.input * CACHE_READ +
-    outTok * rate.output
+    cr * rate.input * (isGoogle ? GOOGLE_CACHE_READ : CACHE_READ) +
+    outTok * rate.output +
+    (r.web_search_count || 0) *
+      (isGoogle ? GOOGLE_GROUNDING_COST_USD : WEB_SEARCH_COST_USD)
   );
 }
 

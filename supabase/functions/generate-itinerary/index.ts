@@ -1,6 +1,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { captureException } from "../_shared/errortrack.ts";
 import {
+  callLLM,
+  modelFor,
+  suggestCap,
+  traitsOf,
+  providerOf,
+  type LLMUsage,
+  type SystemBlock,
+  type JSONSchema,
+} from "../_shared/llm.ts";
+import {
   authenticateUser,
   unauthorized,
   resolveAndGate,
@@ -121,6 +131,169 @@ You are expanding exactly ONE day of an ALREADY-AGREED whole-trip plan (provided
 Return ONLY a raw JSON object for the single day, MINIFIED — no indentation, no newlines. Start with { end with }:
 {"label":"Day K","city":"...","story_title":"2–4 word evocative title","narrative":"2–3 magazine-style sentences","description":"2–3 evocative sentences","transit_tip":"...","activities":[{"time":"09:00","title":"...","geocode":"...","type":"sight","duration":"1h","note":"...","gloss":"...","photo_query":"...","icon":"🏛️","transition":{"mode":"metro"}}],"wishlist":[{"title":"...","geocode":"...","near":"Activity Title from this day"}]}`;
 
+// ── Output schemas ──────────────────────────────────────────────────────────
+// These mirror the JSON shapes spelled out in SYSTEM_PROMPT / PLAN_OVERRIDE /
+// DAYFILL_OVERRIDE and are enforced by the provider, so the parse below cannot
+// fail on shape and the "story mode" fields cannot be quietly omitted. The
+// adapter reshapes them per provider (OpenAI needs every key in `required`,
+// Anthropic rejects maxItems/numeric bounds), so one definition serves all.
+const ACTIVITY_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "time",
+    "title",
+    "geocode",
+    "type",
+    "duration",
+    "note",
+    "gloss",
+    "photo_query",
+    "icon",
+    "transition",
+  ],
+  properties: {
+    time: { type: "string", description: "24h HH:MM" },
+    title: { type: "string" },
+    geocode: { type: "string", description: "exact name for map lookup" },
+    type: { type: "string" },
+    duration: { type: "string", description: 'e.g. "1h", "45m"' },
+    // Nullable, because SYSTEM_PROMPT spends 80 words insisting "MOST
+    // activities need NO note", caps notes at 1-in-4, and says "NEVER emit
+    // note:'' — omit the key entirely". A required non-nullable string left
+    // the model no legal way to say "no note", forcing it to invent ~37
+    // notes on a 7-day trip — exactly the descriptive filler the prompt
+    // calls wrong. Stays in `required` because OpenAI strict demands the key.
+    note: { type: ["string", "null"] },
+    gloss: { type: "string", description: "one evocative line, max 12 words" },
+    photo_query: { type: "string" },
+    icon: { type: "string" },
+    // Nullable rather than absent: OpenAI strict requires every key, so the
+    // model says "no transition" with null instead of by omission.
+    transition: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["mode"],
+      properties: { mode: { type: "string" } },
+    },
+  },
+} as const;
+
+const DAY_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "label",
+    "city",
+    "story_title",
+    "narrative",
+    "description",
+    "transit_tip",
+    "activities",
+    "wishlist",
+  ],
+  properties: {
+    label: { type: "string", description: 'e.g. "Day 1"' },
+    city: { type: "string" },
+    story_title: { type: "string", description: "2-4 word evocative title" },
+    narrative: { type: "string", description: "2-3 magazine-style sentences" },
+    description: { type: "string", description: "2-3 evocative sentences" },
+    transit_tip: { type: ["string", "null"] },
+    activities: { type: "array", items: ACTIVITY_SCHEMA },
+    wishlist: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "geocode", "near"],
+        properties: {
+          title: { type: "string" },
+          geocode: { type: "string" },
+          near: {
+            type: "string",
+            description: "an activity title from this day",
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+const CITIES_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name", "writeup"],
+    properties: {
+      name: { type: "string" },
+      writeup: { type: "string", description: "2-3 evocative sentences" },
+    },
+  },
+} as const;
+
+/** Phase 1: the whole-trip skeleton the day fills expand. */
+const PLAN_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "summary", "cities", "plan"],
+  properties: {
+    name: { type: "string" },
+    summary: { type: "string", description: "2 sentences max" },
+    cities: CITIES_SCHEMA,
+    plan: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "label",
+          "city",
+          "hotel",
+          "sleep_city",
+          "highlights",
+          "description",
+        ],
+        properties: {
+          label: { type: "string" },
+          city: { type: "string" },
+          hotel: { type: ["string", "null"] },
+          sleep_city: { type: ["string", "null"] },
+          highlights: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["title", "icon"],
+              properties: {
+                title: { type: "string" },
+                icon: { type: ["string", "null"] },
+              },
+            },
+          },
+          description: { type: ["string", "null"] },
+        },
+      },
+    },
+  },
+} as const;
+
+/** Phase 2: one day, expanded. */
+const DAYFILL_SCHEMA = DAY_SCHEMA;
+
+/** IG_ARCH=single escape hatch: header + every day in one object. */
+const SINGLESHOT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "summary", "cities", "days"],
+  properties: {
+    name: { type: "string" },
+    summary: { type: "string" },
+    cities: CITIES_SCHEMA,
+    days: { type: "array", items: DAY_SCHEMA },
+  },
+} as const;
+
 // Strip \`\`\`json ... \`\`\` fences and return the raw JSON string.
 function stripFences(text: string): string {
   let t = (text || "").trim();
@@ -132,145 +305,37 @@ function stripFences(text: string): string {
   return t.trim();
 }
 
-interface AnthropicUsage {
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_creation_input_tokens?: number;
-  cache_read_input_tokens?: number;
-}
+// Usage shape now comes from the shared adapter.
+type AnthropicUsage = LLMUsage;
 
-// Provider adapter for the day-fill A/B. Routes by model-id prefix and
-// normalises every provider's response to Anthropic's {text, usage} shape so
-// callers, billing and llm_usage stay identical. Anthropic is the default
-// path and is untouched — a model id without a gemini-/gpt- prefix never
-// reaches this code.
-async function callOtherProvider(
-  model: string,
-  systemText: string,
-  userMessage: string,
-  maxTokens: number,
-): Promise<{ text: string; usage: AnthropicUsage }> {
-  if (model.startsWith("gemini")) {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "x-goog-api-key": Deno.env.get("GEMINI_API_KEY") ?? "",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemText }] },
-          contents: [{ role: "user", parts: [{ text: userMessage }] }],
-          generationConfig: {
-            maxOutputTokens: maxTokens,
-            responseMimeType: "application/json",
-            // Gemini 3.x ships with thinking ON, and thought tokens are
-            // charged as output AND counted against maxOutputTokens — a
-            // trivial probe burned 96 thought tokens and returned a
-            // truncated 3-token body. Day fills would silently emit
-            // unparseable JSON. Same reason Claude 5 gets thinking disabled.
-            thinkingConfig: { thinkingBudget: 0 },
-          },
-        }),
-      },
-    );
-    if (!res.ok) throw new Error(`Gemini error: ${await res.text()}`);
-    const d = await res.json();
-    const text = (d?.candidates?.[0]?.content?.parts || [])
-      .map((p: { text?: string }) => p.text || "")
-      .join("");
-    return {
-      text,
-      usage: {
-        input_tokens: d?.usageMetadata?.promptTokenCount || 0,
-        output_tokens:
-          (d?.usageMetadata?.candidatesTokenCount || 0) +
-          (d?.usageMetadata?.thoughtsTokenCount || 0),
-      } as AnthropicUsage,
-    };
-  }
-  // OpenAI (GPT-5.x family: max_completion_tokens, no temperature)
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${Deno.env.get("OPENAI_API_KEY") ?? ""}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      max_completion_tokens: maxTokens,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemText },
-        { role: "user", content: userMessage },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`OpenAI error: ${await res.text()}`);
-  const d = await res.json();
-  return {
-    text: d?.choices?.[0]?.message?.content || "",
-    usage: {
-      input_tokens: d?.usage?.prompt_tokens || 0,
-      output_tokens: d?.usage?.completion_tokens || 0,
-      cache_read_input_tokens:
-        d?.usage?.prompt_tokens_details?.cached_tokens || 0,
-    } as AnthropicUsage,
-  };
-}
-
-// Single non-streamed Anthropic call → text + usage. System passed as blocks
-// so fill calls can share the cached SYSTEM_PROMPT prefix.
+// Single non-streamed completion → text + usage, via the shared multi-provider
+// adapter (_shared/llm.ts). System stays as blocks so fill calls share the
+// cached SYSTEM_PROMPT prefix on Anthropic. Provider routing, thinking/
+// temperature handling, JSON-mode rules and usage normalisation all live in
+// the adapter now — this is just the IG-shaped wrapper around it.
 async function callClaude(
   model: string,
   systemBlocks: { type: string; text: string; cache_control?: object }[],
   userMessage: string,
   maxTokens: number,
-): Promise<{ text: string; usage: AnthropicUsage }> {
-  if (model.startsWith("gemini") || model.startsWith("gpt")) {
-    return await callOtherProvider(
-      model,
-      systemBlocks.map((b) => b.text).join("\n\n"),
-      userMessage,
-      maxTokens,
-    );
-  }
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "prompt-caching-2024-07-31",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      // Claude 5 family: temperature is rejected, and thinking is ON by
-      // default — thinking tokens count against max_tokens, which starved the
-      // text block and truncated day JSON mid-string. Disable it: these calls
-      // want fast structured output, not deliberation.
-      ...(model.startsWith("claude-sonnet-5")
-        ? { thinking: { type: "disabled" } }
-        : { temperature: 0.8 }),
-      stream: false,
-      system: systemBlocks,
-      messages: [{ role: "user", content: userMessage }],
-    }),
+  schema?: JSONSchema,
+): Promise<{ text: string; usage: AnthropicUsage; parsed?: unknown }> {
+  const res = await callLLM({
+    model,
+    system: systemBlocks as SystemBlock[],
+    user: userMessage,
+    maxTokens,
+    json: true,
+    temperature: 0.8, // honoured only by pre-Claude-5 Anthropic models
+    schema,
   });
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Anthropic error: ${err}`);
-  }
-  const data = await response.json();
-  if (data.stop_reason === "max_tokens")
-    throw new Error(`hit max_tokens (${maxTokens}) — output truncated`);
-  const text = (data.content || [])
-    .filter((b: { type?: string }) => b.type === "text")
-    .map((b: { text?: string }) => b.text || "")
-    .join("");
-  return { text, usage: (data.usage || {}) as AnthropicUsage };
+  // The adapter already retried once at 1.5x the cap. Still truncated means
+  // the output really is unusable, so fail the way callers expect.
+  if (res.truncated)
+    throw new Error(
+      `hit max_tokens (${res.retriedAtCap ?? maxTokens}) — output truncated`,
+    );
+  return { text: res.text, usage: res.usage, parsed: res.parsed };
 }
 
 interface PlanDay {
@@ -644,106 +709,26 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
     // PLAN skeleton + concurrent day fills (wall-clock ≈ plan + one day, any
     // trip length — what makes Sonnet 5 viable under the ~150s edge limit);
     // "single" = the original one-call streaming path, kept as escape hatch.
-    const igModel = Deno.env.get("IG_MODEL") || "claude-sonnet-5";
+    // Default moved to gemini-3.8-flash on 2026-10-05 on 14-trip bench data
+    // (bench-results-2026-10-05.md), 7-day Thailand itinerary:
+    //   claude-sonnet-5-5   $0.2421  38.5s  7/7 days  23 major violations
+    //   gemini-3.8-flash    $0.0823  17.6s  7/7 days   0 major violations
+    // 3.7x cheaper, 2.2x faster, and the ONLY arm with zero structural
+    // violations across both fixtures, plus 4/4 hotels correct.
+    //
+    // CAVEAT: gemini-3.8-flash's $0.75/$3.75 is promotional and DOUBLES on
+    // 2027-01-01, which cuts the advantage to ~1.9x. Re-run the bench in
+    // December. Rollback at any time via LLM_MODEL_IG / LLM_MODEL_DEFAULT.
+    const igModel = modelFor("IG", "gemini-3.8-flash");
     const igArch = Deno.env.get("IG_ARCH") || "parallel";
-    if (igModel.startsWith("gemini")) {
-      const gResp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${igModel}:streamGenerateContent?alt=sse`,
-        {
-          method: "POST",
-          headers: {
-            "x-goog-api-key": Deno.env.get("GEMINI_API_KEY") ?? "",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-            contents: [{ role: "user", parts: [{ text: userMessage }] }],
-            generationConfig: {
-              maxOutputTokens: Math.min(32000, numDays * 2200 + 6000),
-              responseMimeType: "application/json",
-            },
-          }),
-        },
-      );
-      if (!gResp.ok) {
-        const e = await gResp.text();
-        throw new Error(`Gemini error: ${e}`);
-      }
-      // Re-emit Gemini SSE as the client's `data: "<text delta>"` format — same
-      // shape the Anthropic path emits, so the client parser is unchanged.
-      const { readable, writable } = new TransformStream();
-      const writer = writable.getWriter();
-      const encoder = new TextEncoder();
-      (async () => {
-        let inTok = 0;
-        let outTok = 0;
-        try {
-          const reader = gResp.body!.getReader();
-          const decoder = new TextDecoder();
-          let buf = "";
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            const lines = buf.split("\n");
-            buf = lines.pop() ?? "";
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const raw = line.slice(6).trim();
-              if (!raw) continue;
-              try {
-                const ev = JSON.parse(raw);
-                const txt = ev.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (txt)
-                  await writer.write(
-                    encoder.encode(`data: ${JSON.stringify(txt)}\n\n`),
-                  );
-                if (ev.usageMetadata) {
-                  inTok = ev.usageMetadata.promptTokenCount || inTok;
-                  outTok = ev.usageMetadata.candidatesTokenCount || outTok;
-                }
-              } catch {
-                /* skip non-JSON keep-alive lines */
-              }
-            }
-          }
-        } finally {
-          await writer.write(encoder.encode("data: [DONE]\n\n"));
-          await writer.close();
-          // Log usage only (credit deduction on the canary path is skipped —
-          // the credit cost model is Anthropic-priced; the gate above still ran).
-          const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-          const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-          runInBackground(
-            fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                apikey: supabaseKey,
-                Authorization: `Bearer ${supabaseKey}`,
-              },
-              body: JSON.stringify({
-                trip_id: tripId || null,
-                function_name: "generate-itinerary",
-                model: igModel,
-                input_tokens: inTok,
-                output_tokens: outTok,
-              }),
-            })
-              .then(() => {})
-              .catch(() => {}),
-          );
-        }
-      })();
-      return new Response(readable, {
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-        },
-      });
-    }
-
+    // NOTE: a Gemini-only single-shot branch used to live here. It bypassed
+    // this function's parallel plan+fill architecture, so Gemini arms were not
+    // comparable with any other model; it counted only candidatesTokenCount
+    // (dropping thoughtsTokenCount, which Google bills as output); and it
+    // deliberately skipped deductCredits, so every Gemini generation was free
+    // to the user and invisible to the credit system. All three are fixed by
+    // routing Gemini through the normal path below — _shared/llm.ts handles
+    // the provider differences, and billing is model-aware.
     if (igArch !== "single") {
       // ── PHASE 1: PLAN skeleton (awaited before the stream opens, so a plan
       // failure surfaces as a clean HTTP 500 the client already handles).
@@ -751,13 +736,13 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       // lets it run on a faster model than the day fills. Credits are deducted
       // at igModel rates for the whole batch; when the plan model is cheaper,
       // the ~2k plan tokens are slightly overcharged, never undercharged.
-      const igPlanModel = Deno.env.get("IG_PLAN_MODEL") || igModel;
+      const igPlanModel = modelFor("IG_PLAN", igModel);
       // Cost lever: the per-day fills are ~85% of IG's tokens, so their model
       // is selectable independently. Defaults to igModel (no behaviour
       // change). A/B on 2026-10-02 showed Haiku fills cut cost 72% but
       // hallucinated hotels and restaurants badly — see the IG model note in
       // CLAUDE.md before flipping this.
-      const igFillModel = Deno.env.get("IG_FILL_MODEL") || igModel;
+      const igFillModel = modelFor("IG_FILL", igModel);
       const totalStart = Date.now();
       const planBlocks = [
         {
@@ -772,15 +757,15 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
         planBlocks,
         userMessage,
         planMaxTokens,
+        PLAN_SCHEMA as unknown as JSONSchema,
       );
-      let planParsed: unknown = null;
+      let planParsed: unknown = planRes.parsed ?? null;
       let planRetryUsage: AnthropicUsage | null = null;
-      try {
-        planParsed = JSON.parse(stripFences(planRes.text));
-      } catch {
-        // The day fills already retry; the plan did not — so one malformed
-        // plan response 500'd the whole generation and the user paid again
-        // on re-run. Observed live.
+      if (planParsed === null) {
+        // Kept as the safety net for the degraded prompt-only path (a model
+        // that rejects schemas) and for truncation past callLLM's 1.5x retry.
+        // The fills already retried; the plan did not, so one malformed plan
+        // used to 500 the whole generation and the user paid again on re-run.
         console.warn("Plan parse failed — retrying once");
         planRetryUsage = planRes.usage; // the failed attempt was still billed
         planRes = await callClaude(
@@ -788,7 +773,9 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
           planBlocks,
           userMessage,
           planMaxTokens,
+          PLAN_SCHEMA as unknown as JSONSchema,
         );
+        planParsed = planRes.parsed ?? null;
       }
       let plan: {
         name?: string;
@@ -861,21 +848,62 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
           skeleton +
           `\n\n──── YOUR TASK ────\nProduce ONLY the detailed day object for ${day.label} in ${day.city}. Expand THIS day's anchors (${titles}) into a full schedule. NEVER use any place the plan assigns to a different day — this includes meals and connective stops you add yourself: if a venue is named anywhere in the plan for another day, pick a different one. ${baseNote}`;
         const attempt = async () => {
-          const res = await callClaude(igFillModel, fillSystem, dayUser, 4500);
-          let parsed = JSON.parse(stripFences(res.text));
+          // 4500 is the Sonnet/Haiku-tuned baseline; suggestCap scales it for
+          // verbose models (gpt-6-luna measured ~2.5x output on this prompt).
+          const res = await callClaude(
+            igFillModel,
+            fillSystem,
+            dayUser,
+            suggestCap(igFillModel, 4500),
+            DAYFILL_SCHEMA as unknown as JSONSchema,
+          );
+          // Record usage BEFORE validating. The provider has already charged
+          // us for these tokens (possibly for TWO calls, since callLLM merges
+          // its 1.5x retry), so a shape failure below must not make them
+          // vanish from llm_usage — the plan path handles this deliberately
+          // via planRetryUsage and the fill path simply didn't.
+          fillUsages.push(res.usage);
+          // Schema-guaranteed: the day object cannot arrive mis-shaped, and
+          // the story-mode fields (story_title, narrative) cannot be omitted.
+          // The {days:[...]} unwrap stays for the degraded prompt-only path.
+          let parsed = res.parsed ?? JSON.parse(stripFences(res.text));
           if (Array.isArray(parsed?.days)) parsed = parsed.days[0];
           if (!parsed || !Array.isArray(parsed.activities))
             throw new Error("day object missing activities");
-          fillUsages.push(res.usage);
           parsed.label = day.label;
           parsed.wishlist = Array.isArray(parsed.wishlist)
             ? parsed.wishlist
             : [];
           return parsed;
         };
+        // Degrade to a stub rather than throwing: fillOne runs inside
+        // Promise.all, so an escaping error would fail the whole generation
+        // instead of losing one day.
+        const stub = (err: string) => {
+          fillErrors.push({ day: day.label, error: err });
+          return {
+            label: day.label,
+            city: day.city,
+            description: day.description || "",
+            activities: [],
+            wishlist: [],
+          };
+        };
         try {
           return await attempt();
         } catch (e1) {
+          // Don't re-run the ladder on truncation: callLLM already retried at
+          // 1.5x and billed both attempts, and callClaude threw because even
+          // that was short. A second attempt() burns two MORE calls for the
+          // same reason — worst case ~25,600 output tokens ($0.096 on Gemini,
+          // more than an entire successful IG) and still an empty day.
+          if (/hit max_tokens/.test(e1.message)) {
+            console.error(
+              `Day fill truncated twice for ${day.label}, not re-running:`,
+              e1.message,
+            );
+            return stub(e1.message);
+          }
           console.error(
             `Day fill failed for ${day.label}, retrying:`,
             e1.message,
@@ -887,14 +915,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
               `Day fill failed twice for ${day.label}:`,
               e2.message,
             );
-            fillErrors.push({ day: day.label, error: e2.message });
-            return {
-              label: day.label,
-              city: day.city,
-              description: day.description || "",
-              activities: [],
-              wishlist: [],
-            };
+            return stub(e2.message);
           }
         }
       }
@@ -919,6 +940,126 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
           .catch((e) => console.error("SSE write failed:", e.message));
         return sendChain;
       };
+
+      // ── Billing flush, callable from two places ───────────────────────
+      // The normal path bills in the pump's finally. But a HARD platform
+      // wall-clock kill (~150s) reclaims the isolate before any finally runs,
+      // so a timed-out generation logged NOTHING and deducted NOTHING while
+      // the provider still charged us. Observed 2026-10-05: a gpt-6-luna IG
+      // ran 151.7s and left zero generate-itinerary rows in llm_usage.
+      // runInBackground/waitUntil protects against client disconnects; it
+      // cannot extend the wall clock. So a watchdog flushes early, and the
+      // flush is idempotent so the normal path cannot double-bill.
+      // Guards re-entrancy within a single flush, NOT "bill once ever": the
+      // watchdog takes a snapshot mid-generation and the day-fills still
+      // running afterwards must be billed by the completion path. The arrays
+      // are drained (splice) rather than read, so no usage is billed twice
+      // and none is dropped.
+      let flushing = false;
+      const flushBilling = async (reason: "complete" | "watchdog") => {
+        if (flushing) return;
+        flushing = true;
+        const tally = (list: AnthropicUsage[]) => ({
+          inputTokens: list.reduce((a, u) => a + (u.input_tokens || 0), 0),
+          outputTokens: list.reduce((a, u) => a + (u.output_tokens || 0), 0),
+          cacheCreationTokens: list.reduce(
+            (a, u) => a + (u.cache_creation_input_tokens || 0),
+            0,
+          ),
+          cacheReadTokens: list.reduce(
+            (a, u) => a + (u.cache_read_input_tokens || 0),
+            0,
+          ),
+        });
+        // DRAIN the usage arrays. A watchdog flush at 135s used to snapshot
+        // days 1-4 and set billed=true; days 5-7 then resolved at 141-149s
+        // and pushed into arrays nobody read again, so the most expensive
+        // part of IG went unbilled. Draining lets the completion path bill
+        // exactly the remainder.
+        const planBatch = planUsages.splice(0);
+        const fillBatch = fillUsages.splice(0);
+        // Report igPlanModel, not igModel: the equality test compares the two
+        // SUB-models, which can match each other while differing from
+        // igModel (set LLM_MODEL_IG_PLAN and _FILL but not LLM_MODEL_IG and
+        // every token gets logged and billed against a model never called —
+        // a 20x error if igModel is Sonnet and the sub-models are luna).
+        const phases =
+          igPlanModel === igFillModel
+            ? [{ model: igPlanModel, ...tally([...planBatch, ...fillBatch]) }]
+            : [
+                { model: igPlanModel, ...tally(planBatch) },
+                { model: igFillModel, ...tally(fillBatch) },
+              ];
+        if (reason === "watchdog")
+          console.error(
+            `IG billing watchdog fired at ${Date.now() - totalStart}ms — ` +
+              `flushing partial usage before the platform kills the isolate`,
+          );
+        console.log(
+          `Parallel IG ${reason} in ${Date.now() - totalStart}ms, tokens ` +
+            `in=${phases.reduce((a, p) => a + p.inputTokens, 0)} ` +
+            `out=${phases.reduce((a, p) => a + p.outputTokens, 0)}`,
+        );
+        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        for (const p of phases) {
+          if (!p.inputTokens && !p.outputTokens) continue;
+          await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              apikey: supabaseKey,
+              Authorization: `Bearer ${supabaseKey}`,
+            },
+            body: JSON.stringify({
+              trip_id: tripId || null,
+              function_name:
+                reason === "watchdog"
+                  ? "generate-itinerary:timeout"
+                  : "generate-itinerary",
+              model: p.model,
+              input_tokens: p.inputTokens,
+              output_tokens: p.outputTokens,
+              cache_creation_tokens: p.cacheCreationTokens,
+              cache_read_tokens: p.cacheReadTokens,
+              duration_ms: Date.now() - totalStart,
+            }),
+          }).catch(() => {});
+          await deductCredits({
+            userId: user.id,
+            model: p.model,
+            inputTokens: p.inputTokens,
+            outputTokens: p.outputTokens,
+            cacheCreationTokens: p.cacheCreationTokens,
+            cacheReadTokens: p.cacheReadTokens,
+            // Same name in the ledger as in llm_usage above, so a timeout
+            // row and its deduction cannot disagree.
+            functionName:
+              reason === "watchdog"
+                ? "generate-itinerary:timeout"
+                : "generate-itinerary",
+            tripId: tripId || null,
+            source,
+          });
+        }
+        // A watchdog flush is a partial settlement, so re-arm: fills that
+        // land afterwards are billed by the completion path.
+        if (reason === "watchdog") flushing = false;
+      };
+      // The deadline is measured from REQUEST START, not from here. This line
+      // runs AFTER the awaited plan call (and its possible retry), so a flat
+      // 135_000 meant "135s after the plan finished" — on a 22s plan the
+      // watchdog would fire at t=157s, past the ~150s wall clock that kills
+      // the isolate. The safety net would have missed exactly the runs it was
+      // added for. Clamped to a 5s floor so an already-late run still flushes.
+      const WATCHDOG_MS = 135_000;
+      const billingWatchdog = setTimeout(
+        // runInBackground, not a bare call: the flush does network I/O, and
+        // without waitUntil registration the isolate can be reclaimed
+        // mid-fetch the moment the main pump settles.
+        () => runInBackground(flushBilling("watchdog")),
+        Math.max(5_000, WATCHDOG_MS - (Date.now() - totalStart)),
+      );
 
       // waitUntil-registered: without this, a client disconnect can reclaim
       // the isolate mid-fill, before the finally's billing/usage logging —
@@ -949,16 +1090,33 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
             // awaited call writes the cache first (~1s), after which all N
             // fills READ it at 0.1x. Best-effort: on failure we simply fall
             // back to today's behaviour.
-            try {
-              const warm = await callClaude(
-                igFillModel,
-                fillSystem,
-                "Reply with the single word OK.",
-                1,
-              );
-              fillUsages.push(warm.usage);
-            } catch (e) {
-              console.warn("Cache prime failed (non-fatal):", e.message);
+            // Only Anthropic honours cache_control, so on Gemini/OpenAI the
+            // prime buys nothing — those providers cache automatically,
+            // server-side — while costing one billed call and ~1s on the
+            // critical path. Gate it on the trait rather than the provider
+            // name so a future caching provider picks it up for free.
+            if (traitsOf(igFillModel).supportsPromptCache) {
+              try {
+                const warm = await callLLM({
+                  model: igFillModel,
+                  system: fillSystem as SystemBlock[],
+                  user: "warmup",
+                  // max_tokens:0 is Anthropic's documented pre-warm form: it
+                  // runs prefill (writing the cache) and returns immediately
+                  // with no content and ZERO output tokens billed. The old
+                  // max_tokens:1 produced a one-token reply to throw away.
+                  // Rejected alongside stream/thinking-enabled/json-format/
+                  // forced tool_choice — none of which this call uses.
+                  maxTokens: 0,
+                  // Hitting the cap is the expected outcome here, so the
+                  // adapter's retry-at-1.5x must not fire: the cache is
+                  // written by processing the INPUT, which this call paid for.
+                  retryOnTruncation: false,
+                });
+                fillUsages.push(warm.usage);
+              } catch (e) {
+                console.warn("Cache prime failed (non-fatal):", e.message);
+              }
             }
 
             await Promise.all(
@@ -975,46 +1133,19 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
               tripId: tripId || null,
             });
           } finally {
+            clearTimeout(billingWatchdog);
             await sendChain;
             await writer
               .write(encoder.encode("data: [DONE]\n\n"))
               .catch(() => {});
             await writer.close().catch(() => {});
 
-            const tally = (list: AnthropicUsage[]) => ({
-              inputTokens: list.reduce((a, u) => a + (u.input_tokens || 0), 0),
-              outputTokens: list.reduce(
-                (a, u) => a + (u.output_tokens || 0),
-                0,
-              ),
-              cacheCreationTokens: list.reduce(
-                (a, u) => a + (u.cache_creation_input_tokens || 0),
-                0,
-              ),
-              cacheReadTokens: list.reduce(
-                (a, u) => a + (u.cache_read_input_tokens || 0),
-                0,
-              ),
-            });
-            // One bucket per distinct model; merged when plan and fill match
-            // so the common case still writes a single llm_usage row.
-            const phases =
-              igPlanModel === igFillModel
-                ? [{ model: igModel, ...tally([...planUsages, ...fillUsages]) }]
-                : [
-                    { model: igPlanModel, ...tally(planUsages) },
-                    { model: igFillModel, ...tally(fillUsages) },
-                  ];
-            const inputTokens = phases.reduce((a, p) => a + p.inputTokens, 0);
-            const outputTokens = phases.reduce((a, p) => a + p.outputTokens, 0);
-            const cacheCreationTokens = phases.reduce(
-              (a, p) => a + p.cacheCreationTokens,
-              0,
-            );
-            const cacheReadTokens = phases.reduce(
-              (a, p) => a + p.cacheReadTokens,
-              0,
-            );
+            // BILLING FIRST, reporting second — the rule RG already documents.
+            // captureException is an un-timeouted fetch to PostHog; awaiting
+            // it ahead of the flush put an unbounded delay in front of the
+            // only billing call on a run that is already near the wall clock.
+            runInBackground(flushBilling("complete"));
+
             if (fillErrors.length) {
               console.error("Fill errors:", JSON.stringify(fillErrors));
               await captureException(
@@ -1028,51 +1159,6 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
                 },
               );
             }
-            console.log(
-              `Parallel IG done in ${Date.now() - totalStart}ms, tokens in=${inputTokens} out=${outputTokens}`,
-            );
-
-            const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-            const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-            runInBackground(
-              (async () => {
-                // One row + one deduction per model actually used, so a
-                // mixed plan/fill run bills each phase at its true rate.
-                for (const p of phases) {
-                  if (!p.inputTokens && !p.outputTokens) continue;
-                  await fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                      apikey: supabaseKey,
-                      Authorization: `Bearer ${supabaseKey}`,
-                    },
-                    body: JSON.stringify({
-                      trip_id: tripId || null,
-                      function_name: "generate-itinerary",
-                      model: p.model,
-                      input_tokens: p.inputTokens,
-                      output_tokens: p.outputTokens,
-                      cache_creation_tokens: p.cacheCreationTokens,
-                      cache_read_tokens: p.cacheReadTokens,
-                      duration_ms: Date.now() - totalStart,
-                    }),
-                  }).catch(() => {});
-
-                  await deductCredits({
-                    userId: user.id,
-                    model: p.model,
-                    inputTokens: p.inputTokens,
-                    outputTokens: p.outputTokens,
-                    cacheCreationTokens: p.cacheCreationTokens,
-                    cacheReadTokens: p.cacheReadTokens,
-                    functionName: "generate-itinerary",
-                    tripId: tripId || null,
-                    source,
-                  });
-                }
-              })(),
-            );
           }
         })(),
       );
@@ -1086,6 +1172,26 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       });
     }
 
+    // IG_ARCH=single escape hatch. It still builds its own Anthropic body, so
+    // the thinking/temperature decision has to come from the adapter's trait
+    // table rather than a startsWith() guess: "claude-sonnet-5" prefixes
+    // "claude-sonnet-5-5", where {type:"disabled"} is a 400 and the correct
+    // off-switch is {type:"between_tools"}.
+    // This path POSTs directly to api.anthropic.com, so a non-Anthropic
+    // igModel 404s there. The default is now gemini-3.8-flash, which would
+    // have made the escape hatch fail in exactly the incident it exists for.
+    if (providerOf(igModel) !== "anthropic")
+      throw new Error(
+        `IG_ARCH=single requires an Anthropic model (got "${igModel}") — ` +
+          `set LLM_MODEL_IG to an Anthropic id or use the parallel path`,
+      );
+    const igTraits = traitsOf(igModel);
+    const singleShotSampling = igTraits.thinkingBody
+      ? { thinking: igTraits.thinkingBody }
+      : igTraits.allowTemperature
+        ? { temperature: 0.8 }
+        : {};
+
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -1097,10 +1203,16 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       body: JSON.stringify({
         model: igModel,
         max_tokens: Math.min(40000, numDays * 3500 + 3000),
-        // temperature is rejected by the Claude 5 family; keep for older models
-        ...(igModel.startsWith("claude-sonnet-5")
-          ? { thinking: { type: "disabled" } }
-          : { temperature: 0.8 }),
+        ...singleShotSampling,
+        // Anthropic-only path, so the schema goes on raw rather than through
+        // normaliseSchema — the shape below is already within what Anthropic
+        // accepts (no maxItems, no numeric bounds).
+        output_config: {
+          format: {
+            type: "json_schema",
+            schema: SINGLESHOT_SCHEMA,
+          },
+        },
         stream: true,
         system: [
           {
@@ -1124,9 +1236,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
     const requestBodyStr = JSON.stringify({
       model: igModel,
       max_tokens: Math.min(40000, numDays * 3500 + 3000),
-      ...(igModel.startsWith("claude-sonnet-5")
-        ? { thinking: { type: "disabled" } }
-        : { temperature: 0.8 }),
+      ...singleShotSampling,
       stream: true,
       system: [
         {

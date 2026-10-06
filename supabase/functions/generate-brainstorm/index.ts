@@ -1,15 +1,19 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { captureException } from "../_shared/errortrack.ts";
 import {
+  streamLLM,
+  modelFor,
+  suggestCap,
+  type LLMUsage,
+  type JSONSchema,
+} from "../_shared/llm.ts";
+import {
   authenticateUser,
   unauthorized,
   resolveAndGate,
   deductCredits,
   rateLimit,
   llmKillSwitch,
-  newStreamUsage,
-  accumulateStreamUsage,
-  hasStreamUsage,
   runInBackground,
 } from "../_shared/credits.ts";
 
@@ -188,158 +192,144 @@ serve(async (req) => {
 
     // Model resolved BEFORE the request body — previously the body hardcoded
     // sonnet-4-6 and RG_MODEL only ever routed the Gemini canary.
-    const rgModel = Deno.env.get("RG_MODEL") || "claude-sonnet-5";
-    const requestBody = JSON.stringify({
-      model: rgModel,
-      // 4 routes + 15-20 tier-2 experiences runs ~3.8-4.4k tokens on 6-day
-      // multi-city trips — the old 4000 cap truncated mid-JSON on most runs
-      // (llm_usage showed output_tokens pinned at exactly 4000), which read
-      // as "RG randomly fails, re-run until it works".
-      max_tokens: 9000,
-      // Claude 5 family: temperature is rejected and thinking defaults ON
-      // (which would eat the max_tokens budget mid-JSON) — disable it.
-      ...(rgModel.startsWith("claude-sonnet-5") ||
-      rgModel.startsWith("claude-fable") ||
-      rgModel.startsWith("claude-opus-5")
-        ? { thinking: { type: "disabled" } }
-        : { temperature: 0.7 }),
-      stream: true,
-      // The system prompt is fully static, so cache it as a stable prefix.
-      system: [
-        {
-          type: "text",
-          text: SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-      messages: [{ role: "user", content: finalUserMessage }],
-    });
-
-    // ── Provider switch: RG_MODEL env var selects the RG model per environment.
-    // Unset (prod) → Sonnet 4.6 (the Anthropic path below, unchanged). Set to a
-    // "gemini-*" id (staging) → Gemini streaming path (canary A/B). Same code
-    // ships to both; behaviour differs only by the env var.
-    if (rgModel.startsWith("gemini")) {
-      const gResp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${rgModel}:streamGenerateContent?alt=sse`,
-        {
-          method: "POST",
-          headers: {
-            "x-goog-api-key": Deno.env.get("GEMINI_API_KEY") ?? "",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-            contents: [{ role: "user", parts: [{ text: finalUserMessage }] }],
-            generationConfig: {
-              maxOutputTokens: 8000,
-              responseMimeType: "application/json",
-            },
-          }),
-        },
-      );
-      if (!gResp.ok) {
-        const e = await gResp.text();
-        throw new Error(`Gemini error: ${e}`);
-      }
-      // Re-emit Gemini SSE as the client's `data: "<text delta>"` format — same
-      // shape the Anthropic path emits, so the client parser is unchanged.
-      const { readable, writable } = new TransformStream();
-      const writer = writable.getWriter();
-      const encoder = new TextEncoder();
-      (async () => {
-        let inTok = 0;
-        let outTok = 0;
-        try {
-          const reader = gResp.body!.getReader();
-          const decoder = new TextDecoder();
-          let buf = "";
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            const lines = buf.split("\n");
-            buf = lines.pop() ?? "";
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const raw = line.slice(6).trim();
-              if (!raw) continue;
-              try {
-                const ev = JSON.parse(raw);
-                const txt = ev.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (txt)
-                  await writer.write(
-                    encoder.encode(`data: ${JSON.stringify(txt)}\n\n`),
-                  );
-                if (ev.usageMetadata) {
-                  inTok = ev.usageMetadata.promptTokenCount || inTok;
-                  outTok = ev.usageMetadata.candidatesTokenCount || outTok;
-                }
-              } catch {
-                /* skip non-JSON keep-alive lines */
-              }
-            }
-          }
-        } finally {
-          await writer.write(encoder.encode("data: [DONE]\n\n"));
-          await writer.close();
-          // Log usage only (credit deduction on the canary path is skipped —
-          // the credit cost model is Anthropic-priced; the gate above still ran).
-          const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-          const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-          runInBackground(
-            fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                apikey: supabaseKey,
-                Authorization: `Bearer ${supabaseKey}`,
-              },
-              body: JSON.stringify({
-                trip_id: tripId || null,
-                function_name: "generate-brainstorm",
-                model: rgModel,
-                input_tokens: inTok,
-                output_tokens: outTok,
-              }),
-            })
-              .then(() => {})
-              .catch(() => {}),
-          );
-        }
-      })();
-      return new Response(readable, {
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-        },
-      });
-    }
-
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "prompt-caching-2024-07-31",
-        "content-type": "application/json",
+    // Default moved to gemini-3.8-flash on 2026-10-05 (bench, Thailand 7d):
+    //   claude-sonnet-5-5   171 in / 1,923 out  $0.0195  16.9s  first card 5.8s
+    //   gemini-3.8-flash  3,312 in /   857 out  $0.0057   8.6s  first card 4.2s
+    // 3.4x cheaper and fastest time-to-first-card in the bench, which is the
+    // metric that governs how RG FEELS since cards stream in one at a time.
+    // Both return exactly 4 routes; both OpenAI models returned 21-22.
+    const rgModel = modelFor("RG", "gemini-3.8-flash");
+    // 4 routes + 15-20 tier-2 experiences runs ~3.8-4.4k tokens on 6-day
+    // multi-city trips — the old 4000 cap truncated mid-JSON on most runs
+    // (llm_usage showed output_tokens pinned at exactly 4000), which read
+    // as "RG randomly fails, re-run until it works". gpt-6-luna measured
+    // 8710 against this 9000 cap, so the cap scales with the model.
+    const rgMaxTokens = suggestCap(rgModel, 9000);
+    // The system prompt is fully static, so cache it as a stable prefix
+    // (Anthropic only — the adapter drops cache_control elsewhere).
+    const rgSystem = [
+      {
+        type: "text" as const,
+        text: SYSTEM_PROMPT,
+        cache_control: { type: "ephemeral" as const },
       },
-      body: requestBody,
+    ];
+
+    // RG returns a HETEROGENEOUS top-level array: 4 tier-1 route objects
+    // followed by 15-20 tier-2 experience objects, with different field sets.
+    // anyOf expresses that and is accepted by all three providers (verified
+    // 2026-10-05). The schema is what finally makes "the array MUST contain
+    // the routes FOLLOWED BY the tier-2 items" structurally enforced instead
+    // of merely instructed.
+    const RG_TIER1 = {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "title",
+        "tagline",
+        "tier",
+        "category",
+        "icon",
+        "city",
+        "days",
+        "stops",
+        "bestFor",
+        "warning",
+        "recommended",
+        "points",
+      ],
+      properties: {
+        title: { type: "string" },
+        tagline: { type: "string" },
+        tier: { type: "integer", enum: [1] },
+        category: { type: "string", enum: ["Route"] },
+        icon: { type: "string" },
+        city: { type: "string", description: "comma-separated cities" },
+        days: { type: "array", items: { type: "string" } },
+        stops: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["city", "nights", "why"],
+            properties: {
+              city: { type: "string" },
+              nights: { type: "integer" },
+              why: { type: "string", description: "max 12 words" },
+            },
+          },
+        },
+        bestFor: { type: "string" },
+        // Genuinely absent most of the time — nullable so OpenAI strict (which
+        // requires every key) can still express "no warning".
+        warning: { type: ["string", "null"] },
+        recommended: { type: "boolean" },
+        points: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["text", "good"],
+            properties: {
+              text: { type: "string" },
+              good: { type: "boolean" },
+            },
+          },
+        },
+      },
+    };
+    const RG_TIER2 = {
+      type: "object",
+      additionalProperties: false,
+      required: ["title", "city", "category", "note", "icon", "tier"],
+      properties: {
+        title: { type: "string" },
+        city: { type: "string" },
+        category: { type: "string" },
+        note: { type: "string" },
+        icon: { type: "string" },
+        tier: { type: "integer", enum: [2] },
+      },
+    };
+    const RG_SCHEMA = {
+      type: "array",
+      items: { anyOf: [RG_TIER1, RG_TIER2] },
+    };
+
+    // A Gemini-specific single-shot branch used to live here, duplicating the
+    // SSE pump and skipping deductCredits entirely ("the credit cost model is
+    // Anthropic-priced") — so every Gemini RG was free to the user, and only
+    // candidatesTokenCount was logged, dropping the thought tokens Google
+    // bills as output. streamLLM now serves every provider through one pump,
+    // and billing is model-aware.
+    const rgStream = streamLLM({
+      model: rgModel,
+      system: rgSystem,
+      user: finalUserMessage,
+      maxTokens: rgMaxTokens,
+      json: true,
+      // RG returns a TOP-LEVEL JSON ARRAY of route objects. On OpenAI the
+      // adapter drops the schema for this streamed-array case rather than
+      // wrapping it, because a wrapped object would break the progressive
+      // route scanner mid-stream.
+      expectArray: true,
+      schema: RG_SCHEMA as unknown as JSONSchema,
+      // Honoured only by pre-Claude-5 Anthropic models.
+      temperature: 0.7,
     });
 
-    if (!response.ok) {
-      const err = await response.text();
-      // Log status + first 300 chars for diagnostics (avoid logging full body in prod)
-      console.error(
-        `generate-brainstorm: Anthropic ${response.status}:`,
-        err.slice(0, 300),
-      );
-      throw new Error("Anthropic error: " + err);
-    }
+    // Pull the FIRST event before returning the Response. The provider fetch
+    // happens on this first next(), so a 4xx/5xx from the provider still
+    // throws here — inside the try, before any Response exists — and the
+    // client gets the clean HTTP 500 it already handles. Consume the stream
+    // lazily instead and a provider error becomes an empty 200 stream, which
+    // the client reports as "took too long to respond".
+    const firstEvent = await rgStream.next();
 
     // Fallback estimate, used only if the stream never reports real usage.
-    const estimatedInputTokens = Math.round(requestBody.length / 4);
+    const estimatedInputTokens = Math.round(
+      (SYSTEM_PROMPT.length + finalUserMessage.length) / 4,
+    );
 
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
@@ -351,62 +341,54 @@ serve(async (req) => {
     runInBackground(
       (async () => {
         let outputLength = 0;
-        const usage = newStreamUsage();
+        let streamUsage: LLMUsage | null = null;
         try {
-          const reader = response.body!.getReader();
-          const decoder = new TextDecoder();
-          let lineBuffer = "";
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            lineBuffer += decoder.decode(value, { stream: true });
-            const lines = lineBuffer.split("\n");
-            lineBuffer = lines.pop() ?? "";
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const raw = line.slice(6).trim();
-              if (raw === "[DONE]") continue;
-              try {
-                const event = JSON.parse(raw);
-                accumulateStreamUsage(usage, event);
-                if (
-                  event.type === "content_block_delta" &&
-                  event.delta?.type === "text_delta"
-                ) {
-                  outputLength += event.delta.text.length;
-                  await writer.write(
-                    encoder.encode(
-                      "data: " + JSON.stringify(event.delta.text) + "\n\n",
-                    ),
-                  );
-                } else if (
-                  event.type === "message_delta" &&
-                  event.delta?.stop_reason === "max_tokens"
-                ) {
-                  // Truncated output = unparseable JSON downstream. Make it
-                  // loud in the logs instead of masquerading as a client bug.
-                  console.error(
-                    `RG hit max_tokens — output truncated at ~${outputLength} chars`,
-                  );
-                }
-              } catch {
-                /* ignore */
+          // firstEvent was already pulled above (so provider errors 500);
+          // replay it, then drain the rest.
+          for (let ev = firstEvent; !ev.done; ev = await rgStream.next()) {
+            const event = ev.value;
+            if (event.type === "delta") {
+              outputLength += event.text.length;
+              await writer.write(
+                encoder.encode("data: " + JSON.stringify(event.text) + "\n\n"),
+              );
+            } else {
+              streamUsage = event.usage;
+              if (event.truncated) {
+                // Truncated output = unparseable JSON downstream. Make it
+                // loud in the logs instead of masquerading as a client bug.
+                console.error(
+                  `RG hit max_tokens (${rgMaxTokens}) — output truncated at ~${outputLength} chars`,
+                );
               }
             }
           }
+        } catch (e) {
+          // The pump now owns the provider connection, so a mid-stream
+          // failure lands here instead of at the fetch. Bill what was
+          // generated (the finally below) and surface it.
+          console.error("generate-brainstorm stream error:", e.message);
+          await captureException(e, {
+            functionName: "generate-brainstorm:stream",
+            tripId: tripId || null,
+          });
         } finally {
           // BILLING FIRST, stream niceties second. The old order awaited
           // writer.write/close un-caught at the top of this finally — a client
           // disconnect (tab closed, E2E timeout) made those REJECT, the finally
           // threw, and the log + credit deduction below never ran: every
           // abandoned RG stream billed Anthropic in full and recorded nothing.
-          const inputTokens = hasStreamUsage(usage)
-            ? usage.inputTokens
-            : estimatedInputTokens;
+          // Every provider is normalised to the same four disjoint buckets,
+          // so the estimate fallback is the only branch left.
+          const inputTokens =
+            streamUsage && streamUsage.input_tokens
+              ? streamUsage.input_tokens
+              : estimatedInputTokens;
           const outputTokens =
-            usage.outputTokens || Math.round(outputLength / 4);
-          const cacheCreationTokens = usage.cacheCreationTokens;
-          const cacheReadTokens = usage.cacheReadTokens;
+            streamUsage?.output_tokens || Math.round(outputLength / 4);
+          const cacheCreationTokens =
+            streamUsage?.cache_creation_input_tokens ?? 0;
+          const cacheReadTokens = streamUsage?.cache_read_input_tokens ?? 0;
 
           const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
           const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;

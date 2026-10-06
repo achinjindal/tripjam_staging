@@ -1,4 +1,10 @@
 import { captureException } from "../_shared/errortrack.ts";
+import {
+  callLLM,
+  modelFor,
+  suggestCap,
+  type JSONSchema,
+} from "../_shared/llm.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   authenticateUser,
@@ -14,6 +20,26 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
+
+// Provider-enforced shape. `amount` as a typed number matters here: a model
+// that answers "$450" or "450 USD" as a string used to sum to NaN in the
+// Expenses widget, and `category` is pinned to the six the UI buckets by.
+const EXPENSES_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    required: ["title", "amount", "category"],
+    properties: {
+      title: { type: "string", description: "specific line-item title" },
+      amount: { type: "number", description: "USD, number only" },
+      category: {
+        type: "string",
+        enum: ["Stay", "Transport", "Food", "Activities", "Shopping", "Other"],
+      },
+    },
+  },
+} as const;
 
 const SYSTEM_PROMPT = `You are a travel budget estimator. Generate realistic cost estimates for a trip.
 
@@ -79,24 +105,17 @@ serve(async (req) => {
 - Budget: ${budgetLabel}
 - Style: ${(igReq.styles || []).join(", ") || "mixed"}${trip.notes ? `\n- Notes: ${trip.notes}` : ""}`;
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 1024,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      }),
+    // Top-level JSON ARRAY — rides wrapped on OpenAI, bare everywhere else.
+    const model = modelFor("EXPENSES", "claude-haiku-4-5-20251001");
+    const result = await callLLM({
+      model,
+      system: SYSTEM_PROMPT,
+      user: userMessage,
+      maxTokens: suggestCap(model, 1024),
+      json: true,
+      expectArray: true,
+      schema: EXPENSES_SCHEMA as unknown as JSONSchema,
     });
-
-    if (!response.ok) throw new Error(`Anthropic error: ${response.status}`);
-    const data = await response.json();
-    const text = data.content[0].text.trim();
 
     // Log LLM usage (fire-and-forget)
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -111,30 +130,34 @@ serve(async (req) => {
       body: JSON.stringify({
         trip_id: trip?.id || null,
         function_name: "estimate-expenses",
-        model: "claude-haiku-4-5-20251001",
-        input_tokens: data.usage?.input_tokens || 0,
-        output_tokens: data.usage?.output_tokens || 0,
+        model,
+        input_tokens: result.usage.input_tokens,
+        output_tokens: result.usage.output_tokens,
+        cache_creation_tokens: result.usage.cache_creation_input_tokens,
+        cache_read_tokens: result.usage.cache_read_input_tokens,
+        duration_ms: result.ms,
       }),
     }).catch(() => {});
 
     deductCredits({
       userId: user.id,
-      model: "claude-haiku-4-5-20251001",
-      inputTokens: data.usage?.input_tokens || 0,
-      outputTokens: data.usage?.output_tokens || 0,
+      model,
+      inputTokens: result.usage.input_tokens,
+      outputTokens: result.usage.output_tokens,
+      cacheCreationTokens: result.usage.cache_creation_input_tokens,
+      cacheReadTokens: result.usage.cache_read_input_tokens,
       functionName: "estimate-expenses",
       tripId: trip?.id || null,
       source,
     });
 
-    let items = [];
-    try {
-      const start = text.indexOf("[");
-      const end = text.lastIndexOf("]");
-      items = JSON.parse(text.slice(start, end + 1));
-    } catch {
-      items = [];
-    }
+    const items = Array.isArray(result.parsed) ? result.parsed : [];
+    if (!items.length)
+      console.error(
+        `[expenses] empty after schema parse (truncated=${result.truncated}, ` +
+          `schemaUnsupported=${result.schemaUnsupported}): ` +
+          result.text.slice(0, 200),
+      );
 
     return new Response(JSON.stringify({ items }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
