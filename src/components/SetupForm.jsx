@@ -371,16 +371,12 @@ function SetupForm({
 
   // Track visual viewport height (shrinks when the software keyboard opens on mobile).
   // Used to position the suggestions dropdown above the keyboard.
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.visualViewport) return;
-    const onResize = () => {
-      const diff = window.innerHeight - window.visualViewport.height;
-      setKeyboardHeight(diff > 60 ? diff : 0); // only count meaningful keyboard presence
-    };
-    window.visualViewport.addEventListener("resize", onResize);
-    return () => window.visualViewport.removeEventListener("resize", onResize);
-  }, []);
+  // Keyboard-height tracking lived here to drive CityInput's openUpward prop.
+  // That heuristic was the bug: it flipped the suggestion list above the field
+  // whenever the keyboard appeared, even though this field sits just below a
+  // ~370px header with no room above, so the list was clipped out of view.
+  // CityInput now measures the real space on each side and caps its own
+  // height, which also handles desktop, scrolling and short viewports.
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   // Notify parent after form state settles — calling onFormChange inside the
@@ -1255,7 +1251,6 @@ function SetupForm({
               value={form.baseLocation}
               onChange={(v) => set("baseLocation", v)}
               placeholder="Your home city"
-              openUpward={!isDesktop && keyboardHeight > 0}
               inputStyle={{
                 width: "100%",
                 padding: "11px 14px",

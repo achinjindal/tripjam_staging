@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import {
   T,
   RADIUS,
@@ -2459,6 +2459,9 @@ function CityInput({
   hotelCity = null,
   contextHint = null, // region bias appended to the query (no type filter)
   onPick = null, // called with the picked text when a suggestion is chosen
+  // Preferred direction only. The real decision is made by measuring actual
+  // space (see placement below) — callers cannot know whether the field will
+  // sit near the top or bottom of a scrolled viewport.
   openUpward = false,
 }) {
   const [suggs, setSuggs] = useState([]);
@@ -2466,6 +2469,53 @@ function CityInput({
   const [loading, setLoading] = useState(false);
   const timer = useRef(null);
   const abortRef = useRef(null);
+  const wrapRef = useRef(null);
+  // { up: boolean, maxHeight: number }
+  const [placement, setPlacement] = useState({
+    up: openUpward,
+    maxHeight: 320,
+  });
+
+  // Choose the direction with more room and cap the height to fit it.
+  //
+  // This used to be driven purely by "is the soft keyboard up?", which flipped
+  // the list ABOVE the field whenever the keyboard appeared. On the setup
+  // wizard the field sits just under a ~370px header, so five suggestions
+  // (~500px) overflowed upward and were clipped — the list appeared to vanish
+  // the moment you started typing. Measuring is the only reliable answer:
+  // whether there is room depends on where the field ended up after scrolling,
+  // which the caller cannot know.
+  useLayoutEffect(() => {
+    if (!show) return;
+    const measure = () => {
+      const el = wrapRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      // visualViewport excludes the keyboard; innerHeight does not.
+      const vh = window.visualViewport?.height ?? window.innerHeight;
+      const vTop = window.visualViewport?.offsetTop ?? 0;
+      const GAP = 8;
+      const below = vh + vTop - r.bottom - GAP;
+      const above = r.top - vTop - GAP;
+      // Prefer downward unless upward has meaningfully more room, so the list
+      // does not jitter between sides on small differences.
+      const up = above > below + 40;
+      setPlacement({
+        up,
+        maxHeight: Math.max(120, Math.floor(up ? above : below)),
+      });
+    };
+    measure();
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", measure);
+    vv?.addEventListener("scroll", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      vv?.removeEventListener("resize", measure);
+      vv?.removeEventListener("scroll", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [show, suggs.length]);
 
   const handleChange = (val) => {
     onChange(val);
@@ -2531,7 +2581,7 @@ function CityInput({
   };
 
   return (
-    <div style={{ position: "relative" }}>
+    <div ref={wrapRef} style={{ position: "relative" }}>
       <input
         value={value}
         onChange={(e) => handleChange(e.target.value)}
@@ -2543,7 +2593,7 @@ function CityInput({
         <div
           style={{
             position: "absolute",
-            ...(openUpward
+            ...(placement.up
               ? { bottom: "calc(100% + 4px)", top: "auto" }
               : { top: "calc(100% + 4px)", bottom: "auto" }),
             left: 0,
@@ -2553,7 +2603,13 @@ function CityInput({
             borderRadius: RADIUS.md,
             zIndex: 200,
             boxShadow: SHADOW.md,
-            overflow: "hidden",
+            // Fit the space actually available, and scroll past it. Without a
+            // cap the list simply overflowed off-screen with no way to reach
+            // the lower entries.
+            maxHeight: placement.maxHeight,
+            overflowY: "auto",
+            overscrollBehavior: "contain",
+            WebkitOverflowScrolling: "touch",
           }}
         >
           {loading && suggs.length === 0 && (

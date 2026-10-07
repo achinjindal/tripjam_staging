@@ -169,7 +169,13 @@ export function costToCreditsPassthrough(usd: number): number {
   return Math.ceil((usd / EXTERNAL_API_USER_VALUE) * 100) / 100;
 }
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// PINNED. A floating `@2` meant esm.sh resolved to whatever was newest at
+// deploy time — and on 2026-10-07 that was 2.117.3, whose transitive
+// auth-js build 404s on their CDN. Every edge function imports this
+// (directly or via _shared/credits.ts), so ALL deploys failed at once with
+// an error naming a module none of our code references. Pin the version so
+// an upstream publish can never break deploys again; bump deliberately.
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.117.2";
 
 function adminClient() {
   return createClient(

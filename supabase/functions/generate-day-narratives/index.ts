@@ -6,7 +6,13 @@ import {
   type JSONSchema,
 } from "../_shared/llm.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// PINNED. A floating `@2` meant esm.sh resolved to whatever was newest at
+// deploy time — and on 2026-10-07 that was 2.117.3, whose transitive
+// auth-js build 404s on their CDN. Every edge function imports this
+// (directly or via _shared/credits.ts), so ALL deploys failed at once with
+// an error naming a module none of our code references. Pin the version so
+// an upstream publish can never break deploys again; bump deliberately.
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.117.2";
 import {
   authenticateUser,
   unauthorized,

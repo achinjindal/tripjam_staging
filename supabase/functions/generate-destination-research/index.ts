@@ -796,7 +796,7 @@ serve(async (req) => {
         d: destinations,
         t: tagResult.tags,
         m: monthBucket,
-        v: 6, // bump: videos now sourced from the YouTube Data API
+        v: 7, // bump: non-English videos filtered out
         r: refinement,
         b: batch, // paging: each Load-more batch is its own cacheable entry
       }),
@@ -1676,6 +1676,61 @@ async function enrichBylines(
 // degrades silently to whatever the model found on its own.
 const YOUTUBE_CACHE_DAYS = 30;
 
+// `relevanceLanguage` on search.list is a RANKING HINT, not a filter — Google
+// documents it as preferring results in that language, and non-English videos
+// still rank through. Measured in production: a Rajasthan trip surfaced
+// "Rajasthan Travel Guide in Malayalam" as its top inspiration. We assume the
+// traveller reads English unless we have reason to believe otherwise, so the
+// language has to be filtered explicitly.
+//
+// Two independent checks, because each misses cases the other catches:
+//   * script — a title in Malayalam/Devanagari/Thai/CJK/Cyrillic/Arabic is
+//     self-evidently not for an English speaker.
+//   * declared language — videos.list returns defaultAudioLanguage, which
+//     catches the Latin-script case ("... in Malayalam", Hinglish vlogs).
+const NON_LATIN_RE =
+  /[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F\u0E00-\u0E7F\u0400-\u04FF\u0600-\u06FF\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/;
+
+/** Titles that announce a non-English language in Latin script. */
+const DECLARED_LANG_RE =
+  /\b(in|en|em)\s+(malayalam|hindi|tamil|telugu|kannada|marathi|bengali|punjabi|gujarati|urdu|nepali|sinhala|thai|vietnamese|indonesian|tagalog|arabic|turkish|russian|polish|portugu[eê]s|espa[nñ]ol|spanish|french|fran[cç]ais|german|deutsch|italian|italiano|japanese|korean|mandarin|chinese)\b/i;
+
+/**
+ * Ask videos.list for the declared audio language of the candidate ids.
+ * Costs ONE quota unit for the whole batch (search.list costs 100), so this is
+ * effectively free next to the search that produced the ids.
+ * Returns a map id -> language code; absent means YouTube declared nothing.
+ */
+async function youtubeLanguages(
+  ids: string[],
+  key: string,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!ids.length) return out;
+  try {
+    const u = new URL("https://www.googleapis.com/youtube/v3/videos");
+    u.searchParams.set("key", key);
+    u.searchParams.set("part", "snippet");
+    u.searchParams.set("id", ids.slice(0, 50).join(","));
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 6000);
+    const r = await fetch(u, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!r.ok) return out;
+    for (const it of ((await r.json())?.items ?? []) as Record<
+      string,
+      Record<string, string>
+    >[]) {
+      const lang =
+        it.snippet?.defaultAudioLanguage || it.snippet?.defaultLanguage || "";
+      if (it.id && typeof it.id === "string") out.set(it.id as string, lang);
+    }
+  } catch {
+    /* no language data is a reason to fall back on the script check, not to fail */
+  }
+  return out;
+}
+
 type YtVideo = {
   title: string;
   url: string;
@@ -1707,7 +1762,8 @@ async function youtubeSearchVideos(
   // different window per Load-more batch. Returning the same top 3 every time
   // is what made batch 2 look like batch 1 — measured on Seville, 3 of the 4
   // duplicates were videos. Paging the pool costs no extra quota.
-  const cacheKey = `yt-pool:${q.toLowerCase()}`;
+  // v2: pools cached before the language filter contain non-English videos.
+  const cacheKey = `yt-pool-v2:${q.toLowerCase()}`;
 
   // Cache first — a destination's best travel videos do not change hourly, and
   // the 100/day quota is a hard wall rather than something we can pay past.
@@ -1765,8 +1821,17 @@ async function youtubeSearchVideos(
     return [];
   }
 
+  // One extra quota unit for the whole batch, against search.list's 100.
+  const langById = await youtubeLanguages(
+    items
+      .map((r) => (r as { id?: { videoId?: string } })?.id?.videoId)
+      .filter((v): v is string => !!v),
+    key,
+  );
+
   const out: YtVideo[] = [];
   const seenChannels = new Set<string>();
+  let droppedLang = 0;
   for (const raw of items) {
     const it = raw as {
       id?: { videoId?: string };
@@ -1783,6 +1848,17 @@ async function youtubeSearchVideos(
     // Shorts are vertical clips, not the trip-planning content this feature is
     // for; they surface heavily on travel queries and read as filler.
     if (/#shorts?\b/i.test(title)) continue;
+    // Assume the traveller reads English unless we have reason to think
+    // otherwise. A declared non-English audio track is decisive; otherwise a
+    // non-Latin script or a title announcing a language is enough.
+    const declared = (langById.get(id) || "").toLowerCase();
+    const nonEnglish = declared
+      ? !declared.startsWith("en")
+      : NON_LATIN_RE.test(title) || DECLARED_LANG_RE.test(title);
+    if (nonEnglish) {
+      droppedLang++;
+      continue;
+    }
     // One item per creator — the same rule the prompt enforces for articles,
     // applied here deterministically instead of hopefully.
     const chan = sn.channelTitle.trim();
@@ -1796,6 +1872,10 @@ async function youtubeSearchVideos(
       published: String(sn.publishedAt || "").slice(0, 10),
     });
   }
+  if (droppedLang)
+    console.log(
+      `[inspirations] YouTube: dropped ${droppedLang} non-English video(s) for "${q}"`,
+    );
 
   // Persist even an empty result: a destination with no usable videos should
   // not re-spend quota on every load.
@@ -1884,7 +1964,34 @@ type InspirationItem = {
   type?: string;
 };
 
+/** True when a title looks like it is aimed at an English reader. */
+function isEnglishTitle(title: unknown): boolean {
+  const t = `${title || ""}`;
+  return !(NON_LATIN_RE.test(t) || DECLARED_LANG_RE.test(t));
+}
+
+/**
+ * Outer wrapper so the language rule is enforced on the FINAL titles, after
+ * oEmbed has replaced the model's claim with the canonical one. Keeping this
+ * as a wrapper (rather than another line inside the pipeline) means every
+ * early-return path in there — fail-open spam screen, no suspects, screening
+ * error — is covered too; there are six of them.
+ */
 async function validateInspirationLinks(
+  items: InspirationItem[],
+  destinations: string[],
+  apiKey: string,
+): Promise<InspirationItem[]> {
+  const out = await validateInspirationLinksInner(items, destinations, apiKey);
+  const kept = out.filter((i) => isEnglishTitle(i?.title));
+  if (kept.length !== out.length)
+    console.log(
+      `[inspirations] dropped ${out.length - kept.length} non-English item(s) post-oEmbed`,
+    );
+  return kept;
+}
+
+async function validateInspirationLinksInner(
   items: InspirationItem[],
   destinations: string[],
   apiKey: string,
@@ -1899,6 +2006,29 @@ async function validateInspirationLinks(
       i.type = "video";
     }
   }
+
+  // 0b. Language. We assume the traveller reads English unless we have reason
+  //     to think otherwise. This has to live HERE rather than only in the
+  //     YouTube helper, because items arrive from three independent sources —
+  //     the model's own web_search, the Brave path, and the YouTube API — and
+  //     only this function sees all of them. Fixing it in youtubeSearchVideos
+  //     alone left a Malayalam vlog on a Rajasthan trip, because the MODEL had
+  //     supplied that one.
+  //     Runs after oEmbed-corrected titles below would be ideal, but the
+  //     search title is already indicative and dropping early saves the probe.
+  //     Applied TWICE on purpose. This early pass is a cheap pre-filter that
+  //     avoids probing obviously non-English items. The decisive pass runs
+  //     AFTER oEmbed (see the end of this function), because oEmbed REPLACES
+  //     the model's title with the canonical one — a Bengali vlog reached
+  //     production with a Latin-script title from the model that oEmbed then
+  //     corrected to Bengali, after this check had already cleared it.
+  const beforeLang = items.length;
+  items = items.filter((i) => isEnglishTitle(i?.title));
+  if (items.length !== beforeLang)
+    console.log(
+      `[inspirations] dropped ${beforeLang - items.length} non-English item(s) pre-probe`,
+    );
+  if (!items.length) return [];
 
   // 1. Liveness — parallel, bounded by the 5s per-request timeout. Video
   //    platforms go through oEmbed instead, which actually validates

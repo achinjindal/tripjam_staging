@@ -9826,16 +9826,20 @@ export default function App({
     if (E2E_CHEAP) return;
     if (pretripRoutes.length === 0) return;
 
-    // COST: Inspirations is the most expensive call in the app (Haiku +
-    // web search, ~$0.09 each). It used to pre-warm the moment RG produced
-    // routes — i.e. for everyone merely browsing options, and for everyone
-    // who abandons before ever building a trip. Now it only pre-warms once
-    // an itinerary actually exists (a committed trip). Users who open the
-    // tab earlier still get it: the lazy effect below loads on demand.
-    // hasLoaded/loading already prevent a double load, so this needs no ref
-    // of its own — and must NOT sit behind hasEagerLoadedRef, or the
-    // deferred pre-warm would be swallowed by the RG-time run.
-    if (days.length > 0 && !destResearch.hasLoaded && !destResearch.loading) {
+    // Pre-warm at RG time, so the tab is populated before the traveller ever
+    // opens it rather than showing a skeleton on arrival.
+    //
+    // This was previously deferred to post-IG (days.length > 0) on cost
+    // grounds: at ~$0.15 a call, pre-warming for everyone who merely browses
+    // routes or abandons was not worth it. That trade no longer holds —
+    // self-served search took a cold load to ~$0.02 and ~16s (measured
+    // 2026-10-07), so pre-warming an abandoner costs about three credits
+    // against a far better first impression for everyone who stays.
+    //
+    // hasLoaded/loading already prevent a double load, so this needs no ref of
+    // its own — and must NOT sit behind hasEagerLoadedRef, which is consumed
+    // by the deep-dive pre-load below and would swallow this.
+    if (!destResearch.hasLoaded && !destResearch.loading) {
       loadDestinationResearch();
     }
 
@@ -9861,8 +9865,10 @@ export default function App({
         }
       }
     }
-    // days.length is a dependency so the deferred Inspirations pre-warm
-    // actually fires when the itinerary lands, not only at RG time.
+    // days.length stays a dependency as a safety net: a trip opened directly
+    // at the itinerary stage (no RG in this session) still has routes, but if
+    // a future path reaches days without routes this re-runs. It no longer
+    // gates the Inspirations pre-warm — that now fires at RG time.
   }, [pretripRoutes.length, days.length]);
 
   // Lazy fallback: fire Inspirations load if the user navigates to the tab
@@ -13867,6 +13873,24 @@ export default function App({
                 minHeight: 44,
               }}
             >
+              {/* The mobile header's "← Trips" is hidden on desktop, and the
+                  sidebar that used to carry "All trips" is gone — without
+                  this the only way back is the avatar menu. */}
+              {onHome && (
+                <button
+                  onClick={() => {
+                    if (igAbortRef.current) {
+                      igAbortRef.current.abort();
+                      igAbortRef.current = null;
+                      _igInFlight.current = false;
+                    }
+                    onHome();
+                  }}
+                  style={tripContextBtnStyle}
+                >
+                  ← All trips
+                </button>
+              )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
                   style={{
@@ -15175,10 +15199,10 @@ export default function App({
                     display: activeBottomTab === "itinerary" ? "block" : "none",
                   }}
                 >
-                  {/* Header — scrolls away. Hidden on desktop because the left
-                    sidebar already provides trip name, dates, share, and
-                    "Explore other plans" — keeping the gradient header would
-                    double up on every control. */}
+                  {/* Header — scrolls away. Hidden on desktop because the
+                    trip-context bar already provides trip name, dates, share,
+                    "← All trips" and "Explore other plans" — keeping the
+                    gradient header would double up on every control. */}
                   <div
                     style={{
                       background: `linear-gradient(160deg,${T.dusk},${T.ocean})`,
