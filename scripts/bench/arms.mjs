@@ -40,9 +40,10 @@ export const ARMS = [
   {
     id: "prod-baseline",
     // The control: no overrides at all, i.e. whatever the deployed defaults
-    // are. As of 2026-10-05 that is Sonnet 5.5 for RG and IG (upgraded from
-    // Sonnet 5 — same $2/$10, Jun-2026 knowledge, 512-token cache minimum)
-    // and Haiku 4.5 for everything else.
+    // are. As of 2026-10-06 that is gemini-3.8-flash for RG and IG,
+    // gpt-6-luna for Magazine deep-dives, Haiku 4.5 for todos/expenses/
+    // preferences/wishlist/narratives, and Haiku + Sonnet-5.5 escalation +
+    // YouTube video discovery for Inspirations.
     // "Sonnet everywhere" is deliberately NOT an arm: nobody would ship
     // Sonnet for todo generation, so it would be a control for no decision.
     env: {},
@@ -140,6 +141,49 @@ export const TRIPS = [
     morningStart: "early",
     notes:
       "Want Georgian wine and food, the Gergeti Trinity church, and good mountain views. No early-morning hikes.",
+  },
+  // ── Cost-analysis set (2026-10-06): three trips, 5-10 days, deliberately
+  // spanning the axes that move cost — trip length (drives IG day-fill count),
+  // city count (drives Magazine deep-dives) and destination popularity (drives
+  // whether Inspirations escalates).
+  {
+    id: "portugal-5d",
+    destinations: ["Lisbon", "Porto"],
+    numDays: 5,
+    startOffset: 65,
+    travelers: "2",
+    styles: ["Food & Culinary", "History & Culture"],
+    budget: "mid",
+    pace: "moderate",
+    morningStart: "mid",
+    notes:
+      "Second trip to Portugal. Want pastelarias, a fado night, and a day in the Douro. Not interested in queuing for the big museums.",
+  },
+  {
+    id: "japan-10d",
+    destinations: ["Japan"],
+    numDays: 10,
+    startOffset: 95,
+    travelers: "2",
+    styles: ["Food & Culinary", "History & Culture", "Photography & Scenery"],
+    budget: "mid",
+    pace: "active",
+    morningStart: "early",
+    notes:
+      "First time in Japan, flying into Tokyo and out of Osaka. Want ramen and izakayas, at least one onsen night, and to use the rail pass properly.",
+  },
+  {
+    id: "peru-8d",
+    destinations: ["Peru"],
+    numDays: 8,
+    startOffset: 80,
+    travelers: "2",
+    styles: ["History & Culture", "Nature & Outdoors"],
+    budget: "mid",
+    pace: "active",
+    morningStart: "early",
+    notes:
+      "Cusco, the Sacred Valley and Machu Picchu. Need altitude acclimatisation built in. Would like one food-focused day in Lima.",
   },
 ].map((t) => ({
   ...t,

@@ -35,12 +35,13 @@ const pick = (f) => {
   return i < 0 ? null : argv[i + 1];
 };
 const ONLY_ARM = pick("--arm");
-const GROUNDED_MODEL = pick("--model") || "gemini-3.8-flash";
-const KEY = "INSPIRATIONS_GROUNDED_MODEL";
+const KEY = "INSPIRATIONS_SEARCH";
 
 const ARMS = [
-  { id: "control", env: {} }, // flag unset => Anthropic
-  { id: "grounded", env: { [KEY]: GROUNDED_MODEL } },
+  // flag unset => the Anthropic web_search agentic loop (today's behaviour)
+  { id: "anthropic", env: {} },
+  // self-served: Brave search + ONE synthesis pass over snippets
+  { id: "brave", env: { [KEY]: "brave" } },
 ];
 
 // Deliberately mixed: two heavily-covered destinations where any approach
@@ -107,6 +108,7 @@ const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 async function scoreItems(items) {
   const out = {
     n: items.length,
+    blocked: 0,
     videos: 0,
     articles: 0,
     dead: 0,
@@ -147,9 +149,16 @@ async function scoreItems(items) {
     } else {
       const st = await headOrGet(url);
       row.status = st;
-      if (st === 0 || st >= 400) {
+      // Only 404/410 prove absence. 403/406/429 are bot blocks — publishers
+      // reject this scorer's UA while serving browsers fine. Counting those
+      // as dead invented a 4-vs-1 "regression" that did not exist:
+      // bridgesandballoons.com 403s here and is demonstrably live.
+      if (st === 404 || st === 410) {
         out.dead++;
         row.verdict = "DEAD";
+      } else if (st === 0 || st >= 400) {
+        out.blocked++;
+        row.verdict = `BLOCKED(${st})`;
       } else row.verdict = "ok";
     }
     out.detail.push(row);

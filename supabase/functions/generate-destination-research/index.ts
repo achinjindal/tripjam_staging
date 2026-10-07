@@ -19,7 +19,14 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { captureException } from "../_shared/errortrack.ts";
-import { traitsOf, providerOf } from "../_shared/llm.ts";
+import {
+  traitsOf,
+  providerOf,
+  callLLM,
+  modelFor,
+  suggestCap,
+  type JSONSchema,
+} from "../_shared/llm.ts";
 import {
   authenticateUser,
   unauthorized,
@@ -346,8 +353,10 @@ async function callGeminiGroundedResearch(
   outputTokens: number;
   webSearchCount: number;
   grounded: boolean;
+  ms: number;
 }> {
   const key = Deno.env.get("GEMINI_API_KEY") ?? "";
+  const tG0 = Date.now();
   const fail = (status: number, errText: string) => ({
     ok: false,
     status,
@@ -357,6 +366,7 @@ async function callGeminiGroundedResearch(
     outputTokens: 0,
     webSearchCount: 0,
     grounded: false,
+    ms: Date.now() - tG0,
   });
   if (!key) return fail(0, "GEMINI_API_KEY not set");
 
@@ -482,6 +492,7 @@ async function callGeminiGroundedResearch(
   const u2 = d2?.usageMetadata || {};
   return {
     ok: true,
+    ms: Date.now() - tG0,
     status: 200,
     errText: "",
     text: (d2?.candidates?.[0]?.content?.parts || [])
@@ -514,7 +525,9 @@ async function callResearchLLM(
   inputTokens: number;
   outputTokens: number;
   webSearchCount: number;
+  ms: number;
 }> {
+  const t0 = Date.now();
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -551,6 +564,7 @@ async function callResearchLLM(
       inputTokens: 0,
       outputTokens: 0,
       webSearchCount: 0,
+      ms: Date.now() - t0,
     };
   }
   const data = await res.json();
@@ -562,6 +576,7 @@ async function callResearchLLM(
     inputTokens: data?.usage?.input_tokens || 0,
     outputTokens: data?.usage?.output_tokens || 0,
     webSearchCount: countWebSearches(data?.content || [], data?.usage),
+    ms: Date.now() - t0,
   };
 }
 
@@ -617,9 +632,15 @@ async function extractTags(
   dbHeaders: Record<string, string>,
   supabaseUrl: string,
   tripId: string | null,
-): Promise<{ tags: string[]; inputTokens: number; outputTokens: number }> {
+): Promise<{
+  tags: string[];
+  inputTokens: number;
+  outputTokens: number;
+  ms: number;
+}> {
+  const t0 = Date.now();
   const trimmed = notes.trim();
-  if (!trimmed) return { tags: [], inputTokens: 0, outputTokens: 0 };
+  if (!trimmed) return { tags: [], inputTokens: 0, outputTokens: 0, ms: 0 };
 
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -636,7 +657,8 @@ async function extractTags(
         messages: [{ role: "user", content: `Trip notes:\n"${trimmed}"` }],
       }),
     });
-    if (!res.ok) return { tags: [], inputTokens: 0, outputTokens: 0 };
+    if (!res.ok)
+      return { tags: [], inputTokens: 0, outputTokens: 0, ms: Date.now() - t0 };
     const data = await res.json();
     const text =
       data?.content?.[0]?.type === "text" ? data.content[0].text : "{}";
@@ -659,6 +681,7 @@ async function extractTags(
       body: JSON.stringify({
         trip_id: tripId,
         function_name: "generate-destination-research:tags",
+        duration_ms: Date.now() - t0,
         model: MODEL,
         input_tokens: data?.usage?.input_tokens || 0,
         output_tokens: data?.usage?.output_tokens || 0,
@@ -666,17 +689,21 @@ async function extractTags(
     }).catch(() => {});
 
     return {
+      ms: Date.now() - t0,
       tags: out,
       inputTokens: data?.usage?.input_tokens || 0,
       outputTokens: data?.usage?.output_tokens || 0,
     };
   } catch (e) {
     console.warn("tag extraction failed:", (e as Error).message);
-    return { tags: [], inputTokens: 0, outputTokens: 0 };
+    return { tags: [], inputTokens: 0, outputTokens: 0, ms: Date.now() - t0 };
   }
 }
 
 serve(async (req) => {
+  // Wall clock for the whole request, used as duration_ms on the primary
+  // llm_usage row.
+  const reqStart = Date.now();
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -882,7 +909,29 @@ serve(async (req) => {
       ReturnType<typeof callGeminiGroundedResearch>
     > | null = null;
 
-    if (groundedModel.startsWith("gemini")) {
+    // Self-served search: we run the search ourselves and the model does ONE
+    // pass over snippets. Flag-gated; falls back to the Anthropic path on any
+    // shortfall, so the worst case is the behaviour we have today.
+    let selfServed: Awaited<ReturnType<typeof selfServedResearch>> = null;
+    if (
+      (Deno.env.get("INSPIRATIONS_SEARCH") || "").trim().toLowerCase() ===
+        "brave" &&
+      !quick
+    ) {
+      selfServed = await selfServedResearch(
+        destinations,
+        tagResult.tags,
+        monthBucket,
+        refinement,
+        SYSTEM_PROMPT,
+      );
+      if (!selfServed)
+        console.warn(
+          "[inspirations] self-served path produced nothing — falling back",
+        );
+    }
+
+    if (!selfServed && groundedModel.startsWith("gemini")) {
       grounded = await callGeminiGroundedResearch(
         groundedModel,
         SYSTEM_PROMPT,
@@ -899,7 +948,7 @@ serve(async (req) => {
       }
     }
 
-    if (!grounded?.ok) {
+    if (!selfServed && !grounded?.ok) {
       haiku = await callResearchLLM(
         MODEL,
         quick ? 2 : HAIKU_MAX_USES,
@@ -912,16 +961,43 @@ serve(async (req) => {
       }
     }
 
-    // From here the two paths converge: `research` is whichever one produced
-    // usable text, and the escalation logic below is unchanged.
-    const research = grounded?.ok ? grounded : haiku!;
-    let parsed = tryParseJson(research.text);
+    // From here the paths converge. The self-served path already returns
+    // structured items, so it skips tryParseJson entirely — one of the reasons
+    // it is cheaper: no "return ONLY raw JSON" contract to get wrong, and no
+    // fence-stripping fallback.
+    const research = selfServed
+      ? {
+          text: "",
+          inputTokens: selfServed.inputTokens,
+          outputTokens: selfServed.outputTokens,
+          // Brave queries are not Anthropic web_search calls and must not be
+          // billed at $0.01 each. They cost $0.005 and are accounted for in
+          // the deduction below as a flat pass-through.
+          webSearchCount: 0,
+        }
+      : grounded?.ok
+        ? grounded
+        : haiku!;
+    // Loose element typing to match the downstream filters, which is how the
+    // Anthropic path's tryParseJson result was already typed.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let parsed: {
+      inspirations?: any[];
+      place_insights?: any[];
+      sources?: any[];
+    } | null = selfServed
+      ? { inspirations: selfServed.items }
+      : tryParseJson(research.text);
     // researchModel = who actually generated `research` (never reassigned).
     // usedModel     = whose content is in the final digest; the escalation
     //                 block below reassigns it to ESCALATION_MODEL.
     // These MUST stay distinct: billing the primary row against usedModel
     // charges Haiku's tokens at Sonnet's rate whenever escalation wins.
-    const researchModel = grounded?.ok ? groundedModel : MODEL;
+    const researchModel = selfServed
+      ? selfServed.model
+      : grounded?.ok
+        ? groundedModel
+        : MODEL;
     let usedModel = researchModel;
     let webSearchCount = research.webSearchCount;
     let sonnet: Awaited<ReturnType<typeof callResearchLLM>> | null = null;
@@ -1147,6 +1223,11 @@ serve(async (req) => {
       body: JSON.stringify({
         trip_id: tripId,
         function_name: "generate-destination-research",
+        // Wall time of the whole request, not just the provider call — this is
+        // the number that answers "how long does Inspirations take?". Every
+        // other function logged duration_ms; this one never did, so the
+        // slowest user-facing AI call was the one with no timing data.
+        duration_ms: Date.now() - reqStart,
         // researchModel, not usedModel: this row is the PRIMARY call's usage,
         // and usedModel may have been reassigned to the escalation model.
         model: researchModel,
@@ -1162,6 +1243,7 @@ serve(async (req) => {
         body: JSON.stringify({
           trip_id: tripId,
           function_name: "generate-destination-research:escalation",
+          duration_ms: sonnet.ms,
           model: ESCALATION_MODEL,
           input_tokens: sonnet.inputTokens,
           output_tokens: sonnet.outputTokens,
@@ -1262,6 +1344,320 @@ function registrableHost(url: string): string | null {
 // attribution with ground truth. Measured mismatches: claimed "Mona" was
 // actually "Unique Japan Travel"; claimed "Unknown" was "ONLY in JAPAN * GO".
 const VIDEO_HOST_RE = /(^|\.)(youtube\.com|youtu\.be)$/i;
+
+/**
+ * Self-served research: search ourselves, then ONE model turn over snippets.
+ * Returns null when it cannot produce a usable digest, so the caller falls
+ * back to the Anthropic path rather than serving a thin result.
+ */
+async function selfServedResearch(
+  destinations: string[],
+  tags: string[],
+  monthBucket: string,
+  refinement: string,
+  systemPrompt: string,
+): Promise<{
+  items: Record<string, unknown>[];
+  inputTokens: number;
+  outputTokens: number;
+  model: string;
+  queries: number;
+  ms: number;
+} | null> {
+  const t0 = Date.now();
+  const dest = destinations[0];
+  if (!dest) return null;
+
+  // 2-3 queries, phrased the way a person hunting creator content would.
+  // Kept small deliberately: each costs $0.005 and the marginal query adds
+  // mostly duplicates.
+  const queries = [
+    `${dest} travel blog personal trip report`,
+    `${dest} travel guide ${tags.slice(0, 2).join(" ")}`.trim(),
+    refinement ? `${dest} ${refinement} blog` : "",
+  ].filter(Boolean);
+
+  const pools = await Promise.all(queries.map((q) => braveSearch(q, 12)));
+  const seen = new Set<string>();
+  const candidates: Candidate[] = [];
+  for (const pool of pools)
+    for (const c of pool) {
+      const host = registrableHost(c.url) || "";
+      if (!host || NON_CREATOR_RE.test(host)) continue;
+      if (seen.has(c.url)) continue;
+      seen.add(c.url);
+      candidates.push(c);
+    }
+  if (candidates.length < 4) {
+    console.warn(
+      `[inspirations] self-served: only ${candidates.length} candidates from ` +
+        `${queries.length} queries — falling back to Anthropic`,
+    );
+    return null;
+  }
+
+  // The model picks from a CLOSED set. Measured: zero invented URLs.
+  const allowed = new Set(candidates.map((c) => c.url));
+  const listing = candidates
+    .map(
+      (c, i) =>
+        `[${i + 1}] ${c.title}\n    url: ${c.url}\n    snippet: ${c.description || "(none)"}${c.age ? `\n    published: ${c.age}` : ""}`,
+    )
+    .join("\n\n");
+
+  const rules = systemPrompt.split("OUTPUT FORMAT")[0].trim();
+  const model = modelFor("INSPIRATIONS_SYNTH", MODEL);
+  const res = await callLLM({
+    model,
+    system:
+      rules +
+      `\n\nOUTPUT FOR THIS STEP: you are NOT searching. You are given raw search` +
+      ` results — title, url and snippet only, with no page body. Select ONLY` +
+      ` entries meeting the rules above.` +
+      `\n\nA one-person travel blog published under a BRAND name (Nomadic Matt,` +
+      ` Wander-Lush, Bridges & Balloons) IS an individual creator and IS eligible —` +
+      ` what disqualifies a source is the ORGANISATION behind it, not the absence` +
+      ` of a human name. Reject tour operators, OTAs, booking sites, tourism boards` +
+      ` and multi-author listicle farms. Ask "is one person writing this in the` +
+      ` first person?" — if yes, include it. Aim for 5-7 entries.` +
+      `\n\nCopy each url VERBATIM from the candidate list; never invent or alter` +
+      ` one. For author, give the blog's name if the person's is not evident —` +
+      ` it is corrected from the page afterwards.`,
+    user:
+      `Destination: ${dest}${tags.length ? `\nTraveller interests: ${tags.join(", ")}` : ""}` +
+      `${monthBucket !== "any" ? `\nTravelling around: ${monthBucket}` : ""}` +
+      `\n\nSearch results:\n\n${listing}`,
+    maxTokens: suggestCap(model, 1800),
+    json: true,
+    schema: SELF_SERVED_SCHEMA as unknown as JSONSchema,
+  });
+
+  const parsed = res.parsed as {
+    inspirations?: Record<string, unknown>[];
+  } | null;
+  const picked = (parsed?.inspirations ?? []).filter((i) =>
+    allowed.has(String(i.url || "")),
+  );
+  const dropped = (parsed?.inspirations ?? []).length - picked.length;
+  if (dropped)
+    console.warn(
+      `[inspirations] self-served: dropped ${dropped} off-list url(s)`,
+    );
+  if (!picked.length) return null;
+
+  // Recover real bylines — snippets do not carry them.
+  const { bylines, dead } = await enrichBylines(
+    picked.map((i) => ({ url: String(i.url) })),
+  );
+  const live = picked.filter((i) => !dead.has(String(i.url)));
+  for (const i of live) {
+    const real = bylines.get(String(i.url));
+    if (real) i.author = real;
+    i.type = "article";
+  }
+  if (dead.size)
+    console.log(
+      `[inspirations] self-served: dropped ${dead.size} dead link(s) at enrichment`,
+    );
+  if (!live.length) return null;
+
+  console.log(
+    `[inspirations] self-served: ${queries.length} queries -> ` +
+      `${candidates.length} candidates -> ${live.length} items ` +
+      `(${picked.length - live.length} dead dropped), ` +
+      `${bylines.size} bylines recovered, ${Date.now() - t0}ms`,
+  );
+  return {
+    items: live,
+    inputTokens: res.usage.input_tokens,
+    outputTokens: res.usage.output_tokens,
+    model,
+    queries: queries.length,
+    ms: Date.now() - t0,
+  };
+}
+
+const SELF_SERVED_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["inspirations"],
+  properties: {
+    inspirations: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "url", "author", "blurb"],
+        properties: {
+          title: { type: "string" },
+          url: { type: "string" },
+          author: { type: "string" },
+          blurb: { type: "string", description: "max 18 words" },
+        },
+      },
+    },
+  },
+} as const;
+
+// ── Self-served article search (Brave) ───────────────────────────────────────
+// The Anthropic web_search path is an AGENTIC loop: each iteration re-sends
+// every result retrieved so far, so a 3-search call bills ~30k input tokens
+// (82% of them retrieved page content) plus $0.01/search in fees. Measured
+// split of one call: 45% input, 43% search fees, 12% output — i.e. 88% of the
+// money is spent reading the web, not writing the answer.
+//
+// Self-serving the search collapses that to ONE model turn over ~6k tokens of
+// snippets, with no per-search fee to Anthropic. Measured in the 2026-10-06
+// spike: $0.029/call vs $0.0675, and ~8-10s vs 35-50s.
+//
+// Two findings from that spike shape this code:
+//   * Handing the model a CLOSED candidate set eliminated URL fabrication
+//     entirely (0 invented URLs across 8 runs) and content farms were still
+//     correctly rejected from snippets alone.
+//   * Snippets do NOT carry bylines, so authors degrade to brand names.
+//     enrichBylines() fetches only the SELECTED pages to recover real names.
+const BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+
+type Candidate = {
+  title: string;
+  url: string;
+  description: string;
+  age?: string;
+};
+
+/** Brave web search. Returns [] on any failure so the caller can fall back to
+ *  the Anthropic path rather than serving an empty digest. */
+async function braveSearch(query: string, count: number): Promise<Candidate[]> {
+  const key = Deno.env.get("BRAVE_SEARCH_KEY") || "";
+  if (!key) return [];
+  try {
+    const u = new URL(BRAVE_ENDPOINT);
+    u.searchParams.set("q", query);
+    u.searchParams.set("count", String(Math.min(20, count)));
+    u.searchParams.set("search_lang", "en");
+    // Recency matters for this feature (the prompt asks for <=24 months) and
+    // it is far cheaper to filter at the search layer than to pay the model
+    // to read and reject stale results.
+    u.searchParams.set("freshness", "py");
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch(u, {
+      signal: ctrl.signal,
+      headers: {
+        Accept: "application/json",
+        "Accept-Encoding": "gzip",
+        "X-Subscription-Token": key,
+      },
+    });
+    clearTimeout(t);
+    if (!r.ok) {
+      const body = await r.text();
+      // 429 = monthly credit exhausted. Expected at the ceiling, not an
+      // incident; anything else is a misconfiguration worth seeing.
+      const quota = r.status === 429;
+      console.warn(
+        `[inspirations] brave ${r.status}${quota ? " (quota — falling back)" : ""}: ${body.slice(0, 200)}`,
+      );
+      if (!quota)
+        void captureException(new Error(`brave_search_${r.status}`), {
+          functionName: "generate-destination-research:brave",
+          query,
+        });
+      return [];
+    }
+    const d = await r.json();
+    return ((d?.web?.results ?? []) as Record<string, string>[])
+      .map((w) => ({
+        title: decodeEntities(String(w.title || "")).replace(/<[^>]+>/g, ""),
+        url: String(w.url || ""),
+        description: decodeEntities(String(w.description || "")).replace(
+          /<[^>]+>/g,
+          "",
+        ),
+        age: w.age ? String(w.age) : undefined,
+      }))
+      .filter((c) => c.url && c.title);
+  } catch (e) {
+    console.warn(`[inspirations] brave threw: ${(e as Error).message}`);
+    return [];
+  }
+}
+
+/** Obvious non-creators. Cheap pre-filter so the model never spends tokens
+ *  judging an OTA — it rejects them correctly, but not paying for the
+ *  judgement is better. */
+const NON_CREATOR_RE =
+  /(^|\.)(tripadvisor|booking|expedia|travelocity|hotels|agoda|viator|getyourguide|klook|airbnb|kayak|skyscanner|lonelyplanet|timeout|cntraveler|wikipedia|wikivoyage|reddit|quora|pinterest|facebook|instagram|tiktok|goaheadtours|intrepidtravel|gadventures)\./i;
+
+/** Recover real bylines for the SELECTED items only. Snippets carry no author,
+ *  so without this the digest degrades to brand names where production
+ *  currently surfaces real people ~80% of the time. Bounded and parallel. */
+async function enrichBylines(
+  items: { url: string; author?: string }[],
+): Promise<{ bylines: Map<string, string>; dead: Set<string> }> {
+  const out = new Map<string, string>();
+  // We are already fetching every selected page for its byline, so liveness
+  // is free: a non-200 here IS a dead link. Brave's index carries some stale
+  // URLs (measured 4 dead across 4 destinations vs the Anthropic path's 1),
+  // and dropping them at this point costs nothing and makes the self-served
+  // path strictly BETTER verified than the one it replaces — the Anthropic
+  // path never fetches the article at all.
+  const dead = new Set<string>();
+  await Promise.all(
+    items.slice(0, 8).map(async (it) => {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 5000);
+        const r = await fetch(it.url, {
+          signal: ctrl.signal,
+          redirect: "follow",
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; TripJam/1.0)" },
+        });
+        clearTimeout(t);
+        if (!r.ok) {
+          // ONLY 404/410 prove a page is gone. 403 and 406 are bot blocks —
+          // Cloudflare and WAF rules reject our server UA while the page is
+          // perfectly alive for a browser. Measured: bridgesandballoons.com
+          // and alittleadrift.com both 403 to us and both are live. Treating
+          // those as dead would silently discard good creator content, which
+          // is worse than the stale link it was meant to prevent.
+          if (r.status === 404 || r.status === 410) dead.add(it.url);
+          return;
+        }
+        const html = (await r.text()).slice(0, 200_000);
+        const pick = (re: RegExp) => {
+          const m = html.match(re);
+          return m ? decodeEntities(m[1]).trim().slice(0, 60) : "";
+        };
+        const author =
+          pick(/<meta[^>]+name=["']author["'][^>]+content=["']([^"']+)/i) ||
+          pick(
+            /<meta[^>]+property=["']article:author["'][^>]+content=["']([^"']+)/i,
+          ) ||
+          pick(/"author"\s*:\s*\{[^}]*?"name"\s*:\s*"([^"]+)"/i);
+        // Reject junk bylines. `article:author` very often holds a profile
+        // URL rather than a name (willflyforfood.net returned
+        // "https://www.facebook.com", which would have been displayed to the
+        // user as the author), and some sites use placeholder accounts.
+        const bad =
+          !author ||
+          /^https?:\/\//i.test(author) ||
+          /(facebook|twitter|x|instagram|linkedin|plus\.google)\.com/i.test(
+            author,
+          ) ||
+          /^(admin|author|editor|staff|team|user|guest|contributor)$/i.test(
+            author,
+          ) ||
+          author.includes("@") ||
+          author.length < 2;
+        if (!bad) out.set(it.url, author);
+      } catch {
+        // Network error or timeout is not proof of death either. Keep it.
+      }
+    }),
+  );
+  return { bylines: out, dead };
+}
 
 // ── YouTube video discovery ──────────────────────────────────────────────────
 // Videos used to be found by asking Haiku to web_search for them, which was

@@ -535,6 +535,43 @@ async function buildTrip(arm, fixture, ctx) {
   }
   log(`   todos ${steps.todos.count} · expenses ${steps.expenses.count}`);
 
+  // 8. Inspirations. Gated on IG in the app, so it runs last — and it is the
+  // largest single cost centre, so omitting it (as this harness did until
+  // 2026-10-06) understated a trip's true cost by roughly half.
+  {
+    const r = await callFunction({
+      url: URL,
+      jwt: ctx.jwt,
+      fn: "generate-destination-research",
+      body: {
+        destinations: fixture.destinations,
+        notes: fixture.notes,
+        startDate: fixture.startDate,
+        tripId,
+      },
+      timeoutMs: 180000,
+    });
+    const items = r.json?.digest?.inspirations;
+    steps.inspirations = {
+      ms: r.ms,
+      ok: r.ok && Array.isArray(items) && items.length > 0,
+      count: Array.isArray(items) ? items.length : 0,
+      videos: Array.isArray(items)
+        ? items.filter((i) => i.type === "video").length
+        : 0,
+      cached: !!r.json?.cached,
+      error: r.ok ? null : r.json?.error || `HTTP ${r.status}`,
+    };
+    if (!steps.inspirations.ok)
+      problems.push(
+        `inspirations returned ${steps.inspirations.count} items${r.ok ? "" : `: ${steps.inspirations.error}`}`,
+      );
+    log(
+      `   inspirations ${steps.inspirations.count} items ` +
+        `(${steps.inspirations.videos} video)${steps.inspirations.cached ? " [cached]" : ""}`,
+    );
+  }
+
   return finish();
 
   async function finish() {
