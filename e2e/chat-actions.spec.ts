@@ -61,32 +61,8 @@ test.describe("Chat Actions", () => {
     await snap(page, "40-chat-open");
   });
 
-  test("chat pill pre-fills input", async ({ page }) => {
-    test.setTimeout(120000);
-    const opened = await openTrip(page);
-    if (!opened) {
-      test.skip();
-      return;
-    }
-    await page.waitForTimeout(1000);
-
-    // The "Make Day N more relaxed" pill is always present on the itinerary chat
-    // (unlike the Day-1-hotel pill, whose text depends on whether a hotel exists).
-    const pill = page
-      .locator("button", { hasText: /Make Day \d+ more relaxed/i })
-      .first();
-    await expect(pill).toBeVisible({ timeout: 5000 });
-    const pillText = (await pill.textContent())?.trim() || "";
-    await pill.click();
-    await page.waitForTimeout(300);
-
-    // Input (the chat textarea) should now be pre-filled with the pill text.
-    const input = page.locator("textarea[placeholder*='Ask Trippy']").first();
-    const value = await input.inputValue().catch(() => "");
-    expect(value).toContain(pillText);
-
-    await snap(page, "41-chat-pill");
-  });
+  // Chips now send on tap (no pre-fill) — covered against a mocked endpoint
+  // in chat-apply.spec.ts ("starter chip sends on tap"), so no credits spent.
 
   test("activity chat icon pre-fills chat with context", async ({ page }) => {
     test.setTimeout(120000);

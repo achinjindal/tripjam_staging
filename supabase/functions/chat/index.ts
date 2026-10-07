@@ -14,6 +14,24 @@ import {
   runInBackground,
 } from "../_shared/credits.ts";
 
+// The client's error bubble text (current and older wordings).
+const ERROR_REPLY_RE = /^Sorry, (something went wrong|I couldn't get a reply)/i;
+
+// A one-line reply for when the model returned actions but no message.
+// deno-lint-ignore no-explicit-any
+function describeActions(actions: any[]): string {
+  const days = actions
+    .filter((a) => a?.type === "update_day" && a.day?.label)
+    .map((a) => a.day.label);
+  if (days.length) return `Updated ${days.join(", ")}.`;
+  if (actions.some((a) => a?.type === "update_route"))
+    return "Updated the plan.";
+  if (actions.some((a) => a?.type === "dismiss_route")) return "Dismissed.";
+  if (actions.some((a) => a?.type === "suggest"))
+    return "Here are some options.";
+  return "Done.";
+}
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -289,8 +307,17 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
 
     // Clean history. On group trips, prefix each human turn with its author so
     // Trippy can attribute across speakers; assistant turns are left bare.
+    // Error bubbles are not things Trippy said: older clients saved them as
+    // assistant rows and still send them back, so drop them here too.
     const cleanHistory = (history || [])
-      .filter((m: any) => m.content && m.content.trim() && !m.streaming)
+      .filter(
+        (m: any) =>
+          typeof m.content === "string" &&
+          m.content.trim() &&
+          !m.streaming &&
+          !m.error &&
+          !ERROR_REPLY_RE.test(m.content.trim()),
+      )
       .map((m: any) => ({
         role: m.role === "assistant" ? "assistant" : "user",
         content:
@@ -319,12 +346,17 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
       groupContext && sender ? `${sender}: ${message}` : message;
     const messages = [...recent, { role: "user", content: currentContent }];
 
-    // ── Provider switch: CHAT_MODEL env var selects the chat model per env.
-    // Unset → Sonnet 4.6. A "claude-*" id routes the Anthropic path below with
-    // that model (threaded through the request AND billing — it was hardcoded
-    // before, which would have billed a Haiku A/B at Sonnet rates). A
-    // "gemini-*" id → Gemini non-streaming path (returns full JSON).
-    const chatModel = Deno.env.get("CHAT_MODEL") || "claude-sonnet-5";
+    // This function calls the Anthropic API directly (moving it onto
+    // _shared/llm.ts is planned), so only claude-* ids work here. Anything
+    // else would have been an unbilled Gemini canary path or a hard failure.
+    const configuredModel = Deno.env.get("CHAT_MODEL") || "claude-sonnet-5";
+    const chatModel = configuredModel.startsWith("claude")
+      ? configuredModel
+      : "claude-haiku-4-5";
+    if (chatModel !== configuredModel)
+      console.warn(
+        `chat: CHAT_MODEL=${configuredModel} is not supported here; using ${chatModel}`,
+      );
 
     const requestBody = JSON.stringify({
       model: chatModel,
@@ -349,107 +381,6 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
       ],
       messages,
     });
-    if (chatModel.startsWith("gemini")) {
-      const gResp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${chatModel}:generateContent`,
-        {
-          method: "POST",
-          headers: {
-            "x-goog-api-key": Deno.env.get("GEMINI_API_KEY") ?? "",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            systemInstruction: {
-              parts: [{ text: staticInstructions + "\n\n" + dynamicContext }],
-            },
-            contents: (
-              messages as Array<{ role: string; content: string }>
-            ).map((m) => ({
-              role: m.role === "assistant" ? "model" : "user",
-              parts: [{ text: m.content }],
-            })),
-            generationConfig: {
-              maxOutputTokens: 4000,
-              responseMimeType: "application/json",
-            },
-          }),
-        },
-      );
-      if (!gResp.ok) {
-        const e = await gResp.text();
-        throw new Error(`Gemini error: ${e}`);
-      }
-      const gdata = (await gResp.json()) as any;
-      const content: string =
-        gdata.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-
-      // Log usage only (credit deduction on the canary path is skipped — the
-      // credit cost model is Anthropic-priced; resolveAndGate above still ran).
-      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-      const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-      runInBackground(
-        fetch(`${supabaseUrl}/rest/v1/llm_usage`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-          },
-          body: JSON.stringify({
-            trip_id: trip?.id || null,
-            function_name: "chat",
-            model: chatModel,
-            input_tokens: gdata.usageMetadata?.promptTokenCount || 0,
-            output_tokens: gdata.usageMetadata?.candidatesTokenCount || 0,
-          }),
-        })
-          .then(() => {})
-          .catch(() => {}),
-      );
-
-      // Parse the same way the Anthropic path does: first `{` / last `}`.
-      const gStart = content.indexOf("{");
-      const gEnd = content.lastIndexOf("}");
-      let data: any = { message: "Done." };
-      try {
-        data = JSON.parse(content.slice(gStart, gEnd + 1));
-        if (!data.message) data.message = "Done.";
-      } catch {
-        data = { message: content };
-      }
-
-      // Backwards compat: convert old-style updatedRoutes/updatedDays to actions.
-      if (data.updatedRoutes && !data.actions) {
-        data.actions = data.updatedRoutes.map((r: any) => ({
-          type: "update_route",
-          route: r,
-        }));
-        if (data.pendingRoutes) {
-          data.actions.push({
-            type: "pending_routes",
-            routeIds: data.pendingRoutes,
-          });
-        }
-        delete data.updatedRoutes;
-        delete data.pendingRoutes;
-      }
-      if (data.updatedDays && !data.actions) {
-        data.actions = data.updatedDays.map((d: any) => ({
-          type: "update_day",
-          day: d,
-        }));
-        if (data.suggestions) {
-          data.actions.push({ type: "suggest", suggestions: data.suggestions });
-        }
-        delete data.updatedDays;
-        delete data.suggestions;
-      }
-
-      return new Response(JSON.stringify(data), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
     // Latency: time from just before the Anthropic request to when the stream
     // finishes (written to llm_usage.duration_ms below).
     const __anthropicStart = Date.now();
@@ -550,6 +481,8 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
     const pump = (async () => {
       const usage = newStreamUsage();
       let accumulated = "";
+      let stopReason: string | null = null;
+      let streamError: string | null = null;
       try {
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();
@@ -567,6 +500,8 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
             try {
               const event = JSON.parse(raw);
               accumulateStreamUsage(usage, event);
+              if (event.type === "message_delta" && event.delta?.stop_reason)
+                stopReason = event.delta.stop_reason;
               if (
                 event.type === "content_block_delta" &&
                 event.delta?.type === "text_delta"
@@ -581,23 +516,39 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
           }
         }
       } catch (e) {
-        console.error("chat stream error:", (e as Error).message);
+        streamError = (e as Error).message;
+        console.error("chat stream error:", streamError);
       }
 
-      // Parse the complete reply. If parsing fails, prefer the cleanly
-      // extracted message (already streamed) over dumping raw JSON-ish text.
+      // Parse the complete reply. A reply is unusable — and is neither shown
+      // as a success nor charged — when nothing came back, when the model ran
+      // out of tokens, or when the JSON broke while carrying actions (the
+      // streamed message would announce an edit that never gets applied).
+      // A parse failure on a plain answer keeps the cleanly extracted text.
       const start = accumulated.indexOf("{");
       const end = accumulated.lastIndexOf("}");
-      let data: any = { message: "Done." };
+      let data: any = null;
+      let unusable: string | null = null;
       try {
         data = JSON.parse(accumulated.slice(start, end + 1));
-        if (!data.message) data.message = "Done.";
+        if (!data || typeof data !== "object") throw new Error("not an object");
       } catch {
-        data = { message: extractor.decoded || accumulated };
+        data = null;
+      }
+      if (stopReason === "max_tokens") unusable = "max_tokens";
+      else if (!data) {
+        if (/"actions"\s*:/.test(accumulated))
+          unusable = "parse_failed_actions";
+        else if (extractor.decoded.trim())
+          data = { message: extractor.decoded };
+        // The model answered in plain prose instead of JSON: show it as is.
+        else if (start < 0 && accumulated.trim() && !streamError)
+          data = { message: accumulated.trim() };
+        else unusable = streamError ? "stream_error" : "empty";
       }
 
       // Backwards compat: convert old-style updatedRoutes/updatedDays to actions format
-      if (data.updatedRoutes && !data.actions) {
+      if (data?.updatedRoutes && !data.actions) {
         data.actions = data.updatedRoutes.map((r: any) => ({
           type: "update_route",
           route: r,
@@ -611,7 +562,7 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
         delete data.updatedRoutes;
         delete data.pendingRoutes;
       }
-      if (data.updatedDays && !data.actions) {
+      if (data?.updatedDays && !data.actions) {
         data.actions = data.updatedDays.map((d: any) => ({
           type: "update_day",
           day: d,
@@ -623,7 +574,39 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
         delete data.suggestions;
       }
 
-      await sendEvent({ type: "final", data });
+      if (data && !unusable) {
+        const acts = Array.isArray(data.actions) ? data.actions : [];
+        if (typeof data.message !== "string" || !data.message.trim()) {
+          if (acts.length) data.message = describeActions(acts);
+          else unusable = "empty";
+        }
+      }
+      if (unusable) {
+        data = {
+          error: unusable,
+          message:
+            unusable === "max_tokens" || unusable === "parse_failed_actions"
+              ? "That change was too big to apply in one go, so nothing was changed. Try asking for one day or one plan at a time."
+              : "Sorry, I couldn't get a reply just now, so nothing was changed. Please try again.",
+        };
+        runInBackground(
+          captureException(new Error(`chat reply unusable: ${unusable}`), {
+            functionName: "chat",
+            userId: user.id,
+            tripId: trip?.id || null,
+            stopReason,
+            streamError,
+            outputChars: accumulated.length,
+            model: chatModel,
+          }),
+        );
+      }
+
+      // Old clients treat a missing "final" as an error ("Reply stream ended
+      // unexpectedly"), which is the right outcome for an unusable reply.
+      await sendEvent(
+        unusable ? { type: "error", ...data } : { type: "final", data },
+      );
       if (wantsStream) {
         await writer.write(encoder.encode("data: [DONE]\n\n")).catch(() => {});
         await writer.close().catch(() => {});
@@ -665,6 +648,9 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
             }),
           }).catch(() => {});
 
+          // We paid the provider either way, but a reply the user can't use
+          // is not charged to them.
+          if (unusable) return;
           await deductCredits({
             userId: user.id,
             model: chatModel,
@@ -678,7 +664,7 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
           });
         })(),
       );
-      return data;
+      return { data, unusable };
     })();
     // Keep the isolate alive for the WHOLE pump, not just the trailing log —
     // a client disconnect mid-stream must still land the usage row and the
@@ -686,8 +672,9 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
     runInBackground(pump.then(() => {}));
 
     if (!wantsStream) {
-      const data = await pump;
+      const { data, unusable } = await pump;
       return new Response(JSON.stringify(data), {
+        status: unusable ? 502 : 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }

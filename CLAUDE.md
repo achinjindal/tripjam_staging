@@ -202,6 +202,9 @@ supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
 ### AI / Edge Functions
 
 - Unified chat uses action-based responses: LLM returns `actions[]` array with support for bulk dismiss (routeIds array).
+  - **Reply contract:** SSE `delta` events, then exactly one of `final` (`{message, actions}`) or `error` (`{error, message}`), then `[DONE]`. `error` is sent when the reply is unusable (empty, `max_tokens`, or broken JSON that carried actions); it is not charged and the client shows it as an unsaved error bubble. Non-streaming callers get a 502 for the same cases.
+  - **Applying:** `dispatchActions` returns per-action `{type, ok, reason}`; the bubble's "View updated" and wording come from what applied, not what the model claimed. `update_day` is insert-then-delete-by-id with rollback, and kept activities (matched by title) keep their saved place/booking data — the model only sees `time title`.
+  - Messages sent while Trippy is replying queue (max 3, de-duped) via `sendChatDirect`; never write a send path that drops them.
 - Route labels (P1, P2...) computed at render time from display index, never stored.
 - All functions log token usage to `llm_usage` table (fire-and-forget).
 - `generate-destination-research` uses Haiku 4.5 + `web_search` tool (max 6 uses). Results cached in DB; cache key = (destinations, tags, monthBucket).

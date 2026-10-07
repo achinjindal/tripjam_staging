@@ -110,6 +110,20 @@ function activityInsertShape(a, dayId, i) {
     added_by: a.added_by ?? null,
     photo_url: a.photo_url ?? null,
     transition_data: a.transition_data ?? a.transition ?? null,
+    // Place + verification data: without these an undo brings activities
+    // back with no coordinates (off the map, re-verified and re-billed).
+    lat: a.lat ?? null,
+    lng: a.lng ?? null,
+    place_id: a.place_id ?? null,
+    business_status: a.business_status ?? null,
+    photo_query: a.photo_query ?? null,
+    geocode_source: a.geocode_source ?? null,
+    geocode_confidence: a.geocode_confidence ?? null,
+    geocode_corrected_from: a.geocode_corrected_from ?? null,
+    geocode_verified_at: a.geocode_verified_at ?? null,
+    cost: a.cost ?? null,
+    gloss: a.gloss ?? null,
+    flagged: a.flagged ?? null,
   };
 }
 
