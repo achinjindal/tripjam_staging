@@ -53,6 +53,10 @@ async function openTripChat(page: Page, tripId: string) {
   return ask;
 }
 
+// Replies are saved to the trip's chat history, so a fixed reply text would
+// match a bubble from an earlier run. Tag every mocked reply with this run.
+const RUN = `r${Date.now().toString(36)}`;
+
 let sb: SupabaseClient;
 let tripId: string;
 let day: { id: string; label: string; city: string };
@@ -122,7 +126,7 @@ test("day edit keeps untouched activities' saved data", async ({ page }) => {
     {
       type: "final",
       data: {
-        message: `Added a cafe to ${day.label}.`,
+        message: `Added a cafe to ${day.label} (${RUN}).`,
         actions: [
           {
             type: "update_day",
@@ -161,7 +165,7 @@ test("day edit keeps untouched activities' saved data", async ({ page }) => {
   await ask.fill("e2e: add a cafe");
   await ask.press("Enter");
   await expect(
-    page.getByText(`Added a cafe to ${day.label}.`).last(),
+    page.getByText(`Added a cafe to ${day.label} (${RUN}).`).last(),
   ).toBeVisible({ timeout: 15000 });
 
   await expect
@@ -222,7 +226,7 @@ test("v3 activity_ops apply atomically and log an undo snapshot", async ({
     {
       type: "final",
       data: {
-        message: "Added a coffee stop.",
+        message: `Added a coffee stop (${RUN}).`,
         actions: [
           {
             type: "activity_ops",
@@ -254,12 +258,11 @@ test("v3 activity_ops apply atomically and log an undo snapshot", async ({
   const t0 = new Date().toISOString();
   await ask.fill("e2e: add a coffee stop");
   await ask.press("Enter");
-  // dropped:1 → the reply says part of it couldn't be applied.
+  // dropped:1 → this run's bubble says part of it couldn't be applied (the
+  // note is only added once the ops were applied).
   await expect(
-    page.getByText(/Part of that couldn't be applied/).last(),
-  ).toBeVisible({
-    timeout: 15000,
-  });
+    page.getByText(`Added a coffee stop (${RUN}).`).last(),
+  ).toContainText("Part of that couldn't be applied", { timeout: 15000 });
   expect(bodies[0]?.protocol).toBe(2);
   const { data: after } = await sb
     .from("activities")
@@ -297,7 +300,7 @@ test("a failed activity_ops batch changes nothing and says so", async ({
     {
       type: "final",
       data: {
-        message: "Moved things around.",
+        message: `Moved things around (${RUN}).`,
         actions: [
           {
             type: "activity_ops",
@@ -315,10 +318,10 @@ test("a failed activity_ops batch changes nothing and says so", async ({
   await ask.fill("e2e: move things");
   await ask.press("Enter");
   await expect(
-    page
-      .getByText(/I couldn't apply that change, so nothing was changed/)
-      .last(),
-  ).toBeVisible({ timeout: 15000 });
+    page.getByText(`Moved things around (${RUN}).`).last(),
+  ).toContainText("I couldn't apply that change, so nothing was changed", {
+    timeout: 15000,
+  });
   const { data: after } = await sb
     .from("activities")
     .select("id, time")
