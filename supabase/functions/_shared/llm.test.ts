@@ -18,6 +18,7 @@ import {
   providerOf,
   traitsOf,
   suggestCap,
+  turnsOf,
   parseLLMJson,
   mergeUsage,
   normaliseSchemaForTest as normaliseSchema,
@@ -258,3 +259,46 @@ Deno.test("mergeUsage sums every disjoint bucket", () => {
   assertEquals(merged.cache_read_input_tokens, 4);
   assertEquals(merged.web_search_requests, 3);
 });
+
+Deno.test(
+  "turnsOf: no messages → the single user turn (existing callers)",
+  () => {
+    assertEquals(turnsOf({ user: "hi" }), [{ role: "user", content: "hi" }]);
+  },
+);
+
+Deno.test(
+  "turnsOf: normalises a chat history to what Anthropic accepts",
+  () => {
+    const out = turnsOf({
+      user: "unused",
+      messages: [
+        { role: "assistant", content: "greeting the model never sent" },
+        { role: "user", content: "a" },
+        { role: "user", content: "b" },
+        { role: "assistant", content: "  " },
+        { role: "assistant", content: "reply" },
+        { role: "user", content: "c" },
+      ],
+    });
+    assertEquals(out, [
+      { role: "user", content: "a\nb" },
+      { role: "assistant", content: "reply" },
+      { role: "user", content: "c" },
+    ]);
+  },
+);
+
+Deno.test(
+  "turnsOf: a history ending on the assistant gets the user turn",
+  () => {
+    const out = turnsOf({
+      user: "now this",
+      messages: [
+        { role: "user", content: "q" },
+        { role: "assistant", content: "a" },
+      ],
+    });
+    assertEquals(out[out.length - 1], { role: "user", content: "now this" });
+  },
+);

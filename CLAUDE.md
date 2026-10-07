@@ -83,7 +83,8 @@ supabase/
     generate-brainstorm/       — Route Generation (RG): 4 route options with **bold** day text
     generate-itinerary/        — Itinerary Generation (IG): day-by-day plan with transit tips + transitions
     generate-destination-research/ — Inspirations tab: web-search-backed articles/vlogs via Haiku + web_search
-    chat/                      — Unified chat endpoint (action-based, 6 message history cap)
+    chat/                      — Unified chat endpoint (action-based, 6 message history cap;
+                                 _ops.ts = v3 itinerary edit ops + ref resolution)
     city-deep-dive/            — Magazine deep dive content (anti-hallucination prompt)
     places-proxy/              — Geocoding proxy (Photon + Nominatim)
     generate-todos/            — AI todo suggestions with due dates
@@ -205,6 +206,9 @@ supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
   - **Reply contract:** SSE `delta` events, then exactly one of `final` (`{message, actions}`) or `error` (`{error, message}`), then `[DONE]`. `error` is sent when the reply is unusable (empty, `max_tokens`, or broken JSON that carried actions); it is not charged and the client shows it as an unsaved error bubble. Non-streaming callers get a 502 for the same cases.
   - **Applying:** `dispatchActions` returns per-action `{type, ok, reason}`; the bubble's "View updated" and wording come from what applied, not what the model claimed. `update_day` is insert-then-delete-by-id with rollback, and kept activities (matched by title) keep their saved place/booking data — the model only sees `time title`.
   - Messages sent while Trippy is replying queue (max 3, de-duped) via `sendChatDirect`; never write a send path that drops them.
+  - **Chat v3 itinerary edits (`protocol: 2`):** the web client sends `protocol: 2`; the itinerary context lists each activity with a short ref (`D3.2`) and the model returns small ops (`replace_activity`, `insert_activity`, `remove_activity`, `move_activity`, `set_time`). `chat/_ops.ts` `resolveOps` validates them, maps refs to ids, rewrites remove+insert of the same place into a move, and folds them into ONE `activity_ops` action, which the client applies via the `apply_activity_ops` RPC (migration `20261007000001`, SECURITY INVOKER, all-or-nothing, returns `before` for undo and `after` for render). Clients without `protocol` (old PWAs, the Android APK until a Play update) keep the v2 `update_day` contract — keep it working until a minimum-client-version check exists.
+  - **No output schema on chat.** Measured 2026-10-07 on Haiku 4.5: the itinerary action union is refused ("compiled grammar is too large") and the brainstorm schema adds ~1.5–2 s to first token cached, ~13 s on a cold compile (24 h cache, and chat traffic is well under a call a day). Don't re-add one without re-measuring.
+  - Chat calls the model through `streamLLM` (`modelFor("CHAT", …)` → `LLM_MODEL_CHAT` → legacy `CHAT_MODEL`), with multi-turn history via `CallOpts.messages`.
 - Route labels (P1, P2...) computed at render time from display index, never stored.
 - All functions log token usage to `llm_usage` table (fire-and-forget).
 - `generate-destination-research` uses Haiku 4.5 + `web_search` tool (max 6 uses). Results cached in DB; cache key = (destinations, tags, monthBucket).

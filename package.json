@@ -19,7 +19,7 @@
     "deploy:functions:prod": "supabase functions deploy chat city-deep-dive create-checkout estimate-expenses extract-preferences generate-brainstorm generate-day-narratives generate-destination-research generate-itinerary generate-todos generate-wishlist inbound-email payment-webhook places-proxy redeem-coupon revenuecat-verify revenuecat-webhook send-email --project-ref viyvdqwwnbbqjuwiuzbh",
     "db:push:staging": "supabase link --project-ref wlrzvwjdrjpfqcwgmzch && supabase db push",
     "db:push:prod": "supabase link --project-ref viyvdqwwnbbqjuwiuzbh && supabase db push",
-    "test:functions": "deno test --allow-env --config supabase/functions/deno.json supabase/functions/_shared/llm.test.ts supabase/functions/places-proxy/_helpers.test.ts"
+    "test:functions": "deno test --allow-env --config supabase/functions/deno.json supabase/functions/_shared/llm.test.ts supabase/functions/places-proxy/_helpers.test.ts supabase/functions/chat/_ops.test.ts"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",

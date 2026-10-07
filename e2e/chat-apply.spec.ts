@@ -207,6 +207,126 @@ test("day edit keeps untouched activities' saved data", async ({ page }) => {
   expect(undoKeep?.lat).toBeCloseTo(35.0001);
 });
 
+test("v3 activity_ops apply atomically and log an undo snapshot", async ({
+  page,
+}) => {
+  test.skip(!tripId || snapshot.length < 2, "QA trip day 1 not usable");
+  test.setTimeout(120000);
+  const { data: cur } = await sb
+    .from("activities")
+    .select("*")
+    .eq("day_id", day.id)
+    .order("position");
+  const first = cur![0];
+  const bodies = await mockChat(page, [
+    {
+      type: "final",
+      data: {
+        message: "Added a coffee stop.",
+        actions: [
+          {
+            type: "activity_ops",
+            dropped: 1,
+            ops: [
+              { op: "set_time", activity_id: first.id, time: "07:45" },
+              {
+                op: "insert",
+                day_id: day.id,
+                after_id: first.id,
+                activity: {
+                  time: "08:30",
+                  title: "E2E Ops Cafe",
+                  geocode: "Shibuya, Tokyo",
+                  geocode_end: "",
+                  type: "food",
+                  duration: "30m",
+                  note: "",
+                  icon: "☕",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ]);
+  const ask = await openTripChat(page, tripId);
+  const t0 = new Date().toISOString();
+  await ask.fill("e2e: add a coffee stop");
+  await ask.press("Enter");
+  // dropped:1 → the reply says part of it couldn't be applied.
+  await expect(
+    page.getByText(/Part of that couldn't be applied/).last(),
+  ).toBeVisible({
+    timeout: 15000,
+  });
+  expect(bodies[0]?.protocol).toBe(2);
+  const { data: after } = await sb
+    .from("activities")
+    .select("*")
+    .eq("day_id", day.id)
+    .order("position");
+  expect(after!.length).toBe(cur!.length + 1);
+  expect(after![0].id).toBe(first.id);
+  expect(after![0].time).toBe("07:45");
+  expect(after![0].lat).toBe(first.lat);
+  expect(after![1].title).toBe("E2E Ops Cafe");
+  const { data: logRows } = await sb
+    .from("activity_log")
+    .select("summary, undo_payload")
+    .eq("trip_id", tripId)
+    .eq("action", "update_day")
+    .gte("created_at", t0);
+  expect(logRows!.length).toBe(1);
+  expect(logRows![0].summary).toMatch(/^Trippy edited /);
+  expect(logRows![0].undo_payload.activities.length).toBe(cur!.length);
+  expect("wishlist" in logRows![0].undo_payload).toBe(false);
+});
+
+test("a failed activity_ops batch changes nothing and says so", async ({
+  page,
+}) => {
+  test.skip(!tripId, "QA trip not found");
+  test.setTimeout(120000);
+  const { data: before } = await sb
+    .from("activities")
+    .select("id, time")
+    .eq("day_id", day.id)
+    .order("position");
+  await mockChat(page, [
+    {
+      type: "final",
+      data: {
+        message: "Moved things around.",
+        actions: [
+          {
+            type: "activity_ops",
+            dropped: 0,
+            ops: [
+              { op: "set_time", activity_id: before![0].id, time: "06:00" },
+              { op: "remove", activity_id: crypto.randomUUID() },
+            ],
+          },
+        ],
+      },
+    },
+  ]);
+  const ask = await openTripChat(page, tripId);
+  await ask.fill("e2e: move things");
+  await ask.press("Enter");
+  await expect(
+    page
+      .getByText(/I couldn't apply that change, so nothing was changed/)
+      .last(),
+  ).toBeVisible({ timeout: 15000 });
+  const { data: after } = await sb
+    .from("activities")
+    .select("id, time")
+    .eq("day_id", day.id)
+    .order("position");
+  expect(after).toEqual(before);
+});
+
 test("unusable reply changes nothing and isn't saved", async ({ page }) => {
   test.skip(!tripId, "QA trip not found");
   test.setTimeout(120000);

@@ -391,9 +391,13 @@ function wrapArrayRoot(schema: JSONSchema): JSONSchema {
  *  instead of failing the user's request outright. */
 function isSchemaRejection(msg: string): boolean {
   return (
-    /output_config|response_format|responseJsonSchema|json_schema|responseSchema/i.test(
+    (/output_config|response_format|responseJsonSchema|json_schema|responseSchema/i.test(
       msg,
-    ) && /not supported|unsupported|invalid|unrecognized|unknown/i.test(msg)
+    ) &&
+      /not supported|unsupported|invalid|unrecognized|unknown/i.test(msg)) ||
+    // Anthropic refuses schemas whose grammar is too big to compile
+    // (observed 2026-10-07 on Haiku 4.5 with an 11-way action union).
+    /compiled grammar is too large|schema is too complex/i.test(msg)
   );
 }
 
@@ -424,6 +428,34 @@ const asBlocks = (s: SystemInput): SystemBlock[] =>
 const asText = (s: SystemInput): string =>
   typeof s === "string" ? s : s.map((b) => b.text).join("\n\n");
 
+/**
+ * The conversation to send: `messages` when given, else the single `user`
+ * turn. Normalised to what every provider accepts — consecutive same-role
+ * turns merged, leading assistant turns dropped, empty turns removed, and a
+ * trailing user turn guaranteed (Anthropic 400s on any of these).
+ */
+export function turnsOf(o: Pick<CallOpts, "user" | "messages">): ChatTurn[] {
+  if (!o.messages?.length) return [{ role: "user", content: o.user }];
+  const out: ChatTurn[] = [];
+  for (const m of o.messages) {
+    const content = (m.content ?? "").trim();
+    if (!content) continue;
+    const role = m.role === "assistant" ? "assistant" : "user";
+    if (!out.length && role === "assistant") continue;
+    const last = out[out.length - 1];
+    if (last && last.role === role) last.content += "\n" + content;
+    else out.push({ role, content });
+  }
+  if (!out.length || out[out.length - 1].role !== "user")
+    out.push({ role: "user", content: o.user || "Continue." });
+  return out;
+}
+const geminiContents = (o: CallOpts) =>
+  turnsOf(o).map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }],
+  }));
+
 const emptyUsage = (): LLMUsage => ({
   input_tokens: 0,
   output_tokens: 0,
@@ -431,10 +463,17 @@ const emptyUsage = (): LLMUsage => ({
   cache_read_input_tokens: 0,
 });
 
+/** One turn of a multi-turn conversation (chat). */
+export type ChatTurn = { role: "user" | "assistant"; content: string };
+
 export type CallOpts = {
   model: string;
   system: SystemInput;
   user: string;
+  /** Multi-turn conversation. When set it is sent INSTEAD of `user` and must
+   *  start and end with a user turn, alternating roles (Anthropic rejects
+   *  anything else; turnsOf() merges and trims to guarantee it). */
+  messages?: ChatTurn[];
   maxTokens: number;
   /** Ask the provider to guarantee JSON. Ignored when expectArray is true on
    *  a provider whose JSON mode forbids top-level arrays. */
@@ -459,7 +498,7 @@ async function callAnthropic(o: CallOpts, t: Traits): Promise<LLMResult> {
     max_tokens: o.maxTokens,
     stream: false,
     system: asBlocks(o.system),
-    messages: [{ role: "user", content: o.user }],
+    messages: turnsOf(o),
   };
   if (t.thinkingBody) body.thinking = t.thinkingBody;
   else if (t.allowTemperature && o.temperature !== undefined)
@@ -510,7 +549,7 @@ async function callAnthropic(o: CallOpts, t: Traits): Promise<LLMResult> {
 async function callGemini(o: CallOpts, t: Traits): Promise<LLMResult> {
   const mk = (withBudgetZero: boolean) => ({
     systemInstruction: { parts: [{ text: asText(o.system) }] },
-    contents: [{ role: "user", parts: [{ text: o.user }] }],
+    contents: geminiContents(o),
     generationConfig: {
       maxOutputTokens: o.maxTokens,
       ...(o.json || o.schema ? { responseMimeType: "application/json" } : {}),
@@ -597,10 +636,7 @@ async function callOpenAI(o: CallOpts, t: Traits): Promise<LLMResult> {
         : useJsonMode
           ? { response_format: { type: "json_object" } }
           : {}),
-      messages: [
-        { role: "system", content: asText(o.system) },
-        { role: "user", content: o.user },
-      ],
+      messages: [{ role: "system", content: asText(o.system) }, ...turnsOf(o)],
     }),
     signal: o.signal,
   });
@@ -769,7 +805,7 @@ export async function* streamLLM(
       max_tokens: opts.maxTokens,
       stream: true,
       system: asBlocks(opts.system),
-      messages: [{ role: "user", content: opts.user }],
+      messages: turnsOf(opts),
     };
     if (t.thinkingBody) body.thinking = t.thinkingBody;
     else if (t.allowTemperature && opts.temperature !== undefined)
@@ -829,7 +865,7 @@ export async function* streamLLM(
   if (t.provider === "google") {
     const mk = (budgetZero: boolean) => ({
       systemInstruction: { parts: [{ text: asText(opts.system) }] },
-      contents: [{ role: "user", parts: [{ text: opts.user }] }],
+      contents: geminiContents(opts),
       generationConfig: {
         maxOutputTokens: opts.maxTokens,
         ...(opts.json || opts.schema
@@ -929,7 +965,7 @@ export async function* streamLLM(
       stream_options: { include_usage: true },
       messages: [
         { role: "system", content: asText(opts.system) },
-        { role: "user", content: opts.user },
+        ...turnsOf(opts),
       ],
     }),
     signal: opts.signal,

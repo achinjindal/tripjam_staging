@@ -7652,6 +7652,7 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const CHAT_MUTATION_TYPES = new Set([
+  "activity_ops",
   "update_route",
   "dismiss_route",
   "generate_more_plans",
@@ -12113,6 +12114,42 @@ export default function App({
     }
   };
 
+  // Fetch (and persist) photos for a day's activities that have none yet.
+  // `hint(a)` can supply model-side lat/lng/photo_query for a row.
+  const warmActivityPhotos = (dayId, acts, city, hint = () => ({})) => {
+    for (const a of acts || []) {
+      if (!a?.id || a.type === "transit" || a.photo_url) continue;
+      const h = hint(a) || {};
+      _fetchPhoto(a.geocode || a.title, city, a.type, undefined, {
+        lat: a.lat ?? h.lat,
+        lng: a.lng ?? h.lng,
+        photoQuery: a.photo_query ?? h.photo_query,
+      }).then((url) => {
+        if (!url) return;
+        supabase
+          .from("activities")
+          .update({ photo_url: url })
+          .eq("id", a.id)
+          .then(({ error }) => {
+            if (error)
+              console.warn("activity photo persist failed:", error.message);
+          });
+        setDays((prev) =>
+          prev.map((d) =>
+            d.id !== dayId
+              ? d
+              : {
+                  ...d,
+                  activities: (d.activities || []).map((x) =>
+                    x.id === a.id ? { ...x, photo_url: url } : x,
+                  ),
+                },
+          ),
+        );
+      });
+    }
+  };
+
   // ── Action dispatcher: executes actions returned by unified chat ──
   // Returns one {type, ok, reason} per action so the reply can say what
   // actually happened (not what the model claimed), plus `routeId` for applied
@@ -12268,6 +12305,58 @@ export default function App({
             triggerRgRef.current?.({ addMore: true });
             break;
           }
+          case "activity_ops": {
+            // Chat v3: the server validated the model's operations and
+            // resolved its refs to ids; apply_activity_ops applies them in one
+            // transaction (all or nothing) under the user's RLS, and returns
+            // each touched day before (undo) and after (render).
+            const fail = failWith("activity_ops");
+            const ops = Array.isArray(action.ops) ? action.ops : [];
+            if (!ops.length)
+              fail(action.dropped ? "all_ops_invalid" : "no_ops");
+            const { data: res, error: opsErr } = await supabase.rpc(
+              "apply_activity_ops",
+              { p_ops: ops },
+            );
+            if (opsErr || !Array.isArray(res?.after)) {
+              console.error("activity_ops failed:", opsErr);
+              fail("rpc_error");
+            }
+            const afterByDay = new Map(
+              res.after.map((d) => [d.day_id, d.activities || []]),
+            );
+            setDays((prev) =>
+              prev.map((d) =>
+                afterByDay.has(d.id)
+                  ? { ...d, activities: afterByDay.get(d.id) }
+                  : d,
+              ),
+            );
+            for (const d of res.after) {
+              const city = daysRef.current.find((x) => x.id === d.day_id)?.city;
+              warmActivityPhotos(d.day_id, d.activities || [], city);
+            }
+            for (const b of res.before || []) {
+              const label =
+                daysRef.current.find((x) => x.id === b.day_id)?.label ||
+                "a day";
+              logActivity({
+                tripId: trip?.id,
+                userId: session?.user?.id,
+                action: "update_day",
+                entityType: "day",
+                entityId: b.day_id,
+                summary: `Trippy edited ${label}`,
+                // No wishlist key: undo restores activities, leaves gems.
+                undoPayload: {
+                  dayId: b.day_id,
+                  activities: b.activities || [],
+                },
+              });
+            }
+            if (action.dropped) extra = { partial: true };
+            break;
+          }
           case "update_day": {
             const updatedDay = action.day;
             const fail = failWith("update_day");
@@ -12310,6 +12399,7 @@ export default function App({
               }
             }
             const usedOld = new Set();
+            const matchedIds = []; // new index → kept activity's id
             const KEEP_FIELDS = [
               "title",
               "type",
@@ -12347,9 +12437,7 @@ export default function App({
                 };
                 for (const f of KEEP_FIELDS) row[f] = match[f] ?? null;
                 row.confirmed = match.confirmed ?? false;
-                // The transit hint describes the leg from the previous stop;
-                // it only still holds if the activity didn't move.
-                if (match.position !== j) row.transition_data = null;
+                matchedIds[j] = match.id;
                 return row;
               }
               return {
@@ -12369,6 +12457,19 @@ export default function App({
                 photo_url: null,
                 transition_data: act.transition || null,
               };
+            });
+            // A transit hint describes the leg to the NEXT activity, so a kept
+            // row keeps it only if its next activity is unchanged.
+            const oldSorted = [...oldActs].sort(
+              (a, b) => (a.position ?? 0) - (b.position ?? 0),
+            );
+            const oldNext = new Map(
+              oldSorted.map((a, i) => [a.id, oldSorted[i + 1]?.id ?? null]),
+            );
+            newRows.forEach((row, j) => {
+              const id = matchedIds[j];
+              if (id && oldNext.get(id) !== (matchedIds[j + 1] ?? null))
+                row.transition_data = null;
             });
             // Insert the new set first and check it, then delete the old rows
             // by id. A failure at either step leaves the day as it was (no
@@ -12433,51 +12534,12 @@ export default function App({
                     },
               ),
             );
-            // Fetch photos for activities that don't have one yet
-            const dayCity = updatedDay.city ?? existingDay.city;
-            for (const insertedAct of sortedActs) {
-              if (insertedAct.type === "transit" || insertedAct.photo_url)
-                continue;
-              const src = incoming[insertedAct.position] || {};
-              _fetchPhoto(
-                insertedAct.geocode || insertedAct.title,
-                dayCity,
-                insertedAct.type,
-                undefined,
-                {
-                  lat: insertedAct.lat ?? src.lat,
-                  lng: insertedAct.lng ?? src.lng,
-                  photoQuery: insertedAct.photo_query ?? src.photo_query,
-                },
-              ).then((url) => {
-                if (!url) return;
-                supabase
-                  .from("activities")
-                  .update({ photo_url: url })
-                  .eq("id", insertedAct.id)
-                  .then(({ error }) => {
-                    if (error)
-                      console.warn(
-                        "activity photo persist failed:",
-                        error.message,
-                      );
-                  });
-                setDays((prev) =>
-                  prev.map((d) =>
-                    d.id !== dayId
-                      ? d
-                      : {
-                          ...d,
-                          activities: d.activities.map((a) =>
-                            a.id === insertedAct.id
-                              ? { ...a, photo_url: url }
-                              : a,
-                          ),
-                        },
-                  ),
-                );
-              });
-            }
+            warmActivityPhotos(
+              dayId,
+              sortedActs,
+              updatedDay.city ?? existingDay.city,
+              (a) => incoming[a.position] || {},
+            );
             logActivity({
               tripId: trip?.id,
               userId: session?.user?.id,
@@ -12761,6 +12823,9 @@ export default function App({
           days: daysRef.current || [],
           form: pendingForm || {},
           message,
+          // Chat v3: schema-checked replies, and itinerary edits as small
+          // operations (activity_ops) instead of whole-day rewrites.
+          protocol: 2,
           ...(spendPersonal ? { spend_personal: true } : {}),
           ...(memberList
             ? { members: memberList, sender: nameOf(session.user.id) }
@@ -12948,7 +13013,9 @@ export default function App({
           .filter((r) => r.ok && r.routeId)
           .map((r) => r.routeId);
         deferred = results.flatMap((r) => r.deferred || []);
-        if (results.some((r) => !r.ok && isMutation(r)))
+        if (
+          results.some((r) => (!r.ok && isMutation(r)) || (r.ok && r.partial))
+        )
           finalContent += hasChanges
             ? "\n\n(Part of that couldn't be applied. The rest is saved.)"
             : "\n\n(I couldn't apply that change, so nothing was changed. Try again, or ask for a smaller change.)";

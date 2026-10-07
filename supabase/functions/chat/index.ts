@@ -1,6 +1,15 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { captureException } from "../_shared/errortrack.ts";
-import { traitsOf } from "../_shared/llm.ts";
+import {
+  streamLLM,
+  modelFor,
+  suggestCap,
+  type CallOpts,
+  type ChatTurn,
+  type LLMUsage,
+  type StreamEvent,
+} from "../_shared/llm.ts";
+import { itineraryContext, resolveOps, describeOps } from "./_ops.ts";
 import {
   authenticateUser,
   unauthorized,
@@ -8,11 +17,40 @@ import {
   deductCredits,
   rateLimit,
   llmKillSwitch,
-  newStreamUsage,
-  accumulateStreamUsage,
-  hasStreamUsage,
   runInBackground,
 } from "../_shared/credits.ts";
+
+// v3 itinerary edit vocabulary. Refs come from itineraryContext() (./_ops.ts).
+const OPS_INSTRUCTIONS = `
+1. Itinerary edits — change ONLY what the user asked for, using these operations. Every activity in TRIP CONTEXT has a ref like D3.2 (day 3, item 2); days are D1, D2, …
+   {"type":"replace_activity","ref":"D3.2","activity":{…}}   — a different place in that slot
+   {"type":"insert_activity","day":"D3","after":"D3.2","activity":{…}}   — after:"" puts it first in the day
+   {"type":"remove_activity","ref":"D3.4"}
+   {"type":"move_activity","ref":"D3.4","day":"D5","after":"D5.1"}
+   {"type":"set_time","ref":"D3.3","time":"15:30"}
+   activity = {"time":"HH:MM","title":"…","geocode":"…","geocode_end":"","type":"sight|food|shop|transit|hotel","duration":"1.5h","note":"…","icon":"one emoji"}
+   RULES:
+   - Use the fewest operations that do the job. Never touch or re-send activities the user didn't ask about.
+   - To move an existing activity (another time slot or another day) use move_activity — never remove it and insert it again; move keeps its saved details and booking.
+   - Copy refs exactly from TRIP CONTEXT. A ref always means that ORIGINAL item, even after earlier operations in the same reply. Several inserts after the same ref keep the order you give them.
+   - Times: when an edit leaves a gap or an overlap, add set_time for only the activities that must shift. Keep meals at meal times.
+   - Items marked [booked] are reservations: never replace, move or remove them unless the user explicitly asks.
+   - "Make a day more relaxed" means removing one or two activities (and retiming if needed), not rebuilding the day.
+   - Use real, specific, well-established places only — never a generic "Lunch". If unsure a place exists under that exact name, pick a better-known one.
+   - Geography: a new place must be in the same town and neighbourhood as the activities around it.
+   - geocode: the shortest plain name for maps (e.g. "Colaba Causeway"). Transit: geocode = departure point, geocode_end = arrival point; other types use "" for geocode_end.
+   - DEPARTURE CONSTRAINT: last-day activities must finish before the departure time.
+   - Use "" for any text field that doesn't apply.
+
+2. suggest — Show alternatives without changing the itinerary
+   {"type":"suggest","context":"hotel"|"activity"|"food","city":"...","suggestions":[{type, title, geocode, note, description, duration, distance_hint, cost_hint, area, price, bullets},...]}
+   MANDATORY whenever you propose alternative places (hotels, activities, restaurants): 2-3 suggestions as this action, NEVER as prose descriptions. Keep "message" to 1-2 sentences that name each suggested place once.
+   - type: "hotel" for hotel alternatives (this routes photos + booking links), else "sight"/"food"/"activity"
+   - title + geocode: real, well-established places ONLY — fully-qualified geocode ("[Place], [area], [city], [country]").
+   - LOCATION SANITY: alternatives MUST be in the same town/area as the place they replace.
+   - note: what it IS, max 8 words. description: 1-2 sentences a traveler needs to DECIDE.
+   - duration (activities/food), distance_hint, cost_hint. Hotels add area, price ("$".."$$$$") and bullets (3 phrases); others use "" and [].
+`;
 
 // The client's error bubble text (current and older wordings).
 const ERROR_REPLY_RE = /^Sorry, (something went wrong|I couldn't get a reply)/i;
@@ -20,6 +58,8 @@ const ERROR_REPLY_RE = /^Sorry, (something went wrong|I couldn't get a reply)/i;
 // A one-line reply for when the model returned actions but no message.
 // deno-lint-ignore no-explicit-any
 function describeActions(actions: any[]): string {
+  const opsAction = actions.find((a) => a?.type === "activity_ops");
+  if (opsAction?.ops?.length) return describeOps(opsAction.ops);
   const days = actions
     .filter((a) => a?.type === "update_day" && a.day?.label)
     .map((a) => a.day.label);
@@ -65,6 +105,7 @@ serve(async (req) => {
       members,
       sender,
       preferences,
+      protocol,
     } = await req.json();
 
     // Pre-flight (Phase 2.5): resolve which wallet pays — personal for a solo
@@ -82,6 +123,11 @@ serve(async (req) => {
     // ── Build context based on current screen ──
     const isBrainstorm = screen === "brainstorm";
     const isItinerary = screen === "itinerary";
+    // Chat v3 clients send protocol: 2: on the itinerary they edit with small
+    // operations (./_ops.ts) instead of whole-day rewrites. Older clients (cached PWAs, the Android APK until a
+    // Play update) send nothing and keep the v2 contract unchanged.
+    const v3 = protocol === 2;
+    const opsCtx = v3 && isItinerary ? itineraryContext(days || []) : null;
 
     // Route summary (for brainstorm context)
     const routeSummary = (routes || [])
@@ -105,18 +151,21 @@ ${points}`;
       })
       .join("\n\n");
 
-    // Itinerary summary (for itinerary context)
-    const itinerarySummary = (days || [])
-      .map((d: any) => {
-        const acts = (d.activities || [])
-          .map((a: any) => `${a.time} ${a.title}`)
-          .join(", ");
-        const gems = d.wishlist?.length
-          ? ` | Local gems: ${d.wishlist.map((w: any) => w.title).join(", ")}`
-          : "";
-        return `${d.label} - ${d.city}: ${acts}${gems}`;
-      })
-      .join("\n");
+    // Itinerary summary (for itinerary context). v3: one line per activity
+    // with its ref, type, duration and booked status.
+    const itinerarySummary = opsCtx
+      ? opsCtx.text
+      : (days || [])
+          .map((d: any) => {
+            const acts = (d.activities || [])
+              .map((a: any) => `${a.time} ${a.title}`)
+              .join(", ");
+            const gems = d.wishlist?.length
+              ? ` | Local gems: ${d.wishlist.map((w: any) => w.title).join(", ")}`
+              : "";
+            return `${d.label} - ${d.city}: ${acts}${gems}`;
+          })
+          .join("\n");
 
     // Logistics
     const fmtTime = (iso: string) =>
@@ -197,8 +246,10 @@ ${
     : ""
 }
 ${
-  isItinerary
-    ? `
+  opsCtx
+    ? OPS_INSTRUCTIONS
+    : isItinerary
+      ? `
 1. update_day — Modify a day's activities in the itinerary
    {"type":"update_day","day":{...day object with label, city, activities, wishlist...}}
    RULES:
@@ -227,7 +278,7 @@ ${
    - cost_hint: e.g. "Free", "~€2 bus", "€€"
    For hotel suggestions add: area, price ("$"/"$$"/"$$$"/"$$$$"), bullets (3 phrases)
 `
-    : ""
+      : ""
 }
 ACTIONS AVAILABLE ON ALL SCREENS:
 
@@ -262,7 +313,11 @@ Example (brainstorm):
 {"message":"Made P2 more relaxed — swapped the packed Day 3 for a beach day in Mirissa.","actions":[{"type":"update_route","route":{...full P2 object...}}]}
 
 Example (itinerary):
-{"message":"Replaced Day 3 lunch with Trishna in Colaba — one of Mumbai's best seafood spots.","actions":[{"type":"update_day","day":{"label":"Day 3","city":"Mumbai","activities":[...],"wishlist":[...]}}]}
+${
+  opsCtx
+    ? `{"message":"Swapped Day 3 lunch for Trishna in Colaba — one of Mumbai's best seafood spots.","actions":[{"type":"replace_activity","ref":"D3.2","activity":{"time":"13:00","title":"Trishna","geocode":"Trishna Mumbai","geocode_end":"","type":"food","duration":"1h","note":"Coastal seafood institution","icon":"🦀"}}]}`
+    : `{"message":"Replaced Day 3 lunch with Trishna in Colaba — one of Mumbai's best seafood spots.","actions":[{"type":"update_day","day":{"label":"Day 3","city":"Mumbai","activities":[...],"wishlist":[...]}}]}`
+}
 
 Example (no change):
 {"message":"P1 is the best fit for beach lovers — it covers the south coast with minimal driving."}
@@ -346,31 +401,13 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
       groupContext && sender ? `${sender}: ${message}` : message;
     const messages = [...recent, { role: "user", content: currentContent }];
 
-    // This function calls the Anthropic API directly (moving it onto
-    // _shared/llm.ts is planned), so only claude-* ids work here. Anything
-    // else would have been an unbilled Gemini canary path or a hard failure.
-    const configuredModel = Deno.env.get("CHAT_MODEL") || "claude-sonnet-5";
-    const chatModel = configuredModel.startsWith("claude")
-      ? configuredModel
-      : "claude-haiku-4-5";
-    if (chatModel !== configuredModel)
-      console.warn(
-        `chat: CHAT_MODEL=${configuredModel} is not supported here; using ${chatModel}`,
-      );
-
-    const requestBody = JSON.stringify({
+    // modelFor reads LLM_MODEL_CHAT, then the legacy CHAT_MODEL secret (what
+    // both environments set today), then LLM_MODEL_DEFAULT.
+    const chatModel = modelFor("CHAT", "claude-haiku-4-5");
+    const llmOpts: CallOpts = {
       model: chatModel,
-      max_tokens: 8192,
-      // Claude 5 family: thinking is on by default and its tokens count
-      // against max_tokens (see generate-itinerary) — turn it off for chat.
-      // The SHAPE is model-specific (Sonnet 5.5 rejects "disabled" and wants
-      // "between_tools"), so take it from the adapter's trait table rather
-      // than a prefix test that would silently 400 on a newer model.
-      ...(traitsOf(chatModel).thinkingBody
-        ? { thinking: traitsOf(chatModel).thinkingBody }
-        : {}),
-      stream: true,
-      // Static instructions are cached; per-call context is not.
+      // Static instructions first (cacheable where the model's minimum
+      // prefix allows), per-call context after.
       system: [
         {
           type: "text",
@@ -379,25 +416,46 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
         },
         { type: "text", text: dynamicContext },
       ],
-      messages,
-    });
-    // Latency: time from just before the Anthropic request to when the stream
+      user: currentContent,
+      messages: messages as ChatTurn[],
+      // v3 edits are small operations; v2 rewrites whole days and routes.
+      maxTokens: suggestCap(chatModel, opsCtx ? 4096 : 8192),
+      // No output schema. Measured on staging 2026-10-07 (Haiku 4.5): the
+      // itinerary schema is refused ("compiled grammar is too large"), and
+      // the brainstorm one adds ~1.5-2 s to first token even when cached and
+      // ~13 s on the cold compile — which, at chat's traffic, is most calls.
+      // Short op replies + resolveOps validation + the unusable-reply rules
+      // below cover what the schema would have.
+    };
+    const requestChars =
+      staticInstructions.length +
+      dynamicContext.length +
+      JSON.stringify(messages).length;
+
+    // Latency: time from just before the model request to when the stream
     // finishes (written to llm_usage.duration_ms below).
     const __anthropicStart = Date.now();
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY") ?? "",
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "prompt-caching-2024-07-31",
-        "content-type": "application/json",
-      },
-      body: requestBody,
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Anthropic error: ${err}`);
+    // Open the stream and wait for its first event BEFORE answering, so a
+    // provider failure is a plain HTTP error (the client shows it) rather
+    // than a half-open stream. One retry for an overloaded provider.
+    let stream!: AsyncGenerator<StreamEvent, void, unknown>;
+    let firstEvent!: IteratorResult<StreamEvent, void>;
+    for (let attempt = 0; ; attempt++) {
+      stream = streamLLM(llmOpts);
+      try {
+        firstEvent = await stream.next();
+        break;
+      } catch (e) {
+        const msg = (e as Error).message || String(e);
+        if (
+          attempt === 0 &&
+          /\b(429|500|502|503|529)\b|overloaded/i.test(msg)
+        ) {
+          await new Promise((r) => setTimeout(r, 700));
+          continue;
+        }
+        throw e;
+      }
     }
 
     // ── True streaming to the client (opt-in via the x-chat-stream header so
@@ -479,42 +537,23 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
     };
 
     const pump = (async () => {
-      const usage = newStreamUsage();
+      let usage: LLMUsage | null = null;
       let accumulated = "";
       let stopReason: string | null = null;
       let streamError: string | null = null;
-      try {
-        const reader = response.body!.getReader();
-        const decoder = new TextDecoder();
-        let lineBuffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          lineBuffer += decoder.decode(value, { stream: true });
-          const lines = lineBuffer.split("\n");
-          lineBuffer = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const raw = line.slice(6).trim();
-            if (raw === "[DONE]") continue;
-            try {
-              const event = JSON.parse(raw);
-              accumulateStreamUsage(usage, event);
-              if (event.type === "message_delta" && event.delta?.stop_reason)
-                stopReason = event.delta.stop_reason;
-              if (
-                event.type === "content_block_delta" &&
-                event.delta?.type === "text_delta"
-              ) {
-                accumulated += event.delta.text;
-                const fresh = extractor.push(event.delta.text);
-                if (fresh) await sendEvent({ type: "delta", text: fresh });
-              }
-            } catch {
-              /* skip */
-            }
-          }
+      const onEvent = async (ev: StreamEvent) => {
+        if (ev.type === "delta") {
+          accumulated += ev.text;
+          const fresh = extractor.push(ev.text);
+          if (fresh) await sendEvent({ type: "delta", text: fresh });
+        } else {
+          usage = ev.usage;
+          if (ev.truncated) stopReason = "max_tokens";
         }
+      };
+      try {
+        if (!firstEvent.done) await onEvent(firstEvent.value);
+        for await (const ev of stream) await onEvent(ev);
       } catch (e) {
         streamError = (e as Error).message;
         console.error("chat stream error:", streamError);
@@ -574,6 +613,15 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
         delete data.suggestions;
       }
 
+      // v3 itinerary: validate the model's operations and swap its refs for
+      // real ids, folded into one activity_ops action the browser applies
+      // atomically. Dropped ops are counted so the reply can say so.
+      if (data && !unusable && opsCtx && Array.isArray(data.actions)) {
+        const { actions, dropped } = resolveOps(data.actions, opsCtx);
+        data.actions = actions;
+        if (dropped.length)
+          console.warn("chat: dropped ops", JSON.stringify(dropped));
+      }
       if (data && !unusable) {
         const acts = Array.isArray(data.actions) ? data.actions : [];
         if (typeof data.message !== "string" || !data.message.trim()) {
@@ -615,13 +663,15 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
       // Prefer the API's real token counts; fall back to a length estimate only
       // if the usage events never arrived (so billing never silently zeroes out).
       const durationMs = Date.now() - __anthropicStart;
-      const inputTokens = hasStreamUsage(usage)
-        ? usage.inputTokens
-        : Math.round(requestBody.length / 4);
+      const u = usage as LLMUsage | null;
+      const inputTokens =
+        u && (u.input_tokens || u.cache_read_input_tokens)
+          ? u.input_tokens
+          : Math.round(requestChars / 4);
       const outputTokens =
-        usage.outputTokens || Math.round(accumulated.length / 4);
-      const cacheCreationTokens = usage.cacheCreationTokens;
-      const cacheReadTokens = usage.cacheReadTokens;
+        u?.output_tokens || Math.round(accumulated.length / 4);
+      const cacheCreationTokens = u?.cache_creation_input_tokens ?? 0;
+      const cacheReadTokens = u?.cache_read_input_tokens ?? 0;
 
       // Log LLM usage + deduct credits. Wrapped in runInBackground so the
       // isolate stays alive until both complete (see runInBackground docs).
