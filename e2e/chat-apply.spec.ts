@@ -1,9 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { type SupabaseClient } from "@supabase/supabase-js";
 import { login, dismissTripOverlays } from "./helpers";
+import { qaClient, seedTokyoTrip } from "./seedTrip";
 
 // How chat replies are APPLIED, against a mocked chat endpoint (no LLM, no
 // credits) and the real staging database:
@@ -11,20 +9,7 @@ import { login, dismissTripOverlays } from "./helpers";
 //    (coordinates, note, booked status) and logs an undo snapshot with them;
 //  - an unusable reply (server "error" event) changes nothing and isn't saved;
 //  - starter chips send on tap.
-// Uses day 1 of the qa "Tokyo to Kyoto Classic" trip and restores it after.
-
-function readEnv() {
-  const env: Record<string, string> = {};
-  const raw = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), "..", ".env"),
-    "utf8",
-  );
-  for (const line of raw.split("\n")) {
-    const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*)\s*$/);
-    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, "");
-  }
-  return env;
-}
+// Uses day 1 of a throwaway Tokyo trip (seedTrip.ts), deleted after.
 
 const sse = (events: unknown[]) =>
   events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") +
@@ -65,31 +50,10 @@ let snapshot: any[] = [];
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
-  const env = readEnv();
-  sb = createClient(env.VITE_SUPABASE_URL, env.VITE_SUPABASE_ANON_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  await sb.auth.signInWithPassword({
-    email: "qa-tester@tripjam.app",
-    password: "qaTest123!",
-  });
-  const me = (await sb.auth.getUser()).data.user!.id;
-  const { data: trips } = await sb
-    .from("trips")
-    .select("id")
-    .ilike("name", "Tokyo to Kyoto Classic%")
-    .eq("created_by", me)
-    .not("ig_response", "is", null)
-    .limit(1);
-  tripId = trips?.[0]?.id;
-  if (!tripId) return;
-  const { data: dayRows } = await sb
-    .from("days")
-    .select("id, label, city")
-    .eq("trip_id", tripId)
-    .order("position")
-    .limit(1);
-  day = dayRows![0];
+  sb = await qaClient();
+  const seeded = await seedTokyoTrip(sb, "ZZ chat apply");
+  tripId = seeded.tripId;
+  day = seeded.days[0];
   const { data: acts } = await sb
     .from("activities")
     .select("*")
@@ -99,11 +63,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  if (!tripId || !snapshot.length) return;
-  // Put day 1 back exactly as it was (same ids).
-  await sb.from("activities").delete().eq("day_id", day.id);
-  const { error } = await sb.from("activities").insert(snapshot);
-  if (error) console.error("chat-apply restore failed:", error.message);
+  if (tripId) await sb.from("trips").delete().eq("id", tripId);
 });
 
 test("day edit keeps untouched activities' saved data", async ({ page }) => {

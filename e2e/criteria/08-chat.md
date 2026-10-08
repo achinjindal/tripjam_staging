@@ -1,6 +1,6 @@
 # Chat ("Trippy")
 
-Spec references: `e2e/chat-apply.spec.ts`, `chat-streaming.spec.ts`, `chat-actions.spec.ts`, `activity-ops.spec.ts`, `update-gate.spec.ts`, `chat-live.spec.ts` (`CHAT_LIVE=1`). Behaviour is described in `docs/user-journeys/08-chat.md`.
+Spec references: `e2e/chat-apply.spec.ts`, `chat-fixes.spec.ts`, `chat-streaming.spec.ts`, `chat-actions.spec.ts`, `activity-ops.spec.ts`, `update-gate.spec.ts`, `chat-live.spec.ts` (`CHAT_LIVE=1`). Behaviour is described in `docs/user-journeys/08-chat.md`.
 
 ## Entry and empty state
 
@@ -30,20 +30,28 @@ Spec references: `e2e/chat-apply.spec.ts`, `chat-streaming.spec.ts`, `chat-actio
 18. Undo on the card restores the day exactly (same ids and times). The card is saved in `meta` and shows after a reload, without the Undo button.
 19. Each touched day gets an `update_day` activity-log row whose undo snapshot includes coordinates (no `wishlist` key).
 20. New places are checked in the background. Verified ones get coordinates. A conclusive miss gets a Trippy note with a "Suggest alternatives" button that sends the follow-up.
+21. An insert or replace naming a place already in the trip is skipped, and the bubble names it ("… is already in your trip").
+
+## Worth a look (proactive fixes)
+
+22. A built itinerary with a booked-leg clash, an arrival or departure clash, a repeated restaurant, an overlap or a long ride shows up to 3 fixes, at most one per day, under the greeting (empty chat) or at the end of the thread.
+23. Tapping a fix sends its request to Trippy as a normal message and hides the fix for the session.
+24. × hides a fix for this viewer across reloads.
+25. Placeholder arrival/departure times (12:00 / 19:00) and hotel meals never produce a fix.
 
 ## v2 contract (old clients)
 
-21. `update_day` keeps kept activities' saved data (title match), inserts before deleting, and rolls back on failure.
+26. `update_day` keeps kept activities' saved data (title match), inserts before deleting, and rolls back on failure.
 
 ## RPC contract (`apply_activity_ops`)
 
-22. Several inserts after the same anchor keep their order; inserting after null puts the item at the start of the day.
-23. Replace creates a new row in the same slot (place data and booking cleared).
-24. Move across days renumbers both days; a removed row's day is renumbered.
-25. A transit hint is cleared only on rows whose next activity changed.
-26. Any invalid op (unknown id, anchor on another day) rolls back the whole batch; unknown ids are errors, never silent no-ops.
+27. Several inserts after the same anchor keep their order; inserting after null puts the item at the start of the day.
+28. Replace creates a new row in the same slot (place data and booking cleared).
+29. Move across days renumbers both days; a removed row's day is renumbered.
+30. A transit hint is cleared only on rows whose next activity changed.
+31. Any invalid op (unknown id, anchor on another day) rolls back the whole batch; unknown ids are errors, never silent no-ops.
 
 ## Version gate
 
-27. A web build older than `min_client_build.web` sees a blocking "Update TripJam" screen with Reload; the config message overrides the default text.
-28. No gate when the minimum is 0 or in the past, when only Android's minimum is raised, or when the config read fails (fails open).
+32. A web build older than `min_client_build.web` sees a blocking "Update TripJam" screen with Reload; the config message overrides the default text.
+33. No gate when the minimum is 0 or in the past, when only Android's minimum is raised, or when the config read fails (fails open).

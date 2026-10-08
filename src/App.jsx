@@ -179,6 +179,7 @@ class ErrorBoundary extends Component {
   }
 }
 import html2canvas from "html2canvas";
+import { findTripFixes } from "./tripFixes.js";
 
 // DebugContext is now imported from ./context.js (was duplicated here).
 
@@ -11836,6 +11837,151 @@ export default function App({
     return chips;
   })();
 
+  // Proactive fixes (src/tripFixes.js): problems found in the built
+  // itinerary from trip data, each sent to Trippy as a request on tap.
+  // Dismissals are a per-viewer convenience, so localStorage is enough.
+  const fixKey = trip?.id ? `tj_fixes_dismissed_${trip.id}` : null;
+  const [dismissedFixes, setDismissedFixes] = useState(() => new Set());
+  useEffect(() => {
+    let ids;
+    try {
+      ids = fixKey ? JSON.parse(localStorage.getItem(fixKey) || "[]") : [];
+    } catch {
+      ids = [];
+    }
+    setDismissedFixes(new Set(Array.isArray(ids) ? ids : []));
+  }, [fixKey]);
+  // Tapped fixes hide for this session; if the edit lands the problem is
+  // gone anyway, and if Trippy asks a follow-up the chat carries it.
+  const [tappedFixes, setTappedFixes] = useState(() => new Set());
+  const tripFixes = useMemo(() => {
+    if (screen !== "itinerary" || !detailedReady || igGenerating) return [];
+    const hidden = new Set([...dismissedFixes, ...tappedFixes]);
+    return findTripFixes(trip, days, hidden);
+  }, [
+    screen,
+    detailedReady,
+    igGenerating,
+    trip,
+    days,
+    dismissedFixes,
+    tappedFixes,
+  ]);
+  const fixesShownRef = useRef(new Set());
+  useEffect(() => {
+    for (const f of tripFixes) {
+      if (fixesShownRef.current.has(f.id)) continue;
+      fixesShownRef.current.add(f.id);
+      posthog.capture("trippy_fix_shown", { kind: f.kind });
+    }
+  }, [tripFixes]);
+  const dismissTripFix = (fix) => {
+    posthog.capture("trippy_fix_dismissed", { kind: fix.kind });
+    setDismissedFixes((prev) => {
+      const next = new Set(prev).add(fix.id);
+      try {
+        if (fixKey)
+          localStorage.setItem(fixKey, JSON.stringify([...next].slice(-50)));
+      } catch {
+        /* storage unavailable: dismissal lasts this session */
+      }
+      return next;
+    });
+  };
+  const applyTripFix = (fix) => {
+    posthog.capture("trippy_fix_tapped", { kind: fix.kind });
+    setTappedFixes((prev) => new Set(prev).add(fix.id));
+    sendChatDirect(fix.prompt);
+  };
+
+  const renderTripFixes = () =>
+    tripFixes.length > 0 &&
+    !chatLoading && (
+      <div
+        role="region"
+        aria-label="Worth a look"
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          padding: "10px 12px",
+          background: T.chalk,
+          borderRadius: RADIUS.md,
+          border: `1px solid ${T.sand}`,
+          boxShadow: SHADOW.sm,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0.4,
+            textTransform: "uppercase",
+            color: T.mist,
+          }}
+        >
+          Worth a look
+        </div>
+        {tripFixes.map((f) => (
+          <div
+            key={f.id}
+            data-fix-kind={f.kind}
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 8,
+            }}
+          >
+            <div
+              style={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: 13,
+                fontFamily: "Georgia,serif",
+                lineHeight: 1.45,
+                color: T.ink,
+              }}
+            >
+              {f.text}
+              <div style={{ marginTop: 6 }}>
+                <button
+                  onClick={() => applyTripFix(f)}
+                  style={{
+                    background: "transparent",
+                    border: `1px solid ${T.ocean}`,
+                    borderRadius: RADIUS.md,
+                    padding: "4px 12px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: T.ocean,
+                    cursor: "pointer",
+                  }}
+                >
+                  {f.label}
+                </button>
+              </div>
+            </div>
+            <button
+              aria-label="Dismiss"
+              title="Dismiss"
+              onClick={() => dismissTripFix(f)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: T.mist,
+                fontSize: 16,
+                lineHeight: 1,
+                padding: 4,
+                cursor: "pointer",
+              }}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+    );
+
   // Dismiss a local gem (used by both Dismiss menu item and Add-to-Itinerary auto-dismiss).
   // Soft-delete via dismissed:true flag in days.wishlist jsonb; emits a chat system-undo row.
   const dismissGemPersist = async (day, gem, reasonLabel) => {
@@ -13351,7 +13497,19 @@ export default function App({
         undo = results.find((r) => r.ok && r.undo)?.undo || null;
         const toVerify = results.flatMap((r) => (r.ok && r.verify) || []);
         if (toVerify.length) deferred.push(() => verifyNewPlaces(toVerify));
+        // Places the server skipped because the trip already has them get
+        // named; the generic note covers any other failure.
+        const opsAct = data.actions.find((a) => a?.type === "activity_ops");
+        const already = Array.isArray(opsAct?.already) ? opsAct.already : [];
+        const otherFailure =
+          (opsAct?.dropped || 0) > already.length ||
+          results.some(
+            (r) => !r.ok && isMutation(r) && r.reason !== "all_ops_invalid",
+          );
+        if (already.length)
+          finalContent += `\n\n(${already.join(" and ")} ${already.length > 1 ? "are" : "is"} already in your trip, so I didn't add ${already.length > 1 ? "them" : "it"} again${hasChanges || otherFailure ? "" : ", and nothing was changed"}.)`;
         if (
+          (otherFailure || !already.length) &&
           results.some((r) => (!r.ok && isMutation(r)) || (r.ok && r.partial))
         )
           finalContent += hasChanges
@@ -18880,11 +19038,14 @@ export default function App({
                               ? chatPlansReady
                                 ? "I've put together some trip plans for you. Ask me anything — compare plans, tweak a specific one, or tell me what matters most to you."
                                 : "I'm working on your trip plans — hang tight! Once they're ready, you can compare, tweak, or ask me anything."
-                              : detailedReady
-                                ? "Your itinerary is ready. Ask me to swap a place, change the pace or find a different hotel, and I'll update the plan."
-                                : "I'm building your itinerary. Once it's ready, ask me to change anything."}
+                              : detailedReady && tripFixes.length
+                                ? "Your itinerary is ready. I spotted something worth a look — tap a fix and I'll sort it, or ask me for any other change."
+                                : detailedReady
+                                  ? "Your itinerary is ready. Ask me to swap a place, change the pace or find a different hotel, and I'll update the plan."
+                                  : "I'm building your itinerary. Once it's ready, ask me to change anything."}
                           </div>
                         </div>
+                        {renderTripFixes()}
                         <div
                           style={{
                             display: "flex",
@@ -19500,6 +19661,8 @@ export default function App({
                         </div>
                       );
                     })}
+                    {filteredMessages.some((m) => m.role !== "system-undo") &&
+                      renderTripFixes()}
                     <div ref={chatBottomRef} />
                   </div>
                   {/* Input */}

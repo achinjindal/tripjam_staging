@@ -24,6 +24,23 @@ References are function names rather than line numbers. All chat client code liv
 - **Itinerary**: chips appear only once `detailedReady`. They name the real Day-1 hotel, the destination, and the busiest real day ("Make Day 4 more relaxed").
 - **Chips send on tap.**
 
+**Worth a look (proactive fixes)**: on a built itinerary, `findTripFixes` (`src/tripFixes.js`) checks the trip data, with no AI call, and the chat shows up to 3 fixes, at most one per day. The box sits under the greeting in an empty chat (whose greeting then mentions it) and at the end of the thread otherwise, and is hidden while Trippy replies. Checks, most important first:
+
+- an activity overlapping a booked flight or train (`trips.travel_data`) on that date;
+- Day 1 plans before the arrival time plus IG's arrival buffer;
+- last-day plans running into the departure (IG's port-arrival buffer);
+- a restaurant repeated on a later day (food types only, hotel meals excluded);
+- one activity's `time + duration` running 30+ minutes into the next;
+- a ride of 50+ minutes between two stops on a day with no transit rows (TransitionRow's road factor and speed).
+
+The arrival and departure checks ignore 12:00 and 19:00: the Board's Travel tab writes those as placeholders when it finds an airport. Map misses aren't flagged, because the verifier also misses famous places (Wat Pho, Todai-ji in production data).
+
+- **Tapping a fix** sends its `prompt` through `sendChatDirect`, so the edit gets the usual ops, change card and undo. The fix hides for the session.
+- **×** dismisses a fix for this viewer (localStorage `tj_fixes_dismissed_<tripId>`).
+- **Telemetry**: PostHog `trippy_fix_shown`, `trippy_fix_tapped` and `trippy_fix_dismissed`, each with `{kind}`.
+
+In 34 recent production trips, 16 had at least one fix.
+
 **Message rendering**: `renderMentions()` formats bold, italics and @mentions. The list is a `role="log"` with `aria-live="polite"`, and the send button has an `aria-label`.
 
 - **While a reply is in progress**: "··· Trippy is thinking" until words arrive, then streamed text with a cursor. "Updating your itinerary…" shows while actions are being applied.
@@ -82,13 +99,16 @@ Every outcome is captured as PostHog `trippy_chat_response` with `ms`, `ms_first
 6. **Model call**: `streamLLM` from `_shared/llm.ts`. The model comes from `modelFor("CHAT", "claude-haiku-4-5")` (`LLM_MODEL_CHAT`, then the legacy `CHAT_MODEL`), with multi-turn history via `CallOpts.messages`. `max_tokens` is `suggestCap(model, 4096)` for v3 itineraries and 8192 otherwise. The stream's first event is awaited before responding, so a provider failure becomes a plain HTTP error. There is one retry on 429/5xx/overloaded.
 7. **No output schema.** Measured on Haiku 4.5: the itinerary union is refused ("compiled grammar is too large"), and the brainstorm schema adds 1.5–13 s to the first word. Reliability comes from short replies plus the checks below.
 8. **Streaming to the client**: the `message` string is extracted incrementally and sent as `{type:"delta"}` events. The stream ends with exactly one `{type:"final", data:{message, actions}}` or `{type:"error", error, message}`, then `[DONE]`.
-9. **Unusable replies are not charged.** A reply counts as unusable if it is empty, hit `max_tokens`, or has broken JSON that carried actions. It is sent as `error` (or a 502 when not streaming) and captured to PostHog. A plain-prose answer is shown as is.
+9. **Unusable replies are not charged.** A reply counts as unusable if it is empty, hit `max_tokens`, or has broken JSON that carried actions. It is sent as `error` (or a 502 when not streaming) and captured to PostHog.
+   - A plain-prose answer is shown as is, even when it contains a stray brace.
+   - A message under `reply`, `response` or `answer` instead of `message` is accepted.
 10. **v3 ops resolution** (`resolveOps`):
     - checks each operation against the context and maps refs to ids;
     - re-anchors inserts placed after a removed item;
     - turns remove + insert of the same place into a move;
+    - drops an insert or replace that names a place still in the trip on any day (`already_in_trip`). Haiku put the same famous restaurant in as a "replacement" in every run of the 2026-10-08 benchmark, and a prompt rule didn't stop it. The skipped titles travel as `already`, and the bubble names them: "(Huen Phen is already in your trip, so I didn't add it again.)";
     - drops invalid ops and counts them;
-    - folds everything into one `{type:"activity_ops", ops, dropped}` action.
+    - folds everything into one `{type:"activity_ops", ops, dropped, already?}` action.
 11. **Billing**: the `llm_usage` row and `deductCredits` run in `runInBackground`, so a client disconnect still lands them.
 
 ### Action vocabulary
@@ -170,6 +190,7 @@ Both are in RUNBOOKS.md, under "Client version gate".
 
 - `supabase/functions/chat/index.ts`: the endpoint (context, prompt, streaming, unusable-reply rules, billing, retired-contract switch).
 - `supabase/functions/chat/_ops.ts` (+ `_ops.test.ts`): refs, op validation and resolution.
+- `src/tripFixes.js` (+ `tripFixes.test.js`): proactive-fix detectors.
 - `supabase/migrations/20261007000001_apply_activity_ops.sql`: the transactional ops RPC.
 - `supabase/migrations/20261008000001_app_config.sql`, `20261008000002_trip_messages_meta.sql`.
 - `supabase/functions/_shared/llm.ts`: `streamLLM`, `turnsOf`, `modelFor`.
