@@ -252,11 +252,25 @@ export const wikiQueuedFetch = makeQueue(250, 3); // Wikimedia — 3 concurrent,
 export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
   const BAD_PATTERNS =
     /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive|painting|drawing|ukiyo|woodblock|engraving|lithograph|poster|artwork|sketch|illustration|video.?game|gameplay|screenshot|cover.?art|box.?art/i;
+  // Commons serves a VIDEO's poster frame as a .jpg under the video's own
+  // path: /thumb/c/c1/Foo.webm/960px--Foo.webm.jpg. Those frames are whatever
+  // the camera happened to be on — a Wikipedia promo reel put a talking head
+  // on "Arashiyama Bamboo Grove" and "Shibuya Crossing" in production. The
+  // existing list has `video.?game` (for game screenshots) but nothing that
+  // matches a video FILE, and the URL contains no literal "video", so it
+  // passed every check.
+  const VIDEO_SOURCED = /\.(webm|ogv|ogg|mp4|m4v|mov|avi|mpe?g)[./]/i;
+  // Wikipedia/Wikimedia's own branded media — anniversary reels, logos,
+  // campaign assets. Never a photograph of a place, and they rank high
+  // because they are linked from everywhere.
+  const WIKI_BRANDED = /\/(Wikipedia|Wikimedia|Wikimania|Wiki_?Loves)[_-]/i;
   const good = (url) =>
     url &&
     !_isPortrait(url) &&
     !_usedPhotoUrls.has(url) &&
-    !BAD_PATTERNS.test(url);
+    !BAD_PATTERNS.test(url) &&
+    !VIDEO_SOURCED.test(url) &&
+    !WIKI_BRANDED.test(url);
 
   // Deduplicate: return cached result immediately if already fetched.
   // NOTE: a cache hit is returned even when the URL is in _usedPhotoUrls —
