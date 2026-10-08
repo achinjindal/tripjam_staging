@@ -38,6 +38,8 @@ const OPS_INSTRUCTIONS = `
    - "Make a day more relaxed" means removing one or two activities (and retiming if needed), not rebuilding the day.
    - Use real, specific, well-established places only — never a generic "Lunch". If unsure a place exists under that exact name, pick a better-known one.
    - Geography: a new place must be in the same town and neighbourhood as the activities around it.
+   - A new place must not already be anywhere in TRIP CONTEXT (any day) — pick one the traveller isn't already visiting.
+   - "Add" means insert_activity (retime neighbours to make room); replace or remove an existing activity only when the user asks for a swap or the day truly cannot fit it — then say so in "message".
    - geocode: the shortest plain name for maps (e.g. "Colaba Causeway"). Transit: geocode = departure point, geocode_end = arrival point; other types use "" for geocode_end.
    - DEPARTURE CONSTRAINT: last-day activities must finish before the departure time.
    - Use "" for any text field that doesn't apply.
@@ -628,8 +630,13 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
           unusable = "parse_failed_actions";
         else if (extractor.decoded.trim())
           data = { message: extractor.decoded };
-        // The model answered in plain prose instead of JSON: show it as is.
-        else if (start < 0 && accumulated.trim() && !streamError)
+        // The model answered in plain prose instead of JSON (possibly with a
+        // stray brace in it): show it as is.
+        else if (
+          accumulated.trim() &&
+          !/^\s*(?:```|\{)/.test(accumulated) &&
+          !streamError
+        )
           data = { message: accumulated.trim() };
         else unusable = streamError ? "stream_error" : "empty";
       }
@@ -671,6 +678,13 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
           console.warn("chat: dropped ops", JSON.stringify(dropped));
       }
       if (data && !unusable) {
+        // Models occasionally name the field "reply"/"response"/"answer".
+        if (typeof data.message !== "string" || !data.message.trim()) {
+          const alt = [data.reply, data.response, data.answer, data.text].find(
+            (v) => typeof v === "string" && v.trim(),
+          );
+          if (alt) data.message = alt;
+        }
         const acts = Array.isArray(data.actions) ? data.actions : [];
         if (typeof data.message !== "string" || !data.message.trim()) {
           if (acts.length) data.message = describeActions(acts);

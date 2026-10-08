@@ -208,3 +208,43 @@ Deno.test("resolve: remove + insert of the same place becomes a move", () => {
     },
   ]);
 });
+
+Deno.test("resolve: a place already in the trip is not added again", () => {
+  const { actions, dropped } = resolveOps(
+    [
+      {
+        type: "replace_activity",
+        ref: "D2.1",
+        activity: { ...act, title: "Lunch at Fort Walk" },
+      },
+      {
+        type: "insert_activity",
+        day: "D2",
+        after: "D2.1",
+        activity: { ...act, title: "Dinner at Galle Fort Walk" },
+      },
+      { type: "remove_activity", ref: "D1.3" },
+      {
+        type: "insert_activity",
+        day: "D2",
+        after: "",
+        activity: { ...act, title: "Evening at Beach" },
+      },
+      { type: "insert_activity", day: "D2", after: "", activity: act },
+    ],
+    ctx,
+  );
+  assertEquals(dropped, [
+    { type: "replace_activity", reason: "already_in_trip" },
+    { type: "insert_activity", reason: "already_in_trip" },
+  ]);
+  assertEquals(
+    actions[0].ops.map((o: { op: string }) => o.op),
+    ["remove", "insert", "insert"],
+  );
+  assertEquals(actions[0].dropped, 2);
+  assertEquals(actions[0].already, [
+    "Lunch at Fort Walk",
+    "Dinner at Galle Fort Walk",
+  ]);
+});

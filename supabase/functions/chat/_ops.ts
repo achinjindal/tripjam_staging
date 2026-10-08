@@ -244,13 +244,52 @@ export function resolveOps(
         });
     }
   }
+  // Models (Haiku especially, measured 2026-10-08) "replace" a dinner with a
+  // restaurant the trip already visits on another day. Drop an insert or
+  // replace that names a place still in the itinerary after this batch; a
+  // remove + insert of the same place is a move and is kept.
+  const liveTitles = [...ctx.refs.entries()]
+    .filter(([r]) => !gone.has(r))
+    .map(([, i]) => placeKey(i.title))
+    .filter(Boolean);
+  const already: string[] = [];
+  const kept = ops.filter((o) => {
+    if (o.op !== "insert" && o.op !== "replace") return true;
+    if (o.activity.type === "transit" || o.activity.type === "hotel")
+      return true;
+    const key = placeKey(o.activity.title);
+    if (!key || !liveTitles.some((t) => samePlace(t, key))) return true;
+    dropped.push({ type: `${o.op}_activity`, reason: "already_in_trip" });
+    already.push(o.activity.title);
+    return false;
+  });
   if (slot >= 0)
     out[slot] = {
       type: "activity_ops",
-      ops: removeInsertToMove(ops, ctx),
+      ops: removeInsertToMove(kept, ctx),
       dropped: dropped.length,
+      // Titles skipped as already in the trip, so the reply can name them.
+      ...(already.length ? { already } : {}),
     };
   return { actions: out, dropped };
+}
+
+// "Evening Dinner at Huen Phen" → "huen phen": the place, without the meal or
+// time-of-day framing IG puts in titles.
+function placeKey(title: string): string {
+  return normTitle(title).replace(
+    /^(?:(?:early|late|evening|afternoon|morning|sunset|riverside|quick)\s+)*(?:breakfast|brunch|lunch|dinner|drinks|coffee|visit|explore)?\s*(?:at|in)?\s+/,
+    "",
+  );
+}
+
+// Same place: equal keys, or one key is a whole-word run inside the other
+// ("night bazaar" in "chiang mai night bazaar") and long enough not to be a
+// coincidence.
+function samePlace(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return short.length >= 8 && ` ${long} `.includes(` ${short} `);
 }
 
 const normTitle = (t: string) =>
