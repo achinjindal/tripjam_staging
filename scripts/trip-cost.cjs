@@ -24,41 +24,35 @@ if (!URL || !KEY) {
 }
 
 // $ per token. Cache write = 1.25x input, cache read = 0.10x input.
-const RATES = {
-  // Mirrors RATES in supabase/functions/_shared/credits.ts (2026-10-03).
-  "claude-fable-5": { input: 10 / 1e6, output: 50 / 1e6 },
-  "claude-opus-4-8": { input: 5 / 1e6, output: 25 / 1e6 },
-  "claude-sonnet-5": { input: 2 / 1e6, output: 10 / 1e6 },
-  "claude-sonnet-5-5": { input: 2 / 1e6, output: 10 / 1e6 },
-  "claude-opus-5-5": { input: 4 / 1e6, output: 20 / 1e6 },
-  "claude-sonnet-4-6": { input: 3 / 1e6, output: 15 / 1e6 },
-  "claude-haiku-4-5": { input: 1 / 1e6, output: 5 / 1e6 },
-  "claude-haiku-4-5-20251001": { input: 1 / 1e6, output: 5 / 1e6 },
-  // Gemini 3.8 Flash's rate DOUBLES on 2027-01-01 — date-conditional so this
-  // script keeps matching what users were actually billed.
-  "gemini-3.8-flash":
-    Date.now() >= Date.UTC(2027, 0, 1)
-      ? { input: 1.5 / 1e6, output: 7.5 / 1e6 }
-      : { input: 0.75 / 1e6, output: 3.75 / 1e6 },
-  "gemini-3.5-flash-lite": { input: 0.3 / 1e6, output: 2.5 / 1e6 },
-  "gpt-5.6-luna": { input: 0.2 / 1e6, output: 1.2 / 1e6 },
-  "gpt-5.4-nano": { input: 0.2 / 1e6, output: 1.25 / 1e6 },
-  "gpt-6-luna": { input: 0.1 / 1e6, output: 0.5 / 1e6 },
-};
-const CACHE_WRITE = 1.25;
-const CACHE_READ = 0.1;
+// Same llm-rates.json the billing path and the Admin console read. This
+// script used to carry a third copy of the table; a model missing from it
+// fell back to fable-5 rates and reported a trip at $1.23 against a true
+// $0.09.
+const rateData = require("../supabase/functions/_shared/llm-rates.json");
+const resolveRate = (r) =>
+  r.from && r.then && Date.now() >= Date.parse(r.from + "T00:00:00Z")
+    ? r.then
+    : r;
+const RATES = Object.fromEntries(
+  Object.entries(rateData.models).map(([k, v]) => {
+    const r = resolveRate(v);
+    return [k, { input: r.input / 1e6, output: r.output / 1e6 }];
+  }),
+);
+const CACHE_WRITE = rateData.multipliers.cacheWrite;
+const CACHE_READ = rateData.multipliers.cacheRead;
 // Google context cache reads are 0.25x input, not Anthropic's 0.10x.
-const GOOGLE_CACHE_READ = 0.25;
+const GOOGLE_CACHE_READ = rateData.multipliers.cacheReadGoogle;
 // Per-search fees. Omitting these under-stated Inspirations — the largest
 // line item — by ~36%, because web_search is billed per call on top of tokens.
-const WEB_SEARCH_COST_USD = 0.01;
-const GOOGLE_GROUNDING_COST_USD = 0.014;
-const CREDIT_LLM_BUDGET_USD = 0.007;
+const WEB_SEARCH_COST_USD = rateData.perSearchUsd.anthropic;
+const GOOGLE_GROUNDING_COST_USD = rateData.perSearchUsd.google;
+const CREDIT_LLM_BUDGET_USD = rateData.creditLlmBudgetUsd;
 
 function rowCost(r) {
   // Match credits.ts: unknown models fall back to the MOST expensive rate so
   // this script never understates what a swap actually billed.
-  const rate = RATES[r.model] || RATES["claude-fable-5"];
+  const rate = RATES[r.model] || RATES[rateData.fallbackModel];
   const inTok = r.input_tokens || 0;
   const outTok = r.output_tokens || 0;
   const cw = r.cache_creation_tokens || 0;

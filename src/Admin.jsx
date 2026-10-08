@@ -6,50 +6,39 @@ import { T, RADIUS, SHADOW, MOTION } from "./theme";
 // 2026-10-02). Previously missing a claude-sonnet-5 entry entirely, so every
 // Sonnet 5 row fell back to Sonnet 4.x's $3/$15 and the console overstated
 // real spend by ~50%.
-const COST_RATES = {
-  "claude-fable-5": { input: 10 / 1_000_000, output: 50 / 1_000_000 },
-  "claude-opus-4-8": { input: 5 / 1_000_000, output: 25 / 1_000_000 },
-  "claude-sonnet-5": { input: 2 / 1_000_000, output: 10 / 1_000_000 },
-  "claude-sonnet-4-6": { input: 3 / 1_000_000, output: 15 / 1_000_000 },
-  "claude-haiku-4-5": { input: 1 / 1_000_000, output: 5 / 1_000_000 },
-  "claude-haiku-4-5-20251001": {
-    input: 1 / 1_000_000,
-    output: 5 / 1_000_000,
-  },
-  // Verified 2026-10-05: Sonnet 5.5 is priced identically to Sonnet 5;
-  // Opus 5.5 is cheaper than Opus 5.
-  "claude-sonnet-5-5": { input: 2 / 1_000_000, output: 10 / 1_000_000 },
-  "claude-opus-5-5": { input: 4 / 1_000_000, output: 20 / 1_000_000 },
-  // Non-Anthropic models (verified 2026-10-03). These were absent entirely,
-  // so every Gemini/GPT row fell back to fable-5's $10/$50 and the console
-  // overstated their spend by up to 100×.
-  // PROMOTIONAL rate that DOUBLES on 2027-01-01. Date-conditional so the
-  // console cannot keep reporting the old price after the rise.
-  "gemini-3.8-flash":
-    Date.now() >= Date.UTC(2027, 0, 1)
-      ? { input: 1.5 / 1_000_000, output: 7.5 / 1_000_000 }
-      : { input: 0.75 / 1_000_000, output: 3.75 / 1_000_000 },
-  "gemini-3.5-flash-lite": { input: 0.3 / 1_000_000, output: 2.5 / 1_000_000 },
-  "gpt-5.6-luna": { input: 0.2 / 1_000_000, output: 1.2 / 1_000_000 },
-  "gpt-5.4-nano": { input: 0.2 / 1_000_000, output: 1.25 / 1_000_000 },
-  "gpt-6-luna": { input: 0.1 / 1_000_000, output: 0.5 / 1_000_000 },
-};
+import rateData from "../supabase/functions/_shared/llm-rates.json";
+
+// Rates come from llm-rates.json, the same file the billing path reads. This
+// console used to keep its own copy; when they drifted the console reported a
+// different number than the user was charged, which is the worst possible
+// place for a discrepancy. Per-million here, per-token below.
+function resolveRate(r) {
+  return r.from && r.then && Date.now() >= Date.parse(r.from + "T00:00:00Z")
+    ? r.then
+    : r;
+}
+const COST_RATES = Object.fromEntries(
+  Object.entries(rateData.models).map(([k, v]) => {
+    const r = resolveRate(v);
+    return [k, { input: r.input / 1_000_000, output: r.output / 1_000_000 }];
+  }),
+);
 
 // Anthropic prompt-caching multipliers relative to the base input rate:
 // cache write = 1.25× input, cache read = 0.10× input. The three input buckets
 // (input_tokens, cache_creation_tokens, cache_read_tokens) are disjoint.
-const CACHE_WRITE_MULTIPLIER = 1.25;
-const CACHE_READ_MULTIPLIER = 0.1;
+const CACHE_WRITE_MULTIPLIER = rateData.multipliers.cacheWrite;
+const CACHE_READ_MULTIPLIER = rateData.multipliers.cacheRead;
 
 // Per-search fees, mirroring computeLLMCost. Omitting these made the console
 // under-state Inspirations — the single largest line item — by roughly a
 // third, because Anthropic web_search is billed per call on top of tokens.
 // Analysing spend through a lens that hides the dominant term is how the
 // 2026-10-03 "venue reality" conclusion had to be retracted.
-const WEB_SEARCH_COST_USD = 0.01;
-const GOOGLE_GROUNDING_COST_USD = 0.014;
+const WEB_SEARCH_COST_USD = rateData.perSearchUsd.anthropic;
+const GOOGLE_GROUNDING_COST_USD = rateData.perSearchUsd.google;
 // Anthropic cache reads are 0.10x input; Google context cache reads are 0.25x.
-const GOOGLE_CACHE_READ_MULTIPLIER = 0.25;
+const GOOGLE_CACHE_READ_MULTIPLIER = rateData.multipliers.cacheReadGoogle;
 
 function calcCost(
   model,
@@ -59,7 +48,7 @@ function calcCost(
   cacheReadTokens = 0,
   webSearchCount = 0,
 ) {
-  const rate = COST_RATES[model] || COST_RATES["claude-fable-5"];
+  const rate = COST_RATES[model] || COST_RATES[rateData.fallbackModel];
   const cacheReadMult = String(model).startsWith("gemini")
     ? GOOGLE_CACHE_READ_MULTIPLIER
     : CACHE_READ_MULTIPLIER;

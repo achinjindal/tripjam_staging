@@ -39,42 +39,43 @@ export function runInBackground(work: Promise<unknown>): void {
 // 4.5 was billed at $0.80/$4 against a real $1/$5 (undercharging ~25%). Keep
 // this table honest — credit deduction, the Admin console and scripts/trip-cost
 // all derive from it. Sonnet 4.6 stays for historical rows priced at its rate.
-export const RATES: Record<string, { input: number; output: number }> = {
-  "claude-fable-5": { input: 10.0, output: 50.0 },
-  "claude-opus-4-8": { input: 5.0, output: 25.0 },
-  "claude-sonnet-5": { input: 2.0, output: 10.0 },
-  // Verified 2026-10-05. Sonnet 5.5 matches Sonnet 5's price exactly and has a
-  // 512-token cache minimum (vs 1024), so it is a no-cost upgrade path.
-  // Opus 5.5 is CHEAPER than Opus 5 ($4/$20 vs $5/$25). Both are listed here
-  // pre-emptively: without an entry, pointing a function at either would hit
-  // the fable-5 fallback and over-bill 5x on input / 2.5x on output.
-  // NOTE: Opus 5.5 reads cache at 0.05x base input (not the 0.1x applied
-  // below) and Fable 5.1 at 0.025x — revisit CACHE_READ_MULTIPLIER before
-  // routing anything to those two.
-  "claude-sonnet-5-5": { input: 2.0, output: 10.0 },
-  "claude-opus-5-5": { input: 4.0, output: 20.0 },
-  "claude-sonnet-4-6": { input: 3.0, output: 15.0 }, // legacy rows only
-  "claude-haiku-4-5": { input: 1.0, output: 5.0 },
-  "claude-haiku-4-5-20251001": { input: 1.0, output: 5.0 },
-  // Non-Anthropic models. Verified against published rates 2026-10-03.
-  // PROMOTIONAL rate that DOUBLES to $1.50/$7.50 on 2027-01-01. Date-
-  // conditional rather than a diary note: RG and IG both default to this
-  // model now, so a stale entry would silently under-bill the two
-  // highest-volume calls in the product by 2x — and the BILLING ALARM
-  // cannot catch it, because the entry exists, it is just wrong.
-  "gemini-3.8-flash":
-    Date.now() >= Date.UTC(2027, 0, 1)
-      ? { input: 1.5, output: 7.5 }
-      : { input: 0.75, output: 3.75 },
-  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
-  "gpt-5.6-luna": { input: 0.2, output: 1.2 },
-  "gpt-5.4-nano": { input: 0.2, output: 1.25 },
-  // Cheapest tier benchmarked 2026-10-03 and the Phase-2 migration target.
-  // MUST stay present: without it the unknown-model fallback below bills at
-  // fable-5's $10/$50 — a ~100x over-charge (a $0.0017 day-fill would bill
-  // $0.17 ≈ 24.9 credits instead of 0.25, draining a new user in 4 calls).
-  "gpt-6-luna": { input: 0.1, output: 0.5 },
-};
+import rateData from "./llm-rates.json" with { type: "json" };
+
+/**
+ * Rates come from llm-rates.json — the single source shared with
+ * src/Admin.jsx and scripts/trip-cost.cjs. Those three used to keep
+ * hand-synced copies and the drift produced three wrong cost figures in one
+ * day. Add models THERE, not here.
+ *
+ * `from`/`then` express a scheduled price change, so a promotional rate
+ * stops under-billing on its own once the date passes rather than depending
+ * on someone remembering.
+ */
+function resolveRate(r: {
+  input: number;
+  output: number;
+  from?: string;
+  then?: { input: number; output: number };
+}): { input: number; output: number } {
+  if (r.from && r.then && Date.now() >= Date.parse(r.from + "T00:00:00Z"))
+    return { input: r.then.input, output: r.then.output };
+  return { input: r.input, output: r.output };
+}
+
+export const RATES: Record<string, { input: number; output: number }> =
+  Object.fromEntries(
+    Object.entries(
+      rateData.models as Record<
+        string,
+        {
+          input: number;
+          output: number;
+          from?: string;
+          then?: { input: number; output: number };
+        }
+      >,
+    ).map(([k, v]) => [k, resolveRate(v)]),
+  );
 
 // D18: Each credit covers $0.007 of LLM spend (70% of $0.01 user value)
 export const CREDIT_LLM_BUDGET_USD = 0.007;
@@ -85,8 +86,8 @@ export const EXTERNAL_API_USER_VALUE = 0.01;
 //   cache write (5-min ephemeral) = 1.25× input, cache read = 0.10× input.
 // `inputTokens`, `cacheCreationTokens` and `cacheReadTokens` are disjoint
 // (they sum to the total input) — mirror exactly what the API `usage` reports.
-export const CACHE_WRITE_MULTIPLIER = 1.25;
-export const CACHE_READ_MULTIPLIER = 0.1;
+export const CACHE_WRITE_MULTIPLIER = rateData.multipliers.cacheWrite;
+export const CACHE_READ_MULTIPLIER = rateData.multipliers.cacheRead;
 
 // Server-side search fees, billed on top of token costs. Omitting these
 // undercharged every Inspirations call by ~40% of its true cost.
@@ -94,15 +95,16 @@ export const CACHE_READ_MULTIPLIER = 0.1;
 //   Anthropic web_search        $10 / 1,000 searches
 //   OpenAI web search           $10 / 1,000 searches
 //   Google Search grounding     5,000 free/month, then $14 / 1,000
-export const GOOGLE_CACHE_READ_MULTIPLIER = 0.25;
-export const WEB_SEARCH_COST_USD = 0.01;
+export const GOOGLE_CACHE_READ_MULTIPLIER =
+  rateData.multipliers.cacheReadGoogle;
+export const WEB_SEARCH_COST_USD = rateData.perSearchUsd.anthropic;
 // Google is billed at its PAID rate even while the 5,000/month free tier is
 // almost certainly covering us. That deliberately over-states cost rather
 // than under-stating it: the free allowance is an org-wide monthly pool this
 // function cannot observe from a single call, and the house rule is that
 // over-charging is visible and refundable while the reverse is not. Revisit
 // if Inspirations volume ever approaches ~1,600 calls/month.
-export const GOOGLE_GROUNDING_COST_USD = 0.014;
+export const GOOGLE_GROUNDING_COST_USD = rateData.perSearchUsd.google;
 
 export function computeLLMCost(
   model: string,
@@ -132,7 +134,7 @@ export function computeLLMCost(
       outputTokens,
     });
   }
-  const r = known || RATES["claude-fable-5"];
+  const r = known || RATES[rateData.fallbackModel];
   // CACHE_READ_MULTIPLIER (0.1x) is ANTHROPIC's discount. Google's context
   // cache reads at 0.25x of input, so applying 0.1x there would under-bill
   // cached input by 2.5x — the unacceptable direction per the house rule

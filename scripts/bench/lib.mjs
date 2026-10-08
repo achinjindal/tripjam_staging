@@ -365,44 +365,29 @@ export function repairJson(raw) {
  * billing incident; a bench script with its own hardcoded prices would be a
  * new place for that drift to hide.
  */
-export function loadRates(path = "supabase/functions/_shared/credits.ts") {
-  const src = readFileSync(path, "utf8");
-  const body = src.slice(src.indexOf("export const RATES"));
-  const table = body.slice(0, body.indexOf("\n};"));
+export function loadRates(path = "supabase/functions/_shared/llm-rates.json") {
+  // Reads the single-source rate file directly. This used to SCRAPE the
+  // RATES literal out of credits.ts with a regex, which broke twice in one
+  // day — once when a date-conditional ternary was added, and again when
+  // the table moved into JSON. Both times the parse silently yielded an
+  // incomplete table and rowCost fell back to fable-5 rates, reporting a
+  // trip at $1.23 against a true $0.09. Reading the data is not clever, and
+  // that is the point.
+  const data = JSON.parse(readFileSync(path, "utf8"));
   const rates = {};
-  // Plain form:  "model": { input: N, output: N },
-  const re =
-    /"([^"]+)":\s*\{\s*input:\s*([0-9.]+)\s*,\s*output:\s*([0-9.]+)\s*,?\s*\}/g;
-  for (const m of table.matchAll(re))
-    rates[m[1]] = { input: +m[2] / 1e6, output: +m[3] / 1e6 };
-
-  // Date-conditional form, used for promotional rates that step up on a known
-  // date:
-  //   "model": Date.now() >= Date.UTC(Y, M, D)
-  //     ? { input: A, output: B }
-  //     : { input: C, output: D },
-  // Scraping source with a regex is inherently brittle — adding the ternary to
-  // credits.ts silently dropped gemini-3.8-flash from this table and the bench
-  // reported a 15x inflated trip cost off the fable-5 fallback. Parse the
-  // ternary too, and resolve the SAME date condition the runtime resolves so
-  // the two can't disagree.
-  const ternary =
-    /"([^"]+)":\s*Date\.now\(\)\s*>=\s*Date\.UTC\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)\s*\?\s*\{\s*input:\s*([0-9.]+)\s*,\s*output:\s*([0-9.]+)\s*,?\s*\}\s*:\s*\{\s*input:\s*([0-9.]+)\s*,\s*output:\s*([0-9.]+)\s*,?\s*\}/g;
-  for (const m of table.matchAll(ternary)) {
-    const after = Date.now() >= Date.UTC(+m[2], +m[3], +m[4]);
-    const [inp, outp] = after ? [+m[5], +m[6]] : [+m[7], +m[8]];
-    rates[m[1]] = { input: inp / 1e6, output: outp / 1e6 };
+  for (const [name, r] of Object.entries(data.models)) {
+    const eff =
+      r.from && r.then && Date.now() >= Date.parse(r.from + "T00:00:00Z")
+        ? r.then
+        : r;
+    rates[name] = { input: eff.input / 1e6, output: eff.output / 1e6 };
   }
-
-  if (!Object.keys(rates).length) throw new Error("could not parse RATES");
-  // Fail loudly if a model the bench actually drives is unparseable, rather
-  // than letting rowCost quietly fall back to fable-5 ($10/$50) and report a
-  // cost that is wrong by up to 100x.
+  if (!Object.keys(rates).length)
+    throw new Error("llm-rates.json has no models");
   for (const must of ["gemini-3.8-flash", "gpt-6-luna", "claude-sonnet-5"])
     if (!rates[must])
       throw new Error(
-        `loadRates could not parse "${must}" from ${path} — the RATES entry ` +
-          `shape changed and every cost number here would be wrong`,
+        `llm-rates.json is missing "${must}" — cost figures would be wrong`,
       );
   return rates;
 }
@@ -418,17 +403,11 @@ export const CREDIT_LLM_BUDGET_USD = 0.007;
  * frequently MORE than its token cost. rowCost used to omit them entirely,
  * which made every search-using arm look free.
  */
-export function loadSearchFees(path = "supabase/functions/_shared/credits.ts") {
-  const src = readFileSync(path, "utf8");
-  const grab = (name) => {
-    const m = src.match(new RegExp(`${name}\\s*=\\s*([0-9.]+)`));
-    if (!m) throw new Error(`could not parse ${name}`);
-    return +m[1];
-  };
-  return {
-    anthropic: grab("WEB_SEARCH_COST_USD"),
-    google: grab("GOOGLE_GROUNDING_COST_USD"),
-  };
+export function loadSearchFees(
+  path = "supabase/functions/_shared/llm-rates.json",
+) {
+  const d = JSON.parse(readFileSync(path, "utf8"));
+  return { anthropic: d.perSearchUsd.anthropic, google: d.perSearchUsd.google };
 }
 
 /** Same arithmetic as computeLLMCost in _shared/credits.ts. */
