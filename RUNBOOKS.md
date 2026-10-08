@@ -618,3 +618,24 @@ GROUP BY u.email, p.username
 ORDER BY spend_usd DESC
 LIMIT 20;
 ```
+
+## Client version gate (minimum build) and retiring old server contracts
+
+Every build is stamped with `VITE_APP_BUILD` (UTC `YYYYMMDDHHmm`, `vite.config.js`); PostHog events carry it as `app_build`. Clients read `app_config` (migration `20261008000001`) on start, on return to the foreground and every 30 min.
+
+**Force clients to update** — blocking "Update TripJam" screen (Play Store on Android, reload on web). Only builds that contain `src/UpdateGate.jsx` can show it. Pick the build number of the oldest release you still accept (check `app_build` in PostHog), never "now" — a minimum newer than the latest Play release locks every Android user out:
+
+```sql
+update app_config
+   set value = '{"web": 202610080000, "android": 202610080000, "message": null}', updated_at = now()
+ where key = 'min_client_build';
+-- back off: set both to 0
+```
+
+**Retire chat's v2 (`update_day`) contract** — builds older than the gate can't show it, so the chat function covers them: when this is true, requests without `protocol: 2` get an uncharged "please update" Trippy reply instead of a model call (cached per isolate for 60 s):
+
+```sql
+update app_config set value = 'true', updated_at = now() where key = 'chat_protocol1_retired';
+```
+
+Before flipping: confirm in PostHog that `trippy_chat_response` events from builds without protocol 2 have stopped (or are few), and that a Play release with chat v3 is live. Only then remove the v2 path from `supabase/functions/chat`.

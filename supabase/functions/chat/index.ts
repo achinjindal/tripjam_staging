@@ -52,6 +52,27 @@ const OPS_INSTRUCTIONS = `
    - duration (activities/food), distance_hint, cost_hint. Hotels add area, price ("$".."$$$$") and bullets (3 phrases); others use "" and [].
 `;
 
+// app_config.chat_protocol1_retired, cached per isolate for a minute. Any
+// read failure counts as "not retired" (old clients keep working).
+let _p1: { at: number; retired: boolean } | null = null;
+async function protocol1Retired(): Promise<boolean> {
+  if (_p1 && Date.now() - _p1.at < 60_000) return _p1.retired;
+  let retired = false;
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const res = await fetch(
+      `${url}/rest/v1/app_config?key=eq.chat_protocol1_retired&select=value`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` } },
+    );
+    if (res.ok) retired = (await res.json())?.[0]?.value === true;
+  } catch {
+    /* not retired */
+  }
+  _p1 = { at: Date.now(), retired };
+  return retired;
+}
+
 // The client's error bubble text (current and older wordings).
 const ERROR_REPLY_RE = /^Sorry, (something went wrong|I couldn't get a reply)/i;
 
@@ -106,7 +127,34 @@ serve(async (req) => {
       sender,
       preferences,
       protocol,
+      client_build,
     } = await req.json();
+
+    // Retiring the v2 contract: clients that don't send `protocol` (old PWAs,
+    // APKs built before chat v3) get a plain "please update" reply instead of
+    // a model call — uncharged, and rendered by every client version as a
+    // normal Trippy message. Off until app_config.chat_protocol1_retired is
+    // set to true (see migration 20261008000001).
+    if (protocol !== 2 && (await protocol1Retired())) {
+      const data = {
+        message:
+          "This version of TripJam is out of date, so I can't make changes from here. Update TripJam (Play Store on Android, or reload in your browser) to keep planning with me — your trips are saved.",
+      };
+      if (req.headers.get("x-chat-stream") !== "1")
+        return new Response(JSON.stringify(data), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      return new Response(
+        `data: ${JSON.stringify({ type: "final", data })}\n\ndata: [DONE]\n\n`,
+        {
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+          },
+        },
+      );
+    }
 
     // Pre-flight (Phase 2.5): resolve which wallet pays — personal for a solo
     // trip (byte-identical to before), the trip pool for a shared trip; a short
@@ -646,6 +694,8 @@ ${isItinerary && itinerarySummary ? `\nITINERARY:\n${itinerarySummary}` : ""}${g
             streamError,
             outputChars: accumulated.length,
             model: chatModel,
+            protocol: protocol ?? 1,
+            clientBuild: client_build ?? null,
           }),
         );
       }

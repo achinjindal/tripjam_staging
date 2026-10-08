@@ -2,7 +2,15 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
+// Monotonic build number (UTC YYYYMMDDHHmm), read by src/version.js for the
+// minimum-client-build gate. The web bundle and the APK built from the same
+// commit share it.
+const APP_BUILD = new Date().toISOString().replace(/\D/g, "").slice(0, 12);
+
 export default defineConfig({
+  define: {
+    "import.meta.env.VITE_APP_BUILD": JSON.stringify(APP_BUILD),
+  },
   plugins: [
     react(),
     VitePWA({

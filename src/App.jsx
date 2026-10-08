@@ -35,6 +35,7 @@ import {
   useForkPaywall,
 } from "./credits";
 import { showToast, confirmSheet } from "./dialogs.jsx";
+import { APP_BUILD } from "./version";
 import { logActivity } from "./activity";
 import { subscribeTrip } from "./realtime";
 import MembersSheet from "./components/MembersSheet.jsx";
@@ -12862,9 +12863,11 @@ export default function App({
           days: daysRef.current || [],
           form: pendingForm || {},
           message,
-          // Chat v3: schema-checked replies, and itinerary edits as small
-          // operations (activity_ops) instead of whole-day rewrites.
+          // Chat v3: itinerary edits come back as small operations
+          // (activity_ops) instead of whole-day rewrites.
           protocol: 2,
+          // Lets the server tell client generations apart (see version.js).
+          client_build: APP_BUILD,
           ...(spendPersonal ? { spend_personal: true } : {}),
           ...(memberList
             ? { members: memberList, sender: nameOf(session.user.id) }

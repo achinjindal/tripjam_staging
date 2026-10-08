@@ -20,6 +20,8 @@ import Avatar from "./Avatar.jsx";
 import LowCreditsBanner from "./LowCreditsBanner.jsx";
 import { refreshCredits, CREDITS_UI_ENABLED } from "./credits";
 import { initRevenueCat } from "./billing";
+import UpdateGate from "./UpdateGate.jsx";
+import { APP_BUILD } from "./version";
 
 // ── Android status bar (APK only): lay the webview out BELOW the status
 // bar instead of behind it — headers were rendering under the clock/battery
@@ -69,7 +71,10 @@ if (import.meta.env.VITE_POSTHOG_KEY) {
     capture_exceptions: true,
     persistence: "localStorage",
   });
-  posthog.register({ app_env: import.meta.env.VITE_APP_ENV || "unknown" });
+  posthog.register({
+    app_env: import.meta.env.VITE_APP_ENV || "unknown",
+    app_build: APP_BUILD,
+  });
 }
 
 // ── URL helpers ──
@@ -415,5 +420,6 @@ createRoot(document.getElementById("root")).render(
   <StrictMode>
     <Root />
     <DialogHost />
+    <UpdateGate />
   </StrictMode>,
 );
