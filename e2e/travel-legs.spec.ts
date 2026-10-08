@@ -110,6 +110,17 @@ test("travel legs: seeded legs render, remove persists, add-booking sheet opens"
     await expect(
       page.getByText("Add a booking", { exact: true }),
     ).toBeVisible();
+    // This section is gated on VITE_EMAIL_INGEST_ADDRESS (BoardView renders it
+    // behind `ingestAddress && …`). Without the var the block correctly does
+    // not render, and the failure surfaced as a bare "element not found" on a
+    // getByText locator — nothing pointing at config. State the precondition
+    // so the next person reads the cause instead of hunting a phantom UI bug.
+    expect(
+      process.env.VITE_EMAIL_INGEST_ADDRESS,
+      "VITE_EMAIL_INGEST_ADDRESS is unset, so the forward-email section is " +
+        "hidden by design. Set it in .env to the same address as the backend " +
+        "INBOUND_EMAIL_ADDRESS secret (see CLAUDE.md pairing rule).",
+    ).toBeTruthy();
     await expect(
       page.getByText("Forward the confirmation email"),
     ).toBeVisible();
