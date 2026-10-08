@@ -343,6 +343,109 @@ test("a failed activity_ops batch changes nothing and says so", async ({
   expect(after).toEqual(before);
 });
 
+test("places Trippy adds are verified; an unfindable one is flagged", async ({
+  page,
+}) => {
+  test.skip(!tripId, "QA trip not found");
+  test.setTimeout(120000);
+  const { data: cur } = await sb
+    .from("activities")
+    .select("id")
+    .eq("day_id", day.id)
+    .order("position");
+  const anchorId = cur![cur!.length - 1].id;
+  const real = `E2E Real Teahouse ${RUN}`;
+  const fake = `E2E Imaginary Cafe ${RUN}`;
+  // verify-place: the real place resolves, the fake one is a conclusive miss.
+  await page.route(
+    "**/functions/v1/places-proxy?action=verify-place*",
+    async (route) => {
+      const name = route.request().postDataJSON()?.name || "";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          name === real
+            ? {
+                lat: 35.7101,
+                lng: 139.8107,
+                source: "google",
+                confidence: "high",
+              }
+            : { reason: "not_found", conclusive: true },
+        ),
+      });
+    },
+  );
+  const act = (title: string, time: string) => ({
+    time,
+    title,
+    geocode: title,
+    geocode_end: "",
+    type: "food",
+    duration: "45m",
+    note: "",
+    icon: "🍵",
+  });
+  const bodies = await mockChat(page, [
+    {
+      type: "final",
+      data: {
+        message: `Added two stops (${RUN}).`,
+        actions: [
+          {
+            type: "activity_ops",
+            dropped: 0,
+            ops: [
+              {
+                op: "insert",
+                day_id: day.id,
+                after_id: anchorId,
+                activity: act(real, "20:00"),
+              },
+              {
+                op: "insert",
+                day_id: day.id,
+                after_id: anchorId,
+                activity: act(fake, "21:00"),
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ]);
+  const ask = await openTripChat(page, tripId);
+  await ask.fill("e2e: add two stops");
+  await ask.press("Enter");
+  await expect(page.getByText(`Added two stops (${RUN}).`).last()).toBeVisible({
+    timeout: 15000,
+  });
+  // The unfindable place gets a Trippy note with a one-tap follow-up.
+  const note = page.getByText(`couldn't find “${fake}” on the map`);
+  await expect(note).toBeVisible({ timeout: 15000 });
+  await expect
+    .poll(
+      async () =>
+        (
+          await sb
+            .from("activities")
+            .select("lat, geocode_source")
+            .eq("day_id", day.id)
+            .eq("title", real)
+            .single()
+        ).data?.lat,
+      { timeout: 15000 },
+    )
+    .toBeCloseTo(35.7101);
+  await page
+    .getByRole("button", { name: "Suggest alternatives" })
+    .last()
+    .click();
+  await expect.poll(() => bodies.length, { timeout: 15000 }).toBe(2);
+  expect(String(bodies[1].message)).toContain(`alternatives to "${fake}"`);
+});
+
 test("unusable reply changes nothing and isn't saved", async ({ page }) => {
   test.skip(!tripId, "QA trip not found");
   test.setTimeout(120000);

@@ -12190,6 +12190,59 @@ export default function App({
     }
   };
 
+  // Places Trippy just added: run them through the verify-place ladder in the
+  // background (the per-day lazy verify only runs once per day, so a day
+  // already on screen would never check them). Verified rows get coordinates
+  // and corrected names; a place Google conclusively can't find (a likely
+  // invention) gets a Trippy note with a one-tap "suggest alternatives".
+  const verifyNewPlaces = async (items) => {
+    const token = (await freshAccessToken()) || session?.access_token;
+    if (!token || !items?.length) return;
+    const results = await Promise.all(
+      items.map(({ activity, city }) =>
+        verifyActivity(activity, city, { access_token: token }, trip?.id).catch(
+          () => null,
+        ),
+      ),
+    );
+    const updates = new Map();
+    const missing = [];
+    results.forEach((r, i) => {
+      const a = items[i].activity;
+      if (r?.status === "verified" && r.updateFields)
+        updates.set(a.id, r.updateFields);
+      else if (r?.status === "unresolved" && r.conclusive) missing.push(a);
+    });
+    if (updates.size)
+      setDays((prev) =>
+        prev.map((d) => ({
+          ...d,
+          activities: (d.activities || []).map((a) =>
+            updates.has(a.id) ? { ...a, ...updates.get(a.id) } : a,
+          ),
+        })),
+      );
+    posthog.capture("trippy_places_verified", {
+      checked: items.length,
+      verified: updates.size,
+      not_found: missing.length,
+    });
+    if (!missing.length) return;
+    const names = missing.map((a) => `“${a.title}”`).join(", ");
+    const first = missing[0];
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: `Heads up: I couldn't find ${names} on the map, so ${missing.length > 1 ? "they" : "it"} may not exist under that name. Want a well-known alternative instead?`,
+        followUp: `Suggest 2-3 well-known alternatives to "${first.title}" for the same time slot, without making any changes yet`,
+        followUpLabel: "Suggest alternatives",
+      },
+    ]);
+    setChatUnread(true);
+  };
+
   // ── Action dispatcher: executes actions returned by unified chat ──
   // Returns one {type, ok, reason} per action so the reply can say what
   // actually happened (not what the model claimed), plus `routeId` for applied
@@ -12372,9 +12425,13 @@ export default function App({
                   : d,
               ),
             );
+            const toVerify = [];
             for (const d of res.after) {
               const city = daysRef.current.find((x) => x.id === d.day_id)?.city;
               warmActivityPhotos(d.day_id, d.activities || [], city);
+              for (const a of d.activities || [])
+                if (a.type !== "transit" && needsVerification(a))
+                  toVerify.push({ activity: a, city });
             }
             for (const b of res.before || []) {
               const label =
@@ -12394,7 +12451,10 @@ export default function App({
                 },
               });
             }
-            if (action.dropped) extra = { partial: true };
+            extra = {
+              verify: toVerify,
+              ...(action.dropped ? { partial: true } : {}),
+            };
             break;
           }
           case "update_day": {
@@ -12580,6 +12640,14 @@ export default function App({
               updatedDay.city ?? existingDay.city,
               (a) => incoming[a.position] || {},
             );
+            extra = {
+              verify: sortedActs
+                .filter((a) => a.type !== "transit" && needsVerification(a))
+                .map((a) => ({
+                  activity: a,
+                  city: updatedDay.city ?? existingDay.city,
+                })),
+            };
             logActivity({
               tripId: trip?.id,
               userId: session?.user?.id,
@@ -13115,6 +13183,8 @@ export default function App({
           .filter((r) => r.ok && r.routeId)
           .map((r) => r.routeId);
         deferred = results.flatMap((r) => r.deferred || []);
+        const toVerify = results.flatMap((r) => (r.ok && r.verify) || []);
+        if (toVerify.length) deferred.push(() => verifyNewPlaces(toVerify));
         if (
           results.some((r) => (!r.ok && isMutation(r)) || (r.ok && r.partial))
         )
@@ -19100,6 +19170,24 @@ export default function App({
                                 )}
                               </div>
                             )}
+                          {isAI && m.followUp && !m.streaming && (
+                            <button
+                              onClick={() => sendChatDirect(m.followUp)}
+                              style={{
+                                marginTop: 8,
+                                background: "transparent",
+                                border: `1px solid ${T.ocean}`,
+                                borderRadius: RADIUS.md,
+                                padding: "6px 14px",
+                                fontSize: 12,
+                                fontFamily: "Georgia,serif",
+                                color: T.ocean,
+                                cursor: "pointer",
+                              }}
+                            >
+                              {m.followUpLabel || "Ask Trippy"}
+                            </button>
+                          )}
                           {isAI && m.hasChanges && !m.streaming && (
                             <button
                               onClick={() => {
