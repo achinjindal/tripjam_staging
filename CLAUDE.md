@@ -164,7 +164,7 @@ supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
 
 - **RG** — Route Generation. Pre-IG step where 4 route options are generated.
 - **IG** — Itinerary Generation. Full day-by-day plan from selected route. Two phases: compact (fast) then detailed (streaming).
-- **Magazine** — Destination guide tab (highlights, deep dives, food, tips). Lazy-loaded: destination + top 2 cities on route load, rest on Magazine open. Deep-dive content persisted in `trips.magazine_digest`.
+- **Magazine** — Destination guide tab (highlights, deep dives, food, tips). Lazy-loaded: destination (up to 2 countries) + the first 2 route cities are pre-loaded when RG returns routes, the rest load on scroll via `onVisible`. Before 2026-10-08 only the countries were pre-loaded, so opening the Magazine showed one populated card above a column of skeletons. Deep-dive content persisted in `trips.magazine_digest`.
 - **Inspirations** — Sub-tab of Magazine. Web-search-backed articles/vlogs from named individual creators. Cached per (destinations, tags, monthBucket) in `trips.inspirations_digest`.
 - **Board** — Tab with Notes, To-dos, Bookmarks, Expenses, Travel & Hotels widgets.
 - **Pre-IG sheet** — Bottom sheet shown after route selection, before IG (budget, pace, morning preference, transport).

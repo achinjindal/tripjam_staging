@@ -9852,24 +9852,49 @@ export default function App({
     // browsing surface) and runs once.
     if (hasEagerLoadedRef.current) return;
     hasEagerLoadedRef.current = true;
-    // Pre-load country-level deep dives (up to 2) as soon as RG completes.
+    // Pre-load the deep dives the Magazine shows FIRST, as soon as RG
+    // completes — the country card(s) plus the first couple of city cards.
+    //
+    // Previously only countries were pre-loaded, so opening the Magazine
+    // showed one populated card above a column of skeletons: every city card
+    // waits for onVisible, and a deep dive takes ~10-20s. The whole surface
+    // read as unfinished at exactly the moment the traveller arrives.
+    // CLAUDE.md already described the intended behaviour as "destination +
+    // top 2 cities on route load"; the code only ever did the destination.
+    //
+    // Affordable now: deep dives moved to gpt-6-luna, ~0.17 credits each, so
+    // two extra pre-loads cost roughly a third of a credit. They were ~1.08
+    // credits each on Haiku, which is why this was kept narrow before.
     const countries = resolveCountriesForMagazine({ pendingForm, editingTrip });
-    if (countries.length > 0) {
-      countries.slice(0, 2).forEach((c) => loadCityDeepDiveApp(c));
-    } else {
-      // Fallback for Help-me-decide: load first city from first undismissed route.
-      for (const route of pretripRoutes) {
-        if (route.dismissed) continue;
-        const cities = (route.city || "")
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-        if (cities.length > 0) {
-          loadCityDeepDiveApp(cities[0]);
-          break;
-        }
+    const preload = [];
+    const pushUnique = (name) => {
+      const k = (name || "").trim();
+      if (!k || isHelpMeDecideDest(k)) return;
+      if (!preload.some((p) => p.toLowerCase() === k.toLowerCase()))
+        preload.push(k);
+    };
+    countries.slice(0, 2).forEach(pushUnique);
+    // First cities of the first undismissed route — the order the Magazine
+    // renders them, so we warm exactly what the traveller sees first. Also
+    // covers Help-me-decide, where there is no country to resolve.
+    const countryKeys = new Set(countries.map((c) => c.toLowerCase()));
+    let cityCount = 0;
+    outer: for (const route of pretripRoutes) {
+      if (route.dismissed) continue;
+      for (const c of (route.city || "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)) {
+        if (countryKeys.has(c.toLowerCase())) continue;
+        const before = preload.length;
+        pushUnique(c);
+        // Count only what was actually added, so duplicates across routes do
+        // not silently eat the budget.
+        if (preload.length > before) cityCount++;
+        if (cityCount >= 2) break outer;
       }
     }
+    preload.forEach((c) => loadCityDeepDiveApp(c));
     // days.length stays a dependency as a safety net: a trip opened directly
     // at the itinerary stage (no RG in this session) still has routes, but if
     // a future path reaches days without routes this re-runs. It no longer
