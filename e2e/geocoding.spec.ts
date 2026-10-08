@@ -48,15 +48,46 @@ if (!ANON_KEY) {
 }
 const PROXY_URL = `${SUPABASE_URL}/functions/v1/places-proxy?action=geocode`;
 
+// geocode is a PAID upstream action and has required a real user token since
+// 47987b7 (2026-09-30, "Abuse hardening: authenticate paid proxy actions") —
+// it used to be callable with the anon key that ships in the client bundle,
+// i.e. a free geocoding faucet billed to us. This spec kept sending the anon
+// key and so had been failing on every run since that commit: six tests red
+// for eight days, with `result.lat` undefined because every response was
+// {"error":"Unauthorized"}.
+let userToken = "";
+test.beforeAll(async () => {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { apikey: ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: "qa-tester@tripjam.app",
+      password: "qaTest123!",
+    }),
+  });
+  const data = await res.json();
+  userToken = data?.access_token || "";
+  if (!userToken)
+    throw new Error(
+      `geocoding.spec.ts: could not sign in qa-tester — ${JSON.stringify(data).slice(0, 160)}`,
+    );
+});
+
 async function geocode(q: string, city?: string) {
   const res = await fetch(PROXY_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${ANON_KEY}`,
+      apikey: ANON_KEY,
+      Authorization: `Bearer ${userToken}`,
     },
     body: JSON.stringify({ q, city: city || null }),
   });
+  if (res.status === 401)
+    throw new Error(
+      "places-proxy returned 401 — the user token was rejected. This spec " +
+        "needs a signed-in user, not the anon key.",
+    );
   return res.json();
 }
 
