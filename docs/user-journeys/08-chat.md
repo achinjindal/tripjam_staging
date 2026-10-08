@@ -1,160 +1,183 @@
 # 08 — Chat ("Trippy")
 
-TripJam has a single unified chat assistant ("Trippy") that works on both the brainstorm (route-planning) and itinerary screens. The frontend sends the current screen plus a snapshot of routes/days/form to one edge function (`supabase/functions/chat/index.ts`), which calls Sonnet 4.6 with a screen-specific action vocabulary and returns `{message, actions[]}` as a single JSON payload. `App.jsx` renders the message and executes each action against local state and Supabase tables (routes, days/activities, todos, expenses, bookmarks, budget, tab navigation). Despite the edge function consuming Anthropic's SSE stream internally, the client sees a **non-streaming** response — the "typing" cursor in the UI is cosmetic.
+Trippy is one chat assistant on the route-planning (`brainstorm`) and itinerary screens. The browser sends a slim snapshot of the trip plus the message to one edge function (`supabase/functions/chat/index.ts`), which streams the model's reply back over SSE. Each reply is a short message plus `actions[]`, and `src/App.jsx` applies the actions: route edits, itinerary edits, to-dos, expenses, bookmarks, budget, navigation. Itinerary edits are small operations against specific activities (chat v3, `protocol: 2`), applied in one database transaction with a change card and one-tap Undo.
+
+References are function names rather than line numbers. All chat client code lives in `src/App.jsx` (search for the names).
 
 ---
 
-## 1. Where the chat lives (frontend UI)
+## 1. Where the chat lives
 
-All chat code is in `src/App.jsx` — there is no separate chat component.
+**State**: `chatMessages` (`{id, role, content, user_id?, streaming?, applying?, error?, suggestions?, changes?, undo?, undone?, hasChanges?, changedRouteIds?, followUp?, followUpLabel?, undoData?}`), `chatInput`, `chatLoading`, `chatOpen`, `chatUnread`. Roles are `user`, `assistant` and a local-only `system-undo` (undo pills, never sent to the model).
 
-**State** (`src/App.jsx:7128-7134`):
+**Persistence**: `persistMessage` writes every user message and every successful Trippy reply to `trip_messages`, using client-supplied ids so the realtime echo dedupes. A reply's cards are saved in `trip_messages.meta` (`chatMeta` / `fromChatMeta`): suggestion cards, the change card, the "View updated" flag and follow-up buttons. They survive a reload and reach co-travellers. Error bubbles are **not** saved, because they'd come back on reload and be sent to the model as if Trippy had said them.
 
-- `chatMessages` — array of `{role, content, user_id?, suggestions?, hasChanges?, changedRouteIds?, streaming?, undoData?}`. Roles: `user`, `assistant`, and a synthetic `system-undo` (undo pills, never sent to the LLM).
-- `chatInput`, `chatLoading`, `chatOpen` (`src/App.jsx:6840`), `chatUnread`, `chatAttention` (mascot pulse).
+**Layout**:
 
-**Persistence/load**: on trip load, messages are fetched from the `trip_messages` table ordered by `created_at` (`src/App.jsx:7157-7178`); if the DB returns nothing but local messages already exist (e.g. user chatted during IG before the trip row settled), local state is kept. Every user and assistant message is inserted into `trip_messages` fire-and-forget (`src/App.jsx:9166`, `9218`; same in `sendChatDirect` at `8740`, `8784`). `system-undo` rows are local-only.
+- **Mobile (collapsed)**: a bar above the bottom nav on the itinerary and brainstorm screens shows Trippy's last reply (or `getChatPlaceholder()`, one stable line per trip).
+- **Mobile (open)**: a bottom sheet. Esc closes it.
+- **Desktop** (`useDesktopShell`): chat is inline in the right column and always open.
 
-**Layout** — two shells:
+**Empty state**: a stage-aware greeting plus `chatStarterChips`, built from the trip as it is.
 
-- **Mobile (collapsed)**: a persistent chat bar sits above the bottom nav on `itinerary` and `brainstorm` screens, hidden on the Board tab (`src/App.jsx:12538-12650`). It shows the mascot (pulses via `chatAttention` after IG completes — `src/App.jsx:8506-8508`) and a fake-input preview showing the last assistant message or a screen-aware placeholder from `getChatPlaceholder()` (`src/App.jsx:7135-7147`). Tapping opens the sheet.
-- **Mobile (open)**: bottom sheet — 50dvh on brainstorm (no scrim, touches pass through to route cards), 85dvh with scrim on itinerary (`src/App.jsx:13595-13666`).
-- **Desktop** (`useDesktopShell`): chat is always rendered inline in the `right-bottom` grid cell; the collapsed bar and close button are hidden (`src/App.jsx:13595-13610`, `13736`).
+- **Brainstorm**: chips appear only once at least 2 plans are ready, and only name plan labels that exist ("Compare P1 and P2", "Reduce hotel switches in Pn" for the plan with the most cities). Labels are P1..Pn over the non-dismissed routes, the same list the server numbers.
+- **Itinerary**: chips appear only once `detailedReady`. They name the real Day-1 hotel, the destination, and the busiest real day ("Make Day 4 more relaxed").
+- **Chips send on tap.**
 
-**Per-tab behavior**: chat renders only when `screen === "itinerary" || screen === "brainstorm"` and `activeBottomTab !== "board"` (`src/App.jsx:13595-13597`) — there is no chat on the Board tab or setup wizard. The behavioral difference between brainstorm and itinerary is driven server-side by the `screen` field in the request (different action vocabulary, see §3), plus different empty-state greetings and suggested-prompt chips client-side (`src/App.jsx:13798-13837`).
+**Message rendering**: `renderMentions()` formats bold, italics and @mentions. The list is a `role="log"` with `aria-live="polite"`, and the send button has an `aria-label`.
 
-**Empty state**: a canned greeting bubble plus 3 suggested-prompt chips — brainstorm gets route-tweak prompts ("Reduce hotel switches in P2", …), itinerary gets prompts derived from the actual Day 1 hotel and destination (`src/App.jsx:13815-13837`). Chips prefill `chatInput` and focus the textarea; they do not auto-send.
-
-**Message rendering**: `renderMentions()` handles `**bold**`, `_italic_`/`*italic*`, and `@mention` highlighting (`src/App.jsx:8673`). Assistant messages that mention itinerary activity names get up to 3 Google Maps link-out pills appended (`src/App.jsx:14045-14118`). Messages with mutation actions get a "View Updated Itinerary" / "View Updated Plans" CTA that closes chat and scrolls to the changed route (`src/App.jsx:14173-14215`).
+- **While a reply is in progress**: "··· Trippy is thinking" until words arrive, then streamed text with a cursor. "Updating your itinerary…" shows while actions are being applied.
+- **Under a reply**, depending on what it did:
+  - suggestion cards;
+  - the **change card** ("What changed": + added, − removed, ⇄ swapped, → moved, ⏱ retimed), with **Undo** in the current session;
+  - follow-up buttons;
+  - "View Updated Itinerary / Plans" when something was actually applied.
 
 ---
 
 ## 2. Sending a message
 
-Two paths, near-identical:
+- `sendChatMessage()`: the typed path (Enter sends, Shift+Enter adds a newline).
+- `sendChatDirect(text)`: everything else (chips, gem taps, poll closes, "know more", follow-ups).
 
-- `sendChatMessage()` (`src/App.jsx:9142-9226`) — user typed into the textarea (Enter sends, Shift+Enter newline — `src/App.jsx:14245-14250`). Captures PostHog `chat_message_sent` with `screen` and message length.
-- `sendChatDirect(message)` (`src/App.jsx:8725-8790`) — programmatic sends from other features (see §6).
+Both go through `startTrippyTurn`, which adds the user bubble and an empty streaming reply bubble, persists the user row, and calls `performChatSend`.
 
-Both: build `history` = `chatMessages` minus `system-undo` rows; optimistically append the user message **and** a placeholder `{role:"assistant", content:"", streaming:true}` (renders as "···" — `src/App.jsx:14024-14027`); insert the user row into `trip_messages`; then call `callUnifiedChat()`.
+**Queue.** While Trippy is replying (`chatBusyRef`), `sendChatDirect` queues the message instead of dropping it. The queue holds at most 3, drops duplicates (including the message in flight), and drains after each reply (`drainChatQueue`). It reads `chatMessagesRef`, so the history always includes the previous reply.
 
-`callUnifiedChat(message, history)` (`src/App.jsx:9109-9140`) POSTs to `/functions/v1/chat` with the user's Supabase access token and body:
+**History** sent to the model (`chatHistory()`) excludes undo rows, error bubbles and anything still streaming. The server trims it to the last 6 turns and also drops error text from older clients.
+
+**Request** (`callUnifiedChat`): `POST /functions/v1/chat` with `x-chat-stream: 1` and this body:
 
 ```js
-{
-  (screen,
-    trip,
-    routes /* non-dismissed pretripRoutes */,
-    days /* daysRef.current */,
-    form /* pendingForm */,
-    message,
-    history);
-}
+{ screen, trip, routes, days,   // slimChatContext(): only fields the server reads
+  form, message, history,
+  protocol: 2,                  // chat v3 (itinerary edits as ops)
+  client_build,                 // VITE_APP_BUILD, see src/version.js
+  members?, sender?, preferences?, spend_personal? }
 ```
 
-- **402 handling**: `if (res.status === 402) { openPaywall("Chatting with Trippy needs credits."); throw ... }` (`src/App.jsx:9132-9135`). Note chat calls `openPaywall` directly rather than the `handleGatedResponse` wrapper used elsewhere — same end result (paywall bottom sheet via `credits.js`).
-- On success, `refreshCredits(session.user.id)` updates the credit balance store (`src/App.jsx:9138`).
-- Any error (including 402) is caught by the caller; the placeholder message is replaced with `"Sorry, something went wrong. (<err>) Try again."` (`src/App.jsx:9201-9204`). There is no retry.
+`slimChatContext` sends trip logistics, route summaries, per-activity id/position/time/title/type/duration/confirmed, and gem titles. That's about 12 KB, against 47–94 KB for the full rows. If the server starts reading another field, add it there too.
 
-The response is a single JSON body — the client does **not** consume a stream. `await res.json()` at `src/App.jsx:9137`.
+**Failures** come back as a reason the user can read; the bubble never just says "error":
+
+- **402**: the paywall opens. On a shared trip whose pool is empty it's the fork paywall; dismissing it ends the turn with a "Not sent" bubble.
+- **429**: "You're sending messages quickly".
+- **502 or an SSE `error` event**: the server's own message.
+
+Every outcome is captured as PostHog `trippy_chat_response` with `ms`, `ms_first_token`, `ok` and `reason`.
 
 ---
 
-## 3. Server processing (`supabase/functions/chat/index.ts`)
+## 3. Server (`supabase/functions/chat/index.ts`)
 
-Request pipeline, in order:
+1. Kill switch, then auth, then rate limit (20 calls a minute).
+2. **Retired-contract switch**: when `app_config.chat_protocol1_retired` is true, a request without `protocol: 2` gets an uncharged "please update TripJam" reply (`protocol1Retired`, cached for 60 s).
+3. Credit pre-flight (`resolveAndGate`: personal wallet, or the trip pool for shared trips).
+4. **Context**:
+   - plans as `PLAN Pn (id=…)` blocks;
+   - for v3 itineraries, `itineraryContext()` (`chat/_ops.ts`), which lists each activity with a short ref such as `D3.2 14:00 Wat Pho (sight, 1.5h) [booked]`;
+   - for v2, `Day N - City: time title, …`;
+   - plus logistics, form preferences, and group context on shared trips.
+5. **Prompt**: static instructions (identity, the screen's action vocabulary, rules, examples) in a cache-marked system block, then a per-request context block. Haiku 4.5's 4,096-token cache minimum means the marker is currently inert.
+6. **Model call**: `streamLLM` from `_shared/llm.ts`. The model comes from `modelFor("CHAT", "claude-haiku-4-5")` (`LLM_MODEL_CHAT`, then the legacy `CHAT_MODEL`), with multi-turn history via `CallOpts.messages`. `max_tokens` is `suggestCap(model, 4096)` for v3 itineraries and 8192 otherwise. The stream's first event is awaited before responding, so a provider failure becomes a plain HTTP error. There is one retry on 429/5xx/overloaded.
+7. **No output schema.** Measured on Haiku 4.5: the itinerary union is refused ("compiled grammar is too large"), and the brainstorm schema adds 1.5–13 s to the first word. Reliability comes from short replies plus the checks below.
+8. **Streaming to the client**: the `message` string is extracted incrementally and sent as `{type:"delta"}` events. The stream ends with exactly one `{type:"final", data:{message, actions}}` or `{type:"error", error, message}`, then `[DONE]`.
+9. **Unusable replies are not charged.** A reply counts as unusable if it is empty, hit `max_tokens`, or has broken JSON that carried actions. It is sent as `error` (or a 502 when not streaming) and captured to PostHog. A plain-prose answer is shown as is.
+10. **v3 ops resolution** (`resolveOps`):
+    - checks each operation against the context and maps refs to ids;
+    - re-anchors inserts placed after a removed item;
+    - turns remove + insert of the same place into a move;
+    - drops invalid ops and counts them;
+    - folds everything into one `{type:"activity_ops", ops, dropped}` action.
+11. **Billing**: the `llm_usage` row and `deductCredits` run in `runInBackground`, so a client disconnect still lands them.
 
-1. **Kill switch** — `llmKillSwitch()` returns 503 if `LLM_KILL_SWITCH=true` (`index.ts:27`, helper at `_shared/credits.ts:209`).
-2. **Auth** — `authenticateUser(req)` verifies the bearer token and loads the profile's credit balance (`index.ts:30`, `_shared/credits.ts:94`). 401 on failure.
-3. **Credit pre-flight** — `user.credits < 1.0` → 402 via `outOfCredits()` (`index.ts:34`); the 1.0 floor prevents overdraw at the boundary.
-4. **Rate limit** — `rateLimit(user.id, ...)`: 20 calls/min/user via `incr_rate_limit` RPC, fail-open, 429 with `Retry-After: 60` when exceeded (`index.ts:36`, `_shared/credits.ts:161`).
-5. **Context building** (`index.ts:39-112`): `screen` selects `isBrainstorm`/`isItinerary`. Routes are serialized as `PLAN P1 (id="...") — title / cities / days / points`; days as `Day N - City: time title, ...` plus local gems; arrival/departure logistics and form preferences (destinations, month, duration, travelers, budget, notes) are appended.
-6. **System prompt, split for caching** (`index.ts:114-224`): `staticInstructions` (identity "Trippy", the screen-specific action vocabulary, response rules, examples) is sent as a system block with `cache_control: {type:"ephemeral"}`; the per-request `dynamicContext` (trip/routes/itinerary snapshot) is a second, uncached system block (`index.ts:256-263`). The static block only varies by screen, so it's reused across every turn of a conversation. Request includes `anthropic-beta: prompt-caching-2024-07-31` (`index.ts:272`).
-7. **History hygiene** (`index.ts:227-249`): drop empty/streaming messages, merge consecutive same-role messages, drop a leading assistant message, then **cap to the last 6 messages** (`index.ts:248`) before appending the new user message.
-8. **Model call** (`index.ts:251-265`): `claude-sonnet-4-6`, `max_tokens: 8192`, `stream: true`, direct `fetch` to `api.anthropic.com/v1/messages`.
-9. **Server-side stream accumulation** (`index.ts:283-312`): the SSE stream is read line-by-line; `text_delta` chunks are concatenated into `accumulated`, and real token usage (including cache read/write) is captured from `message_start`/`message_delta` events via `accumulateStreamUsage` (`_shared/credits.ts:277-336`). Nothing is streamed to the client — streaming is used only to get real usage events and avoid long-response timeouts.
-10. **Billing + logging** (`index.ts:324-359`): wrapped in `runInBackground()` so the Deno isolate survives past the response — inserts an `llm_usage` row (`function_name: "chat"`, model, input/output/cache tokens, trip_id) and calls `deductCredits`. Credits = `ceil((usd / 0.007) * 100) / 100` with cache-write at 1.25× and cache-read at 0.10× input rate (`_shared/credits.ts:52-72`). Token counts fall back to `length/4` estimates only if usage events never arrived (`index.ts:316-322`).
-11. **Parsing/validation** (`index.ts:361-369`): extract the substring between the first `{` and last `}` and `JSON.parse` it. On parse failure the raw accumulated text becomes `data.message` (no actions). A missing `message` defaults to `"Done."`. Individual actions are **not** schema-validated server-side — the dispatcher tolerates bad payloads (§5).
-12. **Backwards compat** (`index.ts:371-396`): legacy `updatedRoutes`/`pendingRoutes` and `updatedDays`/`suggestions` top-level fields are converted into `update_route`/`pending_routes` and `update_day`/`suggest` actions if `actions` is absent.
-13. Response: `{message, actions?}` JSON with CORS headers. Errors return 500 with `{error, message:"Sorry, something went wrong."}` (`index.ts:401-413`).
+### Action vocabulary
 
-### The action contract (what the LLM is told)
+- **Brainstorm**:
+  - `update_route` (the whole route object, plus `stops`);
+  - `dismiss_route` (`routeIds`);
+  - `generate_more_plans`;
+  - `pending_routes` (bulk edits: the first 3 inline, the rest listed).
+- **Itinerary, v3**:
+  - `replace_activity {ref, activity}`;
+  - `insert_activity {day, after, activity}`;
+  - `remove_activity {ref}`;
+  - `move_activity {ref, day, after}`;
+  - `set_time {ref, time}`;
+  - `suggest` (alternatives, no change).
 
-The prompt defines actions per screen (`index.ts:128-217`):
+  The rules: fewest ops, don't touch what wasn't asked, refs always mean the original item, never move or remove `[booked]` items, "more relaxed" means removing 1–2 activities, use real places in the same neighbourhood, respect the departure constraint.
 
-- **Brainstorm-only**: `update_route` (must return the _entire_ route object with original id, full day strings, points as `{text, good}`, preserve trip duration), `dismiss_route` (single `routeId` or bulk `routeIds`), `generate_more_plans`.
-- **Itinerary-only**: `update_day` (full day object keyed by exact `label`; real place names, recalculated times, `wishlist` of 3-5 gems, only changed days, departure-time constraint), `suggest` (alternatives without mutation; hotel suggestions add `area`, `price`, `bullets`).
+- **Itinerary, v2** (old clients): `update_day` (whole-day rewrite), `suggest`.
 - **All screens**: `add_todo`, `add_expense`, `add_bookmark`, `set_budget`, `navigate`.
-- **Brainstorm bulk-edit protocol**: when modifying _all_ plans, return the first 3 as `update_route` actions plus `{"type":"pending_routes","routeIds":[...]}` for the rest (`index.ts:205`) — the app fans out follow-up calls (see table).
-
-Response rules: raw JSON only, message ≤ 2-3 sentences of plain prose (bold/italics OK, no markdown headers/lists), "ACTION BIAS" (do the change, don't ask), honesty rule (never claim an untaken action), refer to plans as P1/P2 (`index.ts:196-205`).
 
 ---
 
-## 4. Actions applied client-side
+## 4. Applying actions (`dispatchActions`)
 
-Back in `sendChatMessage`/`sendChatDirect` (`src/App.jsx:9179-9199` / `8751-8765`):
+`dispatchActions` returns one `{type, ok, reason}` per action (plus `routeId`, `changes`, `undo`, `verify`, `deferred` where they apply). `performChatSend` builds the bubble from **what applied**, not what the model claimed.
 
-- `suggest` actions are pulled out and attached to the assistant message as `suggestions` (rendered as horizontally scrolling `SuggestionCard`/`HotelSuggestionCard` — `src/App.jsx:14120-14172`; cards offer "Use ..." which prefills the input, and "know more" which fires another `sendChatDirect`).
-- Any non-`suggest` action sets `hasChanges` (drives the "View Updated ..." CTA); `update_route` ids are collected into `changedRouteIds` for scroll-to-card.
-- `dispatchActions(actions, userMsg, history)` (`src/App.jsx:8792-9107`) then executes every action sequentially.
+- `hasChanges` is true only if a mutation succeeded.
+- If an action failed, or some ops were dropped, the bubble says so ("I couldn't apply that change, so nothing was changed…" / "Part of that couldn't be applied").
+- `trippy_action_apply {type, ok, reason}` goes to PostHog for each action.
 
-Finally the placeholder assistant bubble is replaced with the real content, `chatLoading` clears, and the assistant row is persisted to `trip_messages`.
+| Action            | What happens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `activity_ops`    | `supabase.rpc("apply_activity_ops", {p_ops})` (migration `20261007000001`): SECURITY INVOKER (the user's RLS), one transaction, all or nothing. It returns `before` and `after` for every touched day. State is set from `after`; an `update_day` activity-log row is written per day with the `before` snapshot (feed undo); the change card is built by `summarizeOpsChanges`; photos warm for new rows. Replace makes a new row (the old place's coordinates and booking go); move keeps the row and all its data. Transit hints are cleared only on rows whose next stop changed. |
+| `update_day` (v2) | Insert the new rows, check them, then delete the old rows **by id**. If either step fails, roll back and leave the day as it was. Kept activities (matched by title, the only thing the model saw) keep their saved place, coordinates, note and booked status. The model contributes time and order only.                                                                                                                                                                                                                                                                            |
+| `update_route`    | Validated and merged outside the state updater, persisted to that one `brainstorm_items` row (awaited), then state updated. Invalid routes and persist errors report `ok:false`.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `dismiss_route`   | Marks routes dismissed (persisted) and adds an undo pill.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `pending_routes`  | Runs **after** the reply is shown (`deferred`): one follow-up chat call per remaining plan, with a toast for progress.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `suggest`         | Not dispatched; carried on the message as cards and saved in `meta`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `add_todo` etc.   | Insert or update the row. Missing fields or a failed write report `ok:false`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `navigate`        | Switches tab and closes the sheet.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
-### Action dispatch table
+**After the reply** (deferred, so the time to finish an edit is unchanged):
 
-| Action type           | Payload                                                                                                      | Local state effect                                                                                                                                                                                                                                                  | DB effect                                                                                                                                                                               | Notes / validation                                                                        |
-| --------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `update_route`        | `{route: {id, title, tagline, tier, category, icon, city, days[], bestFor, warning, recommended, points[]}}` | Merges into `pretripRoutes` by id; selects the route (`setPretripSelectedRouteId`). Malformed results (empty/short day strings, missing title) get an `_error` flag rendered as "try editing this plan again in chat" on the card (`src/App.jsx:8804-8817`, `1562`) | Delete-all + re-insert of `brainstorm_items` for the trip, async, warn-on-fail (`src/App.jsx:8820-8853`)                                                                                | Skipped if `route.id` missing (`8799`)                                                    |
-| `dismiss_route`       | `{routeId}` or `{routeIds: [...]}` (bulk)                                                                    | Marks matching routes `dismissed: true`; appends a `system-undo` chat pill ("N plans dismissed.") (`src/App.jsx:8859-8894`)                                                                                                                                         | `brainstorm_items.update({dismissed:true})` per id, skipping `temp_` ids (`8869-8876`)                                                                                                  | Undo pill calls `undoDismissRef.current(rid)` per id (`src/App.jsx:13869-13883`)          |
-| `generate_more_plans` | `{}`                                                                                                         | Fires `triggerRgRef.current({addMore: true})` — the imperative RG trigger in BrainstormView (`src/App.jsx:8896-8899`, ref at `7216`)                                                                                                                                | RG edge function generates additional routes                                                                                                                                            | —                                                                                         |
-| `update_day`          | `{day: {label, city, activities[], wishlist[]}}`                                                             | Replaces the matched day's activities + wishlist in `days` state; preserves existing photos by geocode; fetches Wikipedia photos for new non-transit activities async (`src/App.jsx:8961-9006`)                                                                     | Delete + re-insert of `activities` rows for the day (count-checked: if RLS blocked the delete, insert is skipped to avoid duplicates — `src/App.jsx:8912-8929`); `days.wishlist` update | Skipped if `label` missing or no matching day (case-insensitive label match, `8903-8909`) |
-| `suggest`             | `{suggestions: [{title, geocode, note, icon, type, area?, price?, bullets?}]}`                               | No dispatch — carried on the message and rendered as suggestion cards (`src/App.jsx:9009-9011`, `14134-14170`)                                                                                                                                                      | none                                                                                                                                                                                    | Hotel type gets `HotelSuggestionCard`                                                     |
-| `pending_routes`      | `{routeIds: [...]}`                                                                                          | For each id, issues a follow-up `callUnifiedChat("Apply the same change to route id=...")` and dispatches its actions — sequential fan-out for bulk route edits (`src/App.jsx:9013-9031`)                                                                           | via resulting `update_route` dispatches                                                                                                                                                 | Each follow-up is a separately billed chat call; failures warn and continue               |
-| `add_todo`            | `{text, category?, due_date?}`                                                                               | none (Board reloads from DB)                                                                                                                                                                                                                                        | Insert into `trip_todos` (`src/App.jsx:9033-9045`)                                                                                                                                      | Skipped without trip id or `text`                                                         |
-| `add_expense`         | `{title, amount, currency?, category?, is_planned?}`                                                         | none                                                                                                                                                                                                                                                                | Insert into `trip_expenses`, defaults USD / "Other" / planned (`src/App.jsx:9047-9062`)                                                                                                 | Skipped without `title` or `amount`                                                       |
-| `add_bookmark`        | `{title, url}`                                                                                               | none                                                                                                                                                                                                                                                                | Insert into `trip_bookmarks` with 🔗 icon (`src/App.jsx:9064-9077`)                                                                                                                     | Skipped without `title` or `url`                                                          |
-| `set_budget`          | `{amount}`                                                                                                   | none                                                                                                                                                                                                                                                                | `trips.update({budget_amount})` (`src/App.jsx:9079-9087`)                                                                                                                               | Skipped without `amount`                                                                  |
-| `navigate`            | `{tab: "magazine"\|"itinerary"\|"map"\|"board"}`                                                             | Switches `pretripTab` (brainstorm screen) or `activeBottomTab` (itinerary screen) and closes the chat sheet (`src/App.jsx:9089-9103`)                                                                                                                               | none                                                                                                                                                                                    | Unknown tabs are no-ops                                                                   |
-
-Unknown action types fall through the `switch` silently. Error handling is per-action (guard clauses + `console.warn`); a failed action never aborts the message or the remaining actions.
+- **Place checks**: `verifyNewPlaces` runs every new place through the verify-place ladder. Verified places get coordinates and corrected names. A **conclusive miss** (Google answered and there's no such place, so likely an invention) gets a Trippy note, "I couldn't find “X” on the map…", with a one-tap **Suggest alternatives** button. This is reported as PostHog `trippy_places_verified`.
+- **Undo from the change card** (`undoTrippyChange`) restores the RPC's before-snapshot (`restoreDayActivities`). If the day was edited since, it asks for confirmation first. It logs `undo` and sends PostHog `trippy_change_undone`.
 
 ---
 
-## 5. Streaming, billing, gating — summary of what's verified
+## 5. Entry points from other features
 
-- **Not streamed to the client.** The edge function requests `stream: true` from Anthropic but accumulates the full response server-side and returns one JSON body (`index.ts:254`, `283-312`, `398`). The frontend's `streaming: true` placeholder and blinking cursor (`src/App.jsx:14024-14043`) are a loading affordance only.
-- **Billing**: `llm_usage` insert + `deductCredits` run post-response via `runInBackground` (`index.ts:328-359`); real cache-aware token counts from stream events, length-estimate fallback.
-- **Gating**: 402 pre-flight when balance < 1.0 credit → frontend `openPaywall("Chatting with Trippy needs credits.")` (`src/App.jsx:9132-9134`) → `CreditsOverlay` bottom sheet.
-- **History cap**: last 6 messages (`index.ts:248`); prompt caching keeps the large static instruction block at 0.10× input cost across turns.
+| Source                                          | Mechanism                                                        |
+| ----------------------------------------------- | ---------------------------------------------------------------- |
+| Starter chips                                   | `sendChatDirect` (auto-send)                                     |
+| Activity "Suggest alternatives"                 | `sendChatDirect`, asking for alternatives without making changes |
+| Activity "Ask Trippy" / Magazine "Ask Trippy"   | Prefill `Tell me about "<title>"`                                |
+| Local gem "Tell me more"                        | `tellMeMoreGem`, which calls `sendChatDirect` (queued if busy)   |
+| Hotel "see options"                             | `sendChatDirect`                                                 |
+| Suggestion card "Know more"                     | `sendChatDirect`                                                 |
+| Poll close (day poll)                           | `applyPollClose`, which calls `sendChatDirect` (queued if busy)  |
+| Shared-trip "Rebalance" chip                    | `sendChatDirect`                                                 |
+| Follow-up buttons (e.g. "Suggest alternatives") | `sendChatDirect(m.followUp)`                                     |
 
----
-
-## 6. Chat entry points from other features
-
-All of these open the sheet and either prefill `chatInput` (user completes and sends) or fire `sendChatDirect` (auto-sends):
-
-| Source                                     | Mechanism                                                                                                       | Reference                                                              |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Route card "Modify Pn" (brainstorm)        | Prefill `Modify P2: `                                                                                           | `src/App.jsx:10343-10348`                                              |
-| Route card dismiss (manual, non-chat)      | Adds a `system-undo` pill to chat                                                                               | `src/App.jsx:10349-10359`                                              |
-| Activity "Replace"                         | Prefill `Replace "<title>" with `                                                                               | `src/App.jsx:11776-11784`                                              |
-| Activity "Suggest alternatives"            | Auto-send asking for 2-3 alternatives "without making any changes yet" (yields a `suggest` action)              | `src/App.jsx:11785-11791`                                              |
-| Local gem "Add to itinerary"               | Auto-send add request + soft-dismisses the gem with an undo pill (`dismissGemPersist`, `src/App.jsx:8705-8723`) | `src/App.jsx:11792-11803`                                              |
-| Hotel "Change" (own booking / see options) | Prefill or auto-send hotel-options request                                                                      | `src/App.jsx:11811-11835`                                              |
-| Magazine cards "Ask Trippy"                | Prefill `Tell me about "<title>"`                                                                               | `src/App.jsx:10521-10529`, `11168-11177`, `11919-11928`, `11989-11995` |
-| Suggestion card "know more"                | Auto-send detail request                                                                                        | `src/App.jsx:14146-14167`                                              |
-| Empty-state prompt chips                   | Prefill, screen-specific                                                                                        | `src/App.jsx:13815-13862`                                              |
-| IG completion                              | Sets `chatUnread` + pulses the mascot (`chatAttention`)                                                         | `src/App.jsx:8499-8508`                                                |
-
-Chat history also feeds **out** of chat: the pre-IG `extract-preferences` call sends `chatHistory` (minus undo rows) so preferences mentioned in conversation influence itinerary generation (`src/App.jsx:6817`).
+Chat history also feeds the pre-IG `extract-preferences` call.
 
 ---
+
+## 6. Version gate and old clients
+
+The Android APK runs its bundled web build until a Play update, so the server keeps the v2 contract for clients that don't send `protocol: 2`.
+
+- `src/UpdateGate.jsx` blocks clients older than `app_config.min_client_build`.
+- `app_config.chat_protocol1_retired` turns off v2 for older builds, which predate the gate.
+
+Both are in RUNBOOKS.md, under "Client version gate".
 
 ## Key files
 
-- `supabase/functions/chat/index.ts` — the entire chat edge function (auth → context → prompt → stream-accumulate → bill → parse → legacy shim).
-- `supabase/functions/_shared/credits.ts` — `authenticateUser`, `outOfCredits` (402), `rateLimit` (20/min), `deductCredits`, cache-aware cost math, `StreamUsage` helpers, `runInBackground`.
-- `src/App.jsx` — chat state (`7128-7178`), placeholder logic (`7135`), `sendChatDirect` (`8725`), `dispatchActions` (`8792-9107`), `callUnifiedChat` + 402 paywall (`9109-9140`), `sendChatMessage` (`9142`), collapsed bar (`12538`), chat sheet + message rendering + undo pills + suggestion cards (`13595-14294`).
-- `src/credits.js` — `openPaywall`, `refreshCredits` (module-level store behind the paywall flow).
-- `src/CreditsOverlay.jsx` — the paywall bottom sheet opened on 402.
+- `supabase/functions/chat/index.ts`: the endpoint (context, prompt, streaming, unusable-reply rules, billing, retired-contract switch).
+- `supabase/functions/chat/_ops.ts` (+ `_ops.test.ts`): refs, op validation and resolution.
+- `supabase/migrations/20261007000001_apply_activity_ops.sql`: the transactional ops RPC.
+- `supabase/migrations/20261008000001_app_config.sql`, `20261008000002_trip_messages_meta.sql`.
+- `supabase/functions/_shared/llm.ts`: `streamLLM`, `turnsOf`, `modelFor`.
+- `src/App.jsx`: `slimChatContext`, `callUnifiedChat`, `startTrippyTurn`, `performChatSend`, `finishTrippyTurn`, `dispatchActions`, `verifyNewPlaces`, `undoTrippyChange`, `chatStarterChips`.
+- `src/feed.js`: `restoreDayActivities` / `activityInsertShape` (undo keeps coordinates).
+- `src/version.js`, `src/UpdateGate.jsx`: the client build number and the gate.
+- E2E:
+  - `chat-apply` (mocked chat, real database);
+  - `activity-ops` (RPC contract);
+  - `chat-streaming`, `chat-actions`, `update-gate`;
+  - `chat-live` (real model; opt-in with `CHAT_LIVE=1`).

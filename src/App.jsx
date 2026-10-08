@@ -68,6 +68,7 @@ import {
   fetchReadState,
   markSeen,
   undoActivity,
+  restoreDayActivities,
 } from "./feed.js";
 import ActivityFeed from "./components/ActivityFeed.jsx";
 import WhileAwaySheet from "./components/WhileAwaySheet.jsx";
@@ -7649,6 +7650,94 @@ function DaySection({
 // Action types that actually change trip state — used for the "View Updated
 // Itinerary" affordance. A whitelist so future informational action types
 // (like richer suggests) can't masquerade as mutations on older clients.
+// What an activity_ops batch changed, from the RPC's per-day before/after
+// snapshots, for the chat's change card. Same-slot remove+add pairs read as
+// a swap. `dayLabel(id)` names a day.
+function summarizeOpsChanges(before, after, dayLabel) {
+  const flat = (days) =>
+    (days || []).flatMap((d) =>
+      (d.activities || []).map((a, i) => ({ ...a, _day: d.day_id, _i: i })),
+    );
+  const was = flat(before);
+  const now = flat(after);
+  const wasById = new Map(was.map((a) => [a.id, a]));
+  const nowById = new Map(now.map((a) => [a.id, a]));
+  const removed = was.filter((a) => !nowById.has(a.id));
+  const added = now.filter((a) => !wasById.has(a.id));
+  const changes = [];
+  for (const r of removed) {
+    const swap = added.find((a) => a._day === r._day && a._i === r._i);
+    if (swap) {
+      added.splice(added.indexOf(swap), 1);
+      changes.push({
+        kind: "swapped",
+        from: r.title,
+        title: swap.title,
+        time: swap.time,
+        day: dayLabel(r._day),
+      });
+    } else
+      changes.push({ kind: "removed", title: r.title, day: dayLabel(r._day) });
+  }
+  for (const a of added)
+    changes.push({
+      kind: "added",
+      title: a.title,
+      time: a.time,
+      day: dayLabel(a._day),
+    });
+  for (const a of now) {
+    const w = wasById.get(a.id);
+    if (!w) continue;
+    if (w._day !== a._day)
+      changes.push({
+        kind: "moved",
+        title: a.title,
+        time: a.time,
+        day: dayLabel(a._day),
+        fromDay: dayLabel(w._day),
+      });
+    else if ((w.time || "") !== (a.time || ""))
+      changes.push({
+        kind: "retimed",
+        title: a.title,
+        time: a.time,
+        day: dayLabel(a._day),
+      });
+  }
+  return changes;
+}
+
+// A day's content fingerprint, to notice edits made after Trippy's change.
+const daySignature = (acts) =>
+  (acts || []).map((a) => `${a.id}|${a.time || ""}|${a.title || ""}`).join(";");
+
+// What a Trippy reply carried besides its text, saved in trip_messages.meta
+// so cards survive a reload and reach co-travellers. Null when there's none.
+const CHAT_META_KEYS = [
+  "suggestions",
+  "hasChanges",
+  "changedRouteIds",
+  "changes",
+  "followUp",
+  "followUpLabel",
+];
+function chatMeta(fields) {
+  const meta = {};
+  for (const k of CHAT_META_KEYS) {
+    const v = fields[k];
+    if (v == null || v === false || (Array.isArray(v) && !v.length)) continue;
+    meta[k] = v;
+  }
+  return Object.keys(meta).length ? meta : null;
+}
+const fromChatMeta = (meta) =>
+  meta && typeof meta === "object"
+    ? Object.fromEntries(
+        CHAT_META_KEYS.filter((k) => meta[k] != null).map((k) => [k, meta[k]]),
+      )
+    : {};
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -8250,6 +8339,7 @@ export default function App({
             user_id: row.user_id,
             audience: row.audience,
             directed_user_id: row.directed_user_id,
+            ...fromChatMeta(row.meta),
           };
           setChatMessages((prev) =>
             prev.some((m) => m.id === row.id) ? prev : [...prev, mapped],
@@ -9987,7 +10077,7 @@ export default function App({
     if (!trip?.id) return;
     supabase
       .from("trip_messages")
-      .select("id, role, content, user_id, audience, directed_user_id")
+      .select("id, role, content, user_id, audience, directed_user_id, meta")
       .eq("trip_id", trip.id)
       .order("created_at")
       .then(({ data }) => {
@@ -9998,6 +10088,7 @@ export default function App({
           user_id: m.user_id,
           audience: m.audience,
           directed_user_id: m.directed_user_id,
+          ...fromChatMeta(m.meta),
         }));
         setChatMessages((prev) => {
           // If the user already sent messages while we were loading (e.g. right after IG),
@@ -11968,6 +12059,60 @@ export default function App({
         if (error) console.warn("trip_messages insert failed:", error.message);
       });
 
+  // One-tap undo of a Trippy edit: put the touched days back exactly as the
+  // RPC's before-snapshot had them. Asks first if a day changed since.
+  const undoTrippyChange = async (msg) => {
+    const u = msg.undo;
+    if (!u?.before?.length) return;
+    const edited = u.before.some((b) => {
+      const cur = daysRef.current.find((d) => d.id === b.day_id);
+      return cur && daySignature(cur.activities) !== u.afterSig?.[b.day_id];
+    });
+    if (edited) {
+      const go = await confirmSheet({
+        title: "Undo Trippy's change?",
+        message:
+          "This day was edited since — undoing will also revert those edits.",
+        confirmLabel: "Undo anyway",
+        cancelLabel: "Keep",
+        danger: true,
+      });
+      if (!go) return;
+    }
+    try {
+      for (const b of u.before)
+        await restoreDayActivities(b.day_id, b.activities || []);
+    } catch (e) {
+      console.warn("Trippy undo failed:", e?.message);
+      showToast("Undo failed — try from the activity feed");
+      return;
+    }
+    const byDay = new Map(u.before.map((b) => [b.day_id, b.activities || []]));
+    setDays((prev) =>
+      prev.map((d) =>
+        byDay.has(d.id) ? { ...d, activities: byDay.get(d.id) } : d,
+      ),
+    );
+    setChatMessages((prev) =>
+      prev.map((m) =>
+        m.id === msg.id ? { ...m, undo: null, undone: true } : m,
+      ),
+    );
+    logActivity({
+      tripId: trip?.id,
+      userId: session?.user?.id,
+      action: "undo",
+      entityType: "day",
+      entityId: u.before[0].day_id,
+      summary: "undid Trippy's edit",
+    });
+    posthog.capture("trippy_change_undone", {
+      days: u.before.length,
+      changes: msg.changes?.length || 0,
+    });
+    showToast("Undone");
+  };
+
   // Messages sent while Trippy is replying (chips, gem taps, poll closes) wait
   // here instead of being dropped, and go out one at a time. Refs rather than
   // state: the queue drains from a callback, where state captured by the
@@ -12451,8 +12596,19 @@ export default function App({
                 },
               });
             }
+            const labelOf = (id) =>
+              daysRef.current.find((x) => x.id === id)?.label || "a day";
             extra = {
               verify: toVerify,
+              changes: summarizeOpsChanges(res.before, res.after, labelOf),
+              // In-memory only: one-tap undo for this session (the feed keeps
+              // its own undo for later).
+              undo: {
+                before: res.before,
+                afterSig: Object.fromEntries(
+                  res.after.map((d) => [d.day_id, daySignature(d.activities)]),
+                ),
+              },
               ...(action.dropped ? { partial: true } : {}),
             };
             break;
@@ -13136,6 +13292,8 @@ export default function App({
     let hasChanges = false;
     let changedRouteIds = [];
     let deferred = [];
+    let changes = [];
+    let undo = null;
     try {
       // Stream words into the assistant bubble as they generate; the
       // streaming flag stays true so the blinking-cursor branch renders.
@@ -13175,6 +13333,12 @@ export default function App({
       }
 
       // Apply actions; the bubble reports what was actually applied.
+      if (data.actions?.some((a) => CHAT_MUTATION_TYPES.has(a.type)))
+        setChatMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, applying: true } : m,
+          ),
+        );
       if (data.actions?.length) {
         const results = await dispatchActions(data.actions, userMsg, history);
         const isMutation = (r) => CHAT_MUTATION_TYPES.has(r.type);
@@ -13183,6 +13347,8 @@ export default function App({
           .filter((r) => r.ok && r.routeId)
           .map((r) => r.routeId);
         deferred = results.flatMap((r) => r.deferred || []);
+        changes = results.flatMap((r) => (r.ok && r.changes) || []);
+        undo = results.find((r) => r.ok && r.undo)?.undo || null;
         const toVerify = results.flatMap((r) => (r.ok && r.verify) || []);
         if (toVerify.length) deferred.push(() => verifyNewPlaces(toVerify));
         if (
@@ -13223,6 +13389,8 @@ export default function App({
       suggestions,
       hasChanges,
       changedRouteIds,
+      changes: changes.length ? changes : null,
+      undo,
     });
     // Error bubbles are not saved: they'd come back on reload and be sent to
     // the model as if Trippy had said them.
@@ -13236,6 +13404,7 @@ export default function App({
         role: "assistant",
         content: finalContent,
         audience: "trippy",
+        meta: chatMeta({ suggestions, hasChanges, changedRouteIds, changes }),
       });
     }
     for (const run of deferred) run();
@@ -18985,8 +19154,13 @@ export default function App({
                             }}
                           >
                             {m.streaming && !m.content ? (
-                              <span style={{ color: T.mist, letterSpacing: 2 }}>
-                                ···
+                              <span style={{ color: T.mist }}>
+                                <span style={{ letterSpacing: 2 }}>···</span>{" "}
+                                <span
+                                  style={{ fontSize: 12, fontStyle: "italic" }}
+                                >
+                                  Trippy is thinking
+                                </span>
                               </span>
                             ) : (
                               renderMentions(m.content || "")
@@ -19004,7 +19178,95 @@ export default function App({
                                 }}
                               />
                             )}
+                            {m.streaming && m.applying && (
+                              <div
+                                style={{
+                                  marginTop: 6,
+                                  fontSize: 12,
+                                  fontStyle: "italic",
+                                  color: T.mist,
+                                }}
+                              >
+                                {screen === "brainstorm"
+                                  ? "Updating your plans…"
+                                  : "Updating your itinerary…"}
+                              </div>
+                            )}
+                            {isAI && m.changes?.length > 0 && !m.streaming && (
+                              <div
+                                aria-label="What changed"
+                                style={{
+                                  marginTop: 8,
+                                  paddingTop: 8,
+                                  borderTop: `1px solid ${T.border}`,
+                                  fontSize: 12,
+                                  lineHeight: 1.6,
+                                  color: T.ink,
+                                }}
+                              >
+                                {m.changes.slice(0, 8).map((c, ci) => (
+                                  <div key={ci}>
+                                    <span
+                                      style={{ color: T.mist, marginRight: 6 }}
+                                    >
+                                      {{
+                                        added: "+",
+                                        removed: "−",
+                                        swapped: "⇄",
+                                        moved: "→",
+                                        retimed: "⏱",
+                                      }[c.kind] || "•"}
+                                    </span>
+                                    {c.kind === "swapped"
+                                      ? `${c.from} → ${c.title}`
+                                      : c.title}
+                                    <span style={{ color: T.mist }}>
+                                      {c.kind === "moved"
+                                        ? ` · ${c.fromDay} → ${c.day}${c.time ? ` ${c.time}` : ""}`
+                                        : c.kind === "removed"
+                                          ? ` · ${c.day}`
+                                          : ` · ${c.day}${c.time ? ` ${c.time}` : ""}`}
+                                    </span>
+                                  </div>
+                                ))}
+                                {m.changes.length > 8 && (
+                                  <div style={{ color: T.mist }}>
+                                    +{m.changes.length - 8} more
+                                  </div>
+                                )}
+                                {m.undo && (
+                                  <button
+                                    onClick={() => undoTrippyChange(m)}
+                                    style={{
+                                      marginTop: 6,
+                                      background: "transparent",
+                                      border: `1px solid ${T.border}`,
+                                      borderRadius: RADIUS.sm,
+                                      padding: "3px 10px",
+                                      fontSize: 12,
+                                      fontFamily: "Georgia,serif",
+                                      color: T.ink,
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    Undo
+                                  </button>
+                                )}
+                                {m.undone && (
+                                  <div
+                                    style={{
+                                      marginTop: 4,
+                                      color: T.mist,
+                                      fontStyle: "italic",
+                                    }}
+                                  >
+                                    Undone
+                                  </div>
+                                )}
+                              </div>
+                            )}
                             {/* Place link-outs for AI messages mentioning places */}
+
                             {isAI &&
                               !m.streaming &&
                               m.content &&
@@ -19188,49 +19450,53 @@ export default function App({
                               {m.followUpLabel || "Ask Trippy"}
                             </button>
                           )}
-                          {isAI && m.hasChanges && !m.streaming && (
-                            <button
-                              onClick={() => {
-                                setChatOpen(false);
-                                if (screen === "brainstorm") {
-                                  setPretripTab("brainstorm");
-                                  // Scroll to first changed route
-                                  const targetId =
-                                    m.changedRouteIds?.[0] ||
-                                    pretripSelectedRouteId;
-                                  if (targetId) {
-                                    setPretripSelectedRouteId(null);
-                                    setTimeout(
-                                      () => setPretripSelectedRouteId(targetId),
-                                      100,
-                                    );
+                          {isAI &&
+                            m.hasChanges &&
+                            !m.undone &&
+                            !m.streaming && (
+                              <button
+                                onClick={() => {
+                                  setChatOpen(false);
+                                  if (screen === "brainstorm") {
+                                    setPretripTab("brainstorm");
+                                    // Scroll to first changed route
+                                    const targetId =
+                                      m.changedRouteIds?.[0] ||
+                                      pretripSelectedRouteId;
+                                    if (targetId) {
+                                      setPretripSelectedRouteId(null);
+                                      setTimeout(
+                                        () =>
+                                          setPretripSelectedRouteId(targetId),
+                                        100,
+                                      );
+                                    }
+                                  } else {
+                                    setActiveBottomTab("itinerary");
                                   }
-                                } else {
-                                  setActiveBottomTab("itinerary");
-                                }
-                              }}
-                              style={{
-                                marginTop: 8,
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 6,
-                                background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
-                                color: "white",
-                                border: "none",
-                                borderRadius: RADIUS.md,
-                                padding: "8px 14px",
-                                fontFamily: "Georgia,serif",
-                                fontSize: 12,
-                                cursor: "pointer",
-                                fontWeight: 600,
-                                boxShadow: SHADOW.md,
-                              }}
-                            >
-                              {trip
-                                ? "🗺️ View Updated Itinerary"
-                                : "💡 View Updated Plans"}
-                            </button>
-                          )}
+                                }}
+                                style={{
+                                  marginTop: 8,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  background: `linear-gradient(135deg, ${T.ocean}, ${T.dusk})`,
+                                  color: "white",
+                                  border: "none",
+                                  borderRadius: RADIUS.md,
+                                  padding: "8px 14px",
+                                  fontFamily: "Georgia,serif",
+                                  fontSize: 12,
+                                  cursor: "pointer",
+                                  fontWeight: 600,
+                                  boxShadow: SHADOW.md,
+                                }}
+                              >
+                                {trip
+                                  ? "🗺️ View Updated Itinerary"
+                                  : "💡 View Updated Plans"}
+                              </button>
+                            )}
                         </div>
                       );
                     })}

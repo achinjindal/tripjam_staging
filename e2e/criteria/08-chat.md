@@ -1,35 +1,49 @@
-# Chat (FAB & Bottom Sheet)
+# Chat ("Trippy")
 
-## FAB (Floating Action Button)
+Spec references: `e2e/chat-apply.spec.ts`, `chat-streaming.spec.ts`, `chat-actions.spec.ts`, `activity-ops.spec.ts`, `update-gate.spec.ts`, `chat-live.spec.ts` (`CHAT_LIVE=1`). Behaviour is described in `docs/user-journeys/08-chat.md`.
 
-1. Mascot FAB appears on itinerary and brainstorm screens
-2. FAB is draggable with edge-snap behavior (snaps to left or right edge)
-3. Tapping FAB opens chat bottom sheet
-4. FAB shows unread indicator after new AI responses (e.g. after IG generation)
+## Entry and empty state
 
-## Chat - Route Context (Pre-IG)
+1. Chat appears on the itinerary and brainstorm screens: inline on desktop, a collapsed bar plus sheet on mobile (Esc closes it).
+2. The greeting matches the stage (plans being made / plans ready / itinerary building / itinerary ready).
+3. Starter chips name only things that exist (plan labels, the real hotel, the busiest real day), are hidden while generating, and **send on tap**.
+4. The collapsed bar shows Trippy's last reply, or a placeholder that doesn't change between renders.
 
-5. Chat in brainstorm mode has write access to modify routes
-6. Routes are labeled R1–R4 — chat references them by label
-7. Chat can modify route details (add cities, change days, swap activities)
-8. Modified routes update in the UI after chat response
-9. Route count stays at exactly 4 — chat cannot add or remove routes
-10. Trip duration preserved unless user explicitly asks to change it
-11. Chat welcome message appears on first open in brainstorm
+## Sending and replies
 
-## Chat - Trip Context (Post-IG)
+5. Streamed words appear before the reply completes; cards render after it.
+6. While waiting: "Trippy is thinking"; while applying an edit: "Updating your itinerary…".
+7. The reply fills **its own** bubble, even if undo rows or other messages were added meanwhile.
+8. Messages sent while Trippy is replying (chips, gem taps, poll closes) are queued, not dropped: at most 3, no duplicates.
+9. An unusable reply (server `error` event) shows the server's message, changes nothing, is not saved, and is not charged.
+10. Error bubbles are not saved and are not sent back to the model as history.
+11. A 402 opens the paywall; a 429 says to slow down; other failures show a reason.
+12. Requests carry `protocol: 2`, `client_build`, and the slim context (under 30 KB, no `ig_response`, `magazine_digest` or photo URLs).
 
-12. Chat in itinerary mode can answer questions and suggest changes
-13. Hotel suggestion cards show photo (TripAdvisor), price, area, bullets
-14. Hotel suggestion card photo area collapses when no photo found
-15. "Use this" on hotel suggestion replaces the hotel in the itinerary
-16. Activity suggestion cards show photo (Wikipedia) and details
-17. Suggestion card photo area collapses when no photo found
-18. Chat messages persist in DB (trip_messages table)
-19. Chat welcome message appears after first IG generation
+## Itinerary edits (v3)
 
-## Chat UI
+13. Edits arrive as one `activity_ops` action and apply all-or-nothing through `apply_activity_ops`.
+14. A failed batch leaves the day unchanged and the bubble says nothing was changed.
+15. Partially dropped ops: the rest apply and the bubble says part couldn't be applied.
+16. Moved and untouched activities keep their saved data (coordinates, note, booked status). Untouched rows keep their ids.
+17. The change card lists added / removed / swapped / moved / retimed items.
+18. Undo on the card restores the day exactly (same ids and times). The card is saved in `meta` and shows after a reload, without the Undo button.
+19. Each touched day gets an `update_day` activity-log row whose undo snapshot includes coordinates (no `wishlist` key).
+20. New places are checked in the background. Verified ones get coordinates. A conclusive miss gets a Trippy note with a "Suggest alternatives" button that sends the follow-up.
 
-20. Chat input auto-resizes as user types
-21. Chat header shows mascot image and contextual subtitle
-22. Chat messages survive page refresh (loaded from DB)
+## v2 contract (old clients)
+
+21. `update_day` keeps kept activities' saved data (title match), inserts before deleting, and rolls back on failure.
+
+## RPC contract (`apply_activity_ops`)
+
+22. Several inserts after the same anchor keep their order; inserting after null puts the item at the start of the day.
+23. Replace creates a new row in the same slot (place data and booking cleared).
+24. Move across days renumbers both days; a removed row's day is renumbered.
+25. A transit hint is cleared only on rows whose next activity changed.
+26. Any invalid op (unknown id, anchor on another day) rolls back the whole batch; unknown ids are errors, never silent no-ops.
+
+## Version gate
+
+27. A web build older than `min_client_build.web` sees a blocking "Update TripJam" screen with Reload; the config message overrides the default text.
+28. No gate when the minimum is 0 or in the past, when only Android's minimum is raised, or when the config read fails (fails open).

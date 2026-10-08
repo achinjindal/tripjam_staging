@@ -446,6 +446,98 @@ test("places Trippy adds are verified; an unfindable one is flagged", async ({
   expect(String(bodies[1].message)).toContain(`alternatives to "${fake}"`);
 });
 
+test("change card lists the edit, Undo restores the day, card survives reload", async ({
+  page,
+}) => {
+  test.skip(!tripId, "QA trip not found");
+  test.setTimeout(150000);
+  const { data: cur } = await sb
+    .from("activities")
+    .select("id, title, time, position")
+    .eq("day_id", day.id)
+    .order("position");
+  test.skip(cur!.length < 2, "day 1 needs two activities");
+  const [first, second] = cur!;
+  const added = `E2E Card Cafe ${RUN}`;
+  await mockChat(page, [
+    {
+      type: "final",
+      data: {
+        message: `Reworked the morning (${RUN}).`,
+        actions: [
+          {
+            type: "activity_ops",
+            dropped: 0,
+            ops: [
+              { op: "set_time", activity_id: first.id, time: "06:15" },
+              { op: "remove", activity_id: second.id },
+              {
+                op: "insert",
+                day_id: day.id,
+                after_id: first.id,
+                activity: {
+                  time: "07:00",
+                  title: added,
+                  geocode: added,
+                  geocode_end: "",
+                  type: "food",
+                  duration: "30m",
+                  note: "",
+                  icon: "☕",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ]);
+  const ask = await openTripChat(page, tripId);
+  await ask.fill("e2e: rework the morning");
+  await ask.press("Enter");
+  const card = page.getByLabel("What changed").last();
+  await expect(card).toBeVisible({ timeout: 15000 });
+  await expect(card).toContainText(`${first.title} · ${day.label} 06:15`);
+  await expect(card).toContainText(added);
+  // Remove + insert in the same slot reads as a swap.
+  await expect(card).toContainText(`${second.title} → ${added}`);
+
+  // Saved with the message (meta) for reloads and co-travellers.
+  await expect
+    .poll(
+      async () =>
+        (
+          await sb
+            .from("trip_messages")
+            .select("meta")
+            .eq("trip_id", tripId)
+            .eq("content", `Reworked the morning (${RUN}).`)
+            .maybeSingle()
+        ).data?.meta?.changes?.length,
+      { timeout: 15000 },
+    )
+    .toBeGreaterThan(0);
+
+  await card.getByRole("button", { name: "Undo" }).click();
+  await expect(card).toContainText("Undone", { timeout: 15000 });
+  const { data: restored } = await sb
+    .from("activities")
+    .select("id, title, time, position")
+    .eq("day_id", day.id)
+    .order("position");
+  expect(restored!.map((a) => [a.id, a.time])).toEqual(
+    cur!.map((a) => [a.id, a.time]),
+  );
+
+  // After a reload the card is still there (from meta) but undo is not.
+  await page.reload();
+  await page.waitForTimeout(3000);
+  await dismissTripOverlays(page, 3000);
+  const reloaded = page.getByLabel("What changed").last();
+  await expect(reloaded).toContainText(added, { timeout: 20000 });
+  await expect(reloaded.getByRole("button", { name: "Undo" })).toHaveCount(0);
+});
+
 test("unusable reply changes nothing and isn't saved", async ({ page }) => {
   test.skip(!tripId, "QA trip not found");
   test.setTimeout(120000);
