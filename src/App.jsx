@@ -9865,7 +9865,19 @@ export default function App({
     // Affordable now: deep dives moved to gpt-6-luna, ~0.17 credits each, so
     // two extra pre-loads cost roughly a third of a credit. They were ~1.08
     // credits each on Haiku, which is why this was kept narrow before.
-    const countries = resolveCountriesForMagazine({ pendingForm, editingTrip });
+    // Use the SAME resolver the Magazine renders with. It previously used
+    // resolveCountriesForMagazine, which returns the LAST comma-segment:
+    // "Bali, Indonesia" -> "Indonesia", "Tokyo, Japan" -> "Japan". The
+    // Magazine renders resolveDestinationsForMagazine, the FIRST segment —
+    // "Bali", "Tokyo". So for any destination entered as "City, Country"
+    // (which is exactly what the place autocomplete produces) the pre-load
+    // warmed a key nothing displays: we paid for an "Indonesia" deep dive
+    // while the "Bali" card the traveller sees started cold. It only looked
+    // correct for bare single-word destinations, where the two agree.
+    const destCards = resolveDestinationsForMagazine({
+      pendingForm,
+      editingTrip,
+    });
     const preload = [];
     const pushUnique = (name) => {
       const k = (name || "").trim();
@@ -9873,11 +9885,13 @@ export default function App({
       if (!preload.some((p) => p.toLowerCase() === k.toLowerCase()))
         preload.push(k);
     };
-    countries.slice(0, 2).forEach(pushUnique);
+    destCards.slice(0, 2).forEach(pushUnique);
     // First cities of the first undismissed route — the order the Magazine
     // renders them, so we warm exactly what the traveller sees first. Also
     // covers Help-me-decide, where there is no country to resolve.
-    const countryKeys = new Set(countries.map((c) => c.toLowerCase()));
+    // Mirrors the Magazine's own exclusion: city cards skip anything already
+    // shown as a destination card.
+    const destKeys = new Set(destCards.map((c) => c.toLowerCase()));
     let cityCount = 0;
     outer: for (const route of pretripRoutes) {
       if (route.dismissed) continue;
@@ -9885,7 +9899,7 @@ export default function App({
         .split(",")
         .map((x) => x.trim())
         .filter(Boolean)) {
-        if (countryKeys.has(c.toLowerCase())) continue;
+        if (destKeys.has(c.toLowerCase())) continue;
         const before = preload.length;
         pushUnique(c);
         // Count only what was actually added, so duplicates across routes do
