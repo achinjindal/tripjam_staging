@@ -12809,6 +12809,68 @@ export default function App({
     return results;
   };
 
+  // The trip context chat sends, cut to the fields the chat function reads
+  // (supabase/functions/chat: trip logistics, route summaries, and per day
+  // its activities' id/position/time/title/type/duration/booked + gem
+  // titles). The full rows were 47-94 KB per message — mostly the trip's
+  // ig_response and magazine_digest, and photo URLs — for ~3k tokens used.
+  // Keep in step with the server if it starts reading another field.
+  const slimChatContext = () => {
+    const t = trip || editingTrip || null;
+    const pick = (o, keys) =>
+      Object.fromEntries(
+        keys.filter((k) => o?.[k] != null).map((k) => [k, o[k]]),
+      );
+    return {
+      trip: t
+        ? pick(t, [
+            "id",
+            "name",
+            "destination",
+            "arrival_time",
+            "arrival_city",
+            "arrival_mode",
+            "departure_time",
+            "departure_city",
+            "departure_mode",
+          ])
+        : null,
+      // P1..Pn = this list's order, the same one the starter chips use.
+      routes: (pretripRoutes || [])
+        .filter((r) => !r.dismissed)
+        .map((r) =>
+          pick(r, [
+            "id",
+            "title",
+            "city",
+            "tagline",
+            "bestFor",
+            "warning",
+            "recommended",
+            "days",
+            "points",
+          ]),
+        ),
+      days: (daysRef.current || []).map((d) => ({
+        ...pick(d, ["id", "label", "city"]),
+        activities: (d.activities || []).map((a) =>
+          pick(a, [
+            "id",
+            "position",
+            "time",
+            "title",
+            "type",
+            "duration",
+            "confirmed",
+          ]),
+        ),
+        wishlist: (d.wishlist || [])
+          .filter((w) => w?.title)
+          .map((w) => pick(w, ["title", "dismissed"])),
+      })),
+    };
+  };
+
   // callUnifiedChat re-issues the chat request. spendPersonal:true is set only
   // by the fork-paywall retry on a shared trip whose pool is empty — it tells
   // the server to resolve the spend to the caller's personal wallet for this
@@ -12858,9 +12920,7 @@ export default function App({
         },
         body: JSON.stringify({
           screen,
-          trip: trip || editingTrip || null,
-          routes: (pretripRoutes || []).filter((r) => !r.dismissed),
-          days: daysRef.current || [],
+          ...slimChatContext(),
           form: pendingForm || {},
           message,
           // Chat v3: itinerary edits come back as small operations

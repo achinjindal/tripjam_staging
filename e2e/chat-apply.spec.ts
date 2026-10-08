@@ -264,6 +264,19 @@ test("v3 activity_ops apply atomically and log an undo snapshot", async ({
     page.getByText(`Added a coffee stop (${RUN}).`).last(),
   ).toContainText("Part of that couldn't be applied", { timeout: 15000 });
   expect(bodies[0]?.protocol).toBe(2);
+  // Slim context: only the fields the chat function reads, not the full
+  // trip / activity rows (those were 47-94 KB a message).
+  const body = bodies[0] as {
+    trip: Record<string, unknown>;
+    days: Array<{ activities: Array<Record<string, unknown>> }>;
+  };
+  expect(JSON.stringify(body).length).toBeLessThan(30000);
+  expect(body.trip.ig_response).toBeUndefined();
+  expect(body.trip.magazine_digest).toBeUndefined();
+  expect(Object.keys(body.days[0].activities[0]).sort()).toEqual(
+    expect.arrayContaining(["id", "position", "title"]),
+  );
+  expect(body.days[0].activities[0].photo_url).toBeUndefined();
   const { data: after } = await sb
     .from("activities")
     .select("*")
