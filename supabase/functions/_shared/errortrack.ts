@@ -26,6 +26,45 @@ interface ErrorContext {
   [k: string]: unknown;
 }
 
+// The three named fields map to dedicated properties below; everything else a
+// caller passes is forwarded verbatim. Without this, `[k: string]: unknown`
+// advertised arbitrary context that was silently dropped at runtime — a
+// diagnostic passed to captureException never reached PostHog, which is how
+// "model returned unparseable digest" (issue #13) arrived with no raw output
+// attached and had to be chased through 24h-retention edge logs instead.
+const NAMED_KEYS = new Set(["functionName", "userId", "tripId"]);
+
+// PostHog rejects oversized payloads; a raw model response can be far larger
+// than anything useful to read in the UI.
+const MAX_PROP_CHARS = 8_000;
+
+function clip(s: string): string {
+  return s.length > MAX_PROP_CHARS
+    ? `${s.slice(0, MAX_PROP_CHARS)}…[truncated, ${s.length} chars total]`
+    : s;
+}
+
+/** Forward caller-supplied context as PostHog properties. Never throws. */
+function extraProps(ctx: ErrorContext): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(ctx)) {
+    // `$`-prefixed keys are PostHog's own namespace — never let a caller
+    // overwrite $exception_list and friends.
+    if (NAMED_KEYS.has(k) || k.startsWith("$") || v === undefined) continue;
+    if (typeof v === "string") out[k] = clip(v);
+    else if (v === null || typeof v === "number" || typeof v === "boolean")
+      out[k] = v;
+    else {
+      try {
+        out[k] = clip(JSON.stringify(v) ?? String(v));
+      } catch {
+        out[k] = String(v); // circular or otherwise unserializable
+      }
+    }
+  }
+  return out;
+}
+
 /** Send an exception to PostHog error tracking. Never throws. */
 export async function captureException(
   err: unknown,
@@ -42,6 +81,9 @@ export async function captureException(
         event: "$exception",
         distinct_id: ctx.userId || `edge:${ctx.functionName || "unknown"}`,
         properties: {
+          // Spread first so the canonical fields below always win — a caller
+          // passing `app_env` or `function_name` must not shadow them.
+          ...extraProps(ctx),
           $exception_list: [
             {
               type: e.name,

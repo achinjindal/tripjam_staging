@@ -1144,12 +1144,56 @@ serve(async (req) => {
 
     if (!parsed) {
       // Both models failed to produce parseable JSON.
+      //
+      // The raw output is the entire diagnosis — whether this was truncation, a
+      // prose preamble, a markdown fence, or an empty body. It used to live
+      // only in console.error, i.e. in edge logs that expire in 24h on the
+      // Free tier, so issue #13 surfaced in PostHog with nothing to read and
+      // the evidence aged out before anyone looked. Capture it durably BEFORE
+      // throwing, with enough path context to tell the failure modes apart:
+      // `quick` requests skip both the Brave path and the Sonnet escalation,
+      // so a quick call is Haiku-alone with no second model to rescue a bad
+      // parse — a very different bug from both models genuinely failing.
+      const err = new Error("model returned unparseable digest");
       console.error(
         `unparseable digest. ${usedModel} raw (first 500):`,
         research.text?.slice(0, 500),
         sonnet ? "| sonnet raw (first 500): " + sonnet.text?.slice(0, 500) : "",
       );
-      throw new Error("model returned unparseable digest");
+      await captureException(err, {
+        functionName: "generate-destination-research",
+        userId: user.id,
+        tripId,
+        // Which retrieval path actually ran. Brave and Gemini both fall back
+        // to Anthropic on any shortfall, so the live secret does not tell you
+        // what served this request.
+        search_path: selfServed
+          ? "brave"
+          : grounded?.ok
+            ? "gemini-grounded"
+            : "anthropic",
+        quick,
+        batch,
+        escalated: !!sonnet,
+        research_model: researchModel,
+        escalation_model: sonnet ? ESCALATION_MODEL : null,
+        web_search_count: webSearchCount,
+        items_before_parse: items.length,
+        destinations: destinations.join(" | "),
+        tags: tagResult.tags,
+        month_bucket: monthBucket,
+        // The payloads themselves. Lengths are separate because the text is
+        // clipped on the way to PostHog and "empty" vs "truncated at 8k" are
+        // different diagnoses.
+        primary_raw: research.text ?? "",
+        primary_raw_len: research.text?.length ?? 0,
+        sonnet_raw: sonnet?.text ?? null,
+        sonnet_raw_len: sonnet?.text?.length ?? 0,
+      });
+      // Already reported with full context — stop the outer handler from
+      // filing a second, context-free copy of the same failure.
+      (err as Error & { captured?: boolean }).captured = true;
+      throw err;
     }
     if (!Array.isArray(parsed.inspirations)) parsed.inspirations = [];
     // Enforce the named-author rule deterministically — the model sometimes
@@ -1304,9 +1348,12 @@ serve(async (req) => {
       "generate-destination-research error:",
       (err as Error).message,
     );
-    await captureException(err, {
-      functionName: "generate-destination-research",
-    });
+    // Paths that already reported with full diagnostic context mark the error
+    // so this catch-all does not file a second, emptier copy of it.
+    if (!(err as Error & { captured?: boolean }).captured)
+      await captureException(err, {
+        functionName: "generate-destination-research",
+      });
     return new Response(JSON.stringify({ error: (err as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
