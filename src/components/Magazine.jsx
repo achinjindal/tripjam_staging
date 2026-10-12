@@ -25,6 +25,7 @@ import {
   _photoCache,
   _PHOTO_IN_FLIGHT,
   wikiQueuedFetch,
+  isNonPlacePhoto,
 } from "../photos";
 
 export function DestinationHero({ dest, isLoading, data, children }) {
@@ -38,11 +39,18 @@ export function DestinationHero({ dest, isLoading, data, children }) {
     // Filename blocklist — ALSO applied to cached heroes so a previously
     // cached bad pick (e.g. the FEZ video-game art matching the city "Fez")
     // self-heals after the pattern list grows.
-    const BAD =
+    const HERO_BAD =
       /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|panorama|blank|in_Indonesia|location|special_marker|video.?game|gameplay|screenshot|cover.?art|box.?art/i;
+    // Hero-specific list ABOVE, shared "never a photo of a place" rules via
+    // isNonPlacePhoto. The hero used to carry only its own list, so the
+    // video-poster-frame fix of 2026-10-08 landed in the itinerary grid and
+    // never reached here — and neither list caught a politician's portrait
+    // ("The_Chief_Minister_of_Goa,_Shri_…jpg" was served full-bleed as the
+    // South Goa hero, via the search fallback hitting an election article).
+    const BAD = (u) => HERO_BAD.test(u) || isNonPlacePhoto(u);
     try {
       const cached = localStorage.getItem(cacheKey);
-      if (cached && !BAD.test(cached)) {
+      if (cached && !BAD(cached)) {
         setPhotoUrl(cached);
         setPhotoLoaded(true);
         return;
@@ -59,14 +67,14 @@ export function DestinationHero({ dest, isLoading, data, children }) {
       );
       const page = Object.values(d?.query?.pages || {})[0];
       const src = page?.thumbnail?.source;
-      if (src && !BAD.test(src)) return src;
+      if (src && !BAD(src)) return src;
       // Fallback 1: search destination name
       const d2 = await wikiQueuedFetch(
         `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(dest)}&gsrlimit=3&prop=pageimages&pithumbsize=900&format=json&origin=*`,
       );
       for (const p of Object.values(d2?.query?.pages || {})) {
         const s = p?.thumbnail?.source;
-        if (s && !BAD.test(s)) return s;
+        if (s && !BAD(s)) return s;
       }
       // Fallback 2: search "Tourism in {dest}" — country pages often have flag as main image
       const d3 = await wikiQueuedFetch(
@@ -74,7 +82,7 @@ export function DestinationHero({ dest, isLoading, data, children }) {
       );
       for (const p of Object.values(d3?.query?.pages || {})) {
         const s = p?.thumbnail?.source;
-        if (s && !BAD.test(s)) return s;
+        if (s && !BAD(s)) return s;
       }
       return null;
     };

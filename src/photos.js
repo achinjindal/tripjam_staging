@@ -124,6 +124,62 @@ export function _isPortrait(url) {
   );
 }
 
+/* ── Shared "this is never a photograph of a place" filters ──────────────
+   These live at module scope and are used by BOTH the activity photo chain
+   (good(), below) and the Magazine destination hero, which used to carry its
+   own drifting copy of a blocklist. That drift was the bug: the video-frame
+   filter added 2026-10-08 fixed the itinerary grid while the hero kept
+   showing the same class of image. Patterns that belong to ONE surface stay
+   there — the grid also rejects skyline/aerial/panorama, which are wrong for
+   a thumbnail but exactly what a destination hero wants. */
+
+// Commons serves a VIDEO's poster frame as a .jpg under the video's own path:
+// /thumb/c/c1/Foo.webm/960px--Foo.webm.jpg. Those frames are whatever the
+// camera happened to be on — a Wikipedia promo reel put a talking head on
+// "Arashiyama Bamboo Grove" and "Shibuya Crossing" in production. The URL
+// contains no literal "video", so every substring check passed it.
+const VIDEO_SOURCED = /\.(webm|ogv|ogg|mp4|m4v|mov|avi|mpe?g)[./]/i;
+
+// Wikipedia/Wikimedia's own branded media — anniversary reels, logos,
+// campaign assets. Never a photograph of a place, and they rank high because
+// they are linked from everywhere on Commons.
+const WIKI_BRANDED = /\/(Wikipedia|Wikimedia|Wikimania|Wiki_?Loves)[_-]/i;
+
+// Photos of PEOPLE that _isPortrait misses because the filename is a caption
+// rather than a filename convention. "South Goa" returned the 2027 Goa
+// election article, whose page image is
+// "The_Chief_Minister_of_Goa,_Shri_Pramod_Sawant.jpg" — a politician at a
+// podium, shown full-bleed as the destination hero.
+//
+// Deliberately narrow, because office words appear in real place names. It
+// matches an honorific ("Shri_", "Smt."), or the "The_<Office>_of_" caption
+// shape used by government photo releases. It does NOT match
+// "Governor's_Palace_Williamsburg" or "Presidential_Palace_Hanoi", which are
+// buildings and legitimately good photos.
+const PERSON_TITLE =
+  /(?:^|[/_])(?:Shri|Smt|Sri|Hon(?:'|%27)?ble)[._]|The_(?:Chief_|Deputy_|Prime_|Vice_)?(?:Minister|President|Governor|Chairman|Chairperson|Secretary|Mayor|Ambassador|Chancellor)[._](?:of|for|in)[._]/i;
+
+// Administrative boundary maps. Restricted to png/svg/gif on purpose:
+// photographs are overwhelmingly .jpg, so "Shibuya_district.jpg" (a real
+// street photo) survives while "South_Goa_district.png" (a boundary map, and
+// what Wikipedia offers for most Indian districts) is rejected.
+const ADMIN_MAP =
+  /_(district|taluka?|tehsil|province|prefecture|municipality|county|subdivision)\.(png|svg|gif)(?:[.?/]|$)/i;
+
+/** True when a URL can never be a usable photo of a place. Shared by the
+ *  itinerary/Magazine photo chain and the destination hero. */
+export function isNonPlacePhoto(url) {
+  if (!url) return true;
+  const decoded = decodeURIComponent(url);
+  return (
+    _isPortrait(url) ||
+    PERSON_TITLE.test(decoded) ||
+    ADMIN_MAP.test(decoded) ||
+    VIDEO_SOURCED.test(url) ||
+    WIKI_BRANDED.test(url)
+  );
+}
+
 /* ── City b-roll video (Story hero slides) ──────────────────────────────
    Destination-level Pexels footage via places-proxy (keyed API, cached
    server-side 30d). Module-cached by promise so concurrent days dedupe. */
@@ -252,25 +308,17 @@ export const wikiQueuedFetch = makeQueue(250, 3); // Wikimedia — 3 concurrent,
 export async function _fetchPhoto(geocode, city, type, hotelOpts, extras = {}) {
   const BAD_PATTERNS =
     /\.(svg|pdf)(\.|$)|map|marker|locator|flag|coat.of.arms|emblem|logo|icon|pictogram|seal_of|coa_of|blank|skyline|panorama|aerial|regulation|commission|directive|painting|drawing|ukiyo|woodblock|engraving|lithograph|poster|artwork|sketch|illustration|video.?game|gameplay|screenshot|cover.?art|box.?art/i;
-  // Commons serves a VIDEO's poster frame as a .jpg under the video's own
-  // path: /thumb/c/c1/Foo.webm/960px--Foo.webm.jpg. Those frames are whatever
-  // the camera happened to be on — a Wikipedia promo reel put a talking head
-  // on "Arashiyama Bamboo Grove" and "Shibuya Crossing" in production. The
-  // existing list has `video.?game` (for game screenshots) but nothing that
-  // matches a video FILE, and the URL contains no literal "video", so it
-  // passed every check.
-  const VIDEO_SOURCED = /\.(webm|ogv|ogg|mp4|m4v|mov|avi|mpe?g)[./]/i;
-  // Wikipedia/Wikimedia's own branded media — anniversary reels, logos,
-  // campaign assets. Never a photograph of a place, and they rank high
-  // because they are linked from everywhere.
-  const WIKI_BRANDED = /\/(Wikipedia|Wikimedia|Wikimania|Wiki_?Loves)[_-]/i;
+  // Video frames, wiki-branded assets, people and boundary maps are rejected
+  // by the shared isNonPlacePhoto() at module scope — the same filter the
+  // Magazine hero uses, so a pattern added for one surface protects both.
+  // BAD_PATTERNS stays local: it additionally rejects skyline/aerial/panorama
+  // and artwork, which are wrong for an activity thumbnail but are exactly
+  // what a destination hero wants.
   const good = (url) =>
     url &&
-    !_isPortrait(url) &&
+    !isNonPlacePhoto(url) &&
     !_usedPhotoUrls.has(url) &&
-    !BAD_PATTERNS.test(url) &&
-    !VIDEO_SOURCED.test(url) &&
-    !WIKI_BRANDED.test(url);
+    !BAD_PATTERNS.test(url);
 
   // Deduplicate: return cached result immediately if already fetched.
   // NOTE: a cache hit is returned even when the URL is in _usedPhotoUrls —
