@@ -22,9 +22,10 @@
 -- 4. A non-member could spend another trip's pool: resolve_credit_source
 --    and deduct_credits never checked membership. resolve_credit_source now
 --    returns source 'denied' for a caller who is neither a member nor the
---    owner of an existing trip (edge functions answer 403; an edge function
---    deployed before this treats anything but 'pool' as personal, which is
---    also safe), and deduct_credits only debits a pool for a member.
+--    owner of an existing trip (edge functions answer 403; one deployed
+--    before this reads 'denied' as a personal wallet with balance 0 and
+--    answers 402, which is also safe), and deduct_credits only debits a
+--    pool for a member.
 -- 5. Owner rights keyed on trips.created_by, which transfer_ownership never
 --    changes: an ex-creator kept update/delete rights (even after being
 --    removed) and the new owner had fewer. They now key on owner_id.
@@ -178,10 +179,17 @@ BEGIN
       RAISE EXCEPTION 'pooled credits change only through a purchase or an AI charge'
         USING errcode = 'P0001';
     END IF;
-    IF OLD.owner_id IS DISTINCT FROM auth.uid() AND (
-         NEW.owner_id    IS DISTINCT FROM OLD.owner_id
-      OR NEW.share_token IS DISTINCT FROM OLD.share_token) THEN
-      RAISE EXCEPTION 'co-travellers cannot change ownership or the share link'
+    -- Ownership moves only through transfer_ownership (SECURITY DEFINER, so
+    -- current_user is its owner there, not a client role): a direct UPDATE,
+    -- even by the owner, could hand the trip to a non-member.
+    IF NEW.owner_id IS DISTINCT FROM OLD.owner_id
+       AND current_user IN ('authenticated', 'anon') THEN
+      RAISE EXCEPTION 'ownership changes only through transfer_ownership'
+        USING errcode = 'P0001';
+    END IF;
+    IF OLD.owner_id IS DISTINCT FROM auth.uid()
+       AND NEW.share_token IS DISTINCT FROM OLD.share_token THEN
+      RAISE EXCEPTION 'co-travellers cannot change the share link'
         USING errcode = 'P0001';
     END IF;
   END IF;

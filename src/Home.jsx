@@ -73,7 +73,9 @@ export default function Home({
     const isOwner = trip.owner_id === session.user.id;
     let others = [];
     if (isOwner) {
-      others = (await fetchMembers(trip.id)).filter(
+      // fetchMembers returns [] on an RPC error; the catch covers a network
+      // throw, so the sheet still opens (without the names).
+      others = (await fetchMembers(trip.id).catch(() => [])).filter(
         (m) => m.user_id !== session.user.id,
       );
     }
