@@ -145,7 +145,7 @@ test.describe("Pre-launch UX fixes", () => {
   test.skip(!INVITE_ENABLED, "requires VITE_INVITE_ENABLED=true");
   test.setTimeout(180000);
 
-  test("auto-sheets queue one at a time: welcome → while-away → style nudge", async ({
+  test("auto-sheets: one welcome sheet absorbs while-away, nothing chains after", async ({
     page,
   }) => {
     const ctx = await setup();
@@ -183,35 +183,33 @@ test.describe("Pre-launch UX fixes", () => {
       test.skip(!opened, `could not open "${TRIP_NAME}"`);
       await page.waitForTimeout(3000);
 
-      // 1. ONLY the welcome sheet.
+      // 1. ONE sheet: the welcome briefing absorbs the while-away digest
+      // (WelcomeSheet awayUnseen, 80b5715) instead of chaining a second
+      // sheet after it, and the style nudge stays queued behind it.
       await expect(page.locator("text=You're on the trip 🎉")).toBeVisible({
         timeout: 10000,
       });
-      await expect(page.locator("text=While you were away")).not.toBeVisible();
+      await expect(
+        page.getByText("WHILE YOU WERE AWAY", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText("While you were away", { exact: true }),
+      ).not.toBeVisible();
       await expect(
         page.locator("text=Trippy plans for everyone on the trip."),
       ).not.toBeVisible();
 
-      // 2. Close welcome → while-away appears (deferred, not skipped).
+      // 2. Close welcome → nothing chains after it: no separate while-away
+      // sheet (its bullets were shown), and no style nudge (the welcome
+      // sheet pre-marks it as consumed; its own CTA covers style).
       await page.locator("text=Look around first").click();
-      await expect(page.locator("text=While you were away")).toBeVisible({
-        timeout: 8000,
-      });
-      await expect(
-        page.locator("text=Trippy plans for everyone on the trip."),
-      ).not.toBeVisible();
-
-      // 3. Close while-away → NO style nudge: the welcome sheet pre-marks it
-      // as consumed (its own CTA covers style), so the queue ends here.
-      await page
-        .locator("button, div", { hasText: /^Got it$/ })
-        .last()
-        .click();
       await page.waitForTimeout(2500);
       await expect(
+        page.getByText("While you were away", { exact: true }),
+      ).not.toBeVisible();
+      await expect(
         page.locator("text=Trippy plans for everyone on the trip."),
       ).not.toBeVisible();
-      await expect(page.locator("text=While you were away")).not.toBeVisible();
     } finally {
       await cleanupJoinNoise(ctx!);
       await owner.from("trips").update({ notes: savedNotes }).eq("id", tripId);

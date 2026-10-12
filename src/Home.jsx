@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
-import { confirmSheet } from "./dialogs.jsx";
+import { confirmSheet, showToast } from "./dialogs.jsx";
+import { fetchMembers, leaveTrip, memberName } from "./members.js";
 import { T, RADIUS, SHADOW, MOTION } from "./theme";
 import PendingInvitesBanner from "./PendingInvitesBanner.jsx";
 
@@ -64,31 +65,57 @@ export default function Home({
   const [deletingId, setDeletingId] = useState(null);
   const [infoOpenId, setInfoOpenId] = useState(null);
 
-  async function deleteTrip(e, tripId) {
+  // The owner deletes the trip for everyone (one RPC; rows cascade). Anyone
+  // else only leaves it: the old client-side deletes, run by a co-member,
+  // wiped the shared itinerary for the whole group.
+  async function deleteTrip(e, trip) {
     e.stopPropagation();
-    const ok = await confirmSheet({
-      title: "Delete this trip?",
-      message:
-        "The itinerary, board, and chat history will be permanently deleted. This can't be undone.",
-      confirmLabel: "Delete trip",
-      danger: true,
-    });
-    if (!ok) return;
-    setDeletingId(tripId);
-    await supabase
-      .from("activities")
-      .delete()
-      .in(
-        "day_id",
-        (
-          await supabase.from("days").select("id").eq("trip_id", tripId)
-        ).data?.map((d) => d.id) || [],
+    const isOwner = trip.owner_id === session.user.id;
+    let others = [];
+    if (isOwner) {
+      others = (await fetchMembers(trip.id)).filter(
+        (m) => m.user_id !== session.user.id,
       );
-    await supabase.from("days").delete().eq("trip_id", tripId);
-    await supabase.from("trip_members").delete().eq("trip_id", tripId);
-    await supabase.from("trips").delete().eq("id", tripId);
-    setTrips((prev) => prev.filter((t) => t.id !== tripId));
-    setDeletingId(null);
+    }
+    const names = others.map((m) => memberName(m, session.user.id));
+    const ok = await confirmSheet(
+      !isOwner
+        ? {
+            title: "Leave this trip?",
+            message:
+              "It will disappear from your trips. Everyone else keeps it, and the owner can invite you back.",
+            confirmLabel: "Leave trip",
+            danger: true,
+          }
+        : {
+            title: "Delete this trip?",
+            message: names.length
+              ? `This deletes it for everyone: ${names.join(", ")} will lose the itinerary, board, and chat too. This can't be undone.`
+              : "The itinerary, board, and chat history will be permanently deleted. This can't be undone.",
+            confirmLabel: names.length ? "Delete for everyone" : "Delete trip",
+            danger: true,
+          },
+    );
+    if (!ok) return;
+    setDeletingId(trip.id);
+    try {
+      if (isOwner) {
+        const { error } = await supabase.rpc("delete_trip", {
+          p_trip: trip.id,
+        });
+        if (error) throw error;
+      } else {
+        await leaveTrip(trip.id);
+      }
+      setTrips((prev) => prev.filter((t) => t.id !== trip.id));
+    } catch (err) {
+      console.error("deleteTrip failed:", err);
+      showToast(
+        isOwner ? "Couldn't delete the trip" : "Couldn't leave the trip",
+      );
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   useEffect(() => {
@@ -118,7 +145,7 @@ export default function Home({
       // PostgREST computed column replacing the ig_response truthiness
       // check. The full trip is fetched on card open (onOpenTripById).
       const TRIP_LIST_COLS =
-        "id,name,destination,start_date,end_date,created_by,origin_city," +
+        "id,name,destination,start_date,end_date,created_by,owner_id,origin_city," +
         "arrival_time,departure_time,created_at,updated_at,arrival_city," +
         "departure_city,summary,notes,arrival_mode,departure_mode,has_car," +
         "share_token,ig_count,budget_amount,budget_currency,base_location," +
@@ -515,7 +542,7 @@ export default function Home({
                       ✏️
                     </button>
                     <button
-                      onClick={(e) => deleteTrip(e, trip.id)}
+                      onClick={(e) => deleteTrip(e, trip)}
                       disabled={deletingId === trip.id}
                       style={{
                         background: "none",
@@ -526,7 +553,16 @@ export default function Home({
                         padding: "4px",
                         opacity: deletingId === trip.id ? 0.4 : 1,
                       }}
-                      title="Delete trip"
+                      title={
+                        trip.owner_id === session.user.id
+                          ? "Delete trip"
+                          : "Leave trip"
+                      }
+                      aria-label={
+                        trip.owner_id === session.user.id
+                          ? "Delete trip"
+                          : "Leave trip"
+                      }
                     >
                       🗑️
                     </button>

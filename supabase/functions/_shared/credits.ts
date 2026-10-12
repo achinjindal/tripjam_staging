@@ -281,6 +281,7 @@ export function outOfPool(
 // wallet pays (personal for solo/null trip or an explicit opt-in; pool for a
 // shared trip) via one SECURITY DEFINER RPC, checks THAT balance >= min, and
 // returns the resolved source so the caller can thread it into deductCredits.
+//   - Existing trip the caller isn't on → 403 `not_a_member`.
 //   - Solo/null trip → source 'personal', gate identical to requireMinCredits.
 //   - Shared trip, pool short → 402 `empty_trip_pool` (fork); personal untouched.
 export async function resolveAndGate(
@@ -317,6 +318,23 @@ export async function resolveAndGate(
   }
 
   const row = Array.isArray(data) ? data[0] : data;
+  // The trip exists and the caller is neither a member nor its owner: never
+  // run (or bill) an AI call against someone else's trip.
+  if (row?.source === "denied") {
+    return {
+      gate: new Response(
+        JSON.stringify({
+          error: "Not a member of this trip",
+          code: "not_a_member",
+        }),
+        {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      ),
+      source: "personal",
+    };
+  }
   const source: CreditSource = row?.source === "pool" ? "pool" : "personal";
   const balance = Number(
     row?.balance ?? (source === "personal" ? user.credits : 0),

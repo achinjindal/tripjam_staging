@@ -287,14 +287,18 @@ test.describe("Collaboration — real multi-user join (Phase 1)", () => {
     expect(String(token)).toMatch(/[a-f0-9-]{36}/);
 
     // Ensure B is not already a member from a prior run (idempotent cleanup).
-    // leave_trip errors harmlessly if B isn't a member — swallow it.
+    // Only ask leave_trip when B really is a member: before the 2026-10-09
+    // fix, leave_trip by a non-member deleted the owner's solo trip — this
+    // step is how the QA trip kept vanishing. supabase-js returns errors
+    // rather than throwing, so a try/catch here never fired.
     const bPre = await signedClient(SECOND_EMAIL, SECOND_PASSWORD);
     if (bPre) {
-      try {
-        await bPre.rpc("leave_trip", { p_trip: tripId });
-      } catch {
-        /* not a member yet — fine */
-      }
+      const { data: bRow } = await bPre
+        .from("trip_members")
+        .select("trip_id")
+        .eq("trip_id", tripId)
+        .maybeSingle();
+      if (bRow) await bPre.rpc("leave_trip", { p_trip: tripId });
     }
 
     // Baseline member count (should be 1 = owner only).
