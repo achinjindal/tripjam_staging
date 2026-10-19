@@ -8574,6 +8574,24 @@ export default function App({
   const [generatingRoute, setGeneratingRoute] = useState(null); // selected route shown during IG generation
   const [igGenerating, setIgGenerating] = useState(false); // true while IG is in flight (Magazine shown instead of generating screen)
   const [igCompletedInPlace, setIgCompletedInPlace] = useState(false); // IG finished while the user stayed on the pre-trip Magazine
+  // Seconds since IG started, counted ONLY until the first day arrives.
+  // generate-itinerary awaits the whole plan phase before opening its stream,
+  // so the client receives nothing at all for a measured 19–52s on an 8-day
+  // trip (median ~24s). With no signal, the banner sat on one static line and
+  // read as hung — users reported IG "stuck immediately". This drives staged
+  // copy during that window. The interval stops as soon as days stream, so it
+  // never re-renders App once there is real progress to show.
+  const [igElapsed, setIgElapsed] = useState(0);
+  useEffect(() => {
+    if (!igGenerating || streamingDays > 0) return undefined;
+    const t0 = Date.now();
+    setIgElapsed(0);
+    const id = setInterval(
+      () => setIgElapsed(Math.round((Date.now() - t0) / 1000)),
+      1000,
+    );
+    return () => clearInterval(id);
+  }, [igGenerating, streamingDays]);
 
   const daysCacheHitRef = useRef(false);
   const daysRetryRef = useRef(null);
@@ -15340,6 +15358,9 @@ export default function App({
                         const isDone = igCompletedInPlace;
                         const hasProgress =
                           streamingDays > 0 && streamingTotal > 0;
+                        // Capped at 7% so the bar never moves BACKWARD when the
+                        // first real day lands: one day of a 14-day trip is
+                        // ~7.1%, the longest trip this needs to clear.
                         const pct = isDone
                           ? 100
                           : hasProgress
@@ -15349,7 +15370,24 @@ export default function App({
                                   (streamingDays / streamingTotal) * 100,
                                 ),
                               )
-                            : 4;
+                            : Math.min(7, 4 + igElapsed * 0.08);
+                        // Name the stage instead of repeating one line for up
+                        // to a minute. These are the real phases: the plan
+                        // (route + anchors + hotels) is built and awaited in
+                        // full before any day can stream.
+                        const preStreamLine =
+                          igElapsed < 10
+                            ? "Opening the notebook…"
+                            : igElapsed < 25
+                              ? "Mapping your route…"
+                              : "Choosing places and hotels…";
+                        // Measured median ~24s, worst 52s. Past 40s, say so
+                        // rather than letting a normal-but-slow run read as a
+                        // hang.
+                        const preStreamHint =
+                          igElapsed < 40
+                            ? "Usually 20–40 seconds"
+                            : "Taking longer than usual — still working";
                         return (
                           <div
                             style={{
@@ -15392,7 +15430,7 @@ export default function App({
                                       of {streamingTotal}…
                                     </>
                                   ) : (
-                                    <>Opening the notebook…</>
+                                    <>{preStreamLine}</>
                                   )}
                                 </div>
                                 <div
@@ -15406,7 +15444,9 @@ export default function App({
                                 >
                                   {isDone
                                     ? "Every day planned, photos on their way"
-                                    : "Keep browsing — days appear as they're written"}
+                                    : hasProgress
+                                      ? "Keep browsing — days appear as they're written"
+                                      : preStreamHint}
                                 </div>
                               </div>
                               {isDone && (
