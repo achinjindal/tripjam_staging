@@ -3,7 +3,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { login } from "./helpers";
+import { login, ensureTripByName } from "./helpers";
 
 // Phase-1 collaboration: invite links, /join landing, and the members sheet.
 //
@@ -138,6 +138,17 @@ test.describe("Collaboration — invite & join (Phase 1)", () => {
       !INVITE_ENABLED,
       "requires VITE_INVITE_ENABLED=true + invite RPCs on the target DB",
     );
+
+    // Seed the pinned trip instead of requiring someone to have created it by
+    // hand. Before this, a missing fixture made five of the six tests below
+    // skip silently and the sixth assert — so the suite reported a phantom
+    // "members affordance is broken" failure while the actual Phase 1 coverage
+    // simply never ran (issue #14).
+    test.beforeAll(async () => {
+      const owner = await signedClient(OWNER_EMAIL, OWNER_PASSWORD);
+      if (!owner) return; // tests below skip on their own if the trip is absent
+      await ensureTripByName(owner, TRIP_NAME);
+    });
 
     // The members affordance (title="Trip members") renders in the live trip
     // header — the desktop slim header AND the mobile header — when

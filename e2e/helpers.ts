@@ -127,3 +127,59 @@ export async function dismissTripOverlays(page: Page, settleMs = 0) {
     await page.waitForTimeout(800);
   }
 }
+
+/** Ensure a named trip exists for `client`'s user, creating it if absent.
+ *
+ *  The collab specs pin a trip by name (`collab-invite`, `collab-chat`), and
+ *  that trip used to have to be created BY HAND. When it was missing — which
+ *  it was on staging — five invite tests `test.skip`ed and one asserted, so the
+ *  suite reported a phantom "members affordance is broken" UI failure while the
+ *  real coverage was simply not running (issue #14).
+ *
+ *  Seeding it here makes the collab suite self-sufficient: the skips become
+ *  real Phase 1 coverage, and a failure now means the feature broke rather than
+ *  that nobody set the fixture up.
+ *
+ *  Returns the trip id, or null if the trip could not be created (the caller
+ *  should skip rather than assert, so a seeding outage isn't read as a UI bug).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function ensureTripByName(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: any,
+  name: string,
+): Promise<string | null> {
+  const { data: found } = await client
+    .from("trips")
+    .select("id")
+    .ilike("name", `${name}%`)
+    .limit(1);
+  if (found && found[0]) return found[0].id as string;
+
+  const { data: who } = await client.auth.getUser();
+  const uid = who?.user?.id;
+  if (!uid) return null;
+
+  // Trip ids are generated client-side everywhere in this app to avoid RLS
+  // round-trips; match that rather than relying on a DB default.
+  const id = crypto.randomUUID();
+  const { error: tripErr } = await client.from("trips").insert({
+    id,
+    name,
+    destination: "Tokyo → Kyoto",
+    start_date: "2027-03-01",
+    end_date: "2027-03-05",
+    created_by: uid,
+    owner_id: uid,
+  });
+  if (tripErr) return null;
+
+  // Without the membership row the owner fails is_trip_member() and their own
+  // trip is invisible to the collab RLS policies.
+  const { error: memErr } = await client
+    .from("trip_members")
+    .insert({ trip_id: id, user_id: uid, role: "edit" });
+  if (memErr) return null;
+
+  return id;
+}
