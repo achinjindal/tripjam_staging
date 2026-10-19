@@ -109,6 +109,14 @@ async function openTripByName(page: Page, name = TRIP_NAME) {
     .waitForURL(/\/trip\/[a-f0-9-]{36}/, { timeout: 10000 })
     .then(() => true)
     .catch(() => false);
+  // A flat 1500ms was enough on a warm dev server and NOT on a cold one. On a
+  // cold start (Vite still compiling, 150+ trips loading) the trip view keeps
+  // a loading overlay over the header well past that, so clicks on the members
+  // button were intercepted until the 60s timeout — three tests "failed" with
+  // the button reported visible/enabled/stable the whole time. That read as a
+  // product bug; it was the harness. Same suite: 3.6 min cold with 3 failures,
+  // 42.6s warm with 0. Wait for the app to go quiet instead of guessing.
+  await page.waitForLoadState("networkidle").catch(() => {});
   await page.waitForTimeout(1500);
   return opened;
 }
