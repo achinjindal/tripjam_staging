@@ -181,10 +181,12 @@ async function runOnce(token, trip) {
     // A plan that lists the REGION as a base ("South Goa") instead of a
     // real town is a quality smell: the hotel/anchor logic downstream has
     // nothing concrete to geocode.
-    regionAsCity: [...new Set(days.map((d) => d.city).filter(Boolean))].some((c) =>
-      (trip.destinations || []).some(
-        (dest) => dest.split(",")[0].trim().toLowerCase() === c.trim().toLowerCase(),
-      ),
+    regionAsCity: [...new Set(days.map((d) => d.city).filter(Boolean))].some(
+      (c) =>
+        (trip.destinations || []).some(
+          (dest) =>
+            dest.split(",")[0].trim().toLowerCase() === c.trim().toLowerCase(),
+        ),
     ),
   };
 }
@@ -242,7 +244,9 @@ for (const r of results) {
     r.arm.padEnd(28) +
       `${med(g.map((x) => x.firstByte))}ms`.padEnd(11) +
       `${med(g.map((x) => x.total))}ms`.padEnd(12) +
-      `${g.filter((x) => x.days !== x.expectedDays).length}/${g.length}`.padEnd(10) +
+      `${g.filter((x) => x.days !== x.expectedDays).length}/${g.length}`.padEnd(
+        10,
+      ) +
       `${med(g.map((x) => x.cities.length))}`.padEnd(11) +
       `${g.reduce((a, x) => a + x.emptyDays, 0)}`.padEnd(8) +
       `${g.filter((x) => x.regionAsCity).length}/${g.length}`,
@@ -253,7 +257,9 @@ for (const r of results)
   for (const t of TRIPS) {
     const g = r.runs.filter((x) => !x.error && x.trip === t.id);
     if (g.length)
-      console.log(`  ${r.arm.padEnd(28)} ${t.id.padEnd(10)} ${JSON.stringify(g[0].cities)}`);
+      console.log(
+        `  ${r.arm.padEnd(28)} ${t.id.padEnd(10)} ${JSON.stringify(g[0].cities)}`,
+      );
   }
 
 const outDir = path.join("scripts", "bench", "out");

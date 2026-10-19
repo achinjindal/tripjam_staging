@@ -18,8 +18,12 @@ For each edge function in `supabase/functions/`:
 
 ## Cost rates
 
-- Sonnet 4.6: $3/M input, $15/M output
-- Haiku 4.5: $0.80/M input, $4/M output
+**Read them from `supabase/functions/_shared/llm-rates.json`** — the single source
+every consumer (`_shared/credits.ts`, `Admin.jsx`, `scripts/trip-cost.cjs`,
+`scripts/bench/lib.mjs`) already reads. Do not copy rate numbers into this file:
+the hardcoded pair that used to live here had drifted to Haiku 4.5 at $0.80/$4
+when the real rate was $1/$5, so every cost estimate this skill produced was ~20%
+low.
 
 ## Output format
 
