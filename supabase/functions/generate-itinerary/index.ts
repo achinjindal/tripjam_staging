@@ -118,7 +118,35 @@ Return ONLY a raw JSON object, MINIFIED — no indentation, no newlines. Start w
 {"name":"...","summary":"...","cities":[{"name":"...","writeup":"..."}],"plan":[{"label":"Day 1","city":"...","hotel":"...","sleep_city":"...","highlights":[{"title":"...","icon":"🏛"}],"description":"..."}]}
 Do NOT include a "days" array — days are filled in a later step.`;
 
-// Appended to SYSTEM_PROMPT for day-fill calls: all activity/day rules above
+// Rules a SINGLE-DAY fill cannot act on, dropped from its prefix. This matters
+// twice over:
+//
+//  1. COST. The fills run in parallel and each one re-sends the whole prefix —
+//     measured 27.7k input tokens per generation, 97% of IG's input. Anything
+//     left in here is paid for N times, once per day of the trip.
+//  2. CORRECTNESS. SYSTEM_PROMPT ends with the WHOLE-TRIP output schema and a
+//     full {"name","summary","cities","days":[...]} example, while
+//     DAYFILL_OVERRIDE below supplies a DIFFERENT single-day schema. Sending
+//     both put two contradictory output contracts in one prompt and relied on
+//     the override winning.
+//
+// SYSTEM_PROMPT itself is left byte-identical — the IG_ARCH=single legacy path
+// still emits the whole trip in one call and needs every one of these.
+const FILL_DROP: RegExp[] = [
+  /^- SUMMARY:/, // fill must not output a top-level summary
+  /^- CITIES:/, // ...nor the cities array
+  /^- DEFAULT START\/END:/, // the plan already fixed every city
+  /^IMPORTANT OUTPUT ORDER:/, // about name/summary/cities ordering
+  /^Return ONLY a raw JSON object/, // superseded by DAYFILL_OVERRIDE's shape
+  /^\{"name":/, // the whole-trip JSON example
+];
+const FILL_SYSTEM = SYSTEM_PROMPT.split("\n")
+  .filter((l) => !FILL_DROP.some((re) => re.test(l.trim())))
+  .join("\n")
+  .replace(/\n{3,}/g, "\n\n")
+  .trim();
+
+// Appended to FILL_SYSTEM for day-fill calls: all activity/day rules above
 // still apply; only the output shape and plan-obedience rules change. Sharing
 // the SYSTEM_PROMPT prefix keeps the prompt cache warm across all fill calls.
 const DAYFILL_OVERRIDE = `
@@ -833,7 +861,7 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       const fillSystem = [
         {
           type: "text",
-          text: SYSTEM_PROMPT,
+          text: FILL_SYSTEM,
           cache_control: { type: "ephemeral" },
         },
         { type: "text", text: DAYFILL_OVERRIDE },
