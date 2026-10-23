@@ -21,6 +21,7 @@ import {
   turnsOf,
   parseLLMJson,
   mergeUsage,
+  googleUsage,
   normaliseSchemaForTest as normaliseSchema,
 } from "./llm.ts";
 
@@ -302,3 +303,50 @@ Deno.test(
     assertEquals(out[out.length - 1], { role: "user", content: "now this" });
   },
 );
+
+// ── Gemini usage: the cached portion must not be billed twice ───────────────
+// Gemini's promptTokenCount INCLUDES cachedContentTokenCount, while the
+// billing model in credits.ts treats the buckets as DISJOINT. Without the
+// subtraction a cache HIT costs 1.25x a miss (full input rate + cache-read
+// rate), so enabling caching to save money would have raised the bill. The
+// OpenAI path has always subtracted; Gemini's did not.
+Deno.test("googleUsage subtracts cached tokens from the input bucket", () => {
+  const u = googleUsage({
+    promptTokenCount: 10_000, // includes the 8,000 cached
+    cachedContentTokenCount: 8_000,
+    candidatesTokenCount: 500,
+  });
+  assertEquals(u.input_tokens, 2_000);
+  assertEquals(u.cache_read_input_tokens, 8_000);
+  assertEquals(u.output_tokens, 500);
+  // The buckets must sum to the true prompt size, not exceed it.
+  assertEquals(u.input_tokens + u.cache_read_input_tokens, 10_000);
+});
+
+Deno.test(
+  "googleUsage: no caching is unchanged, and never goes negative",
+  () => {
+    const plain = googleUsage({
+      promptTokenCount: 3_000,
+      candidatesTokenCount: 400,
+    });
+    assertEquals(plain.input_tokens, 3_000);
+    assertEquals(plain.cache_read_input_tokens, 0);
+    // Defensive: if a provider ever reports cached > prompt, clamp rather than
+    // emit a negative bucket that would CREDIT the user.
+    const weird = googleUsage({
+      promptTokenCount: 100,
+      cachedContentTokenCount: 500,
+    });
+    assertEquals(weird.input_tokens, 0);
+  },
+);
+
+Deno.test("googleUsage bills thought tokens as output", () => {
+  const u = googleUsage({
+    promptTokenCount: 1_000,
+    candidatesTokenCount: 200,
+    thoughtsTokenCount: 300,
+  });
+  assertEquals(u.output_tokens, 500);
+});

@@ -546,6 +546,27 @@ async function callAnthropic(o: CallOpts, t: Traits): Promise<LLMResult> {
 }
 
 // ── Google Gemini ────────────────────────────────────────────────────────────
+/** Gemini usage → the disjoint {input, cache_read, output} billing buckets.
+ *  Exported so the double-bill guard is covered by a unit test: Gemini's
+ *  promptTokenCount INCLUDES cachedContentTokenCount, so the cached portion
+ *  must be subtracted or a cache HIT costs 1.25x a miss. */
+export function googleUsage(m: {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  thoughtsTokenCount?: number;
+  cachedContentTokenCount?: number;
+}): LLMUsage {
+  const cached = m.cachedContentTokenCount ?? 0;
+  return {
+    input_tokens: Math.max(0, (m.promptTokenCount ?? 0) - cached),
+    // thoughtsTokenCount is billed as OUTPUT; folding it in keeps cost
+    // tracking honest (omitting it under-reports spend).
+    output_tokens: (m.candidatesTokenCount ?? 0) + (m.thoughtsTokenCount ?? 0),
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: cached,
+  };
+}
+
 async function callGemini(o: CallOpts, t: Traits): Promise<LLMResult> {
   const mk = (withBudgetZero: boolean) => ({
     systemInstruction: { parts: [{ text: asText(o.system) }] },
@@ -586,15 +607,7 @@ async function callGemini(o: CallOpts, t: Traits): Promise<LLMResult> {
   const m = d?.usageMetadata || {};
   return {
     text,
-    usage: {
-      input_tokens: m.promptTokenCount ?? 0,
-      // thoughtsTokenCount is billed as OUTPUT; folding it in keeps cost
-      // tracking honest (omitting it under-reports spend).
-      output_tokens:
-        (m.candidatesTokenCount ?? 0) + (m.thoughtsTokenCount ?? 0),
-      cache_creation_input_tokens: 0,
-      cache_read_input_tokens: m.cachedContentTokenCount ?? 0,
-    },
+    usage: googleUsage(m),
     truncated: cand?.finishReason === "MAX_TOKENS",
     model: o.model,
     provider: "google",
@@ -919,7 +932,13 @@ export async function* streamLLM(
         throw new Error(`Gemini stopped: finishReason=${cand.finishReason}`);
       if (d.usageMetadata) {
         // Gemini re-sends cumulative usage per chunk — overwrite, don't add.
-        usage.input_tokens = d.usageMetadata.promptTokenCount ?? 0;
+        // promptTokenCount includes cached tokens; subtract so they are not
+        // billed twice (see the non-streaming path for the full reasoning).
+        usage.input_tokens = Math.max(
+          0,
+          (d.usageMetadata.promptTokenCount ?? 0) -
+            (d.usageMetadata.cachedContentTokenCount ?? 0),
+        );
         usage.output_tokens =
           (d.usageMetadata.candidatesTokenCount ?? 0) +
           (d.usageMetadata.thoughtsTokenCount ?? 0);
