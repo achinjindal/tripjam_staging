@@ -109,6 +109,7 @@ const PLAN_SYSTEM = `You are a travel expert who PLANS multi-day itineraries as 
 Rules:
 - The "plan" array is the AUTHORITATIVE trip skeleton: one entry per day with:
   label ("Day 1"...), city (the day's base area), hotel (a SPECIFIC well-located confirmed-open hotel name — minimise hotel changes, 2+ nights per base, NEVER relocate to a different hotel for a single night when staying in the same area; on a small island or single city ONE base hotel for the whole trip is strongly preferred; towns under ~30 minutes apart — e.g. along one coastline — share ONE base, visited as day outings, never one-night hops; name a hotel ONLY for cities where the traveler sleeps that night), sleep_city (the city where the traveler sleeps AFTER this day; empty string "" on the final departure day), highlights (4-6 objects {title,icon} — the SPECIFIC named places/experiences anchoring that day, INCLUDING 1-2 legendary meal venues; REAL place names only, never generic like "lunch" or "temple"), description (1 sentence).
+- BASES — HARD LIMIT: "city" is where the traveler SLEEPS that night, not a place they visit. Use AT MOST ONE distinct base per 2 nights (an 8-day trip gets 4 bases or fewer); fewer is always better. Towns within ~30 minutes of each other — e.g. along one coastline — are ONE base with day outings, never separate bases. NEVER use a region, state, province, island or the destination string itself as a base ("South Goa", "Tuscany", "Bali", "Kansai") — a base must be a specific town or district you could book a hotel in. A region name here is a failure: it leaves the hotel and map steps with nothing to locate.
 - NO REPEATS ACROSS DAYS: every highlighted place — sights AND restaurants/markets — appears on AT MOST ONE day in the whole trip. Never place the same venue on two different days.
 - GEOGRAPHIC SEQUENCE & PACING: order days so travel flows logically, cover each area fully in one visit, no backtracking. Fixed-time things (sunrise spots, morning markets, night markets) go on sensible days.
 - Obey the SELECTED ROUTE cities/overnight bases and any Day-1 arrival / last-day departure HARD RULES in the user message EXACTLY.
@@ -736,7 +737,23 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       // lets it run on a faster model than the day fills. Credits are deducted
       // at igModel rates for the whole batch; when the plan model is cheaper,
       // the ~2k plan tokens are slightly overcharged, never undercharged.
-      const igPlanModel = modelFor("IG_PLAN", igModel);
+      // The plan is AWAITED before the stream opens, so its latency is dead
+      // air for the client — the whole reason IG read as "stuck". Benchmarked
+      // 2026-10-23 (scripts/bench/ig-plan-model.mjs, 3 fixtures x 3 runs):
+      //   gemini-3.8-flash     plan 15.2s  total 27.5s
+      //   gemini-3.5-flash-lite plan  5.4s  total 16.8s   ← 2.8x faster plan
+      //   claude-haiku-4-5     plan 26.1s
+      //   gpt-6-luna           plan 74.7s  (hidden reasoning — never use here)
+      // Zero day-count shortfalls and zero empty days on both arms, and
+      // flash-lite is also cheaper ($0.30/$2.50 vs $0.75/$3.75).
+      //
+      // It only became safe once PLAN_SYSTEM's base rule was hoisted out of
+      // the hotel parenthetical into its own HARD LIMIT: before that,
+      // flash-lite split an 8-day Goa trip across 7 bases and named the
+      // REGION ("South Goa") as one of them in 3/3 runs. After, 3-4 real
+      // towns and 0/3 region names. Do NOT relax that rule while this model
+      // is here — the fills and the day-fill model are unaffected either way.
+      const igPlanModel = modelFor("IG_PLAN", "gemini-3.5-flash-lite");
       // Cost lever: the per-day fills are ~85% of IG's tokens, so their model
       // is selectable independently. Defaults to igModel (no behaviour
       // change). A/B on 2026-10-02 showed Haiku fills cut cost 72% but
