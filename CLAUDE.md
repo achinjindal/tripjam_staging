@@ -10,13 +10,13 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 
 - **Frontend:** React 18 (JSX) + Vite 8, single-page app, no router library (History API for URL routing)
 - **Backend:** Supabase (Postgres, Auth, Edge Functions, RLS, Realtime)
-- **AI:** Multi-provider (Anthropic / Google / OpenAI) via the shared adapter `supabase/functions/_shared/llm.ts`. Currently live: **Sonnet 5.5** for RG/IG (upgraded from Sonnet 5 on 2026-10-05 — same $2/$10, Jun-2026 knowledge, 512-token cache minimum), **gpt-6-luna** for Magazine deep-dives (8x cheaper AND more accurate than Haiku — see `bench-results-2026-10-05.md`), Haiku 4.5 for chat/todos/expenses/preferences/inspirations/booking-parse (+ Inspirations research escalation on **Sonnet 5.5**, overridable via `INSPIRATIONS_ESCALATION_MODEL` — Anthropic-only, since that path needs the `web_search` server tool).
+- **AI:** Multi-provider (Anthropic / Google / OpenAI) via the shared adapter `supabase/functions/_shared/llm.ts`. **Model defaults live in code, not here.** `grep -rn 'modelFor(' supabase/functions` is the only authoritative answer — env secrets can override per environment, and any list written here rots (this paragraph has been wrong twice). Broad strokes: Gemini on RG and IG, gpt-6-luna on Magazine deep-dives (8x cheaper AND more accurate than Haiku — `bench-results-2026-10-05.md`), Haiku 4.5 on everything else, plus **Sonnet 5.5** for the Inspirations escalation (`INSPIRATIONS_ESCALATION_MODEL`, Anthropic-only because that path needs the `web_search` server tool). The IG **plan** and **fills** are separately selectable and are NOT on the same model — the plan is awaited before the stream opens, so it is tuned for latency.
   - **Always call LLMs through `_shared/llm.ts`** (`callLLM` / `streamLLM`). It routes by model-id prefix and encodes every provider quirk in one place; a model swap becomes a string change rather than an integration. Never hand-roll a provider fetch in a function.
-  - **Per-function model selection:** `modelFor("<KEY>", default)` reads `LLM_MODEL_<KEY>` first, then legacy names (`IG_MODEL`, `IG_FILL_MODEL`, `RG_MODEL`, `CHAT_MODEL`). Each function can sit on a different model independently.
-  - **Provider quirks the adapter handles** (all discovered the hard way — do not re-litigate): Claude 5 family needs `thinking:{type:"disabled"}` and rejects `temperature`; Gemini 3.x needs `thinkingConfig:{thinkingBudget:0}` or thought tokens eat `maxOutputTokens`, **but** Gemini ≥3.5 flash-lite and `*-latest` reject that flag with a 400 (adapter retries without it); OpenAI's `response_format:{type:"json_object"}` **cannot emit a top-level JSON array**, so array-returning prompts (RG, todos, expenses) must pass `expectArray: true`; Gemini `thoughtsTokenCount` and OpenAI reasoning tokens are billed as **output**; OpenAI `prompt_tokens` **includes** cached tokens so they must be subtracted or cached input is billed twice.
+  - **Per-function model selection:** `modelFor("<KEY>", default)` reads `LLM_MODEL_<KEY>` → legacy names (`IG_MODEL`, `RG_MODEL`, `CHAT_MODEL`, …) → **`LLM_MODEL_DEFAULT`** → the hardcoded default. Each function can sit on a different model independently. `LLM_MODEL_DEFAULT` is the blunt lever: it moves every unset call site at once, so it is a rollback/bench tool, not a config. `generate-destination-research` deliberately bypasses `modelFor` so a global default can never route its Anthropic-only `web_search` path to another provider.
+  - **Provider quirks the adapter handles** (all discovered the hard way — do not re-litigate): the `thinking` off-switch DIFFERS per Claude-5 model — Sonnet 5/Opus 5 want `{type:"disabled"}`, **Sonnet 5.5 hard-400s on that and needs `{type:"between_tools"}`**, Opus 5.5/Fable omit it entirely; never branch on a `startsWith` prefix, read `traitsOf(model).thinkingBody`. Claude 5 and Opus 4.7/4.8 also reject `temperature`; Gemini 3.x needs `thinkingConfig:{thinkingBudget:0}` or thought tokens eat `maxOutputTokens`, **but** Gemini ≥3.5 flash-lite and `*-latest` reject that flag with a 400 (adapter retries without it); OpenAI's `response_format:{type:"json_object"}` **cannot emit a top-level JSON array**, so array-returning prompts (RG, todos, expenses) must pass `expectArray: true`; Gemini `thoughtsTokenCount` and OpenAI reasoning tokens are billed as **output**; OpenAI `prompt_tokens` **includes** cached tokens so they must be subtracted or cached input is billed twice.
   - **Verbose models truncate at caps tuned for terse ones.** Use `suggestCap(model, baseline)` instead of a literal `max_tokens`; `callLLM` also retries once at 1.5x on truncation and bills both attempts.
 - **Maps:** Leaflet + react-leaflet, Photon/Nominatim geocoding (with trip destination enrichment)
-- **Photos:** Wikipedia/Wikimedia Commons (free, serialized queue 2 concurrent / 400ms)
+- **Photos:** Wikipedia/Wikimedia Commons (free, 3 concurrent / 250ms stagger, global cool-down on upstream 429s)
 - **Places:** Google Places API (autocomplete, hotel search with lodging type)
 - **Analytics:** PostHog (tagged with `app_env` for staging/production filtering)
 - **Error tracking:** PostHog error tracking (web `capture_exceptions` + edge `_shared/errortrack.ts`, gated on `POSTHOG_KEY` secret; alerts file GitHub issues)
@@ -27,144 +27,66 @@ TripJam is an AI-powered travel planning and collaboration app. Solo founder pro
 
 ## Project Structure
 
-```
-src/
-  App.jsx            — Main UI (~14,700 lines, core state + views)
-  main.jsx           — Entry point, Supabase init, PostHog init, URL routing
-  Auth.jsx           — Login/signup (serif fonts, design system tokens)
-  Home.jsx           — Trip list (card hover, warm palette)
-  Landing.jsx        — Public marketing/landing page (unauthenticated)
-  Admin.jsx          — Admin console (/admin, is_admin gated)
-  TripPublicView.jsx — Read-only shared trip view
-  credits.js         — Module-level credit store: CREDITS_UI_ENABLED, useCredits,
-                       openPaywall, handleGatedResponse, refreshCredits
-  billing.js         — Platform-aware billing: RevenueCat on Android, Lemon Squeezy on web.
-                       Exports isAndroidApp(), initRevenueCat(userId), purchaseCredits(packId)
-  CreditsOverlay.jsx — Paywall bottom sheet (routes to RC or LS based on platform)
-  LowCreditsBanner.jsx — Dismissible banner when credits run low
-  Avatar.jsx         — User avatar component
-  dialogs.jsx        — Module-level toast + confirm sheet (showToast/confirmSheet, replaces
-                       native alert/confirm; same store pattern as credits.js)
-  activity.js        — Fire-and-forget activity logger → activity_log table (collab Phase 0b)
-  realtime.js        — Per-trip Supabase realtime channel scaffold (behind VITE_REALTIME_ENABLED,
-                       ships dark until collab Phase 2)
-  members.js         — trip_members data layer + invite RPC wrappers; exports INVITE_ENABLED
-  JoinTrip.jsx       — /join/:token landing: invite preview + accept, stashes token
-                       across sign-in for unauthenticated users
-  MemberAvatar.jsx   — Member avatar circle (initials + username-hashed color)
-  AddRealEmailPrompt.jsx — Prompt to add a real email (legacy username-only accounts)
-  ForgotPassword.jsx / ResetPassword.jsx — Password recovery flow
-  LegalPage.jsx      — Shared scrollable layout for Privacy + Terms (no auth required)
-  Privacy.jsx / Terms.jsx — Legal pages rendered by LegalPage
-  airports.js        — Airport search helpers
-  airports-data.json — Bundled IATA airport data
-  supabase.js        — Supabase client
-  theme.js           — Design system: T colors, TYPE, SPACE, RADIUS, SHADOW, MOTION
-                       Also exports PLACES_PROXY + PLACES_HEADERS constants
-  photos.js          — Photo fetch, caching, dedup, geocoding, haversine
-  context.js         — DebugContext
+`ls` shows the layout; these are the parts it does not tell you.
 
-  components/
-    BoardView.jsx    — Notes, Todos, Bookmarks, Expenses, Travel & Hotels, LogisticsTab
-    SetupForm.jsx    — 3-step wizard, DateRangePicker, CityInput, ModePills
-    Magazine.jsx     — DestinationHero, CityCard, MagazineHighlightCard, FoodSpotlightCard
-    MapView.jsx      — FitBounds, MapView (itinerary), RouteMapView (brainstorm)
-    MembersSheet.jsx — Members list, invite-link share/revoke, remove/leave/transfer-ownership
-
-  hooks/
-    useViewport.js   — Viewport size hook
-
-supabase/
-  functions/         — Edge Functions (Deno, TypeScript)
-    _shared/
-      credits.ts     — Shared auth + credit-deduction helpers for all gated functions
-                       (authenticateUser, deductCredits, costToCredits, rateLimit, etc.)
-      errortrack.ts  — PostHog exception capture for edge functions ($exception via capture API)
-    generate-brainstorm/       — Route Generation (RG): 4 route options with **bold** day text
-    generate-itinerary/        — Itinerary Generation (IG): day-by-day plan with transit tips + transitions
-    generate-destination-research/ — Inspirations tab: web-search-backed articles/vlogs via Haiku + web_search
-    chat/                      — Unified chat endpoint (action-based, 6 message history cap;
-                                 _ops.ts = v3 itinerary edit ops + ref resolution)
-    city-deep-dive/            — Magazine deep dive content (anti-hallucination prompt)
-    places-proxy/              — Geocoding proxy (Photon + Nominatim)
-    generate-todos/            — AI todo suggestions with due dates
-    estimate-expenses/         — AI budget estimation
-    extract-preferences/       — Pre-IG preference extraction (Haiku)
-    generate-wishlist/         — Wishlist generation
-    create-checkout/           — Lemon Squeezy checkout session creation
-    payment-webhook/           — Lemon Squeezy webhook handler (grants credits on order_created)
-    redeem-coupon/             — Coupon code redemption (grants free credits; single-use per user)
-    revenuecat-verify/         — Server-side RC purchase verification (called immediately after Android purchase)
-    revenuecat-webhook/        — RevenueCat webhook handler for Android IAP (deployed with --no-verify-jwt)
-    inbound-email/             — Resend inbound webhook: forwarded booking emails → Haiku parse →
-                                 hotels_data booked state + reply receipt (deployed with --no-verify-jwt)
-    send-email/                — Outbound transactional email via Resend (itinerary-ready etc.)
-  migrations/        — Postgres migrations (chronological)
-
-scripts/
-  backfill-activity-geocodes.cjs — Backfill missing lat/lng on activities
-  trip-cost.cjs      — Print actual per-function LLM cost for one trip from llm_usage
-                       (needs SUPABASE_SERVICE_ROLE_KEY; anon key returns nothing)
-
-docs/
-  user-journeys/     — Journey-by-journey documentation (00-overview.md is the index):
-                       UI flow + underlying logic per stage, with file:line references
-  collaboration/     — Collaboration feature spec: design.md, v1-scope.md,
-                       implementation-plan.md, documentation.md, migrations-draft/
-
-e2e/                 — Playwright E2E tests
-  helpers.ts         — Login, snap utilities
-  criteria/          — Per-journey acceptance criteria docs (numbered to match test areas)
-  *.spec.ts          — Test suites (board, chat, interactions, magazine, geocoding,
-                       collab-invite, url-routing, smoke, etc.)
-```
+- **`src/App.jsx` is ~20,000 lines** — the entire trip view (state, data fetching,
+  every panel/tab/modal). Sub-components exist (`BoardView`, `SetupForm`,
+  `Magazine`, `MapView`) but most state still lives in App.
+- **Module-level stores, not React context:** `credits.js` and `dialogs.jsx` both
+  expose a store read via `useSyncExternalStore` hooks. Match that pattern rather
+  than adding a provider.
+- **`theme.js` also exports `PLACES_PROXY` and `PLACES_HEADERS`** — not where you
+  would look for them.
+- **Ships-dark modules:** `realtime.js` (behind `VITE_REALTIME_ENABLED`),
+  `members.js` (exports `INVITE_ENABLED`). Both are built but flag-gated off.
+- **`chat/_ops.ts`** holds the v3 itinerary edit ops and ref resolution — the
+  chat endpoint itself is `chat/index.ts`.
+- **`scripts/trip-cost.cjs` needs `SUPABASE_SERVICE_ROLE_KEY`**; with an anon key
+  it returns nothing at all rather than erroring.
+- **`docs/user-journeys/`** is the per-journey documentation (`00-overview.md` is
+  the index), with `file:line` references into the code.
+- **`e2e/criteria/`** holds per-journey acceptance criteria, numbered to match the
+  test areas.
 
 ### Repo root gotchas
 
 - `ad-hoc/` and `inspiration/` are untracked full copies of the repo (scratch workspaces with their own `src/`, `supabase/`, etc.). When searching or editing, work only in the root `src/` and `supabase/` — a grep hit inside these copies is not the real code.
 - `pitch/` — untracked pitch-deck assets (Python deck builder + screenshots), not app code.
-- Root-level `*-design.html` files are gitignored design mockups, not production code.
+- Root-level `*-design.html` are design mockups, not app code — some tracked, some gitignored. Don't edit them as production code either way.
 - `RUNBOOKS.md` — operational runbooks (RevenueCat/Play Billing setup, Supabase secrets, ops SQL snippets).
 
 ## Commands
 
+Run `npm run` to list every script (`dev`, `build`, `check`, `test:e2e`,
+`deploy:functions:*`, `db:push:*`, …). Only the non-obvious ones are noted here:
+
+- **`npm run check`** = format:check + lint + typecheck + **`test:functions`** + build.
+  `test:functions` is a Deno unit suite (`_shared/llm.test.ts`, `chat/_ops.test.ts`,
+  `places-proxy/_helpers.test.ts`, `src/tripFixes.test.js`) — update it when you touch
+  those. Run `check` before review; if formatting fails, `npm run format` and rerun.
+- **CI is NOT the gate.** `.github/workflows/checks.yml` runs only lint, typecheck and
+  build — it does **not** run `format:check` or `test:functions`. Green CI does not mean
+  the unit tests pass or the formatting is clean; only `npm run check` locally does.
+- **`npm run test:e2e`** runs sequentially (`workers: 1`) — the API-dependent
+  specs cannot run in parallel.
+- **`deploy:functions:*` ships your LOCAL working tree, not `origin/main`.**
+  Deploying from a branch that is behind silently reverts whatever another
+  session deployed, with a successful CLI response and a bumped version number.
+  `git fetch origin` and confirm you are up to date before deploying.
+
 ```bash
-# Dev server
-npm run dev                    # Vite on localhost:5173
-
-# Build
-npm run build                  # Production build
-npm run build:android          # Build + Capacitor sync
-
-# Review gate (run before code review; fix formatting first if it fails)
-npm run format                 # Fix formatting with Prettier
-npm run format:check           # Verify formatting
-npm run lint                   # ESLint
-npm run typecheck              # Web TS + Supabase Edge Function Deno checks
-npm run typecheck:web          # Web-only TS check (faster)
-npm run typecheck:functions    # Deno-only check for edge functions
-npm run check                  # format:check + lint + typecheck + build (full gate)
-
-# E2E tests
-npm run test:e2e               # Run all Playwright tests (sequential, workers: 1)
-npx playwright test e2e/smoke.spec.ts   # Run a specific file
-
-# Supabase
-npm run deploy:functions:staging    # Deploy all edge functions to staging
-npm run deploy:functions:prod       # Deploy all edge functions to production
-npm run db:push:staging             # Apply migrations to staging
-npm run db:push:prod                # Apply migrations to production
-
-# payment-webhook and revenuecat-webhook must be deployed with JWT verification disabled:
-supabase functions deploy payment-webhook --no-verify-jwt --project-ref <ref>
+# NOT covered by any npm script — these three must bypass JWT verification,
+# and the bulk deploy scripts do not pass the flag:
+supabase functions deploy payment-webhook    --no-verify-jwt --project-ref <ref>
 supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
+supabase functions deploy inbound-email      --no-verify-jwt --project-ref <ref>
 ```
 
 ## Internal Nomenclature
 
 - **RG** — Route Generation. Pre-IG step where 4 route options are generated.
-- **IG** — Itinerary Generation. Full day-by-day plan from selected route. Two phases: compact (fast) then detailed (streaming).
-- **Magazine** — Destination guide tab (highlights, deep dives, food, tips). Lazy-loaded: destination (up to 2 countries) + the first 2 route cities are pre-loaded when RG returns routes, the rest load on scroll via `onVisible`. Before 2026-10-08 only the countries were pre-loaded, so opening the Magazine showed one populated card above a column of skeletons. Deep-dive content persisted in `trips.magazine_digest`.
+- **IG** — Itinerary Generation. Full day-by-day plan from the selected route. An **awaited PLAN skeleton** (route, anchors, hotels — `LLM_MODEL_IG_PLAN`) then **parallel per-day fills** (`LLM_MODEL_IG_FILL`, ~85% of the tokens). The plan is awaited BEFORE the stream opens, so its latency is dead air for the client — measured 5–25s. `IG_ARCH=single` is a legacy Anthropic-only escape hatch. **Before flipping `LLM_MODEL_IG_FILL`:** an A/B on 2026-10-02 showed Haiku fills cut cost 72% but hallucinated hotels and restaurants badly — the code comment in `generate-itinerary` points here for this reason.
+- **Magazine** — Destination guide tab (highlights, deep dives, food, tips). Pre-loads the first 2 **destinations** (first comma-segment — `Bali`, NOT `Indonesia`; using the country was a real bug that warmed the wrong card) + the first 2 route cities when RG returns. Once an itinerary exists a background 2.5s stagger primes every remaining city; `onVisible` covers anything still cold. Deep-dive content persisted in `trips.magazine_digest`.
 - **Inspirations** — Sub-tab of Magazine. Web-search-backed articles/vlogs from named individual creators. Cached per (destinations, tags, monthBucket) in `trips.inspirations_digest`.
 - **Board** — Tab with Notes, To-dos, Bookmarks, Expenses, Travel & Hotels widgets.
 - **Pre-IG sheet** — Bottom sheet shown after route selection, before IG (budget, pace, morning preference, transport).
@@ -176,27 +98,33 @@ supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
 
 - `main.jsx` does all URL routing via `parseUrl()` — pages: `home` (Landing), `signin`, `signup`, `trip`, `edit`, `create`, `public` (`/share/:token`), `join` (`/join/:token` invite links), `admin`, `privacy`, `terms`, `forgot-password`, `reset-password`. No router library.
 - The URL `/trip/:id/magazine` maps to the internal tab key `brainstorm` (legacy name). This translation happens in `parseUrl()` — the public URL and the internal state key deliberately differ.
-- `App.jsx` (~14,700 lines) contains the entire trip view: state, data fetching, all panel/tab/modal logic. Split into sub-components (BoardView, SetupForm, Magazine, MapView) but most state lives in App.
 - Design system in `theme.js`: `T` (colors + semantic states), `TYPE` (6-level typography), `RADIUS` (4 values), `SHADOW` (3 levels), `MOTION` (3 speeds). Import from there, never hardcode values.
 - Auth is email + password (username auto-derived from the email local part) plus Google OAuth. Legacy accounts created in the username-only era sign in via the fake-email shim `username@tripjam.app`.
 - Trip ID generated client-side (`crypto.randomUUID()`) to avoid RLS issues.
+- **A bare `supabase.from().insert()/.update()` silently no-ops.** The builder is a
+  lazy thenable: un-awaited (or without `.then()`), it never issues a request and
+  never errors. This silently lost chat persistence, IG timing, and route
+  dismissals in production. Always await, and check the result.
 - **Client version gate:** builds carry `VITE_APP_BUILD` (stamped in `vite.config.js`); `src/UpdateGate.jsx` blocks clients older than `app_config.min_client_build` (fails open). The Android APK runs its bundled build until a Play update, so a server contract it uses can only be retired via the gate or `app_config.chat_protocol1_retired` — see RUNBOOKS.md "Client version gate".
 
-### Collaboration (Phases 0–1 built, ships dark)
+### Collaboration (LIVE in production)
 
-- Full spec lives in `docs/collaboration/` (design, v1 scope, phased implementation plan). Phases 0a/0b/1 are merged; Phase 2 (realtime sync) onward is not built.
-- **Feature flags:** `VITE_INVITE_ENABLED` gates all membership/invite UI (`INVITE_ENABLED` from `members.js`); `VITE_REALTIME_ENABLED` gates the realtime scaffold in `realtime.js`. Both default off, so prod behavior is unchanged until flipped.
-- **DB:** migrations `20260721000001`–`0007` — `trip_members`, `trip_invites`, `activity_log`, `is_trip_member()` RLS helper, realtime publication, and SECURITY DEFINER RPCs (`accept_invite`, `create_or_get_invite_link`, `revoke_invite_link`, `get_invite_preview`, `transfer_ownership`, `remove_member`, `leave_trip`).
+- Full spec in `docs/collaboration/`. Phases 0–3, 5, 6 and pooled credits (2.5) are merged, E2E-covered and live. Treat collab code paths as production code, not scaffolding.
+- **Feature flags live in `src/flags.js`** (plus `INVITE_ENABLED` in `members.js`). They default OFF in code, but `.env.production` sets `VITE_INVITE_ENABLED`, `VITE_REALTIME_ENABLED`, `VITE_ROUTES_LENS_ENABLED` and `VITE_PLACE_PEEK_ENABLED` to **true** — the code default is a rollback lever, NOT the current state. Check `.env.production` before assuming anything is dark.
+- **`E2E_CHEAP`** (set only by the Playwright webServer) suppresses the Magazine stagger pre-load, Inspirations auto-fire, Story narrative backfill, and caps the verify-place ladder at the free tiers. E2E runs therefore do NOT exercise the same pre-load paths as dev or prod — don't debug a "missing" pre-load from an E2E run.
+- **DB:** migrations `20260721000001`–`0008` (plus later phase migrations: feed, polls, prefs-realtime, co-edit, board realtime) — `trip_members`, `trip_invites`, `activity_log`, `is_trip_member()` RLS helper, realtime publication, and SECURITY DEFINER RPCs (`accept_invite`, `create_or_get_invite_link`, `revoke_invite_link`, `get_invite_preview`, `transfer_ownership`, `remove_member`, `leave_trip`).
 - **Activity log:** every mutating action calls `logActivity` (`activity.js`) — fire-and-forget, never blocks the mutation; failures are swallowed. Logs on solo trips too.
 - **Invite flow:** MembersSheet creates/shares a `/join/:token` link → JoinTrip previews via `get_invite_preview` (safe pre-membership) → accept via `accept_invite`. Signed-out users get the token stashed in localStorage and resume after auth.
 - The `/join/:token` route renders regardless of the invite flag; only the invite-creation UI is flag-gated.
 
 ### Credits System (launched)
 
-- `credits.js` is a module-level store (not React context). Components read via `useCredits()` / `usePaywall()` hooks backed by `useSyncExternalStore`.
 - `CREDITS_UI_ENABLED = true` — credits UI and paywall are live. Backend deduction runs regardless of this flag.
-- Edge functions return HTTP 402 when credits are exhausted. Frontend calls `handleGatedResponse(res, userId, reason)` which opens the paywall and returns `true` to abort.
-- Each function calls `deductCredits` from `_shared/credits.ts` which charges `ceil((llm_cost_usd / 0.007) * 100) / 100` credits. New users get 100 credits on signup (DB default).
+- **`resolveAndGate` is the mandatory pre-flight gate**, not `requireMinCredits`. It decides whether the personal wallet or the trip pool pays and returns a `source` that must be threaded into `deductCredits`. A new gated function that skips it charges the wrong wallet on shared trips.
+- **402 has TWO shapes:** `insufficient_credits` (personal) and `empty_trip_pool` (shared trip, pool dry). `handleGatedResponse` returns `true` for the first and the **string** `"empty_trip_pool"` for the second — it leaves the personal wallet alone and does not open the paywall; the caller opens the fork paywall. **Never compare `=== true`.**
+- `deductCredits` charges `ceil((llm_cost_usd / 0.007) * 100) / 100` credits. New users get 100 on signup (DB default).
+- **Deliberate unbilled LLM paths:** `extract-preferences` and `inbound-email` log `llm_usage` but charge nothing. Don't "fix" them — `extract-preferences` is also load-bearing for the 6-hourly `health-monitor.yml` probe, which spends a real Haiku call per run and emails on failure.
+- **`LLM_KILL_SWITCH=true`** on edge secrets makes every LLM endpoint return 503 within ~a minute (next cold start). This is the incident lever; every LLM function must call `llmKillSwitch()` as its first guard or it cannot be stopped.
 - **Web payments:** Lemon Squeezy (MoR). `create-checkout` creates a checkout session; `payment-webhook` (deployed with `--no-verify-jwt`, uses HMAC verification instead) grants credits on `order_created`.
 - **Android payments:** RevenueCat via Google Play Billing. `billing.js` detects platform and calls RC SDK. On purchase: immediately calls `revenuecat-verify` for instant credit grant; `revenuecat-webhook` (also `--no-verify-jwt`) is the idempotent fallback. Both use `"rc_<transactionId>"` as `provider_session_id`.
 - **Coupons:** `redeem-coupon` edge function. Single-use per user enforced via `provider_session_id` UNIQUE constraint. Current codes in the function source.
@@ -215,45 +143,32 @@ supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
   - Chat calls the model through `streamLLM` (`modelFor("CHAT", …)` → `LLM_MODEL_CHAT` → legacy `CHAT_MODEL`), with multi-turn history via `CallOpts.messages`.
 - Route labels (P1, P2...) computed at render time from display index, never stored.
 - All functions log token usage to `llm_usage` table (fire-and-forget).
-- `generate-destination-research` uses Haiku 4.5 + `web_search` tool (max 6 uses). Results cached in DB; cache key = (destinations, tags, monthBucket).
+- `generate-destination-research` uses Haiku 4.5 + `web_search` (`INSPIRATIONS_MAX_SEARCHES`, default 3; 2 more on the Sonnet escalation). Results cached in DB; cache key = (destinations, tags, monthBucket).
 
 ### Maps & Photos
 
 - Geocoding enriched with trip destination context (e.g. "Kuta" → "Kuta, Bali") to avoid wrong-continent results.
-- Photos: 4-tier Wikipedia lookup with person-page filtering, serialized Magazine fallback to prevent duplicates.
-- TransitionRow: haversine walk/drive pill + optional transit icon (🚇/🚌/⛴️) linking to Google Maps transit. No LLM time estimates.
-- Inter-city transit cards: rich cards with service name, stations, duration, cost, Rome2Rio link.
+- Photos: 4-tier Wikipedia lookup. **`isNonPlacePhoto()` in `photos.js` is shared by the itinerary grid AND the Magazine hero** — add new reject patterns there, not to one surface. The hero used to carry its own private blocklist, so a filter added for the grid silently never reached it and a Wikipedia promo-reel frame rendered as a destination hero. The hero keeps a small extra list on top (it rejects panoramas the grid allows).
+- TransitionRow: haversine walk/drive pill + optional transit icon linking to Google Maps transit. **No LLM time estimates** — never add one.
 
 ### Data / State
 
-- Pre-loading: Day 1 geocoded/photos cached when streamingDays >= 1. Expanding Day N triggers Day N+1 pre-load.
-- Offline: trip list + days cached in localStorage.
-- Edit Details flow: smart change detection with confirmation sheet. Destinations/duration force regenerate, other changes user chooses.
-- Itinerary replace confirmation: shows parameter diff before overwriting existing itinerary.
+- Edit Details: changing destinations or duration FORCES a regenerate (an itinerary cannot survive them); other changes let the user choose. Replacing an itinerary shows a parameter diff first — overwriting is destructive and unrecoverable.
 
-## Admin Console
+## Billing & cost rates
 
-- Route: `/admin` — gated by `is_admin` boolean on profiles table
-- Tabs: Users, Trips, Credits (by function/model), Daily Usage
-- Shows: trip counts, chat counts, IG timing, activity breakdown, token usage, cost estimates
-- Cost rates (verified 2026-10-03, keep in sync across `_shared/credits.ts`, `Admin.jsx`, `scripts/trip-cost.cjs`, and this file) per M tokens:
-  - Anthropic: Sonnet 5 $2/$10, Sonnet 5.5 $2/$10, Haiku 4.5 $1/$5, Opus 5.5 $4/$20, Opus 4.8 $5/$25, Fable 5 $10/$50 (re-verified 2026-10-05; Sonnet 5's $2/$10 intro price is now permanent — the scheduled $3/$15 rise was cancelled)
-  - Google: Gemini 3.8 Flash $0.75/$3.75 (**promotional — DOUBLES to $1.50/$7.50 on 2027-01-01**), Gemini 3.5 Flash-Lite $0.30/$2.50
-  - OpenAI: GPT-6 Luna $0.10/$0.50, GPT-5.6 Luna $0.20/$1.20, GPT-5.4 Nano $0.20/$1.25
-  - Cache read = 0.1x input, cache write (5m) = 1.25x input, (1h) = 2x. Web search $10/1k calls. Batch API = 50% off both directions.
-  - **Cache-read exceptions `computeLLMCost` does NOT yet model:** Opus 5.5 reads at 0.05x and Fable 5.1 at 0.025x, not 0.1x. Over-bills (safe direction) — fix before routing anything to either.
+(The admin console itself is described in the `testing` skill.)
+
+- **Cost rates live in ONE place: `supabase/functions/_shared/llm-rates.json`.** `_shared/credits.ts`, `Admin.jsx`, `scripts/trip-cost.cjs` and `scripts/bench/lib.mjs` all read it — add a new model there and every consumer picks it up. Scheduled price changes use `from`/`then` (Gemini 3.8 Flash's promotional $0.75/$3.75 doubles on 2027-01-01). Do not copy rate numbers into any other file, this one included: the duplicate is what drifts.
+- Billing gotchas the rate file can't express:
+  - **Cache-read exceptions `computeLLMCost` does NOT yet model:** Opus 5.5 reads at 0.05x and Fable 5.1 at 0.025x, not the standard 0.1x. Over-bills (safe direction) — fix before routing anything to either.
   - **Minimum cacheable prefix is model-dependent and fails SILENTLY:** Haiku 4.5 needs 4,096 tokens, Sonnet 5 needs 1,024, Sonnet 5.5/Opus 5/Opus 5.5 need 512. Below it, `cache_control` is ignored with no error — verify via `cache_creation_input_tokens`/`cache_read_input_tokens` both being 0. No Haiku call site in this codebase clears 4,096, so caching is impossible there as written.
-- **A model missing from `RATES` is a billing incident, not a shrug.** The unknown-model fallback bills at Fable 5 ($10/$50) so a swap can never under-charge — which means a missing entry over-bills by up to ~100x (an IG day-fill costing $0.0017 would bill $0.17 ≈ 25 credits). `computeLLMCost` now logs `BILLING ALARM` and files a PostHog exception when it hits the fallback. Add every new model to all four files above before pointing any function at it.
+- **A model missing from the rate table is a billing incident, not a shrug.** The unknown-model fallback bills at Fable 5 ($10/$50) so a swap can never under-charge — which means a missing entry over-bills by up to ~100x (an IG day-fill costing $0.0017 would bill $0.17 ≈ 25 credits). `computeLLMCost` logs `BILLING ALARM` and files a PostHog exception when it hits the fallback. Add every new model to `llm-rates.json` before pointing any function at it.
 
 ## Testing
 
-- Playwright config: `workers: 1` (sequential) — API-dependent tests can't run in parallel.
-- Test user: `qa-tester` / `qaTest123!`
-- Tests use real Supabase (not mocked). Board tests create trips via serial setup fixture.
-- `collab-invite.spec.ts` members/invite tests skip unless `VITE_INVITE_ENABLED=true` and the invite RPC migrations are applied to staging; the invalid-token test always runs.
-- QA skills: `/code-review` (static analysis), `/qa-e2e` (browser tests with cost tracking).
-- Before sending code for review, run `npm run check`. If formatting fails, run `npm run format`, then rerun `npm run check`.
-- If the local network's ISP hijacks `*.supabase.co` DNS (E2E seeding fails with TLS resets; observed 2026-09), run tests with `TRIPJAM_DNS_PIN=1 NODE_OPTIONS="--import ./e2e/dns-pin.mjs" npx playwright test …` — pins the real edge IPs for Node and Chromium without touching system DNS.
+See the `testing` skill (`.claude/skills/testing/`) — test user, flag-gated
+specs, the serial trip fixture, the review gate, and the ISP DNS-pin workaround.
 
 ## Environments
 
@@ -272,18 +187,16 @@ Two Supabase projects — local dev and staging share one, production is isolate
 - Vercel auto-deploys on push. Preview deploys use staging Supabase, production deploys use production Supabase.
 - **Do not push to any remote without explicit user approval.** Every remote auto-deploys.
 - **Do not make code changes without user approval.** Discuss first, implement after approval. Exception: clear bug fixes can be applied directly.
-- GitHub Actions: `checks.yml` runs the review gate on pushes/PRs to main; `build-android.yml` builds the APK pointed at production (via GitHub Secrets).
-- Always deploy edge functions separately to each environment.
+- GitHub Actions: `checks.yml` runs **lint + typecheck + build only** on pushes/PRs to main — NOT `format:check`, NOT `test:functions`, so green CI does not mean `npm run check` passes; `build-android.yml` builds the APK against production (GitHub Secrets); `health-monitor.yml` probes every 6h (Supabase pause, Anthropic balance, payment keys) and spends a real Haiku call through `extract-preferences` — don't break that function's unbilled path or the probe goes dark.
+- Always deploy edge functions separately to each environment, and **`git fetch origin` first** — the deploy ships your local tree, so deploying from a stale branch silently reverts whatever another session deployed.
 - After any file extraction/split, verify no duplicate `const T =` definitions and no escaped unicode (`\\u` sequences).
 
 ## Supabase Edge Functions
 
-- Runtime: Deno (TypeScript)
-- All use Anthropic API via direct fetch or `npm:@anthropic-ai/sdk`
-- CORS headers required on every response
-- Environment vars: `ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
-- Gated functions import `authenticateUser`, `deductCredits`, `rateLimit` from `../_shared/credits.ts`
-- All functions log token usage to `llm_usage` table (fire-and-forget)
-- Deploy to each environment separately — changes to staging don't affect production
-- `payment-webhook` and `revenuecat-webhook` must be deployed with `--no-verify-jwt`; both use their own secret-based verification instead of Supabase JWT
-- `inbound-email` is also deployed with `--no-verify-jwt` (Resend calls it; Svix signature + SPF/DKIM sender verification instead). Its secrets: `RESEND_INBOUND_WEBHOOK_SECRET`, `RESEND_INBOUND_API_KEY`, `INBOUND_EMAIL_ADDRESS`. **Pairing rule:** the frontend's `VITE_EMAIL_INGEST_ADDRESS` (`.env` / `.env.production` / Vercel) and the Supabase secret `INBOUND_EMAIL_ADDRESS` must hold the SAME address — the frontend renders `local+<tripid8>@domain` copy-to-clipboard addresses and `send-email` prints it in footers; if they drift, users forward to a dead address.
+- **Pin `https://esm.sh/@supabase/supabase-js@2.117.2` in EVERY edge function.** A
+  floating `@2` once resolved to a build whose transitive auth-js 404s on esm.sh,
+  and because every function imports it (directly or via `_shared/credits.ts`),
+  **all deploys failed at once** with an error naming a module our code never
+  references. Bump deliberately, never by omission.
+
+- `inbound-email`, `payment-webhook` and `revenuecat-webhook` are deployed `--no-verify-jwt` (see Commands) — each verifies its own caller instead: Svix signature + SPF/DKIM for inbound mail, HMAC for the payment webhooks. `inbound-email` secrets: `RESEND_INBOUND_WEBHOOK_SECRET`, `RESEND_INBOUND_API_KEY`, `INBOUND_EMAIL_ADDRESS`. **Pairing rule:** the frontend's `VITE_EMAIL_INGEST_ADDRESS` (`.env` / `.env.production` / Vercel) and the Supabase secret `INBOUND_EMAIL_ADDRESS` must hold the SAME address — the frontend renders `local+<tripid8>@domain` copy-to-clipboard addresses and `send-email` prints it in footers; if they drift, users forward to a dead address.
