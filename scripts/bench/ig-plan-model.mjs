@@ -21,7 +21,9 @@ import path from "node:path";
 
 const STAGING_REF = "wlrzvwjdrjpfqcwgmzch";
 const RUNS = Number(process.env.RUNS || 2);
-const KEY = "LLM_MODEL_IG_PLAN";
+// Which stage to vary. IG_PLAN is latency-shaped (awaited, blocks the stream);
+// IG_FILL is cost-shaped (~97% of input, 62% of IG spend).
+const KEY = process.env.BENCH_KEY || "LLM_MODEL_IG_PLAN";
 
 // null = leave unset, i.e. the code default (gemini-3.8-flash) — the control.
 const ONLY = (process.env.ARMS || "").split(",").filter(Boolean);
@@ -178,6 +180,12 @@ async function runOnce(token, trip) {
     withNarrative: days.filter((d) => d.story_title && d.narrative).length,
     cities: [...new Set(days.map((d) => d.city).filter(Boolean))],
     emptyDays: days.filter((d) => !(d.activities || []).length).length,
+    acts: days.reduce((a, d) => a + (d.activities || []).length, 0),
+    noGeocode: days.reduce(
+      (a, d) => a + (d.activities || []).filter((x) => !x.geocode).length,
+      0,
+    ),
+    sampleTitles: (days[1]?.activities || []).map((x) => x.title).slice(0, 6),
     // A plan that lists the REGION as a base ("South Goa") instead of a
     // real town is a quality smell: the hotel/anchor logic downstream has
     // nothing concrete to geocode.
@@ -198,7 +206,10 @@ for (const arm of ARMS) {
   await new Promise((r) => setTimeout(r, 4000)); // let workers pick up the secret
   console.log(`\n══ ${arm.name} ═══════════════════════════`);
   const runs = [];
-  for (const trip of TRIPS) {
+  const FIXTURES = process.env.FIXTURES
+    ? TRIPS.filter((t) => process.env.FIXTURES.split(",").includes(t.id))
+    : TRIPS;
+  for (const trip of FIXTURES) {
     for (let i = 0; i < RUNS; i++) {
       const r = await runOnce(token, trip);
       r.trip = trip.id;
