@@ -20,6 +20,9 @@ export const ALL_MODEL_ENV_KEYS = [
   "LLM_MODEL_NARRATIVES",
   "LLM_MODEL_WISHLIST",
   "LLM_MODEL_REPAIR",
+  "LLM_MODEL_CHAT",
+  "LLM_MODEL_BOOKING_PARSE",
+  "LLM_MODEL_INSPIRATIONS_SYNTH",
   // Legacy names still honoured by modelFor — unset them too, or a stale
   // RG_MODEL on staging silently overrides LLM_MODEL_DEFAULT for RG only.
   // (IG_MODEL really is set on staging today, so this is load-bearing: without

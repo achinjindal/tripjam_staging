@@ -1,4 +1,29 @@
 import { captureException } from "../_shared/errortrack.ts";
+import { modelFor, providerOf } from "../_shared/llm.ts";
+
+// The booking parser's model. It was hardcoded in THREE places — the API call
+// plus two llm_usage rows — so a swap that missed a log would have attributed
+// the cost to a model that never ran, quietly corrupting the Admin cost view
+// and scripts/trip-cost.cjs. One constant, used everywhere.
+//
+// Guarded rather than taken on trust: this function POSTs to api.anthropic.com
+// directly (it sends document/image content blocks that the shared adapter
+// doesn't model), so a global LLM_MODEL_DEFAULT pointing at Gemini or OpenAI
+// would send a model name that endpoint cannot serve and break every forwarded
+// booking. Same reasoning, and the same guard, as INSPIRATIONS_ESCALATION_MODEL
+// in generate-destination-research.
+const BOOKING_PARSE_MODEL = (() => {
+  const want = modelFor("BOOKING_PARSE", "claude-haiku-4-5-20251001");
+  if (providerOf(want) !== "anthropic") {
+    console.error(
+      `[inbound-email] booking-parse model "${want}" is not an Anthropic ` +
+        `model, but this path calls api.anthropic.com directly — falling ` +
+        `back to claude-haiku-4-5-20251001.`,
+    );
+    return "claude-haiku-4-5-20251001";
+  }
+  return want;
+})();
 // Inbound booking ingestion (TripIt-style):
 //   forward a hotel/flight/train confirmation → Resend inbound → this
 //   webhook → Haiku parse → the matching trip's hotels_data gains
@@ -198,7 +223,7 @@ ${bodyText || (file ? "(see attached file)" : "(body unavailable — use the sub
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
+      model: BOOKING_PARSE_MODEL,
       max_tokens: 500,
       messages: [{ role: "user", content }],
     }),
@@ -623,7 +648,7 @@ async function handleInbound(req: Request): Promise<Response> {
         headers: dbh,
         body: JSON.stringify({
           function_name: "inbound-email:dry",
-          model: "claude-haiku-4-5-20251001",
+          model: BOOKING_PARSE_MODEL,
           user_id: user.id,
           input_tokens: pr.usage?.input_tokens || 0,
           output_tokens: pr.usage?.output_tokens || 0,
@@ -808,7 +833,7 @@ async function handleInbound(req: Request): Promise<Response> {
     body: JSON.stringify({
       trip_id: trip.id,
       function_name: "inbound-email",
-      model: "claude-haiku-4-5-20251001",
+      model: BOOKING_PARSE_MODEL,
       input_tokens: pr.usage?.input_tokens || 0,
       output_tokens: pr.usage?.output_tokens || 0,
     }),
