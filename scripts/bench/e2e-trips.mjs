@@ -272,11 +272,18 @@ for (const f of RUN) {
   const region = f.destinations.map((d) =>
     d.split(",")[0].trim().toLowerCase(),
   );
-  const regionBase = bases.filter((b) =>
-    region.includes(b.trim().toLowerCase()),
+  // A destination that IS a city (Reykjavik, Lisbon) is a perfectly good base —
+  // only flag a base that is a REGION or touring route, where "stay in
+  // <region>" leaves the hotel and map steps nothing bookable to resolve.
+  const REGIONY =
+    /\b(goa|bali|tuscany|provence|algarve|kerala|rajasthan|andalusia|patagonia|coast|circle|valley|islands?|region|province)\b/i;
+  const unbookable = bases.filter(
+    (b) => REGIONY.test(b) || region.includes(b.trim().toLowerCase()),
   );
-  if (regionBase.length && f.destinations.length === 1)
-    note(`destination name used as a base: ${regionBase.join(", ")}`);
+  if (unbookable.length)
+    note(
+      `unbookable base(s) — region/route, not a town: ${unbookable.join(", ")}`,
+    );
   const allActs = days.flatMap((d) => d.activities || []);
   const noGeo = allActs.filter((a) => !a.geocode);
   if (noGeo.length)
@@ -296,6 +303,10 @@ for (const f of RUN) {
     for (const a of d.activities || []) {
       const k = (a.title || "").trim().toLowerCase();
       if (!k) continue;
+      // Hotel check-ins are SUPPOSED to repeat: returning to the same base
+      // after a side trip (Cusco -> Machu Picchu -> Cusco) is exactly what
+      // the prompt asks for, not a NO REPEATS violation.
+      if (a.type === "hotel" || /^check in at /i.test(k)) continue;
       if (seen.has(k) && seen.get(k) !== d.label)
         note(
           `repeated venue across days: "${a.title}" (${seen.get(k)} and ${d.label})`,
