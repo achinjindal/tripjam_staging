@@ -441,10 +441,29 @@ serve(async (req) => {
       .filter(Boolean)
       .map((rule: string) => `  • ${rule}`)
       .join("\n");
+    // Day i's calendar date, derived from startDate. Returns null when the
+    // caller sent no startDate (the field is optional).
+    const dayDateISO = (i: number): string | null => {
+      if (!startDate) return null;
+      const d = new Date(`${String(startDate).slice(0, 10)}T00:00:00Z`);
+      if (Number.isNaN(d.getTime())) return null;
+      d.setUTCDate(d.getUTCDate() + i);
+      return d.toISOString().slice(0, 10);
+    };
+    const dayWeekday = (i: number): string | null => {
+      const iso = dayDateISO(i);
+      return iso
+        ? new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", {
+            weekday: "long",
+            timeZone: "UTC",
+          })
+        : null;
+    };
+
     const paceNote =
       pace === "relaxed"
-        ? "PACE: This is a relaxed trip. Plan 5-6 activities per day (HARD MINIMUM 5 — a day with fewer than 5 feels empty), with some gaps for rest, wandering, or a cafe. Relaxed means unhurried, NOT sparse — still fill the day from morning through dinner."
-        : "PACE: This is an active trip. Plan 6-8 activities per day (HARD MINIMUM 6) — push toward the higher end unless an activity is genuinely long (3h+). Make full use of the day, morning through dinner. Never leave a day thin.";
+        ? "PACE: This is a relaxed trip. Plan 5-6 activities per day (HARD MINIMUM 5 — a day with fewer than 5 feels empty), with some gaps for rest, wandering, or a cafe. Relaxed means unhurried, NOT sparse — still fill the day from morning through dinner. HARD CEILING: no day may span more than 9 HOURS from the first activity's start to the last activity's start. A relaxed day that runs 12 hours is not relaxed, whatever the activity count says."
+        : "PACE: This is an active trip. Plan 6-8 activities per day (HARD MINIMUM 6) — push toward the higher end unless an activity is genuinely long (3h+). Make full use of the day, morning through dinner. Never leave a day thin. HARD CEILING: no day may span more than 11 HOURS from the first activity's start to the last activity's start.";
     const morningNote =
       morningStart === "late"
         ? "MORNING ROUTINE: These travelers like a slow start. On days without an arrival constraint, the first activity should not begin before 10:30–11:00. Build in time for a leisurely breakfast. Only start earlier if there is a genuinely unmissable reason (e.g. sunrise at a landmark, avoiding extreme midday heat, timed entry)."
@@ -887,8 +906,13 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
           : day.sleep_city
             ? `The traveler already checked in at this base on an earlier day — do NOT include any check-in activity today.`
             : `This is the final departure day — no hotel check-in.`;
+        const weekday = dayWeekday(i);
+        const dateNote = weekday
+          ? `\n\nTHIS DAY IS ${weekday.toUpperCase()}, ${dayDateISO(i)}. Do NOT schedule a venue that is closed on ${weekday}s (many museums and historic houses close Mondays; some restaurants close Sundays). If the day's anchor is closed, swap it for something open and say so in the note. Respect daylight for this date and latitude — sunset-, sunrise- and aurora-dependent activities must be scheduled when they are actually possible.`
+          : "";
         const dayUser =
           userMessage +
+          dateNote +
           "\n\n──── AGREED WHOLE-TRIP PLAN (all days) ────\n" +
           skeleton +
           `\n\n──── YOUR TASK ────\nProduce ONLY the detailed day object for ${day.label} in ${day.city}. Expand THIS day's anchors (${titles}) into a full schedule. NEVER use any place the plan assigns to a different day — this includes meals and connective stops you add yourself: if a venue is named anywhere in the plan for another day, pick a different one. ${baseNote}`;
@@ -916,6 +940,13 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
           if (!parsed || !Array.isArray(parsed.activities))
             throw new Error("day object missing activities");
           parsed.label = day.label;
+          // Calendar date, computed — never asked of the model. Every day came
+          // back with no date at all, which is why nothing downstream could
+          // reason about weekdays (museums shut on Mondays), daylight (an
+          // aurora watch booked for 19:30 in September) or season. Deriving it
+          // from startDate + index is exact and costs nothing; asking an LLM
+          // to count days is neither.
+          if (dayDateISO(i)) parsed.date = dayDateISO(i);
           parsed.wishlist = Array.isArray(parsed.wishlist)
             ? parsed.wishlist
             : [];

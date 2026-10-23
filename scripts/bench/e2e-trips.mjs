@@ -43,6 +43,7 @@ const FIXTURES = [
     numDays: 5,
     styles: ["Food & Culinary"],
     pace: "relaxed",
+    morningStart: "late", // "we hate early mornings"
     budget: "mid",
     startDate: "2027-05-02",
     notes: "Wine and seafood. We hate early mornings.",
@@ -53,6 +54,7 @@ const FIXTURES = [
     numDays: 10,
     styles: ["Beaches", "Nature & Outdoors"],
     pace: "relaxed",
+    morningStart: "mid", // honeymoon, not a dawn patrol
     budget: "luxury",
     startDate: "2027-06-14",
     notes: "Honeymoon. Want rice terraces and good spas.",
@@ -236,7 +238,7 @@ for (const f of RUN) {
       travelers: 2,
       budget: f.budget,
       pace: f.pace,
-      morningStart: "early",
+      morningStart: f.morningStart || "early",
       styles: f.styles,
       startDate: f.startDate,
       notes: f.notes,
