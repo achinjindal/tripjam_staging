@@ -209,6 +209,42 @@ function bookedLegClash(trip, days) {
 // The same restaurant on two days (IG repeats favourites; earlier chat edits
 // did too). Sights are left alone: going back to a beach or a sunset spot is
 // often the point.
+// Same PLACE under a different NAME. repeatedPlaces() below matches on the
+// title, which the model routinely rewrites while keeping the geocode
+// identical — a luxury-honeymoon trip booked "The Spa at The Legian" on one
+// day and "The Legian Luxury Ayurveda Couples Ritual" on another, same
+// geocode, and the title check saw two different places. It also only looks
+// at food, so a repeated spa or market never registered at all.
+function repeatedGeocodes(days) {
+  const seen = new Map(); // geocode → first dayIdx
+  const out = [];
+  days.forEach((day, i) => {
+    const hits = [];
+    for (const a of sorted(day)) {
+      if (SKIP_TYPES.has(a.type) || LODGING_RE.test(a.title || "")) continue;
+      const g = String(a.geocode || "")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
+      if (g.length < 6) continue;
+      if (seen.has(g) && seen.get(g) !== i)
+        hits.push({ a, first: seen.get(g) });
+      else if (!seen.has(g)) seen.set(g, i);
+    }
+    if (!hits.length) return;
+    const names = list(hits.map((h) => short(h.a.title)));
+    const first = hits[0].first;
+    out.push({
+      kind: "repeat",
+      dayIdx: i,
+      text: `${dayName(day, i)} returns to ${names} from ${dayName(days[first], first)}.`,
+      prompt: `${dayName(day, i)} sends us back to ${names}, already visited on ${dayName(days[first], first)} (same place, different name). Replace it with somewhere new nearby.`,
+      label: "Swap the repeat",
+    });
+  });
+  return out;
+}
+
 function repeatedPlaces(days) {
   const seen = []; // {key, dayIdx}
   const byDay = new Map(); // later dayIdx → {titles, firstDay}
@@ -292,6 +328,123 @@ function longHops(days) {
   return out;
 }
 
+// The schedule allows LESS time than the drive needs. longHops() flags a ride
+// that is merely long; this flags one that cannot be made — and unlike
+// longHops it does NOT skip days containing a transit activity, which is
+// exactly the day-trip shape where the gaps go wrong (a 1h30 Kintamani ->
+// Tegenungan drive given 45 minutes).
+function tightConnections(days) {
+  const out = [];
+  days.forEach((day, i) => {
+    const acts = sorted(day);
+    for (let k = 0; k + 1 < acts.length; k++) {
+      const a = acts[k];
+      const b = acts[k + 1];
+      if (a.type === "transit" || b.type === "transit") continue;
+      if (a.lat == null || a.lng == null || b.lat == null || b.lng == null)
+        continue;
+      const startA = toMin(a.time);
+      const startB = toMin(b.time);
+      if (startA == null || startB == null) continue;
+      const gap = startB - (startA + (durationMin(a.duration) ?? 60));
+      const driveMins = Math.round((metersBetween(a, b) * 1.3) / 400);
+      // 10-minute grace: the drive estimate is a model, not a timetable.
+      if (driveMins < 20 || gap >= driveMins - 10) continue;
+      out.push({
+        kind: "tight",
+        dayIdx: i,
+        text: `${dayName(day, i)} allows ${Math.max(0, gap)} min to travel from ${short(a.title)} to ${short(b.title)}, which takes about ${driveMins}.`,
+        prompt: `On ${dayName(day, i)} there are only ${Math.max(0, gap)} minutes between ${a.title} and ${b.title}, but that trip takes about ${driveMins} minutes. Adjust the times or move one of them.`,
+        label: "Fix the timing",
+      });
+      break;
+    }
+  });
+  return out;
+}
+
+// Two meals stacked on top of each other. The model fills a time grid, so it
+// produces things like a charcuterie board ending 19:10 and a tasting menu at
+// 19:30 — nobody eats both.
+function stackedMeals(days) {
+  const out = [];
+  days.forEach((day, i) => {
+    const meals = sorted(day).filter(
+      (a) => FOOD_TYPES.has(a.type) && !LODGING_RE.test(a.title || ""),
+    );
+    for (let k = 0; k + 1 < meals.length; k++) {
+      const a = meals[k];
+      const b = meals[k + 1];
+      const endA =
+        toMin(a.time) == null
+          ? null
+          : toMin(a.time) + (durationMin(a.duration) ?? 60);
+      const startB = toMin(b.time);
+      if (endA == null || startB == null) continue;
+      if (startB - endA >= 90) continue;
+      out.push({
+        kind: "meal_stack",
+        dayIdx: i,
+        text: `${dayName(day, i)} books ${short(b.title)} only ${Math.max(0, startB - endA)} min after ${short(a.title)}.`,
+        prompt: `On ${dayName(day, i)}, ${b.title} starts just ${Math.max(0, startB - endA)} minutes after ${a.title} finishes — too close to enjoy both. Drop one or move it later.`,
+        label: "Space out the meals",
+      });
+      break;
+    }
+  });
+  return out;
+}
+
+// The activity's OWN note contradicts its schedule. The model writes "Closes
+// at 17:00" and books 17:15-18:30 in the same object; the contradiction is
+// visible on screen, which makes it the most embarrassing class of error.
+const CLOSES_RE =
+  /\b(?:closes?|last entry|last admission)\b[^0-9]{0,16}(\d{1,2}):(\d{2})/i;
+const OPENS_RE = /\bopens?\b[^0-9]{0,16}(\d{1,2}):(\d{2})/i;
+function noteContradictions(days) {
+  const out = [];
+  days.forEach((day, i) => {
+    for (const a of sorted(day)) {
+      const note = String(a.note || "");
+      const start = toMin(a.time);
+      if (start == null || !note) continue;
+      // "in winter"/"in summer" style notes name two different regimes; the
+      // schedule can be right for one of them, so don't cry wolf.
+      if (/\b(winter|summer|seasonal)\b/i.test(note)) continue;
+      const c = CLOSES_RE.exec(note);
+      if (c) {
+        const close = Number(c[1]) * 60 + Number(c[2]);
+        const end = start + (durationMin(a.duration) ?? 60);
+        if (end > close) {
+          out.push({
+            kind: "hours",
+            dayIdx: i,
+            text: `${dayName(day, i)}: ${short(a.title)} runs past its own stated closing time (${c[1]}:${c[2]}).`,
+            prompt: `On ${dayName(day, i)}, ${a.title} is scheduled until after ${c[1]}:${c[2]}, but its own note says it closes then. Move it earlier.`,
+            label: "Fix the hours",
+          });
+          break;
+        }
+      }
+      const o = OPENS_RE.exec(note);
+      if (o) {
+        const open = Number(o[1]) * 60 + Number(o[2]);
+        if (start < open) {
+          out.push({
+            kind: "hours",
+            dayIdx: i,
+            text: `${dayName(day, i)}: ${short(a.title)} starts before its own stated opening time (${o[1]}:${o[2]}).`,
+            prompt: `On ${dayName(day, i)}, ${a.title} is scheduled before ${o[1]}:${o[2]}, but its own note says it opens then. Move it later.`,
+            label: "Fix the hours",
+          });
+          break;
+        }
+      }
+    }
+  });
+  return out;
+}
+
 /**
  * Up to MAX_FIXES fixes, hard clashes first, at most one per day.
  * `dismissed` is a Set of fix ids the viewer closed.
@@ -302,8 +455,15 @@ export function findTripFixes(trip, days, dismissed = new Set()) {
     ...bookedLegClash(trip, days),
     ...arrivalClash(trip, days),
     ...departureClash(trip, days),
-    ...repeatedPlaces(days),
+    // Schedule-breaking first (the trip cannot be done as written), then
+    // self-contradictions, then quality. longHops stays last: tightConnections
+    // supersedes it whenever the ride is not just long but unmakeable.
     ...timeOverlaps(days),
+    ...tightConnections(days),
+    ...noteContradictions(days),
+    ...repeatedGeocodes(days),
+    ...repeatedPlaces(days),
+    ...stackedMeals(days),
     ...longHops(days),
   ].map((f) => ({ ...f, id: `${f.kind}:${f.dayIdx}:${f.text}` }));
   const out = [];
