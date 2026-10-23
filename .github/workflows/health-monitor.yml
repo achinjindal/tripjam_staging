@@ -2,6 +2,12 @@
 #   · Supabase project pause (INACTIVE)      — 2 incidents Aug/Sep 2026
 #   · Anthropic balance exhaustion (LLM 500) — 1 incident Aug 2026
 #   · dead payment keys (checkout 502)       — found Sep 2026, LS-gated below
+#   · Google/Gemini prepay exhaustion        — 2026-10-23, RG AND IG both down
+# PROVIDER COVERAGE IS THE POINT: the LLM probe below was Anthropic-only, so
+# when RG and IG moved to Gemini on 2026-10-05 nothing watched the provider
+# serving the two most important steps. The 2026-10-23 outage ran green
+# through this monitor and was found by hand. Probe EVERY provider in use,
+# and re-check this list whenever a modelFor() default changes provider.
 # A failed run emails the repo owner via GitHub's default workflow-failure
 # notification. Runs every 6 hours; cheap by design (one tiny Haiku call per
 # run via the unbilled extract-preferences).
@@ -22,6 +28,8 @@ jobs:
       STAGING_URL: ${{ secrets.STAGING_SUPABASE_URL }}
       STAGING_ANON: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
       MGMT_TOKEN: ${{ secrets.SUPABASE_MGMT_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       PROBE_PW: ${{ secrets.HEALTH_PROBE_PASSWORD }}
       # Soft-fail list — remove "checkout" once the Lemon Squeezy store is
       # activated and a live key is installed.
@@ -103,6 +111,40 @@ jobs:
             else hard "LLM probe: HTTP $code — $(head -c 200 /tmp/llm.json) (Anthropic balance?)"; fi
           else
             hard "staging sign-in failed (qa-tester) — LLM probe skipped"
+          fi
+
+          # ── 5b. Per-provider balance ───────────────────────────────
+          # One minimal call per provider. A depleted prepay balance is a
+          # hard 402/429 that NO amount of app-level testing surfaces until a
+          # user hits it: the function returns 500 and the monitor above, which
+          # only exercises Anthropic, stays green. Unset key => warn, not fail,
+          # so adding a provider never breaks the run before its secret lands.
+          if [ -n "${GEMINI_API_KEY:-}" ]; then
+            code=$(curl -s -o /tmp/gem.json -w "%{http_code}" --max-time 30 \
+              "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
+              -H "x-goog-api-key: $GEMINI_API_KEY" -H "Content-Type: application/json" \
+              -d '{"contents":[{"parts":[{"text":"ok"}]}],"generationConfig":{"maxOutputTokens":1}}')
+            case "$code" in
+              200) note "LLM (Google): 200 — balance OK" ;;
+              402|429) hard "LLM (Google): HTTP $code — PREPAY DEPLETED or rate-limited. RG and IG both run on Gemini; trip generation is DOWN. Top up at https://ai.studio/projects — $(head -c 160 /tmp/gem.json)" ;;
+              *) hard "LLM (Google): HTTP $code — $(head -c 160 /tmp/gem.json)" ;;
+            esac
+          else
+            soft "LLM (Google): GEMINI_API_KEY not set as a repo secret — provider unmonitored"
+          fi
+
+          if [ -n "${OPENAI_API_KEY:-}" ]; then
+            code=$(curl -s -o /tmp/oai.json -w "%{http_code}" --max-time 30 \
+              "https://api.openai.com/v1/chat/completions" \
+              -H "Authorization: Bearer $OPENAI_API_KEY" -H "Content-Type: application/json" \
+              -d '{"model":"gpt-6-luna","messages":[{"role":"user","content":"ok"}],"max_completion_tokens":1}')
+            case "$code" in
+              200) note "LLM (OpenAI): 200 — balance OK" ;;
+              402|429) hard "LLM (OpenAI): HTTP $code — balance/quota. Magazine deep-dives run on gpt-6-luna — $(head -c 160 /tmp/oai.json)" ;;
+              *) hard "LLM (OpenAI): HTTP $code — $(head -c 160 /tmp/oai.json)" ;;
+            esac
+          else
+            soft "LLM (OpenAI): OPENAI_API_KEY not set as a repo secret — provider unmonitored"
           fi
 
           # ── 6. Checkout (prod) — LS-gated known issue ───────────────
