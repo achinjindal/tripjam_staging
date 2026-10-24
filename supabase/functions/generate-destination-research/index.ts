@@ -127,6 +127,22 @@ const INSPIRATION_TAGS = [
 ] as const;
 const TAG_SET = new Set<string>(INSPIRATION_TAGS as readonly string[]);
 
+/** Trip styles (the pre-IG chips) → inspiration tags. Keys must match
+ *  STYLE_RULES in generate-itinerary; values must exist in INSPIRATION_TAGS. */
+const STYLE_TAGS: Record<string, string[]> = {
+  "Nature & Wildlife": ["nature", "wildlife"],
+  "Food & Culinary": ["food"],
+  "Shopping & Markets": ["culture"],
+  "Photography & Scenery": ["photography"],
+  "Family & Kids": ["family"],
+  "Nightlife & Bars": ["nightlife"],
+  "Relaxation & Wellness": ["slow-travel", "romance"],
+  "Adventure & Thrill": ["adventure", "hiking"],
+  "History & Culture": ["history", "culture"],
+  Beaches: ["beaches"],
+  "Nature & Outdoors": ["nature", "hiking"],
+};
+
 const SYSTEM_PROMPT = `You are researching travel inspirations from REAL INDIVIDUAL CREATORS — not listicle sites, not corporate tourism boards, not aggregator publications. You will use the web_search tool to find recent (last 24 months, prefer last 12) content for a specific destination + traveller interests.
 
 REQUIREMENTS for each inspirations entry:
@@ -724,6 +740,14 @@ serve(async (req) => {
     const body = await req.json();
     const destinations = normaliseList(body.destinations);
     const notes: string = typeof body.notes === "string" ? body.notes : "";
+    // Trip styles, mapped straight onto the tag vocabulary. Tags were derived
+    // ONLY from free-text notes, so a trip whose styles said "Relaxation &
+    // Wellness" but whose notes were empty got generic first-timer research —
+    // a luxury honeymoon was handed "tested with family and children". The
+    // mapping is deterministic: no extra LLM call, no latency.
+    const styleTags: string[] = (
+      Array.isArray(body.styles) ? body.styles : []
+    ).flatMap((s: unknown) => STYLE_TAGS[String(s)] || []);
     const monthBucket = monthBucketFor(body.startDate);
     const tripId: string | null = body.tripId || null;
 
@@ -786,6 +810,11 @@ serve(async (req) => {
       supabaseUrl,
       tripId,
     );
+    // Styles first — they are an explicit user choice, where notes are prose
+    // the extractor may read loosely. Deduped, capped at 5 like extractTags.
+    tagResult.tags = Array.from(
+      new Set([...styleTags, ...tagResult.tags].filter((t) => TAG_SET.has(t))),
+    ).slice(0, 5);
 
     // `v` invalidates the 30-day cache when the prompt changes shape (e.g.
     // requiring article+video mix). Bump on any breaking prompt change.
@@ -850,8 +879,17 @@ serve(async (req) => {
           `different creators and less obvious sources than a first page would — ` +
           `go deeper, not broader.`
         : "";
+    // Balance across destinations EXPLICITLY. Searching each one is not
+    // enough: with a pooled snippet set the model happily returned 8 Kyoto
+    // items and 0 Tokyo for a Tokyo+Kyoto trip, leaving half the trip with no
+    // inspiration at all.
+    const coverageNote =
+      destinations.length > 1
+        ? `\n\nCOVERAGE: this trip visits ${destinations.length} destinations — ${destinations.join(" and ")}. Spread the results ACROSS them: at least 2 entries for EACH destination before adding a third for any one of them. A set that covers only one destination is a failure, however good the individual entries are.`
+        : "";
     const userMessage =
       `Research destination: ${destinations.join(", ")}.` +
+      coverageNote +
       (tagResult.tags.length
         ? `\nTraveller interests: ${tagResult.tags.join(", ")}.`
         : "") +
@@ -1415,14 +1453,27 @@ async function selfServedResearch(
   const dest = destinations[0];
   if (!dest) return null;
 
+  // Cover EVERY destination, not just the first. A Tokyo+Kyoto trip returned
+  // 9 Kyoto items and 0 Tokyo; a Lisbon+Porto trip 9 Lisbon and 0 Porto —
+  // half the trip had no inspiration at all. Capped at 2 destinations so a
+  // long multi-city route cannot fan out the search cost without bound
+  // (each query is $0.005).
+  const covered = destinations.slice(0, 2);
   // 2-3 queries, phrased the way a person hunting creator content would.
   // Kept small deliberately: each costs $0.005 and the marginal query adds
   // mostly duplicates.
-  const queries = [
-    `${dest} travel blog personal trip report`,
-    `${dest} travel guide ${tags.slice(0, 2).join(" ")}`.trim(),
-    refinement ? `${dest} ${refinement} blog` : "",
-  ].filter(Boolean);
+  const queries = (
+    covered.length > 1
+      ? covered.flatMap((d) => [
+          `${d} travel blog personal trip report`,
+          `${d} travel guide ${tags.slice(0, 2).join(" ")}`.trim(),
+        ])
+      : [
+          `${dest} travel blog personal trip report`,
+          `${dest} travel guide ${tags.slice(0, 2).join(" ")}`.trim(),
+          refinement ? `${dest} ${refinement} blog` : "",
+        ]
+  ).filter(Boolean);
 
   const pools = await Promise.all(queries.map((q) => braveSearch(q, 12)));
   const seen = new Set<string>();
@@ -1471,7 +1522,16 @@ async function selfServedResearch(
       ` one. For author, give the blog's name if the person's is not evident —` +
       ` it is corrected from the page afterwards.`,
     user:
-      `Destination: ${dest}${tags.length ? `\nTraveller interests: ${tags.join(", ")}` : ""}` +
+      // Name EVERY destination, not just the first. This said
+      // `Destination: ${dest}` — one city — so for a Tokyo+Kyoto trip the
+      // model was told the destination was Kyoto and faithfully returned 8
+      // Kyoto entries and 0 Tokyo. Searching both cities did not help while
+      // the synthesis step only knew about one.
+      `Destination${covered.length > 1 ? "s" : ""}: ${covered.join(" and ")}` +
+      (covered.length > 1
+        ? `\n\nCOVERAGE REQUIREMENT: this trip visits ${covered.length} destinations. Spread the entries ACROSS them — at least 2 for EACH before a third for any one. A set covering only one destination is a failure however good the entries are.`
+        : "") +
+      `${tags.length ? `\nTraveller interests: ${tags.join(", ")}` : ""}` +
       `${monthBucket !== "any" ? `\nTravelling around: ${monthBucket}` : ""}` +
       `\n\nSearch results:\n\n${listing}`,
     maxTokens: suggestCap(model, 1800),

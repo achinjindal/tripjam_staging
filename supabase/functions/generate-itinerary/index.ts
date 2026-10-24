@@ -71,7 +71,7 @@ Rules:
 - WEATHER: Avoid outdoor 12–16:00 in hot months when possible.
 - TIMING: Fixed-time experiences (sunrise, markets) override morning preference. Max 9-10h of activities per day. Venues with "night" in their nature (night markets, night bazaars, rooftop bars, nightlife) MUST be scheduled 18:00 or later — never in the afternoon.
 - COMMUTE: Characterful local transport where natural (tuk-tuk, longtail boat, vaporetto).
-- TRANSITION: For each activity (except the last of the day), include an optional "transition" object when public transit is a practical option to reach the NEXT activity. Only include for cities with meaningful public transit. OMIT whenever the next activity is walkable (under ~1.2km, roughly a 15-minute walk) — most old-town, bazaar and historic-quarter hops are walking, and tagging them with "bus"/"metro" is wrong and contradicts the walkability of those areas. Omit for rural areas, beach destinations, or very short distances (<500m).
+- TRANSITION: For each activity (except the last of the day), include an optional "transition" object when public transit is a practical option to reach the NEXT activity. This field is how the app shows the traveler how they get around; it was measured ABSENT on entire trips (0 of 62 activities on one), which leaves every hop looking instant. Where a hop is a DRIVE rather than transit or a walk — common on island, rural and road-trip days — still signal it with mode "bus" only if a real bus/shuttle exists; otherwise omit it and make the drive explicit in the next activity's note (e.g. "45-min drive from Ubud"). Only include for cities with meaningful public transit. OMIT whenever the next activity is walkable (under ~1.2km, roughly a 15-minute walk) — most old-town, bazaar and historic-quarter hops are walking, and tagging them with "bus"/"metro" is wrong and contradicts the walkability of those areas. Omit for rural areas, beach destinations, or very short distances (<500m).
   Fields: mode ("metro"|"bus"|"ferry"|"tram")
   Example: {"mode":"metro"}
 - INTER-CITY TRANSIT: EVERY activity with type:"transit" MUST include these extra fields:
@@ -89,7 +89,7 @@ Rules:
 - DAY DESCRIPTION: Each entry in "days" MUST include a "description": 2–3 evocative sentences capturing the day's arc and feel — the neighbourhoods, the rhythm, what makes it memorable. Not a list of stops, but a warm narrative like a Lonely Planet opening paragraph. Mention places only by the names used in that day's activities.
 - TIME-OF-DAY HONESTY: Any time-of-day claim in a title, note or gloss MUST match the scheduled time. Do not call a 14:45 castle visit "golden hour", or a 20:45 drink a "sunset drink" when sunset is 19:45. If you want a sunset moment, SCHEDULE it at sunset; otherwise describe what the place is actually like at the hour you booked.
 - NO REPEATS: Never schedule the same named venue twice in the whole trip (not lunch-then-dinner at the same restaurant, not the same bazaar on two days). Each named place appears exactly once across all days.
-- STORY TITLE: Each entry in "days" MUST include a "story_title": a 2–4 word evocative title for the day (e.g. "Lanterns and Backstreets", "Into the Caldera"). NEVER just a place name — "Ang Thong Marine Park" is WRONG; "Emerald Lagoons" is right. No city names, no "Day N", no itinerary words like "arrival", "departure", "return".
+- STORY TITLE: Each entry in "days" MUST include a "story_title": a 2–4 word evocative title for the day (e.g. "Lanterns and Backstreets", "Into the Caldera"). NEVER just a place name — "Ang Thong Marine Park" is WRONG; "Emerald Lagoons" is right. No city names, no "Day N", no itinerary words like "arrival", "departure", "return". VARY THE SHAPE: do NOT write "Noun and Noun" (or "Noun, Noun") on consecutive days — across a week that pattern becomes wallpaper ("Granite and River Mist", "Granite, Bridges and Port", "Granite and River Gold" is a failure). Mix in prepositional ("Into the Caldera", "Beneath the Banyans"), verb-led ("Chasing the Tide") and single-image ("Saltpan Dawn") titles.
 - NARRATIVE: Each entry in "days" MUST include a "narrative": 2–3 full magazine-style sentences (a single sentence is NOT acceptable) with the day's mood and arc — sensory and specific, written like a travel-magazine opening paragraph. Unlike "description" (a practical overview), the narrative avoids listing stops: mention at most one place, by the name used in that day's activities.
 - GLOSS: Each activity except type:"transit" MUST include a "gloss": one evocative line, max 12 words, capturing what this place IS (e.g. "Ten thousand vermilion gates threading up a sacred mountainside"). Not practical advice — that stays in "note".
 - PHOTO QUERY: Each activity except type:"transit" MUST include a "photo_query": 2–6 words describing the iconic photographed view of this exact place, phrased as a Wikimedia Commons image search (e.g. "Fushimi Inari torii gates tunnel", "Kinkaku-ji golden pavilion pond reflection", "Uluwatu temple cliff sunset"). Name the place; no dates, no adjectives like "beautiful".
@@ -434,6 +434,18 @@ serve(async (req) => {
         mid: "mid-range (3-star hotels, local restaurants)",
         luxury: "luxury (5-star hotels, fine dining)",
       }[budget] || "mid-range";
+    // Lodging reads the budget tier correctly; dining did not — a `budget`
+    // Peru trip paired hostels with Uchu Steakhouse and a Sanctuary Lodge
+    // lunch. Spell the dining band out so it cannot be read as lodging-only.
+    const budgetDining =
+      {
+        budget:
+          "DINING BUDGET: this is a BUDGET trip. Restaurants must match: markets, set-menu almuerzos, street food, neighbourhood canteens. A tasting menu, steakhouse or hotel-restaurant lunch is WRONG here even if it is famous. At most one splurge meal across the whole trip, and say so in its note.",
+        mid: "DINING BUDGET: this is a MID-RANGE trip. Well-regarded local restaurants, markets and one or two standout meals — not fine dining as a habit.",
+        luxury:
+          "DINING BUDGET: this is a LUXURY trip. Destination restaurants and tasting menus are appropriate — but they must still be real, currently-operating and worth the trip. Do not pad with fast food or beach-shack fish and chips.",
+      }[budget] ||
+      "DINING BUDGET: mid-range. Well-regarded local restaurants, not fine dining as a habit.";
     const stylesText = styles.join(", ");
     // Only include style rules for selected styles (saves ~600 tokens vs all 9 in system prompt)
     const styleNotes = (styles || [])
@@ -749,6 +761,7 @@ ${
 Trip: ${travelers} travelers, ${stylesText} style, ${budgetLabel} budget.${travelMonth ? ` Travel dates: ${travelMonth}.` : ""}
 
 ${paceNote}
+${budgetDining}
 ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ? `\n\n${day1Note}` : ""}${lastDayNote ? `\n\n${lastDayNote}` : ""}${notesNote ? `\n${notesNote}` : ""}${stylesNote ? `\n${stylesNote}` : ""}${extraPrefs}`;
 
     // ── Provider/arch switch: IG_MODEL picks the model ("gemini-*" → the

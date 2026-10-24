@@ -9818,6 +9818,15 @@ export default function App({
               pendingForm?.notes ||
               trip?.ig_request?.notes ||
               "",
+            // Styles are an EXPLICIT user choice; tags used to be inferred
+            // from free-text notes alone, so a trip with styles set and no
+            // notes got generic first-timer research (a luxury honeymoon was
+            // handed "tested with family and children").
+            styles:
+              pendingForm?.styles ||
+              trip?.ig_request?.styles ||
+              trip?.styles ||
+              [],
             startDate: trip?.start_date || pendingForm?.startDate || null,
             tripId: trip?.id || editingTrip?.id || null,
             refinement,
