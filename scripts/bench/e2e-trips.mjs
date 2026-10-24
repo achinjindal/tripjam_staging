@@ -102,8 +102,33 @@ async function jwt() {
   return { token: d.access_token, userId: d.user.id };
 }
 
-/** Call an edge function; returns {ms, json|text, status}. Handles SSE. */
-async function call(fn, body, token, { stream = false } = {}) {
+/** Call an edge function; returns {ms, json|text, status}. Handles SSE.
+ *  Retries transient NETWORK failures (ECONNRESET/socket hang up) — the local
+ *  ISP resets TLS to *.supabase.co intermittently, and an unretried blip
+ *  killed a whole five-trip run after the first fixture, losing the other
+ *  four. A transport error is not a product result; never record it as one. */
+async function call(fn, body, token, opts = {}) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await callOnce(fn, body, token, opts);
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e?.cause?.code || e?.message || e);
+      if (!/ECONNRESET|socket hang up|fetch failed|ETIMEDOUT|EPIPE/i.test(msg))
+        throw e;
+      console.log(`      (network ${msg}, retry ${attempt + 1}/3)`);
+      await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+    }
+  }
+  return {
+    ms: 0,
+    status: 0,
+    error: `network: ${String(lastErr).slice(0, 160)}`,
+  };
+}
+
+async function callOnce(fn, body, token, { stream = false } = {}) {
   const t0 = Date.now();
   const res = await fetch(`${URL}/functions/v1/${fn}`, {
     method: "POST",
@@ -229,6 +254,23 @@ for (const f of RUN) {
     note(`RG duplicate route titles: ${titles.join(" | ")}`);
   rec.routes = routes;
 
+  // The user picks a route before IG runs, and IG binds to it — votedItems
+  // carries `stops` [{city,nights,why}], which IG treats as the authoritative
+  // night-by-night plan. Sending nothing (as this harness originally did)
+  // leaves IG planning freely, which looks exactly like "IG ignored the route
+  // the user chose". Pick the recommended card, as most users would.
+  const chosen =
+    routes.find((r) => r.recommended) ||
+    routes.find((r) => r.tier === 1) ||
+    routes[0];
+  const votedItems = chosen
+    ? [{ ...chosen, tier: 1, vote: 1, selected: true }]
+    : null;
+  rec.chosenRoute = chosen
+    ? { title: chosen.title, city: chosen.city, stops: chosen.stops }
+    : null;
+  if (chosen) console.log(`  route    chose "${chosen.title}"`);
+
   // 3 ── IG
   const ig = await call(
     "generate-itinerary",
@@ -242,6 +284,16 @@ for (const f of RUN) {
       styles: f.styles,
       startDate: f.startDate,
       notes: f.notes,
+      // IG builds arrival/departure transfers from these. With none sent it
+      // has nothing to build from, which reads as "no trip starts or ends
+      // properly". Defaults mirror App.jsx's igBody.
+      arrivalCity: f.arrivalCity || null,
+      departureCity: f.departureCity || null,
+      arrivalTime: f.arrivalTime || "09:00",
+      departureTime: f.departureTime || "22:00",
+      arrivalMode: "flight",
+      departureMode: "flight",
+      votedItems,
       tripId,
     },
     token,
@@ -271,17 +323,16 @@ for (const f of RUN) {
     note(
       `${bases.length} bases across ${f.numDays} days (rule caps at ${cap}): ${bases.join(", ")}`,
     );
-  const region = f.destinations.map((d) =>
-    d.split(",")[0].trim().toLowerCase(),
-  );
   // A destination that IS a city (Reykjavik, Lisbon) is a perfectly good base —
   // only flag a base that is a REGION or touring route, where "stay in
   // <region>" leaves the hotel and map steps nothing bookable to resolve.
   const REGIONY =
     /\b(goa|bali|tuscany|provence|algarve|kerala|rajasthan|andalusia|patagonia|coast|circle|valley|islands?|region|province)\b/i;
-  const unbookable = bases.filter(
-    (b) => REGIONY.test(b) || region.includes(b.trim().toLowerCase()),
-  );
+  // Match on REGION-NESS only. An earlier version also flagged any base equal
+  // to a destination, which wrongly condemned "Tokyo" and "Kyoto" on a
+  // two-city trip — those destinations ARE cities you sleep in. REGIONY
+  // already catches the cases that matter (Goa, Bali, Golden Circle).
+  const unbookable = bases.filter((b) => REGIONY.test(b));
   if (unbookable.length)
     note(
       `unbookable base(s) — region/route, not a town: ${unbookable.join(", ")}`,
@@ -321,13 +372,65 @@ for (const f of RUN) {
   const perDay = days.map((d) => (d.activities || []).length);
   if (perDay.some((n) => n > 0 && n < 3))
     note(`thin day(s) with <3 activities: ${perDay.join(",")}`);
+  // ── route adherence: did IG honour the route the user picked? ──
+  if (chosen?.stops?.length) {
+    const planned = chosen.stops.map((st) =>
+      String(st.city || "").toLowerCase(),
+    );
+    const text = JSON.stringify(days).toLowerCase();
+    const dropped = planned.filter((c) => c && !text.includes(c));
+    if (dropped.length)
+      note(
+        `route "${chosen.title}" promised ${dropped.join(", ")} — absent from the itinerary`,
+      );
+    rec.steps.ig.routeStops = planned;
+    rec.steps.ig.routeDropped = dropped;
+  }
+
+  // ── does the trip start and end properly? ──
+  const d1 = days[0];
+  const dn = days[days.length - 1];
+  if (d1 && !(d1.activities || []).some((a) => a.type === "transit"))
+    note(`Day 1 has no inbound transit — arrival not represented`);
+  if (dn && !(dn.activities || []).some((a) => a.type === "transit"))
+    note(`final day has no outbound transit — departure not represented`);
+  const lastTimes = (dn?.activities || []).map((a) => a.time).filter(Boolean);
+  if (lastTimes.length && lastTimes[lastTimes.length - 1] > "19:00")
+    note(
+      `final day runs to ${lastTimes[lastTimes.length - 1]} against a departure`,
+    );
+
+  // ── dates present, and the day span respects the requested pace ──
+  const undated = days.filter((d) => !d.date);
+  if (undated.length)
+    note(`${undated.length}/${days.length} days have no date`);
+  const ceiling = f.pace === "relaxed" ? 9 : 11;
+  for (const d of days) {
+    const ts = (d.activities || []).map((a) => a.time).filter(Boolean);
+    if (ts.length < 2) continue;
+    const toM = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+    const span = (toM(ts[ts.length - 1]) - toM(ts[0])) / 60;
+    if (span > ceiling + 0.5)
+      note(
+        `${d.label} spans ${span.toFixed(1)}h on a ${f.pace} trip (ceiling ${ceiling}h)`,
+      );
+  }
+
   rec.steps.ig.bases = bases;
   rec.steps.ig.activities = allActs.length;
 
   // 4 ── Inspirations
   const insp = await call(
     "generate-destination-research",
-    { destinations: f.destinations, startDate: f.startDate, tripId },
+    // notes feed tag extraction — without them a honeymoon and a hiking trip
+    // get identical research. `styles` is NOT accepted by this function at
+    // all, which is a real product gap rather than a harness one.
+    {
+      destinations: f.destinations,
+      startDate: f.startDate,
+      notes: f.notes,
+      tripId,
+    },
     token,
   );
   const items = insp.json?.digest?.inspirations || [];
@@ -352,7 +455,21 @@ for (const f of RUN) {
   const city = (bases[0] || f.destinations[0].split(",")[0]).trim();
   const dd = await call(
     "city-deep-dive",
-    { city, country: f.destinations[0].split(",").pop().trim(), tripId },
+    {
+      city,
+      country: f.destinations[0].split(",").pop().trim(),
+      // Without this the write-up literally says "unspecified month" — the
+      // function handles it correctly when given, and App.jsx does send it.
+      travelMonth: new Date(`${f.startDate}T00:00:00Z`).toLocaleString(
+        "en-US",
+        {
+          month: "long",
+          timeZone: "UTC",
+        },
+      ),
+      tripDays: f.numDays,
+      tripId,
+    },
     token,
   );
   rec.steps.magazine = { ms: dd.ms, city, error: dd.error };
