@@ -55,6 +55,13 @@ jobs:
           VITE_INVITE_ENABLED: "true"
           VITE_REALTIME_ENABLED: "true"
           VITE_ROUTES_LENS_ENABLED: "true"
+          VITE_PLACE_PEEK_ENABLED: "true"
+          # NOT a flag — without it the Board hides email booking ingestion
+          # entirely (`{VITE_EMAIL_INGEST_ADDRESS && …}`), so the APK silently
+          # shipped without a whole feature the web app has. Must equal the
+          # INBOUND_EMAIL_ADDRESS edge secret or users forward to a dead
+          # address; see the pairing rule in CLAUDE.md.
+          VITE_EMAIL_INGEST_ADDRESS: "bookings@booilkeuku.resend.app"
 
       - name: Add Android platform
         run: npx cap add android || true
