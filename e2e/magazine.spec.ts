@@ -10,10 +10,9 @@ import { login, snap, dismissTripOverlays } from "./helpers";
  *
  * Post design-pass tab layout (desktop shell, default 1280px viewport):
  *  - A built trip lands on the "Itinerary" top tab. The Magazine content lives
- *    under the "Inspirations" top tab (internal key `brainstorm`), which then
- *    exposes an "Inspirations" / "Magazine" sub-tab strip.
- *  - So reaching Magazine is: open trip → click "Inspirations" top tab →
- *    click "Magazine" sub-tab.
+ *    under the "Magazine" top tab (internal key `brainstorm`), which opens on
+ *    the Magazine sub-tab of a "Magazine" / "Inspirations" strip.
+ *  - So reaching Magazine is: open trip → click "Magazine" top tab.
  *
  * Returns false (so the caller can skip) if no built trip / Magazine tab found.
  */
@@ -40,14 +39,7 @@ async function openMagazine(page: import("@playwright/test").Page) {
   await page.waitForTimeout(2000);
   await dismissTripOverlays(page, 2000);
 
-  // Switch to the Inspirations top tab (which hosts the Magazine sub-tab).
-  const inspTab = page.locator("button", { hasText: /Inspirations/i }).first();
-  if (await inspTab.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await inspTab.click();
-    await page.waitForTimeout(1000);
-  }
-
-  // Click the Magazine sub-tab.
+  // Click the Magazine top tab (it defaults to the Magazine sub-tab).
   const magTab = page.locator("button", { hasText: /Magazine/i }).first();
   if (!(await magTab.isVisible({ timeout: 3000 }).catch(() => false))) {
     return false;
@@ -425,13 +417,6 @@ test.describe("Magazine & Photos", () => {
     await page.goto(`/trip/${tripId}`);
     await page.waitForTimeout(2500);
     await dismissTripOverlays(page, 2000);
-    const inspTab = page
-      .locator("button:visible", { hasText: /Inspirations/i })
-      .first();
-    if (await inspTab.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await inspTab.click();
-      await page.waitForTimeout(800);
-    }
     const magTab = page
       .locator("button:visible", { hasText: /Magazine/i })
       .first();
@@ -459,7 +444,7 @@ test.describe("Magazine & Photos", () => {
       .click();
     await page.waitForTimeout(800);
     await page
-      .locator("button:visible", { hasText: /Inspirations|Magazine/i })
+      .locator("button:visible", { hasText: /Magazine/i })
       .first()
       .click();
     await page.waitForTimeout(400);

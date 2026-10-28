@@ -101,7 +101,7 @@ test.describe("Plans (RG) flow", () => {
     await tripCard.click();
     await page.waitForTimeout(2000);
 
-    // Post design-pass: the brainstorm view opens on the Inspirations tab on
+    // Post design-pass: the brainstorm view opens on the Magazine tab on
     // desktop. Switch to the Route sub-tab so the Select cards render.
     const routeTab = page.locator("button", { hasText: /Route/i }).first();
     if (await routeTab.isVisible({ timeout: 3000 }).catch(() => false)) {

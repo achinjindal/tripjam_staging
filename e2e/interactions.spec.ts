@@ -95,8 +95,8 @@ async function setupToRoutes(
  *  Route sub-tab (avoids creating a new trip).
  *
  *  Post design-pass the brainstorm/"plans" view is a tabbed shell
- *  (🛣️ Route · ✨ Inspirations · 📖 Magazine). On desktop it opens on the
- *  Inspirations tab, so the route "Select" cards are NOT visible until we click
+ *  (🛣️ Route · 📖 Magazine · ✨ Inspirations). On desktop it opens on the
+ *  Magazine tab, so the route "Select" cards are NOT visible until we click
  *  the Route tab. We also skip stale drafts that were never populated with
  *  routes (they show a "Generate plans" button instead of Select cards).
  */
