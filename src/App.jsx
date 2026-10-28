@@ -8673,6 +8673,9 @@ export default function App({
   // Phase 3: activity feed / "while you were away".
   const [activity, setActivity] = useState([]);
   const [lastSeenAt, setLastSeenAt] = useState(null);
+  // null lastSeenAt also means "never opened the feed", so loading needs its
+  // own flag: until the read state is in, every past row looks unseen.
+  const [readStateLoaded, setReadStateLoaded] = useState(false);
   const [showFeed, setShowFeed] = useState(false);
   const [showWhileAway, setShowWhileAway] = useState(false);
   const tripOpenedAtRef = useRef(0);
@@ -8725,10 +8728,13 @@ export default function App({
     });
     fetchPolls(tripId).then((list) => !cancelled && setPolls(list));
     fetchActivity(tripId).then((list) => !cancelled && setActivity(list));
+    setReadStateLoaded(false);
     if (session?.user?.id)
-      fetchReadState(tripId, session.user.id).then(
-        (ts) => !cancelled && setLastSeenAt(ts),
-      );
+      fetchReadState(tripId, session.user.id).then((ts) => {
+        if (cancelled) return;
+        setLastSeenAt(ts);
+        setReadStateLoaded(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -8807,6 +8813,10 @@ export default function App({
   useEffect(() => {
     if (!isSharedTrip || !trip?.id) return;
     if (whileAwayShownFor.current === trip.id) return;
+    // Wait for the read state: if the feed loads first, every past change by
+    // others counts as unseen for a moment, and the sheet popped up and then
+    // read "0 changes" once last_seen_at arrived.
+    if (!readStateLoaded) return;
     // Merged sheets: the welcome briefing ABSORBS the away digest (it renders
     // awayUnseen bullets itself), so seeing the briefing consumes this trigger
     // — no second sheet chained after it.
@@ -8818,7 +8828,7 @@ export default function App({
       whileAwayShownFor.current = trip.id;
       setShowWhileAway(true);
     }
-  }, [isSharedTrip, trip?.id, awayUnseen.length, showWelcome]);
+  }, [isSharedTrip, trip?.id, awayUnseen.length, showWelcome, readStateLoaded]);
   // Pool balance lives on trips.credit_balance. Clamp to >= 0 for display —
   // the pool can dip slightly negative server-side but users never see it.
   const poolBalance = Math.max(
