@@ -129,12 +129,23 @@ export default function Home({
       // Fetch the current user's trip memberships. Profile + face icon are
       // now owned by the global Avatar component (mounted in main.jsx), so
       // we don't need to load the profile here anymore.
-      const { data: myMemberships } = await supabase
+      const { data: myMemberships, error: membersErr } = await supabase
         .from("trip_members")
         .select("trip_id, role")
         .eq("user_id", session.user.id);
+      // postgrest-js RESOLVES on a network/HTTP failure — it does not reject.
+      // So `error` has to be read explicitly, or an offline load falls into
+      // `!myMemberships?.length` and returns "No trips yet" having never
+      // consulted the cache. Throw so the offline fallback below runs.
+      if (membersErr) throw membersErr;
 
-      if (!myMemberships?.length) {
+      if (!myMemberships.length) {
+        // A genuine empty state (the query succeeded), so the cache must
+        // follow — otherwise deleting your last trip resurrects it offline.
+        setTrips([]);
+        try {
+          localStorage.removeItem("tripjam_trips");
+        } catch {}
         setLoading(false);
         return;
       }
@@ -152,11 +163,12 @@ export default function Home({
         "departure_city,summary,notes,arrival_mode,departure_mode,has_car," +
         "share_token,ig_count,budget_amount,budget_currency,base_location," +
         "arrival_airport_iata,departure_airport_iata,has_itinerary";
-      const { data: tripsData } = await supabase
+      const { data: tripsData, error: tripsErr } = await supabase
         .from("trips")
         .select(TRIP_LIST_COLS)
         .in("id", tripIds)
         .order("created_at", { ascending: false });
+      if (tripsErr) throw tripsErr;
 
       setTrips(tripsData || []);
       // Cache for offline
@@ -165,11 +177,32 @@ export default function Home({
       } catch {}
     } catch (err) {
       console.error("fetchData error:", err);
-      // Offline fallback
+      // Offline fallback. Two rules here, both learned the hard way:
+      //   1. RESTORE from the cache — this is the path that exists for a
+      //      paused project, a dead network, or an ISP hijacking
+      //      *.supabase.co (all three have happened in production).
+      //   2. Do NOT write to the cache. The old code reached
+      //      `setItem(…, JSON.stringify(tripsData || []))` on a failed
+      //      fetch and overwrote it with [], so one transient fault
+      //      permanently destroyed the user's offline copy and the app
+      //      showed "No trips yet" with a Create CTA.
+      let restored = 0;
       try {
         const cached = localStorage.getItem("tripjam_trips");
-        if (cached) setTrips(JSON.parse(cached));
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length) {
+            setTrips(parsed);
+            restored = parsed.length;
+          }
+        }
       } catch {}
+      // Never let a load failure masquerade as an empty account.
+      showToast(
+        restored
+          ? "Offline — showing your saved trips"
+          : "Couldn't load your trips. Check your connection and retry.",
+      );
     } finally {
       setLoading(false);
     }
