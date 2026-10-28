@@ -1008,9 +1008,20 @@ serve(async (req) => {
           text: "",
           inputTokens: selfServed.inputTokens,
           outputTokens: selfServed.outputTokens,
-          // Brave queries are not Anthropic web_search calls and must not be
-          // billed at $0.01 each. They cost $0.005 and are accounted for in
-          // the deduction below as a flat pass-through.
+          // Brave queries are NOT Anthropic web_search calls and must not
+          // be billed at $0.01 each — hence 0 here, which is correct.
+          //
+          // The comment that used to sit here claimed the $0.005/query cost
+          // was "accounted for in the deduction below as a flat
+          // pass-through". That was never true: the deduction passes
+          // research.webSearchCount (this 0), and deductExternalApiCredits
+          // is called NOWHERE in this codebase. Brave is unbilled — we
+          // absorb it. At 2-6 queries that is $0.01-0.03 per generation
+          // against ~$0.029 of LLM cost, so the true cost of an Inspirations
+          // run is up to ~2x what llm_usage reports. Recorded as
+          // brave_query_count below so the absorbed cost is measurable
+          // before deciding whether to charge for it (a pricing decision,
+          // not a bug fix).
           webSearchCount: 0,
         }
       : grounded?.ok
@@ -1216,6 +1227,9 @@ serve(async (req) => {
         research_model: researchModel,
         escalation_model: sonnet ? ESCALATION_MODEL : null,
         web_search_count: webSearchCount,
+        // Billed at $0 today — see the webSearchCount comment on the
+        // self-served path. Recorded so the absorbed cost is visible.
+        brave_query_count: selfServed?.queries ?? 0,
         items_before_parse: items.length,
         destinations: destinations.join(" | "),
         tags: tagResult.tags,
