@@ -314,11 +314,14 @@ test("travel legs: day-card strip + badge + cancelled hidden", async ({
     // Strip mode on day 2 (no matching transit activity)
     await expandDay(day2!.label);
     await expect(page.getByText("Alphaville Central")).toBeVisible();
-    await expect(page.getByText(/QA Rail 7001/)).toBeVisible();
+    // Day-card strips read "<carrier> <number> · dep HH:MM". Match that shape:
+    // the proactive-fix chat card can name the same train ("… clashes with
+    // your train (QA Rail 7001, …)"), which is a different, correct element.
+    await expect(page.getByText(/^QA Rail 7001 · dep/)).toBeVisible();
     await expect(page.getByText("✓ Booked").first()).toBeVisible();
     // Cancelled leg never renders on day cards
     await expect(page.getByText("Gammaport")).toHaveCount(0);
-    await expect(page.getByText(/QA 900/)).toHaveCount(0);
+    await expect(page.getByText(/QA 900 · dep/)).toHaveCount(0);
 
     // Badge mode (data-dependent: needs an "X to Y" transit title)
     if (badge) {
@@ -327,7 +330,7 @@ test("travel legs: day-card strip + badge + cancelled hidden", async ({
         timeout: 15000,
       });
       // Badge consumed the leg — no duplicate strip for it
-      await expect(page.getByText(/QA Express 8002/)).toHaveCount(0);
+      await expect(page.getByText(/^QA Express 8002 · dep/)).toHaveCount(0);
     } else {
       console.log(
         "badge-mode sub-assertion skipped: no 'X to Y' transit title on QA trip",
