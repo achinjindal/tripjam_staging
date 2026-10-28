@@ -12,8 +12,9 @@
 --   {undone: true, undoneBy: <caller>, undoneAt: now()}
 -- into meta — and only on a Trippy reply that carried a change card
 -- (role = 'assistant', meta has "changes") and is not already undone, for a
--- caller who can edit the trip (an 'edit' trip_members row, or the trip's
--- creator). content and every other meta key are left alone.
+-- caller who can edit the trip (an 'edit' trip_members row; created_by
+-- confers nothing, as everywhere since 20261009000001). content and every
+-- other meta key are left alone.
 --
 -- Returns true when the row was marked, false otherwise (not found, not a
 -- change card, already undone, or the caller can't edit that trip).
@@ -44,15 +45,10 @@ BEGIN
      AND m.role = 'assistant'
      AND m.meta ? 'changes'
      AND NOT coalesce((m.meta->>'undone')::boolean, false)
-     AND (
-       EXISTS (SELECT 1 FROM trip_members tm
-                WHERE tm.trip_id = m.trip_id
-                  AND tm.user_id = v_uid
-                  AND tm.role = 'edit')
-       OR EXISTS (SELECT 1 FROM trips t
-                   WHERE t.id = m.trip_id
-                     AND t.created_by = v_uid)
-     );
+     AND EXISTS (SELECT 1 FROM trip_members tm
+                  WHERE tm.trip_id = m.trip_id
+                    AND tm.user_id = v_uid
+                    AND tm.role = 'edit');
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   RETURN v_rows > 0;
 END;
