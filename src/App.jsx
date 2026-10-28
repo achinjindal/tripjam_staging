@@ -6297,8 +6297,8 @@ function ActivityCard({
 // Hidden on desktop pre-trip where the two views are separate top tabs.
 function MagazineSubTabStrip({ value, onChange }) {
   const tabs = [
-    { key: "inspirations", label: "Inspirations" },
     { key: "magazine", label: "Magazine" },
+    { key: "inspirations", label: "Inspirations" },
   ];
   return (
     <div
@@ -9707,18 +9707,19 @@ export default function App({
   //   "inspirations" — Web-search-backed travel inspirations (new, desktop pre-trip only)
   //   "magazine"    — Magazine grid (city deep-dives etc)
   // Desktop pre-trip: separate "inspirations" top tab. Mobile pre-trip: bottom nav
-  // uses the "magazine" key (Inspirations label) with sub-tabs inside.
+  // uses the "magazine" key (Magazine label) with sub-tabs inside.
   // Drafts (post-RG, no itinerary yet) open straight onto their saved routes —
   // landing on Inspirations/Magazine read as "my routes are gone". The create
   // flow and Explore-plans set this explicitly, so the default only governs
   // direct opens.
   const [pretripTab, setPretripTab] = useState(() =>
-    isDraft ? "brainstorm" : isDesktop ? "inspirations" : "magazine",
+    isDraft ? "brainstorm" : "magazine",
   );
   // Sub-tab inside the "magazine area" — used on mobile (both pre- and post-trip)
   // and on desktop post-trip, where Inspirations and Magazine share one top-tab
   // slot. Hidden on desktop pre-trip where they're separate top tabs.
-  const [magazineSubTab, setMagazineSubTab] = useState("inspirations");
+  // Magazine is the default; the nav button and IG kick-off reset to it.
+  const [magazineSubTab, setMagazineSubTab] = useState("magazine");
   const [magazineFilterCities, setMagazineFilterCities] = useState(null); // cities to filter magazine by (from "Tell me more")
   const [pretripDeepDiveCity, setPretripDeepDiveCity] = useState(null); // city for deep dive in pre-trip magazine
   const [showPreIgSheet, setShowPreIgSheet] = useState(false); // pre-IG refinement bottom sheet
@@ -11250,6 +11251,7 @@ export default function App({
     // setScreen("generating") is kept below for legacy reference but no longer invoked.
     setIgGenerating(true);
     setPretripTab("magazine");
+    setMagazineSubTab("magazine");
 
     const numDays = Math.max(
       1,
@@ -13509,6 +13511,7 @@ export default function App({
                   action.tab === "magazine" ? "magazine" : "brainstorm",
                 );
               else setActiveBottomTab("brainstorm");
+              if (action.tab === "magazine") setMagazineSubTab("magazine");
             } else if (action.tab === "itinerary")
               setActiveBottomTab("itinerary");
             else if (action.tab === "map") {
@@ -14035,8 +14038,8 @@ export default function App({
   // Magazine-area view selection. The "magazine area" hosts two sub-views:
   // Inspirations (web-search-backed reading list) and Magazine (city deep-dives).
   //   - Desktop pre-trip: separate top tabs ("Inspirations" + "Magazine"), no sub-strip.
-  //   - Mobile pre-trip: one bottom-nav button labelled "Inspirations", page sub-tabbed.
-  //   - Post-trip (both): one top/bottom tab labelled "Inspirations", page sub-tabbed.
+  //   - Mobile pre-trip: one bottom-nav button labelled "Magazine", page sub-tabbed.
+  //   - Post-trip (both): one top/bottom tab labelled "Magazine", page sub-tabbed.
   const pretripMagView =
     pretripTab === "inspirations"
       ? "inspirations"
@@ -15109,13 +15112,12 @@ export default function App({
               {(screen === "brainstorm"
                 ? [
                     { key: "brainstorm", icon: "🛣️", label: "Route" },
-                    { key: "inspirations", icon: "✨", label: "Inspirations" },
                     { key: "magazine", icon: "📖", label: "Magazine" },
+                    { key: "inspirations", icon: "✨", label: "Inspirations" },
                   ]
                 : [
-                    // Post-trip: "brainstorm" key is the magazine area; we relabel
-                    // to "Inspirations" because the default sub-tab is Inspirations.
-                    { key: "brainstorm", icon: "✨", label: "Inspirations" },
+                    // Post-trip: "brainstorm" key is the magazine area.
+                    { key: "brainstorm", icon: "📖", label: "Magazine" },
                     { key: "itinerary", icon: "🗓", label: "Itinerary" },
                     { key: "board", icon: "📋", label: "Board" },
                   ]
@@ -15137,6 +15139,7 @@ export default function App({
                         }
                       } else {
                         setActiveBottomTab(key);
+                        if (key === "brainstorm") setMagazineSubTab("magazine");
                       }
                     }}
                     style={{
@@ -16182,10 +16185,8 @@ export default function App({
                 }}
               >
                 {[
-                  // Pre-trip bottom nav. "Magazine" key still drives the magazine
-                  // area state; we relabel to "Inspirations" because the default
-                  // sub-tab inside is Inspirations.
-                  { key: "magazine", icon: "📖", label: "Inspirations" },
+                  // Pre-trip bottom nav. "magazine" key drives the magazine area.
+                  { key: "magazine", icon: "📖", label: "Magazine" },
                   { key: "brainstorm", icon: "🛣️", label: "Route" },
                   { key: "map", icon: "🗺", label: "Map" },
                 ].map(({ key, icon, label }) => {
@@ -16195,6 +16196,7 @@ export default function App({
                       key={key}
                       onClick={() => {
                         setPretripTab(key);
+                        if (key === "magazine") setMagazineSubTab("magazine");
                         if (key !== "magazine") {
                           setMagazineFilterCities(null);
                           setMagazineFilterRouteId(null);
@@ -17359,10 +17361,10 @@ export default function App({
                 </div>
 
                 {/* ── INSPIRATIONS / MAGAZINE TAB (post-trip) ──
-                     Bottom nav button is labelled "Inspirations" and opens a
-                     page with sub-tabs: Inspirations (web-search reading list)
-                     and Magazine (existing BrainstormView with routes + city
-                     content). Inspirations is the default sub-tab. */}
+                     Bottom nav button is labelled "Magazine" and opens a
+                     page with sub-tabs: Magazine (existing BrainstormView with
+                     routes + city content) and Inspirations (web-search
+                     reading list). Magazine is the default sub-tab. */}
                 {activeBottomTab === "brainstorm" && (
                   <div
                     style={{
@@ -17549,10 +17551,9 @@ export default function App({
                   }}
                 >
                   {[
-                    // Post-trip bottom nav. "brainstorm" key still drives the
-                    // magazine area state; we relabel to "Inspirations" because
-                    // the default sub-tab inside is Inspirations.
-                    { key: "brainstorm", icon: "📖", label: "Inspirations" },
+                    // Post-trip bottom nav. "brainstorm" key drives the
+                    // magazine area state.
+                    { key: "brainstorm", icon: "📖", label: "Magazine" },
                     { key: "itinerary", icon: "🗓", label: "Itinerary" },
                     { key: "map", icon: "🗺", label: "Map" },
                     { key: "board", icon: "📋", label: "Board" },
@@ -17564,6 +17565,8 @@ export default function App({
                         onClick={() => {
                           posthog.capture("tab_switch", { tab: key });
                           setActiveBottomTab(key);
+                          if (key === "brainstorm")
+                            setMagazineSubTab("magazine");
                         }}
                         style={{
                           flex: 1,

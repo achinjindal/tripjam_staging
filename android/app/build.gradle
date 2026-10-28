@@ -1,5 +1,35 @@
 apply plugin: 'com.android.application'
 
+// ── Version + release guard ──────────────────────────────────────────────
+// Version comes from the git TAG in CI (build-android.yml derives
+// v1.2.3 -> 10203). Play rejects any upload whose versionCode is not
+// strictly higher than the last, and nothing used to increment this — so the
+// SECOND upload would always have been rejected, at the upload step, with the
+// build long finished. Derived rather than auto-incremented on purpose: the
+// same tag must always produce the same versionCode, so re-running a build is
+// idempotent instead of silently minting a new version.
+//
+// A RELEASE build without the env set is refused outright. The old fallback
+// quietly stamped versionCode 2 on any local `bundleRelease`, and that number
+// is spent the moment it reaches Play. A local release build also inlines
+// whatever happens to be in .env.production — which is how an .aab shipped
+// with no PostHog key and therefore no crash reporting at all. Release
+// artifacts come from CI; failing here makes that a rule, not a habit.
+def envVersionCode = System.getenv("ANDROID_VERSION_CODE")
+def envVersionName = System.getenv("ANDROID_VERSION_NAME")
+def wantsRelease = gradle.startParameter.taskNames.any {
+    it.toLowerCase().contains("release")
+}
+if (wantsRelease && !envVersionCode) {
+    throw new GradleException(
+        "Refusing to build a release without ANDROID_VERSION_CODE.\n" +
+        "Release builds come from CI: `git tag vX.Y.Z && git push origin vX.Y.Z`,\n" +
+        "which derives the versionCode from the tag and injects the signing and\n" +
+        "VITE_* secrets. Building one locally stamps versionCode 2 and silently\n" +
+        "ships whatever .env.production holds."
+    )
+}
+
 android {
     namespace "com.tripjam.app"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,19 +37,11 @@ android {
         applicationId "com.tripjam.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // Version comes from the git TAG in CI, falling back to these
-        // literals for local builds. Play rejects any upload whose
-        // versionCode is not strictly higher than the last one, and nothing
-        // used to increment this — so the SECOND upload would always have
-        // been rejected, at the upload step, with the build long finished.
-        //
-        // Derived rather than auto-incremented on purpose: the same tag must
-        // always produce the same versionCode, so re-running a build is
-        // idempotent instead of silently minting a new version.
-        versionCode System.getenv("ANDROID_VERSION_CODE")
-            ? System.getenv("ANDROID_VERSION_CODE").toInteger()
-            : 2
-        versionName System.getenv("ANDROID_VERSION_NAME") ?: "1.1.0"
+        // Version comes from the git TAG in CI (see build-android.yml);
+        // resolved at script scope above so the guard runs before any
+        // configuration happens.
+        versionCode envVersionCode ? envVersionCode.toInteger() : 2
+        versionName envVersionName ?: "0.0.0-local"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
