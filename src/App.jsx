@@ -11009,6 +11009,26 @@ export default function App({
     // then full days. (The separate compact preview phase was removed to save
     // tokens + time-to-first-day; DayCompact still renders from real days.)
     let headerSaved = false;
+    // The header is applied to the in-memory trip only; it reaches the DB with
+    // tripPayload once the days are saved. On failure, rollbackHeader() puts
+    // back what was on screen before this run (`trip` here is the pre-run
+    // value) — but only while the trip still shows this run's header, so a
+    // trip the user has since switched to is never overwritten.
+    let compactReadyAt = null;
+    let headerTripName = null;
+    const preRunHeader = {
+      name: trip?.name,
+      destination: trip?.destination,
+      dates: trip?.dates,
+      travelers: trip?.travelers,
+      ig_response: trip?.ig_response ?? null,
+    };
+    const rollbackHeader = () => {
+      if (!headerTripName) return;
+      setTrip((prev) =>
+        prev?.name === headerTripName ? { ...prev, ...preRunHeader } : prev,
+      );
+    };
     let itinerary;
     let accumulated = "";
     const generationStartedAt = new Date().toISOString();
@@ -11055,8 +11075,11 @@ export default function App({
             try {
               accumulated += JSON.parse(raw);
 
-              // Detect trip header (name/summary/cities) complete — save the trip
-              // early so Magazine shows the real name while days stream in.
+              // Detect trip header (name/summary/cities) complete — show the
+              // real name in Magazine while days stream in. In memory only:
+              // writing it to the trip row before the days are saved left a
+              // failed regenerate with the new name and ig_response over the
+              // old days, and a draft reopening as "built" with no days.
               if (!headerSaved && /"days"\s*:\s*\[/.test(accumulated)) {
                 try {
                   // Extract just enough JSON to parse the header
@@ -11088,6 +11111,7 @@ export default function App({
                         const originalDest =
                           editingTrip?.destination ||
                           (form.destinations || []).join(" → ");
+                        headerTripName = compactTripName;
                         setTrip((prev) => ({
                           ...prev,
                           name: compactTripName,
@@ -11097,25 +11121,8 @@ export default function App({
                             parseInt(form.travelers) || prev.travelers || null,
                           ig_response: compactData,
                         }));
+                        compactReadyAt = new Date().toISOString();
                         if (capturedTripId) {
-                          const compactReadyAt = new Date().toISOString();
-                          supabase
-                            .from("trips")
-                            .update({
-                              name: compactTripName,
-                              destination: originalDest,
-                              ig_response: compactData,
-                              compact_ready_at: compactReadyAt,
-                              generation_started_at: generationStartedAt,
-                            })
-                            .eq("id", capturedTripId)
-                            .then(({ error }) => {
-                              if (error)
-                                console.warn(
-                                  "header IG save failed:",
-                                  error.message,
-                                );
-                            });
                           supabase
                             .from("generation_log")
                             .insert({
@@ -11261,6 +11268,9 @@ export default function App({
       // If user navigated away (abort), silently stop — don't redirect
       if (e.name === "AbortError") {
         console.log("IG generation aborted by user navigation");
+        // No-op if the view unmounted; otherwise (Explore plans, route
+        // funnel) the abandoned run's header must not stay on the trip.
+        rollbackHeader();
         _igInFlight.current = false;
         return;
       }
@@ -11275,6 +11285,7 @@ export default function App({
       console.error("Accumulated length:", accumulated.length);
       console.error("Accumulated tail:", accumulated.slice(-300));
       setGenerateError(`Generation failed: ${e.message}. Please try again.`);
+      rollbackHeader();
       setIgGenerating(false);
       setScreen("setup");
       _igInFlight.current = false;
@@ -11287,6 +11298,7 @@ export default function App({
     const abort = (msg, err) => {
       console.error(msg, err);
       setGenerateError(`${msg}${err?.message ? `: ${err.message}` : ""}`);
+      rollbackHeader();
       setIgGenerating(false);
       setScreen("setup");
       _igInFlight.current = false;
@@ -11338,6 +11350,7 @@ export default function App({
       end_date: form.endDate,
       created_by: session.user.id,
       generation_started_at: generationStartedAt,
+      ...(compactReadyAt && { compact_ready_at: compactReadyAt }),
       // Salvaged partial runs must NOT look complete: detailed_ready_at is
       // the marker the partial-recovery banner keys on.
       ...(igStreamSalvaged
