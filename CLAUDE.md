@@ -142,7 +142,14 @@ supabase functions deploy inbound-email      --no-verify-jwt --project-ref <ref>
 - `CREDITS_UI_ENABLED = true` — credits UI and paywall are live. Backend deduction runs regardless of this flag.
 - **`resolveAndGate` is the mandatory pre-flight gate**, not `requireMinCredits`. It decides whether the personal wallet or the trip pool pays and returns a `source` that must be threaded into `deductCredits`. A new gated function that skips it charges the wrong wallet on shared trips.
 - **402 has TWO shapes:** `insufficient_credits` (personal) and `empty_trip_pool` (shared trip, pool dry). `handleGatedResponse` returns `true` for the first and the **string** `"empty_trip_pool"` for the second — it leaves the personal wallet alone and does not open the paywall; the caller opens the fork paywall. **Never compare `=== true`.**
-- `deductCredits` charges `ceil((llm_cost_usd / 0.007) * 100) / 100` credits. New users get 100 on signup (DB default).
+- `deductCredits` charges `ceil((llm_cost_usd / creditLlmBudgetUsd) * 100) / 100` credits.
+  **That constant IS the gross margin** (`margin = 1 - budget/price_per_credit`), so cutting
+  model cost cannot move it — cheaper models simply bill fewer credits. Redenominated
+  2026-10-28 from $0.007 to **$0.0035** (1 new credit = 2 old) with every existing balance
+  doubled in `20261028000012`; the signup default stays 100, deliberately halving the free
+  runway. It lives ONLY in `llm-rates.json` — `credits.ts`, `trip-cost.cjs` and
+  `bench/lib.mjs` all read it, and each previously carried its own copy.
+  New users get 100 on signup (DB default).
 - **Deliberate unbilled LLM paths:** `extract-preferences` and `inbound-email` log `llm_usage` but charge nothing. Don't "fix" them — `extract-preferences` is also load-bearing for the 6-hourly `health-monitor.yml` probe, which spends a real Haiku call per run and emails on failure.
 - **`LLM_KILL_SWITCH=true`** on edge secrets makes every LLM endpoint return 503 within ~a minute (next cold start). This is the incident lever; every LLM function must call `llmKillSwitch()` as its first guard or it cannot be stopped.
 - **Web payments:** Lemon Squeezy (MoR). `create-checkout` creates a checkout session; `payment-webhook` (deployed with `--no-verify-jwt`, uses HMAC verification instead) grants credits on `order_created`.

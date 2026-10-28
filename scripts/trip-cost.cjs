@@ -11,7 +11,7 @@
 //
 // Cost model mirrors supabase/functions/_shared/credits.ts:
 //   cost = in*rIn + cacheWrite*rIn*1.25 + cacheRead*rIn*0.10 + out*rOut
-//   credits_charged = ceil((cost / 0.007) * 100) / 100   (LLM-budget scale)
+//   credits_charged = ceil((cost / creditLlmBudgetUsd) * 100) / 100
 
 const URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;

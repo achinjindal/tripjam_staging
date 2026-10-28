@@ -15,6 +15,7 @@ import {
   loadEnv,
   pad,
   fmtUsd,
+  loadCreditBudgetUsd,
 } from "./lib.mjs";
 
 const tripIds = process.argv.slice(2);
@@ -32,7 +33,7 @@ if (!SERVICE) {
 }
 const rates = loadRates();
 const fees = loadSearchFees();
-const CREDIT_USD = 0.007; // _shared/credits.ts
+const CREDIT_USD = loadCreditBudgetUsd(); // llm-rates.json, single source
 
 const rows = [];
 for (const id of tripIds) {

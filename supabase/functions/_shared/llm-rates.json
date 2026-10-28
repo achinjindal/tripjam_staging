@@ -46,5 +46,5 @@
     "anthropic": 0.01,
     "google": 0.014
   },
-  "creditLlmBudgetUsd": 0.007
+  "creditLlmBudgetUsd": 0.0035
 }

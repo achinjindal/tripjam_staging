@@ -4,15 +4,22 @@ import { supabase } from "./supabase";
 // Master switch for the entire credits UX. Controls UI + paywall behavior;
 // backend credit deduction in edge functions always runs regardless.
 //
-// Launched on 2026-05-27 with 300 free credits per signup
-// (LAUNCH_PLAN D2 + handoff decision). At launch flip the prior env-aware
-// guard `!__IS_PROD` (staging-only) was removed once Lemon Squeezy prod
-// secrets + webhook + new-signup-default 300 + edge fn redeploys were
-// all in place — RUNBOOKS "Prod credits launch" steps 1-4 complete.
+// Launched 2026-05-27. The prior env-aware guard `!__IS_PROD`
+// (staging-only) was removed once Lemon Squeezy prod secrets + webhook +
+// edge fn redeploys were in place — RUNBOOKS "Prod credits launch" 1-4.
+//
+// The signup grant is NOT 300. This comment said 300 for five months after
+// the fact: the profiles.credits DEFAULT went 50 -> 300 (20260526000003) ->
+// **100** (20260603000001), and 100 is what every new account has received
+// since 2026-06-03. Landing.jsx and CLAUDE.md both say 100 correctly, so
+// this file was the only place claiming otherwise — and "300 free credits
+// per signup" sitting next to a `displayCredits` example that also uses
+// "300" is exactly how someone concludes we promise 300 and deliver 100.
+// The 300 that IS real is the SMALL PAID PACK ($4.99 -> 300 credits).
 export const CREDITS_UI_ENABLED = true;
 
 // Display credits as whole integers to the user (D14). The backend stores
-// NUMERIC(10,2); we render the floor so users always see "300" not "299.61".
+// NUMERIC(10,2); we render the floor so users always see "99" not "99.61".
 // Admin / debug mode can show full precision via balance.toFixed(2).
 export function displayCredits(balance) {
   if (balance == null || !Number.isFinite(Number(balance))) return 0;

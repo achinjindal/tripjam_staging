@@ -394,7 +394,23 @@ export function loadRates(path = "supabase/functions/_shared/llm-rates.json") {
 
 export const CACHE_WRITE_MULT = 1.25;
 export const CACHE_READ_MULT = 0.1;
-export const CREDIT_LLM_BUDGET_USD = 0.007;
+// Read from llm-rates.json, never redeclared: this was a third hardcoded
+// copy alongside _shared/credits.ts and the JSON, and bench output is what
+// decides which model ships. A stale copy here silently misprices every
+// comparison — and it would have survived the 2026-10-28 redenomination
+// (0.007 -> 0.0035) reporting double the true credit count.
+//
+// NOTE loadRates() returns only the per-model rate map, so the budget has to
+// be read separately rather than off that object.
+export function loadCreditBudgetUsd(
+  path = "supabase/functions/_shared/llm-rates.json",
+) {
+  const v = JSON.parse(readFileSync(path, "utf8")).creditLlmBudgetUsd;
+  if (!Number.isFinite(v) || v <= 0)
+    throw new Error("llm-rates.json: creditLlmBudgetUsd missing or invalid");
+  return v;
+}
+export const CREDIT_LLM_BUDGET_USD = loadCreditBudgetUsd();
 
 /**
  * Per-search fees, parsed from credits.ts so this helper cannot drift from

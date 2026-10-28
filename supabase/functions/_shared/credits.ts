@@ -4,7 +4,7 @@ import { captureException } from "./errortrack.ts";
 //
 // Pricing model (Day 2 rebuild — D11-D18 + D24):
 //   1 credit = $0.01 user value.
-//   LLM calls:    credits_charged = ceil((actual_llm_cost_usd / 0.007) * 100) / 100
+//   LLM calls:    credits_charged = ceil((cost_usd / creditLlmBudgetUsd) * 100) / 100
 //                 (70% LLM budget per credit; 30% margin)
 //   Google/ext:   credits_charged = ceil((external_api_cost_usd / 0.01) * 100) / 100
 //                 (pass-through — no founder margin per D24)
@@ -77,8 +77,22 @@ export const RATES: Record<string, { input: number; output: number }> =
     ).map(([k, v]) => [k, resolveRate(v)]),
   );
 
-// D18: Each credit covers $0.007 of LLM spend (70% of $0.01 user value)
-export const CREDIT_LLM_BUDGET_USD = 0.007;
+// D18: how much LLM spend one credit covers. THIS NUMBER IS THE GROSS MARGIN:
+// margin = 1 - (budget / price_per_credit). Redenominated 2026-10-28 from
+// $0.007 to $0.0035 (1 new credit = 2 old): a trip now bills ~22 credits,
+// which is what it billed before the October cost work, so the efficiency
+// gain stays with us instead of becoming a silent 2x discount. Existing
+// balances were doubled in migration 20261028000012 so nobody lost value. Cutting model cost does NOT move it — credits charged are
+// derived from actual cost, so a cheaper model just bills fewer credits and
+// the ratio is unchanged.
+//
+// Read from llm-rates.json rather than redeclared: this was hardcoded here
+// while llm-rates.json carried its own copy, and the CHARGING path used this
+// one while trip-cost.cjs and the bench read the JSON. Editing the JSON
+// therefore changed every report and none of the billing — a silent split
+// between what we tell ourselves and what we charge, on the one constant that
+// sets the margin.
+export const CREDIT_LLM_BUDGET_USD = rateData.creditLlmBudgetUsd;
 // D24: External APIs (Google Places, Photos) pass through at full $0.01/credit
 export const EXTERNAL_API_USER_VALUE = 0.01;
 
