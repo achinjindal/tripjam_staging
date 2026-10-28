@@ -61,9 +61,9 @@ Run `npm run` to list every script (`dev`, `build`, `check`, `test:e2e`,
 `deploy:functions:*`, `db:push:*`, …). Only the non-obvious ones are noted here:
 
 - **`npm run check`** = format:check + lint + typecheck + **`test:functions`** + build.
-  `test:functions` is a Deno unit suite (`_shared/llm.test.ts`, `chat/_ops.test.ts`,
-  `places-proxy/_helpers.test.ts`, `src/tripFixes.test.js`) — update it when you touch
-  those. Run `check` before review; if formatting fails, `npm run format` and rerun.
+  `test:functions` is a Deno unit suite that also runs a few pure `src/*.test.js` files.
+  Its file list is **explicit in `package.json`**: a new `*.test.*` file is not run until
+  you add it there. Run `check` before review; if formatting fails, `npm run format` and rerun.
 - **CI is NOT the gate.** `.github/workflows/checks.yml` runs only lint, typecheck and
   build — it does **not** run `format:check` or `test:functions`. Green CI does not mean
   the unit tests pass or the formatting is clean; only `npm run check` locally does.
@@ -76,6 +76,11 @@ Run `npm run` to list every script (`dev`, `build`, `check`, `test:e2e`,
   Deploying from a branch that is behind silently reverts whatever another
   session deployed, with a successful CLI response and a bumped version number.
   `git fetch origin` and confirm you are up to date before deploying.
+  `model-bench` is deliberately left out of these scripts: it is a staging-only bench
+  harness (an LLM proxy gated on `BENCH_SECRET`) and must never be deployed to prod.
+- **`db:push:*` relinks the CLI and then pushes every unrecorded migration.** Some
+  migrations have been applied by hand and are missing from `schema_migrations`, so a
+  push would re-run them. Run `supabase migration list` against the target first.
 
 ```bash
 # These three must bypass JWT verification. supabase/config.toml now declares
@@ -158,7 +163,7 @@ supabase functions deploy inbound-email      --no-verify-jwt --project-ref <ref>
   - Chat calls the model through `streamLLM` (`modelFor("CHAT", …)` → `LLM_MODEL_CHAT` → legacy `CHAT_MODEL`), with multi-turn history via `CallOpts.messages`.
 - Route labels (P1, P2...) computed at render time from display index, never stored.
 - All functions log token usage to `llm_usage` table (fire-and-forget).
-- `generate-destination-research` uses Haiku 4.5 + `web_search` (`INSPIRATIONS_MAX_SEARCHES`, default 3; 2 more on the Sonnet escalation). Results cached in DB; cache key = (destinations, tags, monthBucket).
+- `generate-destination-research` has three search backends, chosen by env secrets, and each falls back to the next: `INSPIRATIONS_SEARCH=brave` means we run Brave queries ourselves and the model makes one pass over the snippets (skipped for `quick` runs); `INSPIRATIONS_GROUNDED_MODEL=gemini-*` uses Google Search grounding; the default is Haiku 4.5 + Anthropic `web_search` (`INSPIRATIONS_MAX_SEARCHES`, default 3; 2 more on the Sonnet escalation). Results are cached in the DB with cache key = (destinations, tags, monthBucket).
 
 ### Maps & Photos
 
@@ -179,6 +184,8 @@ supabase functions deploy inbound-email      --no-verify-jwt --project-ref <ref>
   - **Cache-read exceptions `computeLLMCost` does NOT yet model:** Opus 5.5 reads at 0.05x and Fable 5.1 at 0.025x, not the standard 0.1x. Over-bills (safe direction) — fix before routing anything to either.
   - **Minimum cacheable prefix is model-dependent and fails SILENTLY:** Haiku 4.5 needs 4,096 tokens, Sonnet 5 needs 1,024, Sonnet 5.5/Opus 5/Opus 5.5 need 512. Below it, `cache_control` is ignored with no error — verify via `cache_creation_input_tokens`/`cache_read_input_tokens` both being 0. No Haiku call site in this codebase clears 4,096, so caching is impossible there as written.
 - **A model missing from the rate table is a billing incident, not a shrug.** The unknown-model fallback bills at Fable 5 ($10/$50) so a swap can never under-charge — which means a missing entry over-bills by up to ~100x (an IG day-fill costing $0.0017 would bill $0.17 ≈ 25 credits). `computeLLMCost` logs `BILLING ALARM` and files a PostHog exception when it hits the fallback. Add every new model to `llm-rates.json` before pointing any function at it.
+- **Non-LLM API pass-through (`deductExternalApiCredits`) charges only real upstream cost.** Google Places' `GOOGLE_PLACES_CALL_USD` was zeroed on 2026-10-05 after users were charged ~1,154 credits for calls that sat inside Google's free tier. Brave is billed only for queries beyond its monthly free allowance (`BRAVE_FREE_MONTHLY` / `BRAVE_SEARCH_CALL_USD`), counted by the atomic `incr_api_usage` RPC in `api_usage`. Places-proxy's own read-then-PATCH counter loses increments under concurrency, so never price off it. If the counter is unreachable, charge nothing.
+- Per-trip cost questions: the `trip_task_cost` view (calls, credits charged and our USD per trip and task) reads off the indexes added in migration `20261028000009`.
 
 ## Testing
 
