@@ -13,7 +13,7 @@ import { login, dismissTripOverlays } from "./helpers";
 // default replica identity a DELETE's old row has just the PK, so the
 // trip_id-filtered subscription never matched and co-travellers kept the old
 // days — and then got them back from the offline cache even after a reload.
-// Migration 20261028000003 sets REPLICA IDENTITY FULL on days / trip_members /
+// Migration 20261028000006 sets REPLICA IDENTITY FULL on days / trip_members /
 // brainstorm_items. One browser + a Node client (owner A) driving the writes.
 // Each test seeds and deletes its own throwaway trip. Gated on the flags.
 
@@ -188,7 +188,7 @@ const cacheKey = (page: Page, tripId: string) =>
 test.describe("Collaboration — itinerary clear & member removal live", () => {
   test.skip(
     !INVITE_ENABLED || !REALTIME_ENABLED,
-    "requires VITE_INVITE_ENABLED=true + VITE_REALTIME_ENABLED=true + migration 20261028000003 on the target DB",
+    "requires VITE_INVITE_ENABLED=true + VITE_REALTIME_ENABLED=true + migration 20261028000006 on the target DB",
   );
   test.setTimeout(150000);
 

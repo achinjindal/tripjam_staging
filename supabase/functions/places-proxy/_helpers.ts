@@ -138,3 +138,124 @@ export function validateGoogleResult(args: {
 
   return { ok: true, reason: "" };
 }
+
+// ── Local verification of Supabase user access tokens ──────────────────────
+//
+// The proxy used to authenticate every paid call with a network round trip to
+// GET /auth/v1/user. Production's database and Auth live in ap-northeast-1
+// (Tokyo), but an edge function runs in the region nearest the caller
+// (ap-south-1 for most users), so that hop crossed regions on every
+// keystroke-driven autocomplete (measured 2026-10-28; see the commit message).
+//
+// Both projects sign user tokens with an asymmetric key (ES256) and publish
+// the public half at /auth/v1/.well-known/jwks.json, so the signature can be
+// checked in-process — Supabase's recommended path (`getClaims`). What it
+// gives up: a token from a session that was signed out keeps working until it
+// expires (at most 1h). The guarantee the proxy needs — a real, signed-in
+// account, never the public anon key — is unchanged.
+//
+// Returns the user id (`sub`), or null for a token that is invalid. Returns
+// undefined when the token is not one this can judge locally (legacy HS256,
+// unknown kid, unexpected issuer), so the caller falls back to the network
+// check instead — never a reason to call a paid upstream.
+
+export type Jwk = JsonWebKey & { kid?: string; alg?: string };
+
+function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> {
+  const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
+  const bin = atob(b64 + pad);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function b64urlJson(s: string): any {
+  return JSON.parse(new TextDecoder().decode(b64urlToBytes(s)));
+}
+
+const ALG_PARAMS: Record<
+  string,
+  {
+    import: EcKeyImportParams | RsaHashedImportParams;
+    verify: EcdsaParams | AlgorithmIdentifier;
+  }
+> = {
+  ES256: {
+    import: { name: "ECDSA", namedCurve: "P-256" },
+    verify: { name: "ECDSA", hash: "SHA-256" },
+  },
+  RS256: {
+    import: { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    verify: { name: "RSASSA-PKCS1-v1_5" },
+  },
+};
+
+export async function verifyUserJwt(
+  token: string,
+  keys: Jwk[],
+  opts: { issuer: string; nowSec?: number; leewaySec?: number },
+): Promise<string | null | undefined> {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  let header: any, claims: any;
+  try {
+    header = b64urlJson(parts[0]);
+    claims = b64urlJson(parts[1]);
+  } catch {
+    return null;
+  }
+  const params = ALG_PARAMS[header?.alg];
+  // Legacy symmetric tokens can't be checked without the project secret.
+  if (!params) return undefined;
+  const jwk = keys.find(
+    (k) => k.kid === header.kid && (!k.alg || k.alg === header.alg),
+  );
+  if (!jwk) return undefined;
+
+  let ok = false;
+  try {
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      jwk,
+      params.import,
+      false,
+      ["verify"],
+    );
+    ok = await crypto.subtle.verify(
+      params.verify,
+      key,
+      b64urlToBytes(parts[2]),
+      new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
+    );
+  } catch {
+    return null;
+  }
+  if (!ok) return null;
+
+  const now = opts.nowSec ?? Math.floor(Date.now() / 1000);
+  const leeway = opts.leewaySec ?? 30;
+  if (typeof claims?.exp !== "number" || claims.exp + leeway < now) return null;
+  if (typeof claims.nbf === "number" && claims.nbf - leeway > now) return null;
+  // Signed by this project's key but a different issuer string: the URL the
+  // function sees (e.g. http://kong:8000 under `supabase start`) isn't the
+  // public one. Defer to the network check rather than reject a real user.
+  if (claims.iss !== opts.issuer) return undefined;
+  // A real signed-in user — never the anon or service role.
+  if (claims.role !== "authenticated") return null;
+  const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+  if (!aud.includes("authenticated")) return null;
+  if (typeof claims.sub !== "string" || !claims.sub) return null;
+  return claims.sub;
+}
+
+// Unverified `sub` — ONLY for starting a read early (the per-user usage
+// count) while verification runs. Never base a decision on it.
+export function unverifiedSub(token: string): string | null {
+  try {
+    const sub = b64urlJson(token.split(".")[1] ?? "")?.sub;
+    return typeof sub === "string" && sub ? sub : null;
+  } catch {
+    return null;
+  }
+}

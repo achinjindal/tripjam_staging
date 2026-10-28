@@ -404,21 +404,39 @@ export function CityCard({
   }, [photoVisible, city]);
 
   // Lazy-load deep dive when this card scrolls into view (first city is eager-loaded).
+  //
+  // `onVisible` is an inline arrow at both call sites (App.jsx), so its
+  // identity changes on EVERY parent render. With it in the dep array the
+  // observer was torn down and re-created each render and re-fired on an
+  // already-intersecting element — one paid city-deep-dive call per render.
+  // A failed load stores "error", which loadCityDeepDive deliberately treats
+  // as retryable, so that closed into a self-sustaining loop: error →
+  // re-render → fresh observer → fetch → error. On a credit-exhausted
+  // account each turn is a 402 that re-opens the paywall, which re-renders,
+  // which re-fires. Hold the callback in a ref and fire at most once per
+  // mount so the observer's lifetime is the component's, not the render's.
+  const onVisibleRef = useRef(onVisible);
   useEffect(() => {
-    if (!onVisible || !rootRef.current) return;
+    onVisibleRef.current = onVisible;
+  }, [onVisible]);
+  const firedRef = useRef(false);
+  useEffect(() => {
+    if (!rootRef.current) return;
     const el = rootRef.current;
     const obs = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {
-          onVisible();
           obs.disconnect();
+          if (firedRef.current) return;
+          firedRef.current = true;
+          onVisibleRef.current?.();
         }
       },
       { rootMargin: "240px 0px" },
     );
     obs.observe(el);
     return () => obs.disconnect();
-  }, [onVisible]);
+  }, []);
 
   const dd = deepDive && typeof deepDive === "object" ? deepDive : null;
 

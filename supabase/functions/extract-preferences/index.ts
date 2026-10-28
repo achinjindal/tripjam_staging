@@ -6,7 +6,12 @@ import {
   type JSONSchema,
 } from "../_shared/llm.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { authenticateUser, unauthorized } from "../_shared/credits.ts";
+import {
+  authenticateUser,
+  llmKillSwitch,
+  rateLimit,
+  unauthorized,
+} from "../_shared/credits.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -61,8 +66,22 @@ serve(async (req) => {
   // This is a free system-internal call — no credit deduction. Cost (~$0.0007/call)
   // is absorbed by the founder since it runs invisibly between user actions
   // (Build button click → pre-IG sheet open) and would be a surprise charge.
+  //
+  // Being unbilled is exactly why the kill switch and the limiter matter MORE
+  // here than anywhere else: credits are what bound every other LLM endpoint,
+  // and this one has none. Without these two guards an authenticated user
+  // could loop it to drain the Anthropic balance — the failure that has taken
+  // production down twice — and LLM_KILL_SWITCH, the documented incident
+  // lever, could not stop it. The limiter is 20/min, so the 6-hourly
+  // health-monitor probe (4 calls/day) is unaffected.
+  const killed = llmKillSwitch(corsHeaders);
+  if (killed) return killed;
+
   const user = await authenticateUser(req);
   if (!user) return unauthorized(corsHeaders);
+
+  const rateLimited = await rateLimit(user.id, corsHeaders);
+  if (rateLimited) return rateLimited;
 
   try {
     const { notes, chatHistory, tripId } = await req.json();

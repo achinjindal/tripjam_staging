@@ -2121,12 +2121,20 @@ function RouteDraftingCard({ destinations }) {
   );
 }
 
+// Pre-trip Route screen: how long the saved-routes fetch may hang before it
+// becomes a Retry, and how long the screen may sit with destinations but no
+// trip id and no RG in flight before it offers a way out.
+const ROUTES_LOAD_TIMEOUT_MS = 20000;
+const ROUTES_IDLE_GRACE_MS = 6000;
+
 function BrainstormView({
   trip,
   session,
   pendingForm,
   onBuild,
   onBack,
+  onRecoverPlans = null,
+  onHome = null,
   onEditForm = null,
   onInvite = null,
   styleBadge = false,
@@ -2333,15 +2341,43 @@ function BrainstormView({
     .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng))
     .map((s) => ({ lat: s.lat, lng: s.lng }));
 
+  // Saved-routes fetch. A failed or hung fetch must surface (Retry), never
+  // leave `items` null — the quiet loader keys on it and has no exit.
+  const [loadError, setLoadError] = useState(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   useEffect(() => {
-    if (editTripId) {
-      setLoadingItems(true);
-      loadSavedBrainstorm(editTripId).finally(() => setLoadingItems(false));
-    } else if (trip?.id) {
-      setLoadingItems(true);
-      loadItems().finally(() => setLoadingItems(false));
-    }
-  }, [trip?.id, editTripId]);
+    const id = editTripId || trip?.id;
+    if (!id) return;
+    let live = true;
+    let timer;
+    setLoadingItems(true);
+    setLoadError(null);
+    Promise.race([
+      editTripId ? loadSavedBrainstorm(editTripId) : loadItems(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("timeout")),
+          ROUTES_LOAD_TIMEOUT_MS,
+        );
+      }),
+    ])
+      .catch((e) => {
+        if (!live) return;
+        setLoadError(e?.message || "failed");
+        posthog.capture("routes_load_failed", {
+          trip_id: id,
+          reason: e?.message === "timeout" ? "timeout" : "error",
+        });
+      })
+      .finally(() => {
+        clearTimeout(timer);
+        if (live) setLoadingItems(false);
+      });
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [trip?.id, editTripId, loadAttempt]);
 
   // Expose generate() to parent via ref — parent calls it imperatively, not via useEffect
   useEffect(() => {
@@ -2414,11 +2450,14 @@ function BrainstormView({
   }
 
   async function loadSavedBrainstorm(tripId) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("brainstorm_items")
       .select("*")
       .eq("trip_id", tripId)
       .order("position");
+    // Throw rather than render "no routes": an empty panel invites a paid
+    // regeneration over routes that are saved but failed to load.
+    if (error) throw new Error(error.message);
     const flattened = (data || []).map((row) => {
       const merged = { ...row, ...(row.data || {}) };
       // Normalize days — coerce {day, description} or other object shapes back to plain strings
@@ -2472,11 +2511,12 @@ function BrainstormView({
 
   async function loadItems() {
     if (!trip?.id) return;
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("brainstorm_items")
       .select("*")
       .eq("trip_id", trip.id)
       .order("position");
+    if (error) throw new Error(error.message);
     // Flatten the jsonb data field back into the item for rendering
     const flattened = (data || []).map((row) => ({
       ...row,
@@ -2919,6 +2959,40 @@ function BrainstormView({
   const tier1Items = (items || [])
     .filter((it) => it.tier === 1 && !it.dismissed)
     .slice(0, 12);
+  // No source of routes: no trip id to load from and nothing generating.
+  // Without destinations generate() is a no-op too, so the quiet loader would
+  // never resolve (prod 2026-10-28: a remount after IG cleared the parent's
+  // trip context). With destinations, RG is normally moments away (new-trip
+  // setup awaits the draft insert first), so give it a grace period.
+  // Keyed on visible routes, not items === null: the empty-state CTA's
+  // "Generate plans" is just as dead without destinations.
+  const idleNoSource =
+    !generating &&
+    tier1Items.length === 0 &&
+    !(items || []).some((it) => it.tier === 1 && it.dismissed) &&
+    !loadingItems &&
+    !loadError &&
+    !editTripId &&
+    !trip?.id;
+  const [idleStalled, setIdleStalled] = useState(false);
+  useEffect(() => {
+    if (!idleNoSource || !destinations.length) {
+      setIdleStalled(false);
+      return;
+    }
+    const t = setTimeout(() => setIdleStalled(true), ROUTES_IDLE_GRACE_MS);
+    return () => clearTimeout(t);
+  }, [idleNoSource, destinations.length]);
+  const noPlanSource = idleNoSource && (!destinations.length || idleStalled);
+  const routesUnavailable = noPlanSource || (!!loadError && items === null);
+  useEffect(() => {
+    if (!routesUnavailable) return;
+    posthog.capture("routes_screen_no_context", {
+      reason: loadError ? "load_failed" : "no_trip_context",
+      has_destinations: destinations.length > 0,
+      can_recover: !!onRecoverPlans,
+    });
+  }, [routesUnavailable]);
   // All-dismissed detection: chat's dismiss_route can bulk-dismiss every
   // route (destination pivot). Rows survive with dismissed=true, but with
   // zero visible cards the panel used to render NOTHING (the empty-state CTA
@@ -3117,11 +3191,13 @@ function BrainstormView({
                   >
                     {generating
                       ? "Generating your routes…"
-                      : loadingItems || items === null
-                        ? "Loading your plans…"
-                        : !items?.length
-                          ? "Let's find you some routes"
-                          : "Pick a route, then build your itinerary"}
+                      : routesUnavailable
+                        ? "Your plans didn't load"
+                        : loadingItems || items === null
+                          ? "Loading your plans…"
+                          : !items?.length
+                            ? "Let's find you some routes"
+                            : "Pick a route, then build your itinerary"}
                   </div>
                 )}
               </div>
@@ -3361,6 +3437,7 @@ function BrainstormView({
                 a blank panel (items non-empty suppressed this CTA, no cards,
                 nothing to restore). */}
             {items !== null &&
+              !routesUnavailable &&
               tier1Items.length === 0 &&
               dismissedTier1.length === 0 &&
               !generating &&
@@ -3484,6 +3561,7 @@ function BrainstormView({
                 Showing the generation theater here made users think their
                 saved routes were being regenerated (prod report 2026-09-26). */}
             {!generating &&
+              !routesUnavailable &&
               (loadingItems || items === null) &&
               tier1Items.length === 0 && (
                 <div style={{ textAlign: "center", padding: "48px 20px" }}>
@@ -3512,6 +3590,123 @@ function BrainstormView({
                   ))}
                 </div>
               )}
+            {/* No way to get routes (no trip id, no destinations) or the
+                saved-routes fetch failed — a recoverable dead end instead of
+                an endless loader. */}
+            {routesUnavailable && tier1Items.length === 0 && (
+              <div
+                data-testid="routes-unavailable"
+                style={{ textAlign: "center", padding: "60px 20px" }}
+              >
+                <div style={{ fontSize: 40, marginBottom: 12 }}>🧭</div>
+                <div
+                  style={{
+                    fontFamily: "'DM Serif Display',serif",
+                    fontSize: 18,
+                    color: T.ink,
+                    marginBottom: 8,
+                  }}
+                >
+                  {loadError
+                    ? "We couldn't load your plans"
+                    : "We lost track of this trip's plans"}
+                </div>
+                <div
+                  style={{
+                    fontFamily: "Georgia,serif",
+                    fontSize: 13,
+                    color: T.mist,
+                    marginBottom: 16,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {loadError
+                    ? "Your routes are saved — check your connection and try again."
+                    : onRecoverPlans
+                      ? "Nothing is lost — reopen this trip's plans to pick up where you left off."
+                      : destinations.length
+                        ? "Your routes haven't started yet. Find some now, or head back to your trips."
+                        : "Nothing is lost — head back and open your trip again."}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    justifyContent: "center",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  {(() => {
+                    const primary = loadError
+                      ? {
+                          label: "Try again",
+                          run: () => setLoadAttempt((n) => n + 1),
+                        }
+                      : onRecoverPlans
+                        ? { label: "Reopen this trip", run: onRecoverPlans }
+                        : destinations.length
+                          ? { label: "Find routes", run: () => generate() }
+                          : onHome
+                            ? { label: "Go to my trips", run: onHome }
+                            : onBack
+                              ? { label: "Set up a trip", run: onBack }
+                              : null;
+                    const secondary =
+                      primary?.run !== onHome && onHome
+                        ? { label: "My trips", run: onHome }
+                        : null;
+                    return (
+                      <>
+                        {primary && (
+                          <button
+                            onClick={() => {
+                              posthog.capture("routes_screen_recover", {
+                                action: primary.label,
+                              });
+                              primary.run();
+                            }}
+                            style={{
+                              background: T.ocean,
+                              color: "white",
+                              border: "none",
+                              borderRadius: RADIUS.md,
+                              padding: "9px 20px",
+                              fontFamily: "Georgia,serif",
+                              fontSize: 13,
+                              cursor: "pointer",
+                            }}
+                          >
+                            {primary.label}
+                          </button>
+                        )}
+                        {secondary && (
+                          <button
+                            onClick={() => {
+                              posthog.capture("routes_screen_recover", {
+                                action: secondary.label,
+                              });
+                              secondary.run();
+                            }}
+                            style={{
+                              background: "transparent",
+                              color: T.ocean,
+                              border: `1.5px solid ${T.skyBorder}`,
+                              borderRadius: RADIUS.md,
+                              padding: "9px 20px",
+                              fontFamily: "Georgia,serif",
+                              fontSize: 13,
+                              cursor: "pointer",
+                            }}
+                          >
+                            {secondary.label}
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
             {/* Generation theater — only while RG is actually running */}
             {generating && tier1Items.length === 0 && (
               <div
@@ -8222,7 +8417,7 @@ export default function App({
   // Reconcile-from-DB (debounced) rather than patch-from-payload — sidesteps the
   // clobber traps (nested activities / wishlist), and payload.old carries only
   // the id on RLS tables even under REPLICA IDENTITY FULL (FULL is what lets
-  // trip_id-filtered DELETEs arrive at all — migration 20261028000003).
+  // trip_id-filtered DELETEs arrive at all — migration 20261028000006).
   // Days/routes reconcile only when the trip is shared (members > 1) so solo
   // trips carry zero self-echo overhead; trip_members always reconciles so the
   // owner sees the first joiner (and a leaver) live. postgres_changes doesn't
@@ -10821,8 +11016,13 @@ export default function App({
   };
 
   const handleSetupComplete = async (form) => {
-    // New trip — no change detection needed
-    if (!editingTrip || pretripRoutes.length === 0) {
+    // New trip — no change detection needed. A trip that already has an
+    // itinerary always goes through the diff: doSetupComplete(form, true)
+    // deletes its days with no confirmation.
+    if (
+      !editingTrip ||
+      (pretripRoutes.length === 0 && !editingTrip.ig_response)
+    ) {
       return doSetupComplete(form, true);
     }
 
@@ -10929,10 +11129,11 @@ export default function App({
   };
 
   // Itinerary → "Explore plans": the single transition for every entry point.
-  // IG completion clears editingTrip + pendingForm, and the pretrip
+  // A plain trip open has editingTrip + pendingForm null, and the pretrip
   // BrainstormView loads saved routes only from editingTrip?.id — so a bare
-  // setScreen("brainstorm") mounts it with no trip id and it sits in the
-  // empty "Generating your plans…" state forever.
+  // setScreen("brainstorm") would mount it with no trip id (it now shows a
+  // "Reopen this trip" dead end rather than an endless loader, but this is
+  // still the transition to use).
   const openExplorePlans = () => {
     // Abort any in-flight IG generation
     if (igAbortRef.current) {
@@ -11662,8 +11863,17 @@ export default function App({
         days: savedDays?.length || 0,
       });
     setChatUnread(true);
-    setEditingTrip(null);
-    setPendingForm(null);
+    // Keep the trip context pointed at the now-saved trip. IG completes in
+    // place — the user is usually still on the pre-trip screen — and that
+    // screen reads editingTrip/pendingForm for its title, Edit details,
+    // Invite, the saved-routes load on (re)mount, and Build/Start Planning.
+    // Nulling them here (the old behaviour) left a header-less Route tab, an
+    // endless "Loading your plans…" on any remount, and a second draft trip
+    // + RG run on ← → Start Planning. This is the same state openExplorePlans
+    // builds from `trip`; ig_response makes a second Build go through the
+    // replace-itinerary confirmation and update THIS trip.
+    setEditingTrip(tripData);
+    setPendingForm(form);
     setDetailedLoading(false);
     setDetailedReady(true);
     setIgGenerating(false);
@@ -14979,6 +15189,13 @@ export default function App({
                   loadCityDeepDive={loadCityDeepDiveApp}
                   onBuild={handleBuildFromBrainstorm}
                   onBack={() => setScreen("setup")}
+                  // Recovery for a no-context mount: the real trip is still in
+                  // `trip` (SAMPLE_TRIP has no id), so rebuild the plans context
+                  // from it rather than send the user to set up a duplicate.
+                  onRecoverPlans={
+                    trip?.id && trip.ig_response ? openExplorePlans : null
+                  }
+                  onHome={onHome || null}
                   onEditForm={
                     editingTrip
                       ? () => {
@@ -15671,8 +15888,8 @@ export default function App({
                               const dests = resolveDestinationsForMagazine({
                                 pendingForm,
                                 editingTrip,
-                                // IG completion nulls pendingForm/editingTrip —
-                                // trip carries the destination from then on
+                                // A plain trip open has no pendingForm/editingTrip —
+                                // trip carries the destination then
                                 trip,
                               });
                               if (dests.length > 0) return dests.join(" · ");
@@ -15759,7 +15976,7 @@ export default function App({
                           const destinations = resolveDestinationsForMagazine({
                             pendingForm,
                             editingTrip,
-                            // IG completion nulls pendingForm/editingTrip — the
+                            // A plain trip open has no pendingForm/editingTrip — the
                             // destination card must survive via trip.destination
                             trip,
                           });

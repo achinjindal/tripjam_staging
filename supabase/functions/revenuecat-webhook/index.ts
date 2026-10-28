@@ -104,6 +104,17 @@ serve(async (req) => {
         purchased_at_ms: event.purchased_at_ms,
       },
     });
+    // grantCredits returns null ONLY when the RPC genuinely failed — a
+    // duplicate provider_session_id returns the existing balance, so an
+    // idempotent RevenueCat replay does NOT land here. Until this check, a
+    // failed grant answered 200 and RevenueCat never retried: the customer
+    // paid and got nothing, with no alert. Throw into the catch below so the
+    // capture fires and RevenueCat retries (the grant is idempotent).
+    if (newBalance === null) {
+      throw new Error(
+        `grant_failed: revenuecat credits were NOT granted (${credits} credits)`,
+      );
+    }
 
     return new Response(
       JSON.stringify({ received: true, granted: credits, balance: newBalance }),

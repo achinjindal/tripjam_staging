@@ -25,7 +25,7 @@ export const REALTIME_ENABLED =
 // under the default identity a DELETE's old row has only the PK, so the
 // trip_id filter can't match and the event is dropped. Set on the board tables
 // (20260807000001) and on days / brainstorm_items / trip_members
-// (20261028000003). The old row still arrives as just { id } (RLS), so handlers
+// (20261028000006). The old row still arrives as just { id } (RLS), so handlers
 // reconcile from the DB rather than reading payload.old.
 const TRIP_SCOPED_TABLES = [
   "days",

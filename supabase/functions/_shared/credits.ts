@@ -426,7 +426,26 @@ export function llmKillSwitch(
 
 // Atomically deduct credits and log a transaction. Fire-and-forget — failure
 // to record a deduction should not break the user-facing response.
-export async function deductCredits(args: {
+// Both deduction helpers register their OWN work with EdgeRuntime.waitUntil
+// rather than trusting each call site to do it. Six functions
+// (city-deep-dive, estimate-expenses, generate-day-narratives,
+// generate-todos, generate-wishlist, places-proxy) called these as floating
+// promises and then returned a Response immediately, so the isolate could be
+// torn down mid-deduction — the exact failure documented at the top of this
+// file, which once dropped EVERY generate-itinerary deduction. city-deep-dive
+// is the highest-volume of them (Magazine lazy-loads 5-10 per trip), so this
+// was live, unbilled revenue.
+//
+// The returned promise is still awaitable, so callers that already serialize
+// their deductions (generate-itinerary's flushBilling) are unaffected:
+// waitUntil only asks the runtime to keep the isolate alive until it settles.
+export function deductCredits(args: Parameters<typeof deductCreditsInner>[0]) {
+  const work = deductCreditsInner(args);
+  runInBackground(work);
+  return work;
+}
+
+async function deductCreditsInner(args: {
   userId: string;
   model: string;
   inputTokens: number;
@@ -454,7 +473,7 @@ export async function deductCredits(args: {
   if (credits <= 0) return;
   const supa = adminClient();
   try {
-    await supa.rpc("deduct_credits", {
+    const { error } = await supa.rpc("deduct_credits", {
       p_user_id: args.userId,
       p_amount: credits,
       p_reason: args.functionName,
@@ -474,8 +493,30 @@ export async function deductCredits(args: {
         ...(cacheReadTokens ? { cache_read_tokens: cacheReadTokens } : {}),
       },
     });
+    // supabase-js RESOLVES on a Postgres error — it does not throw. Until this
+    // read `error`, a renamed RPC, a changed signature, a numeric overflow or
+    // an RLS denial all looked like success: the LLM ran, the provider billed
+    // us, and no ledger row ever existed — with zero log output. Silence on
+    // this path is lost revenue, so it gets the same BILLING ALARM treatment
+    // as an unknown model rate. Deliberately does NOT rethrow: the user's
+    // work is already done and delivered, so failing their request would turn
+    // a billing fault into a product outage.
+    if (error) throw error;
   } catch (e) {
-    console.error("deductCredits failed:", (e as Error).message);
+    console.error(
+      `BILLING ALARM: deductCredits failed for ${args.functionName} — ` +
+        `${credits} credits ($${usd.toFixed(6)}) NOT charged to ` +
+        `${args.userId}: ${(e as Error).message}`,
+    );
+    void captureException(e, {
+      functionName: args.functionName,
+      userId: args.userId,
+      tripId: args.tripId ?? null,
+      billing_path: "deductCredits",
+      credits,
+      usd,
+      model: args.model,
+    });
   }
 }
 
@@ -530,7 +571,15 @@ export function hasStreamUsage(u: StreamUsage): boolean {
 // Pass-through external API charge (Google Places, Photos, etc). The caller
 // already computed the USD cost from the API's published rate sheet. Uses
 // $0.01-per-credit pass-through scale (no founder margin per D24).
-export async function deductExternalApiCredits(args: {
+export function deductExternalApiCredits(
+  args: Parameters<typeof deductExternalApiCreditsInner>[0],
+) {
+  const work = deductExternalApiCreditsInner(args);
+  runInBackground(work);
+  return work;
+}
+
+async function deductExternalApiCreditsInner(args: {
   userId: string;
   costUsd: number;
   reason: string; // e.g. "places-proxy:google-find-place"
@@ -543,7 +592,7 @@ export async function deductExternalApiCredits(args: {
   if (credits <= 0) return;
   const supa = adminClient();
   try {
-    await supa.rpc("deduct_credits", {
+    const { error } = await supa.rpc("deduct_credits", {
       p_user_id: args.userId,
       p_amount: credits,
       p_reason: args.reason,
@@ -553,8 +602,22 @@ export async function deductExternalApiCredits(args: {
       p_llm_cost_usd: args.costUsd, // re-using column for any external $ cost
       p_metadata: { ...(args.metadata ?? {}), pricing: "passthrough" },
     });
+    if (error) throw error; // see deductCredits: .rpc() resolves on PG errors
   } catch (e) {
-    console.error("deductExternalApiCredits failed:", (e as Error).message);
+    console.error(
+      `BILLING ALARM: deductExternalApiCredits failed for ${args.reason} — ` +
+        `${credits} credits ($${args.costUsd.toFixed(6)}) NOT charged to ` +
+        `${args.userId}: ${(e as Error).message}`,
+    );
+    void captureException(e, {
+      functionName: args.functionName,
+      userId: args.userId,
+      tripId: args.tripId ?? null,
+      billing_path: "deductExternalApiCredits",
+      reason: args.reason,
+      credits,
+      usd: args.costUsd,
+    });
   }
 }
 

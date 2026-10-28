@@ -1045,9 +1045,38 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
       // are drained (splice) rather than read, so no usage is billed twice
       // and none is dropped.
       let flushing = false;
+      let flushAgain = false;
+      // Wrapper owns the re-entrancy guard so the settlement body below can
+      // stay flat. TWO bugs lived in the old inline version:
+      //   1. the re-arm was the LAST statement, after ~200-600ms of awaited
+      //      llm_usage POSTs and deductCredits calls. A completion flush
+      //      arriving in that window hit `if (flushing) return` — and the
+      //      watchdog had ALREADY drained the usage arrays, so fills that
+      //      resolved after the drain had nobody left to bill them. The
+      //      watchdog fires at 135s against a ~150s wall, so that window sits
+      //      exactly where slow generations finish: the most expensive fills.
+      //   2. a throw mid-settlement left `flushing` true forever, silently
+      //      disabling the completion path for the rest of the request.
       const flushBilling = async (reason: "complete" | "watchdog") => {
-        if (flushing) return;
+        if (flushing) {
+          if (reason === "complete") flushAgain = true;
+          return;
+        }
         flushing = true;
+        try {
+          await flushBillingInner(reason);
+        } finally {
+          // A watchdog flush is a partial settlement, so re-arm: fills that
+          // land afterwards are billed by the completion path.
+          if (reason === "watchdog") flushing = false;
+        }
+        // Serve a completion flush that was turned away mid-settlement.
+        if (flushAgain && !flushing) {
+          flushAgain = false;
+          await flushBilling("complete");
+        }
+      };
+      const flushBillingInner = async (reason: "complete" | "watchdog") => {
         const tally = (list: AnthropicUsage[]) => ({
           inputTokens: list.reduce((a, u) => a + (u.input_tokens || 0), 0),
           outputTokens: list.reduce((a, u) => a + (u.output_tokens || 0), 0),
@@ -1131,9 +1160,6 @@ ${morningNote}${styleNotes ? `\n\nSTYLE RULES:\n${styleNotes}` : ""}${day1Note ?
             source,
           });
         }
-        // A watchdog flush is a partial settlement, so re-arm: fills that
-        // land afterwards are billed by the completion path.
-        if (reason === "watchdog") flushing = false;
       };
       // The deadline is measured from REQUEST START, not from here. This line
       // runs AFTER the awaited plan call (and its possible retry), so a flat

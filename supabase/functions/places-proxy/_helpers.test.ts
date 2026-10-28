@@ -14,6 +14,9 @@ import {
   nameSimilarity,
   haversineKm,
   validateGoogleResult,
+  verifyUserJwt,
+  unverifiedSub,
+  type Jwk,
 } from "./_helpers.ts";
 
 Deno.test("HOTEL_CHAIN_RE catches well-known chains", () => {
@@ -165,3 +168,125 @@ Deno.test(
     assert(r.ok);
   },
 );
+
+// ── verifyUserJwt ───────────────────────────────────────────────────────────
+
+const ISS = "https://example.supabase.co/auth/v1";
+const enc = (o: unknown) =>
+  btoa(JSON.stringify(o))
+    .replace(/=+$/, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+const bytesB64url = (b: ArrayBuffer) =>
+  btoa(String.fromCharCode(...new Uint8Array(b)))
+    .replace(/=+$/, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+
+async function makeSigner(kid = "k1") {
+  const pair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const pub = (await crypto.subtle.exportKey("jwk", pair.publicKey)) as Jwk;
+  const jwk: Jwk = { ...pub, kid, alg: "ES256" };
+  const sign = async (claims: Record<string, unknown>, header = {}) => {
+    const h = enc({ alg: "ES256", typ: "JWT", kid, ...header });
+    const p = enc(claims);
+    const sig = await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      pair.privateKey,
+      new TextEncoder().encode(`${h}.${p}`),
+    );
+    return `${h}.${p}.${bytesB64url(sig)}`;
+  };
+  return { jwk, sign };
+}
+
+const NOW = 1_800_000_000;
+const goodClaims = {
+  iss: ISS,
+  sub: "user-123",
+  aud: "authenticated",
+  role: "authenticated",
+  exp: NOW + 3600,
+  iat: NOW,
+};
+
+Deno.test("verifyUserJwt accepts a valid user token", async () => {
+  const { jwk, sign } = await makeSigner();
+  const tok = await sign(goodClaims);
+  assertEquals(
+    await verifyUserJwt(tok, [jwk], { issuer: ISS, nowSec: NOW }),
+    "user-123",
+  );
+  assertEquals(unverifiedSub(tok), "user-123");
+});
+
+Deno.test("verifyUserJwt rejects a tampered payload", async () => {
+  const { jwk, sign } = await makeSigner();
+  const [h, , s] = (await sign(goodClaims)).split(".");
+  const forged = `${h}.${enc({ ...goodClaims, sub: "someone-else" })}.${s}`;
+  assertEquals(
+    await verifyUserJwt(forged, [jwk], { issuer: ISS, nowSec: NOW }),
+    null,
+  );
+});
+
+Deno.test("verifyUserJwt rejects a token signed by another key", async () => {
+  const a = await makeSigner("k1");
+  const b = await makeSigner("k1");
+  const tok = await b.sign(goodClaims);
+  assertEquals(
+    await verifyUserJwt(tok, [a.jwk], { issuer: ISS, nowSec: NOW }),
+    null,
+  );
+});
+
+Deno.test(
+  "verifyUserJwt rejects expired, anon/service role, wrong audience",
+  async () => {
+    const { jwk, sign } = await makeSigner();
+    const opts = { issuer: ISS, nowSec: NOW };
+    for (const bad of [
+      { exp: NOW - 120 },
+      { role: "anon" },
+      { role: "service_role" },
+      { aud: "something-else" },
+      { sub: "" },
+    ]) {
+      const tok = await sign({ ...goodClaims, ...bad });
+      assertEquals(await verifyUserJwt(tok, [jwk], opts), null);
+    }
+    // Within leeway is still fine.
+    const fresh = await sign({ ...goodClaims, exp: NOW - 5 });
+    assertEquals(await verifyUserJwt(fresh, [jwk], opts), "user-123");
+  },
+);
+
+Deno.test(
+  "verifyUserJwt defers (undefined) on HS256 or an unknown kid",
+  async () => {
+    const { jwk, sign } = await makeSigner("k1");
+    const opts = { issuer: ISS, nowSec: NOW };
+    const hs = `${enc({ alg: "HS256", typ: "JWT" })}.${enc(goodClaims)}.sig`;
+    assertEquals(await verifyUserJwt(hs, [jwk], opts), undefined);
+    const otherKid = await sign(goodClaims, { kid: "rotated" });
+    assertEquals(await verifyUserJwt(otherKid, [jwk], opts), undefined);
+    // Validly signed but the function sees another issuer URL (local dev).
+    const otherIss = await sign({
+      ...goodClaims,
+      iss: "http://kong:8000/auth/v1",
+    });
+    assertEquals(await verifyUserJwt(otherIss, [jwk], opts), undefined);
+  },
+);
+
+Deno.test("verifyUserJwt rejects garbage", async () => {
+  const { jwk } = await makeSigner();
+  const opts = { issuer: ISS, nowSec: NOW };
+  assertEquals(await verifyUserJwt("not-a-jwt", [jwk], opts), null);
+  assertEquals(await verifyUserJwt("a.b.c", [jwk], opts), null);
+  assertEquals(unverifiedSub("a.b.c"), null);
+});

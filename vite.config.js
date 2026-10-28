@@ -10,11 +10,39 @@ const APP_BUILD = /^\d{12}$/.test(process.env.APP_BUILD || "")
   ? process.env.APP_BUILD
   : new Date().toISOString().replace(/\D/g, "").slice(0, 12);
 
+// Vite INLINES env vars at build time, so a production bundle built without
+// VITE_POSTHOG_KEY can never report its own breakage: main.jsx gates
+// posthog.init on the key, and posthog.captureException with no init is a
+// silent no-op — no warning, no throw, no event. That is exactly how the
+// Android APK shipped for months with zero crash reporting while the web
+// app was fully instrumented. Fail the build rather than produce an
+// artifact that is structurally incapable of telling us it is broken.
+const requireErrorTracking = () => ({
+  name: "tripjam-require-error-tracking",
+  configResolved(config) {
+    if (config.command !== "build") return;
+    const env = config.env || {};
+    if (env.VITE_POSTHOG_KEY) return;
+    const detail =
+      "VITE_POSTHOG_KEY is not set, so this bundle will have NO error " +
+      "tracking. Set it in .env.production (local builds, including " +
+      "`npm run build:android`), in the Vercel project env, and as the " +
+      "VITE_POSTHOG_KEY repo secret for .github/workflows/build-android.yml.";
+    // Only hard-fail a build that claims to be production; a dev/staging
+    // build without the key is a legitimate choice, not an incident.
+    if (env.VITE_APP_ENV === "production") {
+      throw new Error(`[tripjam] refusing to build production: ${detail}`);
+    }
+    console.warn(`\n\u26a0\ufe0f  [tripjam] ${detail}\n`);
+  },
+});
+
 export default defineConfig({
   define: {
     "import.meta.env.VITE_APP_BUILD": JSON.stringify(APP_BUILD),
   },
   plugins: [
+    requireErrorTracking(),
     react(),
     VitePWA({
       registerType: "autoUpdate",

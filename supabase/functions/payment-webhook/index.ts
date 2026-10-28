@@ -127,7 +127,7 @@ Deno.serve(async (req) => {
             custom,
           },
         );
-        // Return 200 so LS doesn't retry indefinitely; Sentry will alert.
+        // Return 200 so LS doesn't retry indefinitely; PostHog alerts.
         return new Response(
           JSON.stringify({ received: true, warning: "missing_custom_data" }),
           {
@@ -156,6 +156,17 @@ Deno.serve(async (req) => {
           },
         },
       });
+      // grantCredits returns null ONLY when the RPC genuinely failed — a
+      // duplicate provider_session_id returns the existing balance, so an
+      // idempotent Lemon Squeezy replay does NOT land here. Until this check, a
+      // failed grant answered 200 and Lemon Squeezy never retried: the customer
+      // paid and got nothing, with no alert. Throw into the catch below so the
+      // capture fires and Lemon Squeezy retries (the grant is idempotent).
+      if (newBalance === null) {
+        throw new Error(
+          `grant_failed: lemonsqueezy credits were NOT granted (${credits} credits)`,
+        );
+      }
 
       return new Response(
         JSON.stringify({

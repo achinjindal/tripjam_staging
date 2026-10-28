@@ -156,7 +156,7 @@ Credit mechanics are covered in [10 — Credits & payments](10-credits-and-payme
 - The handlers in `src/App.jsx:8202-8388` **reconcile from the database** with a debounce rather than patching from the payload. Chat messages and feed rows are appended, deduped by id. Board events bump `boardTick`.
 - On a solo trip, every handler except `trip_members` returns early, so the owner still sees the first joiner arrive live.
 - `onSubscribed` runs a backfill on connect and reconnect (`:8303-8313`), because `postgres_changes` does not replay missed events. It also refetches the trip's chat and merges it in (`catchUpChat`, merge rules in `src/chatMerge.js`), as it does after the history load and when the tab becomes visible or comes back online, so messages missed while offline appear without a reload.
-- A DELETE reaches a `trip_id`-filtered subscriber only on a `REPLICA IDENTITY FULL` table: the three Board tables (`20260807000001_tier2_board_realtime.sql:31-33`) and `days`, `trip_members`, `brainstorm_items` (`20261028000003`). So an itinerary clear, a member leaving and a deleted route arrive live; `payload.old` still carries only the id, which is why the handlers re-read.
+- A DELETE reaches a `trip_id`-filtered subscriber only on a `REPLICA IDENTITY FULL` table: the three Board tables (`20260807000001_tier2_board_realtime.sql:31-33`) and `days`, `trip_members`, `brainstorm_items` (`20261028000006`). So an itinerary clear, a member leaving and a deleted route arrive live; `payload.old` still carries only the id, which is why the handlers re-read.
 - A Trippy change card's "Undone" is saved on the reply (`trip_messages.meta.undone`) by `mark_trippy_change_undone` (`20261028000004`, SECURITY DEFINER, edit members only, can set nothing else), and reaches co-travellers as a realtime UPDATE that merges meta flags only.
 
 ---
@@ -175,7 +175,7 @@ The RPC has two callers:
 - **IG save** (`handleGenerate`, `src/App.jsx:11478-11522`): it saves the days first and updates the trip row only afterwards. Co-travellers see the new plan through the day INSERT events.
 - **Regenerate routes / Edit Details** (`doSetupComplete`, `src/App.jsx:10624-10629`): it calls the RPC with `p_days: []` to clear the itinerary.
 
-The clear-only call produces only `days` DELETE events, which reach co-travellers since `20261028000003` made `days` `REPLICA IDENTITY FULL`. A successful empty fetch also drops the trip's offline cache, so a cleared itinerary doesn't come back from it.
+The clear-only call produces only `days` DELETE events, which reach co-travellers since `20261028000006` made `days` `REPLICA IDENTITY FULL`. A successful empty fetch also drops the trip's offline cache, so a cleared itinerary doesn't come back from it.
 
 Replacing an itinerary is still destructive. There is no plan history, and the old day ids die, which is why feed undos for them hide (section 6).
 
