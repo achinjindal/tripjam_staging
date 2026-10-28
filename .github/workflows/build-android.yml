@@ -80,6 +80,32 @@ jobs:
       # when the signing secrets are absent so a fork still gets a build;
       # the release step below then fails loudly rather than producing an
       # artifact that looks uploadable and is not.
+      # versionCode is DERIVED from the tag, not auto-incremented: the same
+      # tag must always yield the same code, so re-running a build is
+      # idempotent. v1.2.3 -> 1*10000 + 2*100 + 3 = 10203, which is
+      # monotonic as long as versions increase, and comfortably under Play's
+      # 2100000000 ceiling. A manual run (no tag) gets a high dev-range code
+      # that can never collide with a real release.
+      - name: Derive version from tag
+        run: |
+          ref="${GITHUB_REF#refs/tags/}"
+          if [[ "$ref" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            maj=${BASH_REMATCH[1]}; min=${BASH_REMATCH[2]}; pat=${BASH_REMATCH[3]}
+            if (( min > 99 || pat > 99 )); then
+              echo "::error::minor/patch must be <= 99 for this scheme (got $ref)"; exit 1
+            fi
+            code=$(( maj * 10000 + min * 100 + pat ))
+            name="${maj}.${min}.${pat}"
+          else
+            # Manual dispatch: keep it unmistakably a dev build.
+            code=$(( 900000 + GITHUB_RUN_NUMBER ))
+            name="0.0.0-dev.${GITHUB_RUN_NUMBER}"
+            echo "::warning::not a v*.*.* tag — dev versionCode $code"
+          fi
+          echo "ANDROID_VERSION_CODE=$code" >> "$GITHUB_ENV"
+          echo "ANDROID_VERSION_NAME=$name" >> "$GITHUB_ENV"
+          echo "::notice::versionCode=$code versionName=$name"
+
       - name: Decode upload keystore
         if: env.HAS_SIGNING == 'true'
         run: |
