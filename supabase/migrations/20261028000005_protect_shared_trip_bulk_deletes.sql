@@ -20,9 +20,12 @@
 -- update_day, v3 apply_activity_ops, feed undo, remove/replace hotel) touches
 -- ONE day. So this migration closes the old path without touching the new:
 --
--- 1. days DELETE becomes owner-only. replace_trip_days was the only reason
---    edit members needed it, and it becomes SECURITY DEFINER (2) so it no
---    longer depends on that policy.
+-- 1. days DELETE and INSERT become owner-only. replace_trip_days was the only
+--    reason edit members needed them, and it becomes SECURITY DEFINER (2) so
+--    it no longer depends on either policy. INSERT matters as much as DELETE:
+--    the old client's co-member regenerate deletes (now refused), ignores the
+--    error, then inserts the new days — which would land BESIDE the old ones
+--    and leave the shared trip showing a mix of two plans.
 -- 2. replace_trip_days → SECURITY DEFINER. It already refuses anyone without
 --    an 'edit' trip_members row before writing; that check is now the gate,
 --    and every write is scoped to p_trip. Re-created here (not just ALTERed)
@@ -44,8 +47,9 @@
 -- What the old APK does now, run by a co-member: Home delete fails at the
 -- first step (the client ignores the error, its later steps are refused or
 -- match 0 rows), so the trip survives intact for everyone; the old IG save /
--- regenerate likewise cannot remove the existing plan. Owners on the old APK
--- are unaffected — it is their trip.
+-- regenerate cannot remove the existing plan nor add a second one (its trip
+-- row update — new name / ig_response — still lands; the days stay the old,
+-- whole plan). Owners on the old APK are unaffected — it is their trip.
 --
 -- Rollback (staging first):
 --   DROP TRIGGER IF EXISTS activities_bulk_delete_guard ON activities;
@@ -53,26 +57,44 @@
 --   -- restore the edit-member days DELETE policy: re-run
 --   --   20261028000001_days_delete_policy.sql, then
 --   DROP POLICY IF EXISTS "Owner can delete days" ON days;
+--   CREATE POLICY "Edit members can insert days" ON days FOR INSERT
+--     WITH CHECK (auth.uid() IN (SELECT user_id FROM trip_members
+--                 WHERE trip_id = days.trip_id AND role = 'edit'));
+--   CREATE POLICY "trip editors can insert days" ON days FOR INSERT
+--     TO authenticated WITH CHECK (trip_id IN (SELECT trip_id FROM
+--     trip_members WHERE user_id = auth.uid() AND role = 'edit'));
+--   DROP POLICY IF EXISTS "Owner can insert days" ON days;
 --   ALTER FUNCTION public.replace_trip_days(uuid, jsonb) SECURITY INVOKER;
 -- Restoring the policy BEFORE flipping replace_trip_days back to INVOKER
 -- matters: an INVOKER replace without an edit-member days DELETE policy
 -- deletes 0 rows and raises "could not remove the existing days", i.e.
 -- co-members can no longer regenerate.
 --
--- Idempotent (safe to re-run) — migrations here are applied by hand.
+-- Idempotent (safe to re-run) — migrations here are applied by hand. One
+-- transaction: applied halfway (owner-only policies, INVOKER replace) would
+-- stop co-members regenerating.
 -- ============================================================================
 
--- 1. days DELETE: owner only ----------------------------------------------------
+BEGIN;
+
+-- 1. days DELETE and INSERT: owner only -----------------------------------------
 DROP POLICY IF EXISTS "Edit members can delete days" ON days;
 DROP POLICY IF EXISTS "Owner can delete days" ON days;
 CREATE POLICY "Owner can delete days" ON days FOR DELETE TO authenticated
   USING (EXISTS (SELECT 1 FROM trips t WHERE t.id = days.trip_id AND t.owner_id = auth.uid()));
+DROP POLICY IF EXISTS "Edit members can insert days" ON days;
+DROP POLICY IF EXISTS "trip editors can insert days" ON days;
+DROP POLICY IF EXISTS "Owner can insert days" ON days;
+CREATE POLICY "Owner can insert days" ON days FOR INSERT TO authenticated
+  WITH CHECK (EXISTS (SELECT 1 FROM trips t WHERE t.id = days.trip_id AND t.owner_id = auth.uid()));
 
 -- 2. replace_trip_days: SECURITY DEFINER ---------------------------------------
 -- Body unchanged from 20261028000002 apart from the header and the delete
 -- check's comment. As DEFINER, RLS no longer filters its writes, so:
 --   * the edit-membership check below is THE authorization gate — it runs
---     before any write, and owners are edit members by construction;
+--     before any write (an owner normally holds an edit row too — the creator's
+--     row is inserted with the trip; the rare legacy owner without one could
+--     not regenerate before this migration either);
 --   * every statement is scoped to p_trip (the day DELETE and INSERT, and the
 --     activity INSERT keyed on the day just inserted for p_trip);
 --   * auth.uid() still reads the caller's JWT, so added_by stays the caller.
@@ -227,3 +249,5 @@ CREATE TRIGGER activities_bulk_delete_guard
   REFERENCING OLD TABLE AS deleted_activities
   FOR EACH STATEMENT
   EXECUTE FUNCTION public.guard_bulk_activity_delete();
+
+COMMIT;

@@ -4,7 +4,7 @@ import {
   assertEquals,
   assertStrictEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { applyServerFields, mergeChatRows } from "./chatMerge.js";
+import { applyServerFields, isoTime, mergeChatRows } from "./chatMerge.js";
 
 const at = (s) => `2026-10-28T10:00:${String(s).padStart(2, "0")}.000+00:00`;
 const row = (id, s, extra = {}) => ({
@@ -140,3 +140,27 @@ Deno.test("applyServerFields keeps the object when nothing moves", () => {
     undone: true,
   });
 });
+
+Deno.test(
+  "realtime timestamps normalise to strict ISO (WebKit can't parse them raw)",
+  () => {
+    assertEquals(
+      isoTime("2026-10-28 10:00:01.123456+00"),
+      "2026-10-28T10:00:01.123+00:00",
+    );
+    assertEquals(
+      isoTime("2026-10-28 10:00:01+05:30"),
+      "2026-10-28T10:00:01+05:30",
+    );
+    assertEquals(isoTime(at(1)), at(1));
+  },
+);
+
+Deno.test(
+  "an unparseable held created_at is corrected by the saved row",
+  () => {
+    const held = { ...row("a", 1), created_at: "not a time" };
+    const out = applyServerFields(held, row("a", 1));
+    assertEquals(out.created_at, at(1));
+  },
+);

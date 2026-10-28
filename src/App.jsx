@@ -8347,6 +8347,7 @@ export default function App({
       const rows = data.map(fromChatRow);
       setChatMessages((prev) => mergeChatRows(prev, rows));
     };
+    catchUpChatRef.current = catchUpChat;
     // Reconnect / initial backfill (postgres_changes doesn't replay).
     const backfill = () => {
       reconcileMembers();
@@ -8449,6 +8450,7 @@ export default function App({
     window.addEventListener("online", onOnline);
     return () => {
       cancelled = true;
+      if (catchUpChatRef.current === catchUpChat) catchUpChatRef.current = null;
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", onOnline);
       Object.values(timers).forEach(clearTimeout);
@@ -10186,6 +10188,7 @@ export default function App({
   // while disconnected comes back with catchUpChat on reconnect — which waits
   // for this load (chatLoadedTripRef).
   const chatLoadedTripRef = useRef(null);
+  const catchUpChatRef = useRef(null);
   useEffect(() => {
     const tripId = trip?.id;
     if (!tripId) return;
@@ -10204,7 +10207,13 @@ export default function App({
           if (loaded.length === 0 && prev.length > 0) return prev;
           return loaded;
         });
-        if (!error) chatLoadedTripRef.current = tripId;
+        if (!error) {
+          chatLoadedTripRef.current = tripId;
+          // The load above replaces the chat, so a row that arrived live while
+          // it was in flight (and the subscribe-time catch-up, skipped until
+          // now) would be lost until the next reconnect. Catch up once more.
+          catchUpChatRef.current?.();
+        }
       });
     return () => {
       cancelled = true;
@@ -11098,6 +11107,7 @@ export default function App({
     // trip the user has since switched to is never overwritten.
     let compactReadyAt = null;
     let headerTripName = null;
+    const preRunTripId = trip?.id;
     const preRunHeader = {
       name: trip?.name,
       destination: trip?.destination,
@@ -11108,7 +11118,9 @@ export default function App({
     const rollbackHeader = () => {
       if (!headerTripName) return;
       setTrip((prev) =>
-        prev?.name === headerTripName ? { ...prev, ...preRunHeader } : prev,
+        prev?.id === preRunTripId && prev?.name === headerTripName
+          ? { ...prev, ...preRunHeader }
+          : prev,
       );
     };
     let itinerary;
@@ -11615,6 +11627,9 @@ export default function App({
       abort("Failed to save the itinerary", saveDaysErr);
       return;
     }
+    // The new days are saved: from here the new header is the truth, so a
+    // later abort must not roll the screen back to the old one.
+    headerTripName = null;
     if (isEditing) {
       const { error: updateErr } = await withRetry(() =>
         supabase.from("trips").update(tripPayload).eq("id", tripId),

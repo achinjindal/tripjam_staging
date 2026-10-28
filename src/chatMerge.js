@@ -20,8 +20,17 @@
 //
 // Pure module (no React, no I/O, no imports) — unit-tested under Deno.
 
+// Realtime delivers Postgres text ("2026-10-28 10:00:01.123456+00"), REST
+// delivers ISO. V8 parses both; WebKit (Safari, iOS) rejects the space, the
+// bare-hour offset and microseconds, so normalise to strict ISO first.
+export const isoTime = (v) =>
+  String(v)
+    .replace(" ", "T")
+    .replace(/(\.\d{3})\d+/, "$1")
+    .replace(/([+-]\d\d)$/, "$1:00");
 const ts = (m) => {
-  const t = m?.created_at ? Date.parse(m.created_at) : NaN;
+  if (!m?.created_at) return null;
+  const t = Date.parse(isoTime(m.created_at));
   return Number.isFinite(t) ? t : null;
 };
 
@@ -32,7 +41,7 @@ const ts = (m) => {
  */
 function forwardPatch(held, row) {
   let patch = null;
-  if (!held.created_at && row.created_at)
+  if (ts(held) == null && ts(row) != null)
     patch = { ...patch, created_at: row.created_at };
   if (row.undone === true && held.undone !== true)
     patch = { ...patch, undone: true, undo: null };
