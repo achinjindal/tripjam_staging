@@ -353,7 +353,7 @@ function Pricing() {
       sub: "on signup",
       credits: "100 credits",
       bullets: [
-        "Plan ~2-3 trips",
+        "Plan ~4 full trips",
         "Full magazine + itinerary",
         "Offline access on mobile",
         "No card required",
@@ -558,7 +558,13 @@ const FAQS = [
   },
   {
     q: "What's a credit?",
-    a: "A credit ≈ $0.01 of AI cost passed through to you. Generating a quick to-do list uses ~1 credit; a full multi-day itinerary uses 20-30. The free 100 credits cover a couple of full trips.",
+    // Measured 2026-10-28 against llm_usage (median per call, budget $0.0035):
+    // to-dos 1.39 cr, itinerary 7.12 cr, a complete trip ~21.9 cr. The previous
+    // answer called a credit "$0.01 of AI cost passed through to you" — wrong by
+    // ~3x AND a false description of the pricing basis, since margin after
+    // payment fees is ~70%. State what things COST in credits, never a
+    // cost-basis claim: the first drifts slowly, the second is a misstatement.
+    a: "Credits pay for the AI work behind each feature. A quick to-do list is about 1 credit, a full day-by-day itinerary about 7, and planning a complete trip — routes, itinerary, inspiration and chat — lands around 20. Your free 100 credits cover roughly four full trips.",
   },
   {
     q: "Do credits expire?",
