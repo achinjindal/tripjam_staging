@@ -166,6 +166,33 @@ function matches(item, q) {
   );
 }
 
+// Google autocomplete is unfiltered, so "tokyo" comes back as Tokyo plus four
+// malls and arenas. Keep what a traveller means by a destination. Google's own
+// "(regions)" filter is NOT a substitute: it drops colloquial areas (Amalfi
+// Coast, Patagonia, Cotswolds) and natural features (Lake Como, Swiss Alps,
+// Hạ Long Bay) — measured on real queries 2026-10-28.
+const DESTINATION_TYPES = new Set([
+  "political", // country, state, city, district, neighbourhood
+  "colloquial_area",
+  "natural_feature",
+  "island",
+  "archipelago",
+  "continent",
+  "national_park",
+  "nature_preserve",
+  "landmark", // Angkor Wat
+  "historical_place", // Machu Picchu
+]);
+
+export function keepDestinationLike(items) {
+  const kept = (items || []).filter((it) =>
+    (it?.placePrediction?.types || []).some((t) => DESTINATION_TYPES.has(t)),
+  );
+  // Nothing destination-like (an unusual query, or a result without types):
+  // show Google's list rather than "No results" — Enter still adds the text.
+  return kept.length ? kept : items || [];
+}
+
 // fold(query) → suggestions, shared by every SetupForm mount in this tab, so
 // reopening the sheet or going back a step answers instantly.
 export const destSuggestCache = new Map();

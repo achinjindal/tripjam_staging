@@ -13,6 +13,7 @@ import {
   instantSuggestions,
   destSuggestCache,
   fold as destKey,
+  keepDestinationLike,
 } from "../destinationSuggest";
 
 // Destination autocomplete tuning. The first attempt gives up at 4s and
@@ -501,7 +502,8 @@ function SetupForm({
         if (!res.ok) throw new Error(`autocomplete ${res.status}`);
         const data = await res.json();
         if (search.signal.aborted) return;
-        const items = (data.suggestions || []).slice(0, 8);
+        // Destinations only — no malls, arenas or restaurants for "tokyo".
+        const items = keepDestinationLike(data.suggestions).slice(0, 8);
         // Only real answers are cached — a 5xx used to cache [] for the
         // query, so it kept showing "No results" until a reload.
         destSuggestCache.set(destKey(val), items);
