@@ -3,7 +3,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { login } from "./helpers";
+import { login, dismissTripOverlays } from "./helpers";
 
 // Phase-3 collaboration: activity feed / "while you were away" / undo.
 //
@@ -212,6 +212,98 @@ test.describe("Collaboration — activity feed / undo (Phase 3)", () => {
     } finally {
       if (todoId) await owner.from("trip_todos").delete().eq("id", todoId);
       await bClient.rpc("leave_trip", { p_trip: tripId });
+    }
+  });
+
+  // A regenerate replaces every day id, so undo rows for the old itinerary
+  // have nothing to restore into: their Undo is hidden, others keep theirs.
+  test("undo hides for a day the itinerary no longer has", async ({
+    browser,
+  }) => {
+    const owner = await signedClient(OWNER_EMAIL, OWNER_PASSWORD);
+    const bClient = await signedClient(SECOND_EMAIL, SECOND_PASSWORD);
+    if (!owner || !bClient) {
+      test.skip(true, "could not sign in the test users");
+      return;
+    }
+    const ownerId = (await owner.auth.getUser()).data.user?.id as string;
+    const tripId = crypto.randomUUID();
+    const { error: tripErr } = await owner.from("trips").insert({
+      id: tripId,
+      name: "ZZ stale undo fixture",
+      destination: "Probe",
+      start_date: "2026-12-01",
+      end_date: "2026-12-02",
+      created_by: ownerId,
+      owner_id: ownerId,
+      // Without an itinerary record the trip opens in route planning.
+      ig_response: { name: "ZZ stale undo fixture" },
+    });
+    expect(tripErr).toBeNull();
+    try {
+      await owner
+        .from("trip_members")
+        .insert({ trip_id: tripId, user_id: ownerId, role: "edit" });
+      const { data: saved, error: saveErr } = await owner.rpc(
+        "replace_trip_days",
+        {
+          p_trip: tripId,
+          p_days: [
+            { label: "Day 1", city: "Probe", activities: [{ title: "Kept" }] },
+          ],
+        },
+      );
+      expect(saveErr).toBeNull();
+      const liveDay = saved[0].id as string;
+      const { data: token } = await owner.rpc("create_or_get_invite_link", {
+        p_trip: tripId,
+      });
+      const { error: joinErr } = await bClient.rpc("accept_invite", {
+        p_token: token,
+      });
+      expect(joinErr).toBeNull();
+      const row = (summary: string, dayId: string) => ({
+        trip_id: tripId,
+        user_id: ownerId,
+        action: "update_day",
+        entity_type: "day",
+        entity_id: dayId,
+        summary,
+        undo_payload: { dayId, activities: [] },
+      });
+      const { error: logErr } = await owner
+        .from("activity_log")
+        .insert([
+          row("edited the old Day 2", crypto.randomUUID()),
+          row("edited Day 1", liveDay),
+        ]);
+      expect(logErr).toBeNull();
+
+      const a = await (await browser.newContext()).newPage();
+      for (const fn of ["generate-brainstorm", "generate-itinerary"])
+        await a.route(`**/functions/v1/${fn}`, (r) =>
+          r.fulfill({ status: 500, body: "{}" }),
+        );
+      await login(a, OWNER_EMAIL);
+      await a.goto(`/trip/${tripId}`);
+      await dismissTripOverlays(a, 4000);
+      const bell = a.getByRole("button", { name: "Activity" });
+      await expect(bell).toBeVisible({ timeout: 20000 });
+      await expect(a.getByText("Kept").first()).toBeVisible({ timeout: 20000 });
+      await bell.click();
+      const entry = (summary: string) =>
+        a.getByText(`You ${summary}`, { exact: true }).locator("..");
+      await expect(entry("edited Day 1")).toBeVisible({ timeout: 10000 });
+      await expect(
+        entry("edited Day 1").getByText("Undo", { exact: true }),
+      ).toBeVisible();
+      await expect(entry("edited the old Day 2")).toBeVisible();
+      await expect(
+        entry("edited the old Day 2").getByText("Undo", { exact: true }),
+      ).toHaveCount(0);
+    } finally {
+      await bClient.rpc("leave_trip", { p_trip: tripId });
+      await owner.rpc("delete_trip", { p_trip: tripId });
     }
   });
 });

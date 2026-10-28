@@ -86,8 +86,27 @@ const UNDOABLE = new Set([
   "set_budget",
 ]);
 
-export function isUndoable(row) {
-  return UNDOABLE.has(row?.action) && row?.undo_payload != null;
+export function isUndoable(row, liveDayIds) {
+  if (!UNDOABLE.has(row?.action) || row?.undo_payload == null) return false;
+  // An itinerary change whose day is gone (the trip was regenerated since)
+  // can't be restored — the old day id no longer exists.
+  const dayId = undoDayId(row);
+  return !(liveDayIds && dayId && !liveDayIds.has(dayId));
+}
+
+/** The day an itinerary undo would write into, or null for non-day rows. */
+export function undoDayId(row) {
+  const p = row?.undo_payload || {};
+  switch (row?.action) {
+    case "update_day":
+      return p.dayId || null;
+    case "remove_activity":
+      return p.dayId || p.activity?.day_id || null;
+    case "update_activity":
+      return p.activity?.day_id || null;
+    default:
+      return null;
+  }
 }
 
 // Whitelist an activity object (which may carry BOTH DB-shape and merged

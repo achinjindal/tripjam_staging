@@ -61,6 +61,7 @@ export default function ActivityFeed({
   session,
   activity = [],
   onUndo,
+  liveDayIds,
   onClose,
 }) {
   const selfId = session?.user?.id;
@@ -166,7 +167,7 @@ export default function ActivityFeed({
               {g.rows.map((row) => {
                 const info = INFO_ACTIONS.has(row.action);
                 const undone = undoneIds.has(row.id);
-                const undoable = isUndoable(row) && !undone;
+                const undoable = isUndoable(row, liveDayIds) && !undone;
                 return (
                   <div
                     key={row.id}

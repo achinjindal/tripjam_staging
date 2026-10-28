@@ -19,7 +19,7 @@ Parallel surfaces once a trip exists:
    Magazine (destination guide) + Inspirations                [06]
    Board (notes, todos, bookmarks, expenses, travel & hotels) [07]
    Chat (action-based AI assistant, all tabs)                 [08]
-   Sharing (public share link; collaboration schema)          [09]
+   Collaboration (invites, shared chat, pool) & public link   [09]
 
 Cross-cutting:
    Credits & payments (gating every AI call)                  [10]
@@ -39,7 +39,7 @@ Cross-cutting:
 | [06 — Magazine & Inspirations](06-magazine-and-inspirations.md) | Lazy-loaded destination guide, `city-deep-dive` (anti-hallucination), Inspirations via `generate-destination-research` (web search), `magazine_digest`/`inspirations_digest` caching                                  |
 | [07 — Board](07-board.md)                                       | Notes, To-dos (`generate-todos`), Bookmarks, Expenses (`estimate-expenses`), Travel & Hotels (airport search + Google Places hotel autocomplete — this is where flights/hotels live, not the wizard), CityInput modes |
 | [08 — Chat](08-chat.md)                                         | Unified `chat` edge function, `actions[]` contract (full action-type table), per-tab context, frontend dispatch + undo, 6-message history cap                                                                         |
-| [09 — Collaboration & sharing](09-collaboration-and-sharing.md) | `trip_members` schema + RLS matrix, public `/share/:token` view, what exists vs. what is schema-only (invites/comments/realtime do **not** exist yet)                                                                 |
+| [09 — Collaboration & sharing](09-collaboration-and-sharing.md) | Live co-travellers: membership + owner model, invites, leave/delete, RLS matrix, pooled credits, feed/undo, realtime, atomic regenerate; public `/share/:token` view                                                  |
 | [10 — Credits & payments](10-credits-and-payments.md)           | Credit lifecycle, deduction formula (`ceil((cost/0.007)*100)/100`, cache multipliers), 402 → paywall, Lemon Squeezy (web), RevenueCat (Android), coupons                                                              |
 | [11 — Offline, PWA & mobile](11-offline-pwa-mobile.md)          | localStorage offline cache, vite-plugin-pwa auto-update, Capacitor Android, platform detection, staging/production env split                                                                                          |
 | [12 — Admin console](12-admin.md)                               | `/admin` (`is_admin`-gated), per-tab queries and metrics, client-side cost model, `llm_usage` table, `scripts/trip-cost.cjs`                                                                                          |
@@ -77,7 +77,7 @@ All routing lives in `parseUrl()` at `src/main.jsx:76`, driven by the History AP
 - **Design system:** all UI reads tokens from `src/theme.js` (`T`, `TYPE`, `RADIUS`, `SHADOW`, `MOTION`). Never hardcode values.
 - **State home:** most trip state lives in `App.jsx` (~14.5k lines); BoardView/SetupForm/Magazine/MapView are rendering split-outs, not state owners.
 - **Client-generated IDs:** trip IDs come from `crypto.randomUUID()` on the client so the insert satisfies RLS immediately.
-- **No realtime:** despite Supabase Realtime being available, the app currently has zero live subscriptions — collaboration is same-account or read-only share links (see doc 09).
+- **Realtime:** shared trips sync live through Supabase Realtime (`src/realtime.js`, behind `VITE_REALTIME_ENABLED`, on in production) — chat, itinerary, Board, feed and polls (see doc 09).
 
 ## Corrections to stale assumptions (found while writing these docs)
 
@@ -86,6 +86,6 @@ Things the code says that older notes (`CLAUDE.md`, README) get wrong — trust 
 - Auth is **email-based** with auto-derived usernames + Google OAuth; "username-only, no email" describes only legacy accounts (doc 01).
 - Flights and hotels are entered in the **Board → Travel & Hotels** widget, not the setup wizard; there is no `trips.flights_data` column — flights are flat `trips` columns (doc 07).
 - The photo queue is **2 concurrent / 400ms** (`photos.js`), not 3/300ms; Inspirations `web_search` allows **6** uses, not 4 (docs 05, 06).
-- Comments, invites, and realtime sync exist **only as schema/dead code**, not as features (doc 09).
+- Invites, shared chat, pooled credits, the activity feed and realtime sync are **live features** (doc 09); general comments remain unbuilt (the `comments` table only backs poll notes).
 
 Several bugs these docs originally flagged were fixed on 2026-07-13: share links are now served by a token-scoped RPC (`get_shared_trip`) with a revoke option, manual activity edits persist to the `activities` table, the dead client-side Anthropic call in Expenses was removed, deep-dive/todo/expense 402s open the paywall, the Admin IG-timing panel derives seconds from `generation_log` timestamps, and the over-broad `USING (true)` RLS policies were scoped to `service_role` (with explicit admin/member policies where clients need access).

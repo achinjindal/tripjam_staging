@@ -8184,6 +8184,9 @@ export default function App({
   }, [trip?.id, trip?.destination]);
   const [days, setDays] = useState([]);
   const daysRef = useRef(days);
+  // Undo buttons hide when their day is gone (a regenerate replaces every
+  // day id), since there is nothing left to restore into.
+  const liveDayIds = useMemo(() => new Set(days.map((d) => d.id)), [days]);
   useEffect(() => {
     daysRef.current = days;
   }, [days]);
@@ -19102,6 +19105,9 @@ export default function App({
                     )}
                     {filteredMessages.map((m, i) => {
                       if (m.role === "system-undo") {
+                        const staleUndo =
+                          !!m.undoData?.dayId &&
+                          !liveDayIds.has(m.undoData.dayId);
                         const handleUndo = async () => {
                           if (m.undoData?.dismissedRouteIds) {
                             // Undo bulk route dismiss
@@ -19232,21 +19238,23 @@ export default function App({
                               }}
                             >
                               <span>{m.content}</span>
-                              <button
-                                onClick={handleUndo}
-                                style={{
-                                  background: "none",
-                                  border: `1px solid ${T.mist}`,
-                                  borderRadius: RADIUS.md,
-                                  padding: "2px 10px",
-                                  fontSize: 12,
-                                  fontFamily: "Georgia,serif",
-                                  color: T.ink,
-                                  cursor: "pointer",
-                                }}
-                              >
-                                Undo
-                              </button>
+                              {!staleUndo && (
+                                <button
+                                  onClick={handleUndo}
+                                  style={{
+                                    background: "none",
+                                    border: `1px solid ${T.mist}`,
+                                    borderRadius: RADIUS.md,
+                                    padding: "2px 10px",
+                                    fontSize: 12,
+                                    fontFamily: "Georgia,serif",
+                                    color: T.ink,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  Undo
+                                </button>
+                              )}
                             </div>
                           </div>
                         );
@@ -19419,24 +19427,27 @@ export default function App({
                                     +{m.changes.length - 8} more
                                   </div>
                                 )}
-                                {m.undo && (
-                                  <button
-                                    onClick={() => undoTrippyChange(m)}
-                                    style={{
-                                      marginTop: 6,
-                                      background: "transparent",
-                                      border: `1px solid ${T.border}`,
-                                      borderRadius: RADIUS.sm,
-                                      padding: "3px 10px",
-                                      fontSize: 12,
-                                      fontFamily: "Georgia,serif",
-                                      color: T.ink,
-                                      cursor: "pointer",
-                                    }}
-                                  >
-                                    Undo
-                                  </button>
-                                )}
+                                {m.undo &&
+                                  m.undo.before?.every((b) =>
+                                    liveDayIds.has(b.day_id),
+                                  ) && (
+                                    <button
+                                      onClick={() => undoTrippyChange(m)}
+                                      style={{
+                                        marginTop: 6,
+                                        background: "transparent",
+                                        border: `1px solid ${T.border}`,
+                                        borderRadius: RADIUS.sm,
+                                        padding: "3px 10px",
+                                        fontSize: 12,
+                                        fontFamily: "Georgia,serif",
+                                        color: T.ink,
+                                        cursor: "pointer",
+                                      }}
+                                    >
+                                      Undo
+                                    </button>
+                                  )}
                                 {m.undone && (
                                   <div
                                     style={{
@@ -20368,6 +20379,7 @@ export default function App({
             session={session}
             activity={activity}
             onUndo={handleUndo}
+            liveDayIds={liveDayIds}
             onClose={() => setShowFeed(false)}
           />
         )}
