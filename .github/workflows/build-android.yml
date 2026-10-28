@@ -45,13 +45,27 @@ jobs:
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
+      # APP_BUILD is pinned here (vite.config.js uses it when set) so the
+      # number in the log is exactly the bundle's VITE_APP_BUILD — the value
+      # app_config.min_client_build's "android" entry is compared against.
       - name: Build web app
-        run: npm run build
+        run: |
+          export APP_BUILD=$(date -u +%Y%m%d%H%M)
+          echo "APP_BUILD=$APP_BUILD" >> "$GITHUB_ENV"
+          echo "::notice::APP_BUILD=$APP_BUILD (min_client_build android value for this release)"
+          npm run build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
           VITE_REVENUECAT_ANDROID_KEY: ${{ secrets.VITE_REVENUECAT_ANDROID_KEY }}
+          # Error tracking. Absent until 2026-10-28, which meant the APK had
+          # ZERO crash reporting: main.jsx gates posthog.init on this key, and
+          # posthog.captureException without init is a SILENT no-op — no
+          # console warning, no throw. Every Android crash was invisible.
+          # Host intentionally omitted: main.jsx defaults to us.i.posthog.com,
+          # which matches Vercel production (verified against the live bundle).
+          VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
           # Feature flags — keep in lockstep with Vercel production env.
           # (Past APKs built with ALL of these unset: collab, realtime,
           # Routes Lens dark and Android payments dead.)

@@ -4,8 +4,11 @@ import { VitePWA } from "vite-plugin-pwa";
 
 // Monotonic build number (UTC YYYYMMDDHHmm), read by src/version.js for the
 // minimum-client-build gate. The web bundle and the APK built from the same
-// commit share it.
-const APP_BUILD = new Date().toISOString().replace(/\D/g, "").slice(0, 12);
+// commit share it. CI may pin it via APP_BUILD (the Android workflow does, so
+// the number it prints in the log is exactly the one in the bundle).
+const APP_BUILD = /^\d{12}$/.test(process.env.APP_BUILD || "")
+  ? process.env.APP_BUILD
+  : new Date().toISOString().replace(/\D/g, "").slice(0, 12);
 
 export default defineConfig({
   define: {
