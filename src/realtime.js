@@ -21,6 +21,12 @@ import { supabase } from "./supabase";
 export const REALTIME_ENABLED =
   import.meta.env.VITE_REALTIME_ENABLED === "true";
 
+// Any table here whose DELETEs a handler relies on needs REPLICA IDENTITY FULL:
+// under the default identity a DELETE's old row has only the PK, so the
+// trip_id filter can't match and the event is dropped. Set on the board tables
+// (20260807000001) and on days / brainstorm_items / trip_members
+// (20261028000003). The old row still arrives as just { id } (RLS), so handlers
+// reconcile from the DB rather than reading payload.old.
 const TRIP_SCOPED_TABLES = [
   "days",
   "trip_messages",
@@ -29,7 +35,7 @@ const TRIP_SCOPED_TABLES = [
   "brainstorm_items",
   "trip_members",
   "trip_preferences",
-  // Tier 2 board live-sync (REPLICA IDENTITY FULL so filtered DELETEs deliver).
+  // Tier 2 board live-sync.
   "trip_todos",
   "trip_expenses",
   "trip_bookmarks",

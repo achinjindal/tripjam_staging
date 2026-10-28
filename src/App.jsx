@@ -8201,11 +8201,13 @@ export default function App({
   }, [days, trip?.id]);
   // Phase 2: per-trip realtime live sync (behind VITE_REALTIME_ENABLED).
   // Reconcile-from-DB (debounced) rather than patch-from-payload — sidesteps the
-  // clobber traps (nested activities / wishlist) and the unusable REPLICA
-  // IDENTITY payload.old. Days/routes reconcile only when the trip is shared
-  // (members > 1) so solo trips carry zero self-echo overhead; trip_members
-  // always reconciles so the owner sees the first joiner live. postgres_changes
-  // doesn't replay on reconnect → onSubscribed backfills. See
+  // clobber traps (nested activities / wishlist), and payload.old carries only
+  // the id on RLS tables even under REPLICA IDENTITY FULL (FULL is what lets
+  // trip_id-filtered DELETEs arrive at all — migration 20261028000003).
+  // Days/routes reconcile only when the trip is shared (members > 1) so solo
+  // trips carry zero self-echo overhead; trip_members always reconciles so the
+  // owner sees the first joiner (and a leaver) live. postgres_changes doesn't
+  // replay on reconnect → onSubscribed backfills. See
   // realtime-implementation-plan.md.
   useEffect(() => {
     const tripId = trip?.id;
@@ -8243,7 +8245,15 @@ export default function App({
         .select("*, activities(*)")
         .eq("trip_id", tripId)
         .order("position");
-      if (data) setDays(dedupDays(data));
+      if (!data) return;
+      setDays(dedupDays(data));
+      // An emptied itinerary (owner changed destinations / length) must not
+      // come back from the offline cache — the persist effect only writes
+      // non-empty days, so drop the key here.
+      if (!data.length)
+        try {
+          localStorage.removeItem(`tripjam_days_${tripId}`);
+        } catch {}
     };
     const reconcileRoutes = async () => {
       const { data } = await supabase
@@ -8707,9 +8717,16 @@ export default function App({
                   JSON.stringify(deduped),
                 );
               } catch {}
-            } else if (!daysCacheHitRef.current && (error || !data?.length)) {
-              // Offline fallback: load from localStorage (cache-hit opens
-              // already painted from it)
+            } else if (!error && data) {
+              // The trip really has no days (itinerary cleared since the last
+              // visit): drop whatever the cache painted, and the cache itself.
+              if (daysCacheHitRef.current) setDays([]);
+              try {
+                localStorage.removeItem(`tripjam_days_${initialTrip.id}`);
+              } catch {}
+            } else if (!daysCacheHitRef.current) {
+              // Offline fallback (real errors only): load from localStorage
+              // (cache-hit opens already painted from it)
               try {
                 const cached = localStorage.getItem(
                   `tripjam_days_${initialTrip.id}`,
@@ -10627,6 +10644,10 @@ export default function App({
           p_days: [],
         });
         if (clearErr) console.warn("clear itinerary failed:", clearErr.message);
+        else
+          try {
+            localStorage.removeItem(`tripjam_days_${editingTrip.id}`);
+          } catch {}
       }
     }
 
