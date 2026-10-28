@@ -12,6 +12,26 @@ import rateData from "../supabase/functions/_shared/llm-rates.json";
 // console used to keep its own copy; when they drifted the console reported a
 // different number than the user was charged, which is the worst possible
 // place for a discrepancy. Per-million here, per-token below.
+// Derive a readable label from the model id itself. The old inline
+// `m.includes("haiku") ? "Haiku" : "Sonnet"` predated multi-provider routing,
+// so EVERY Gemini and gpt-6-luna row rendered as "Sonnet" — in the one console
+// you would use to notice a misrouting, and on the majority of current traffic
+// (Gemini on RG/IG, luna on Magazine deep-dives). Derived rather than mapped so
+// a model added to llm-rates.json can never silently show up as the wrong
+// family; an unrecognised id falls through to its literal value.
+function modelLabel(m) {
+  if (!m) return "—";
+  const s = String(m);
+  if (s.startsWith("claude-")) {
+    const [, family, ...ver] = s.split("-");
+    const fam = family ? family[0].toUpperCase() + family.slice(1) : s;
+    return ver.length ? `${fam} ${ver.join(".")}` : fam;
+  }
+  if (s.startsWith("gemini-")) return s.replace("gemini-", "Gemini ");
+  if (s.startsWith("gpt-")) return s.replace("gpt-", "GPT-");
+  return s;
+}
+
 function resolveRate(r) {
   return r.from && r.then && Date.now() >= Date.parse(r.from + "T00:00:00Z")
     ? r.then
@@ -720,9 +740,7 @@ export default function AdminConsole({ session, onHome }) {
                         {tripDetail.usage.map((u, i) => (
                           <tr key={i}>
                             <td style={tdStyle}>{u.function_name}</td>
-                            <td style={tdStyle}>
-                              {u.model.includes("haiku") ? "Haiku" : "Sonnet"}
-                            </td>
+                            <td style={tdStyle}>{modelLabel(u.model)}</td>
                             <td style={tdStyle}>{fmtNum(u.input_tokens)}</td>
                             <td style={tdStyle}>{fmtNum(u.output_tokens)}</td>
                             <td style={tdStyle}>
@@ -942,9 +960,7 @@ export default function AdminConsole({ session, onHome }) {
                       .map((g, i) => (
                         <tr key={i}>
                           <td style={tdStyle}>{g.fn}</td>
-                          <td style={tdStyle}>
-                            {g.model.includes("haiku") ? "Haiku" : "Sonnet"}
-                          </td>
+                          <td style={tdStyle}>{modelLabel(g.model)}</td>
                           <td style={tdStyle}>{g.calls}</td>
                           <td style={tdStyle}>{fmtNum(g.input)}</td>
                           <td style={tdStyle}>{fmtNum(g.output)}</td>

@@ -34,8 +34,91 @@ import {
   llmKillSwitch,
   resolveAndGate,
   deductCredits,
+  deductExternalApiCredits,
   runInBackground,
 } from "../_shared/credits.ts";
+
+// ── Brave search pass-through ────────────────────────────────────────────────
+// Self-served Inspirations runs 2-6 Brave queries per generation. These were
+// entirely unbilled while a comment claimed they were "accounted for in the
+// deduction as a flat pass-through" — they never were, so an Inspirations run
+// truly cost up to ~2x what llm_usage reported.
+//
+// Deliberately env-overridable and shaped exactly like places-proxy's
+// GOOGLE_PLACES_CALL_USD, because that constant encodes a lesson: it was
+// zeroed on 2026-10-05 after users had been charged ~1,154 credits (~$11.54)
+// for Google calls that Google never invoiced (the field mask kept us inside
+// a 5,000/month free tier). The house rule that came out of it is to charge a
+// pass-through only while the upstream cost is REAL.
+//
+// Billed AT ACTUALS, which for a metered API with a free tier means: queries
+// inside the monthly free allowance cost us $0 and are charged $0; only
+// queries beyond it are charged, at the real overage rate. A flat per-query
+// rate would re-create the Google mistake on day one, because Brave's first
+// 2,000 queries/month are free.
+//
+// The monthly counter lives in api_usage (api='brave', scope='monthly') and is
+// bumped through the ATOMIC incr_api_usage RPC — places-proxy's read-then-PATCH
+// helper loses increments under concurrency, which is fine for a quota guard
+// and not fine for pricing.
+//   BRAVE_FREE_MONTHLY=2000     free queries/month on the current plan
+//   BRAVE_SEARCH_CALL_USD=0.005 overage rate ($5 CPM "Base"); 0 disables billing
+const BRAVE_SEARCH_CALL_USD = parseFloat(
+  Deno.env.get("BRAVE_SEARCH_CALL_USD") || "0.005",
+);
+const BRAVE_FREE_MONTHLY = parseInt(
+  Deno.env.get("BRAVE_FREE_MONTHLY") || "2000",
+  10,
+);
+
+/**
+ * Record `n` Brave queries against this month's counter and return how many of
+ * them fall BEYOND the free allowance — i.e. the only ones that cost real
+ * money and may be charged.
+ *
+ * Fails CLOSED on billing (returns 0 = charge nothing) if the counter is
+ * unreachable: under-charging is the acceptable direction, over-charging for
+ * calls a provider never invoiced is the mistake this whole design exists to
+ * avoid.
+ */
+async function braveBillableQueries(n: number): Promise<number> {
+  if (n <= 0 || BRAVE_SEARCH_CALL_USD <= 0) return 0;
+  const period = new Date().toISOString().slice(0, 7); // YYYY-MM
+  try {
+    const res = await fetch(
+      `${Deno.env.get("SUPABASE_URL")}/rest/v1/rpc/incr_api_usage`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+          Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!}`,
+        },
+        body: JSON.stringify({
+          p_api: "brave",
+          p_scope: "monthly",
+          p_period: period,
+          p_amount: n,
+        }),
+      },
+    );
+    if (!res.ok) return 0;
+    const total = Number(await res.json());
+    if (!Number.isFinite(total)) return 0;
+    // `total` is the count AFTER adding n, so the pre-call total was total - n.
+    // Billable = the portion of [total-n, total) sitting above the allowance.
+    const billable = Math.min(n, Math.max(0, total - BRAVE_FREE_MONTHLY));
+    if (billable > 0) {
+      console.log(
+        `[inspirations] brave overage: ${billable}/${n} queries billable ` +
+          `(month total ${total}, free ${BRAVE_FREE_MONTHLY})`,
+      );
+    }
+    return billable;
+  } catch {
+    return 0;
+  }
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -847,6 +930,24 @@ serve(async (req) => {
             hit.expires_at &&
             new Date(hit.expires_at).getTime() > Date.now()
           ) {
+            // extractTags is a REAL Haiku call and it already ran: its output
+            // is part of the cache key, so it cannot be deferred past the
+            // lookup. The miss path folds its tokens into the main deduction,
+            // but this early return skipped that entirely — so every cache HIT
+            // silently absorbed a Haiku call. It is logged to llm_usage as
+            // ":tags" either way, which is why the cost showed up in the
+            // dashboards while never reaching a ledger.
+            runInBackground(
+              deductCredits({
+                userId: user.id,
+                model: MODEL, // tags always run on Haiku
+                inputTokens: tagResult.inputTokens,
+                outputTokens: tagResult.outputTokens,
+                functionName: "generate-destination-research:tags",
+                tripId,
+                source,
+              }),
+            );
             return new Response(
               JSON.stringify({
                 digest: hit.digest,
@@ -1268,6 +1369,7 @@ serve(async (req) => {
       parsed.inspirations,
       destinations,
       apiKey,
+      { userId: user.id, tripId: tripId ?? null, source },
     );
     parsed.place_insights = parsed.place_insights || [];
     parsed.sources = parsed.sources || [];
@@ -1368,6 +1470,38 @@ serve(async (req) => {
         source,
       }),
     );
+    // Brave queries are a real third-party cost and are NOT Anthropic
+    // web_search calls, so they cannot ride on webSearchCount (which is priced
+    // at Anthropic's $10/1k). Billed as a pass-through at user-value rate so
+    // the founder breaks even rather than taking a margin. Charged only when
+    // BRAVE_SEARCH_CALL_USD is non-zero — see the constant for why that
+    // matters. Its own ledger line (reason + metadata) so the user, the Admin
+    // console and trip-cost.cjs all attribute it to search rather than to
+    // tokens.
+    const braveQueries = selfServed?.queries ?? 0;
+    if (braveQueries > 0) {
+      runInBackground(
+        braveBillableQueries(braveQueries).then((billable) =>
+          billable > 0
+            ? deductExternalApiCredits({
+                userId: user.id,
+                costUsd: billable * BRAVE_SEARCH_CALL_USD,
+                reason: "generate-destination-research:brave-search",
+                functionName: "generate-destination-research",
+                tripId,
+                source,
+                metadata: {
+                  queries: braveQueries,
+                  billable_queries: billable,
+                  usd_per_query: BRAVE_SEARCH_CALL_USD,
+                  free_monthly: BRAVE_FREE_MONTHLY,
+                  provider: "brave",
+                },
+              })
+            : undefined,
+        ),
+      );
+    }
     if (sonnet && sonnet.ok) {
       runInBackground(
         deductCredits({
@@ -2098,12 +2232,29 @@ function isEnglishTitle(title: unknown): boolean {
  * early-return path in there — fail-open spam screen, no suspects, screening
  * error — is covered too; there are six of them.
  */
+// Billing context for the spam screen. Optional so the signature stays usable
+// from anywhere, but the single real caller always passes it: without this the
+// screen's Haiku call was neither logged to llm_usage NOR charged — invisible
+// to the Admin console AND to scripts/trip-cost.cjs, which is exactly the
+// cost-drift class llm-rates.json was created to end.
+type BillCtx = {
+  userId: string;
+  tripId: string | null;
+  source?: Parameters<typeof deductCredits>[0]["source"];
+};
+
 async function validateInspirationLinks(
   items: InspirationItem[],
   destinations: string[],
   apiKey: string,
+  bill?: BillCtx,
 ): Promise<InspirationItem[]> {
-  const out = await validateInspirationLinksInner(items, destinations, apiKey);
+  const out = await validateInspirationLinksInner(
+    items,
+    destinations,
+    apiKey,
+    bill,
+  );
   const kept = out.filter((i) => isEnglishTitle(i?.title));
   if (kept.length !== out.length)
     console.log(
@@ -2116,6 +2267,7 @@ async function validateInspirationLinksInner(
   items: InspirationItem[],
   destinations: string[],
   apiKey: string,
+  bill?: BillCtx,
 ): Promise<InspirationItem[]> {
   if (!items?.length) return [];
   // 0. Normalise type from the URL before anything else. The model sometimes
@@ -2206,6 +2358,47 @@ async function validateInspirationLinksInner(
     });
     if (!res.ok) return live; // fail-open: screening is best-effort
     const data = await res.json();
+    // Log + charge the screen's own tokens. Tiny (~200 max_tokens on Haiku)
+    // but it is real Anthropic spend, and an unmeasured cost is how per-trip
+    // cost quietly drifts away from reality.
+    const inTok = data?.usage?.input_tokens || 0;
+    const outTok = data?.usage?.output_tokens || 0;
+    if (inTok || outTok) {
+      const sUrl = Deno.env.get("SUPABASE_URL");
+      const sKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      if (sUrl && sKey) {
+        runInBackground(
+          fetch(`${sUrl}/rest/v1/llm_usage`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              apikey: sKey,
+              Authorization: `Bearer ${sKey}`,
+            },
+            body: JSON.stringify({
+              trip_id: bill?.tripId ?? null,
+              function_name: "generate-destination-research:spam-screen",
+              model: MODEL,
+              input_tokens: inTok,
+              output_tokens: outTok,
+            }),
+          }),
+        );
+      }
+      if (bill?.userId) {
+        runInBackground(
+          deductCredits({
+            userId: bill.userId,
+            model: MODEL,
+            inputTokens: inTok,
+            outputTokens: outTok,
+            functionName: "generate-destination-research:spam-screen",
+            tripId: bill.tripId,
+            source: bill.source,
+          }),
+        );
+      }
+    }
     const text: string = data?.content?.[0]?.text || "[]";
     const rejected: number[] = JSON.parse(
       (text.match(/\[[\d,\s]*\]/) || ["[]"])[0],
