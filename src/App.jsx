@@ -2963,9 +2963,12 @@ function BrainstormView({
   // never resolve (prod 2026-10-28: a remount after IG cleared the parent's
   // trip context). With destinations, RG is normally moments away (new-trip
   // setup awaits the draft insert first), so give it a grace period.
+  // Keyed on visible routes, not items === null: the empty-state CTA's
+  // "Generate plans" is just as dead without destinations.
   const idleNoSource =
     !generating &&
-    items === null &&
+    tier1Items.length === 0 &&
+    !(items || []).some((it) => it.tier === 1 && it.dismissed) &&
     !loadingItems &&
     !loadError &&
     !editTripId &&
@@ -3433,6 +3436,7 @@ function BrainstormView({
                 a blank panel (items non-empty suppressed this CTA, no cards,
                 nothing to restore). */}
             {items !== null &&
+              !routesUnavailable &&
               tier1Items.length === 0 &&
               dismissedTier1.length === 0 &&
               !generating &&
