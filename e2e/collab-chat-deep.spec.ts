@@ -295,25 +295,22 @@ test("a Trippy edit asked by A reaches B: question, reply, change card, undo", a
   }
 });
 
-test("known gap: B's change card shows that A undid it", async ({
-  browser,
-}) => {
-  test.fail(true, "undo state is local to the undoer's card (App.jsx undone)");
+test("B's change card shows that A undid it", async ({ browser }) => {
   const { ctxA, ctxB, a, b } = await twoMembers(browser);
   try {
     const { cardA, cardB } = await trippyDropsSkytree(a, b);
     await undoOnA(cardA);
     await expect(cardB).toContainText("Undone", { timeout: 10000 });
+    await expect(cardB.getByRole("button", { name: "Undo" })).toHaveCount(0);
   } finally {
     await ctxA.close();
     await ctxB.close();
   }
 });
 
-test("known gap: A's change card still shows Undone after a reload", async ({
+test("A's change card still shows Undone after a reload", async ({
   browser,
 }) => {
-  test.fail(true, "undo state isn't saved with the message");
   const { ctxA, ctxB, a, b } = await twoMembers(browser);
   try {
     const { reply, cardA } = await trippyDropsSkytree(a, b);
@@ -321,9 +318,9 @@ test("known gap: A's change card still shows Undone after a reload", async ({
     await a.reload();
     await a.locator('textarea[maxlength="2000"]').first().waitFor();
     await expect(a.getByText(reply)).toBeVisible({ timeout: 20000 });
-    await expect(a.getByLabel("What changed").last()).toContainText("Undone", {
-      timeout: 10000,
-    });
+    const reloaded = a.getByLabel("What changed").last();
+    await expect(reloaded).toContainText("Undone", { timeout: 10000 });
+    await expect(reloaded.getByRole("button", { name: "Undo" })).toHaveCount(0);
   } finally {
     await ctxA.close();
     await ctxB.close();
@@ -371,10 +368,9 @@ test("after a dropped connection, live chat resumes and a reload shows what was 
   }
 });
 
-test("known gap: messages missed while offline appear on reconnect, without a reload", async ({
+test("messages missed while offline appear on reconnect, without a reload", async ({
   browser,
 }) => {
-  test.fail(true, "reconnect backfill doesn't refetch trip_messages");
   const { ctxA, ctxB, a, b, bReady } = await twoMembers(browser);
   try {
     const missed = `${RUN} missed, no reload`;
@@ -385,6 +381,20 @@ test("known gap: messages missed while offline appear on reconnect, without a re
     await ctxB.setOffline(false);
     expect(await bReady(back, 60000), "B's channel re-subscribed").toBe(true);
     await expect(b.getByText(missed)).toBeVisible({ timeout: 15000 });
+
+    // Once, and above what A sends next (live).
+    const later = `${RUN} after the catch-up`;
+    await sendTo(a, "Everyone", later);
+    await expect(b.getByText(later)).toBeVisible({ timeout: 20000 });
+    await expect(b.getByText(missed, { exact: true })).toHaveCount(1);
+    const [yMissed, yLater] = await Promise.all(
+      [missed, later].map(
+        async (t) =>
+          (await b.getByText(t, { exact: true }).boundingBox())?.y ?? -1,
+      ),
+    );
+    expect(yMissed).toBeGreaterThanOrEqual(0);
+    expect(yMissed).toBeLessThan(yLater);
   } finally {
     await ctxA.close();
     await ctxB.close();
