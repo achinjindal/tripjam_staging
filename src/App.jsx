@@ -9814,7 +9814,10 @@ export default function App({
             },
             body: JSON.stringify({
               notes: pendingForm?.notes || "",
-              chatHistory: chatMessages.filter((m) => m.role !== "system-undo"),
+              // The server reads only the last 10 (and caps each one).
+              chatHistory: chatMessages
+                .filter((m) => m.role !== "system-undo")
+                .slice(-10),
               tripId: trip?.id || editingTrip?.id || null,
             }),
           },

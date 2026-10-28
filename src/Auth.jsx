@@ -175,11 +175,11 @@ export default function Auth({ initialMode }) {
       // The DB trigger `create_profile_on_auth_signup` already inserted a row
       // using the username we passed in raw_user_meta_data. Upsert here is a
       // belt-and-braces sync in case the trigger fell through to its own
-      // derivation path (collision, etc).
+      // derivation path (collision, etc). No `email`: the trigger sets it from
+      // auth.users and users may not write it (inbound-email routes by it).
       const { error: profileError } = await supabase.from("profiles").upsert({
         id: data.user.id,
         username: chosenUsername,
-        email: cleanEmail,
         display_name: chosenUsername,
       });
       if (profileError) {

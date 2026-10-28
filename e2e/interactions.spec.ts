@@ -393,9 +393,10 @@ test.describe("Pre-IG sheet", () => {
       .locator("button", { hasText: /Build My Itinerary/i })
       .first();
     await buildBtn.click();
-    // The sheet opens only AFTER the extract-preferences fetch resolves — a
-    // fixed 500ms wait raced it (scrim tap landed pre-open, then the sheet
-    // appeared and the assertion saw it). Wait for the sheet itself.
+    // Wait for the sheet itself, not a fixed delay: a 500ms wait once raced
+    // its open (scrim tap landed pre-open, then the sheet appeared and the
+    // assertion saw it). It now opens instantly with defaults while
+    // extract-preferences fills the pills in the background.
     await expect(page.locator("text=/Fine-tune/i").first()).toBeVisible({
       timeout: 15000,
     });
