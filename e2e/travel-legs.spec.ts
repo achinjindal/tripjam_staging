@@ -115,8 +115,9 @@ test("travel legs: seeded legs render, remove persists, add-booking sheet opens"
     // not render, and the failure surfaced as a bare "element not found" on a
     // getByText locator — nothing pointing at config. State the precondition
     // so the next person reads the cause instead of hunting a phantom UI bug.
+    // Vite reads .env; this test process doesn't, so check both.
     expect(
-      process.env.VITE_EMAIL_INGEST_ADDRESS,
+      process.env.VITE_EMAIL_INGEST_ADDRESS || env.VITE_EMAIL_INGEST_ADDRESS,
       "VITE_EMAIL_INGEST_ADDRESS is unset, so the forward-email section is " +
         "hidden by design. Set it in .env to the same address as the backend " +
         "INBOUND_EMAIL_ADDRESS secret (see CLAUDE.md pairing rule).",
