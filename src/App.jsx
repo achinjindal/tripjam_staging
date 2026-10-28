@@ -10615,15 +10615,12 @@ export default function App({
           .then(({ error }) => {
             if (error) console.warn("clear ig_response failed:", error.message);
           });
-        // Delete existing days + activities
-        const { data: existingDays } = await supabase
-          .from("days")
-          .select("id")
-          .eq("trip_id", editingTrip.id);
-        const dayIds = (existingDays || []).map((d) => d.id);
-        if (dayIds.length)
-          await supabase.from("activities").delete().in("day_id", dayIds);
-        await supabase.from("days").delete().eq("trip_id", editingTrip.id);
+        // Delete existing days (activities cascade) in one transaction.
+        const { error: clearErr } = await supabase.rpc("replace_trip_days", {
+          p_trip: editingTrip.id,
+          p_days: [],
+        });
+        if (clearErr) console.warn("clear itinerary failed:", clearErr.message);
       }
     }
 
@@ -11286,9 +11283,10 @@ export default function App({
       setGenerateError(`${msg}${err?.message ? `: ${err.message}` : ""}`);
       setIgGenerating(false);
       setScreen("setup");
+      _igInFlight.current = false;
     };
 
-    // 1. Persist trip (update if editing, insert if new)
+    // 1. Persist trip (insert if new; an edited trip is updated after step 3)
     const tripId = isEditing ? editingTrip.id : crypto.randomUUID();
     const igRequest = {
       destinations: form.destinations,
@@ -11371,36 +11369,24 @@ export default function App({
       })(),
     };
 
-    if (isEditing) {
-      // Update trip row in place
-      const { error: updateErr } = await supabase
-        .from("trips")
-        .update(tripPayload)
-        .eq("id", tripId);
-      if (updateErr) {
-        abort("Failed to update trip", updateErr);
-        return;
+    // Network blips and 5xx are retried; a 4xx (the request itself is bad)
+    // is not. Both writes below are whole-row replacements, so repeating one
+    // whose response was lost is harmless.
+    const withRetry = async (call) => {
+      let res;
+      for (const wait of [0, 1000, 3000]) {
+        if (wait) await new Promise((r) => setTimeout(r, wait));
+        res = await call();
+        if (!res.error || (res.status >= 400 && res.status < 500)) break;
       }
-      // Wipe existing days (activities cascade via FK). Brainstorm items also cleared.
-      const { data: existingDays } = await supabase
-        .from("days")
-        .select("id")
-        .eq("trip_id", tripId);
-      const existingDayIds = (existingDays || []).map((d) => d.id);
-      if (existingDayIds.length) {
-        const { error: delActErr } = await supabase
-          .from("activities")
-          .delete()
-          .in("day_id", existingDayIds);
-        if (delActErr) console.error("Failed to delete activities:", delActErr);
-      }
-      const { error: delDayErr } = await supabase
-        .from("days")
-        .delete()
-        .eq("trip_id", tripId);
-      if (delDayErr) console.error("Failed to delete days:", delDayErr);
-      // Keep brainstorm_items — user can go back to "Explore Other Plans"
-    } else {
+      return res;
+    };
+
+    // Editing: the trip row is updated only after the new days are saved
+    // (step 3) — writing the new ig_response and dates first would leave them
+    // over the old days if the save failed. Keep brainstorm_items — user can
+    // go back to "Explore Other Plans".
+    if (!isEditing) {
       // owner_id on CREATE only (updates must never reassign ownership).
       // Without it every post-launch trip had owner_id NULL, and the invite
       // RPCs check owner_id strictly — owners couldn't mint invite links.
@@ -11483,71 +11469,60 @@ export default function App({
       }
     }
 
-    // 3. Insert days + activities (all days in parallel)
+    // 3. Save days + activities in ONE transaction (replace_trip_days): the old
+    // itinerary is deleted and the new one inserted together, so a failure
+    // leaves the previous plan intact instead of a half-saved trip.
     const start = new Date(form.startDate);
-    const savedDays = (
-      await Promise.all(
-        itinerary.days.map(async (day, i) => {
-          const dayDate = new Date(start);
-          dayDate.setDate(start.getDate() + i);
-          const isoDate = dayDate.toISOString().split("T")[0];
-
-          const { data: dayData, error: dayErr } = await supabase
-            .from("days")
-            .insert({
-              trip_id: tripData.id,
-              label: day.label,
-              date: isoDate,
-              city: day.city,
-              position: i,
-              description: day.description || null,
-              story_title: day.story_title || null,
-              narrative: day.narrative || null,
-              wishlist: day.wishlist?.length ? day.wishlist : null,
-              hotel_options: day.hotelOptions?.length ? day.hotelOptions : null,
-              hotel_check_in_time: day.hotelCheckInTime || null,
-              transit_tip: day.transit_tip || null,
-            })
-            .select()
-            .single();
-
-          if (dayErr || !dayData) {
-            abort(`Failed to save ${day.label}`, dayErr);
-            return null;
-          }
-
-          const activities = await Promise.all(
-            day.activities.map((act, j) =>
-              supabase
-                .from("activities")
-                .insert({
-                  day_id: dayData.id,
-                  time: act.time,
-                  title: act.title,
-                  geocode: act.geocode || null,
-                  geocode_end: act.geocodeEnd || null,
-                  type: act.type,
-                  duration: act.duration,
-                  note: act.note,
-                  gloss: act.gloss || null,
-                  photo_query: act.photo_query || null,
-                  confirmed: act.confirmed,
-                  icon: act.icon,
-                  package: act.package || null,
-                  position: j,
-                  added_by: session.user.id,
-                  transition_data: act.transition || null,
-                })
-                .select()
-                .single()
-                .then((r) => r.data),
-            ),
-          );
-
-          return { ...dayData, activities: activities.filter(Boolean) };
-        }),
-      )
-    ).filter(Boolean);
+    const dayRows = itinerary.days.map((day, i) => {
+      const dayDate = new Date(start);
+      dayDate.setDate(start.getDate() + i);
+      return {
+        label: day.label,
+        date: dayDate.toISOString().split("T")[0],
+        city: day.city,
+        description: day.description || null,
+        story_title: day.story_title || null,
+        narrative: day.narrative || null,
+        wishlist: day.wishlist?.length ? day.wishlist : null,
+        hotel_options: day.hotelOptions?.length ? day.hotelOptions : null,
+        hotel_check_in_time: day.hotelCheckInTime || null,
+        transit_tip: day.transit_tip || null,
+        activities: (day.activities || []).map((act) => ({
+          time: act.time,
+          title: act.title,
+          geocode: act.geocode || null,
+          geocode_end: act.geocodeEnd || null,
+          type: act.type,
+          duration: act.duration,
+          note: act.note,
+          gloss: act.gloss || null,
+          photo_query: act.photo_query || null,
+          confirmed: act.confirmed,
+          icon: act.icon,
+          package: act.package || null,
+          transition_data: act.transition || null,
+        })),
+      };
+    });
+    const { data: savedDays, error: saveDaysErr } = await withRetry(() =>
+      supabase.rpc("replace_trip_days", {
+        p_trip: tripData.id,
+        p_days: dayRows,
+      }),
+    );
+    if (saveDaysErr || !Array.isArray(savedDays)) {
+      abort("Failed to save the itinerary", saveDaysErr);
+      return;
+    }
+    if (isEditing) {
+      const { error: updateErr } = await withRetry(() =>
+        supabase.from("trips").update(tripPayload).eq("id", tripId),
+      );
+      if (updateErr) {
+        abort("Failed to update trip", updateErr);
+        return;
+      }
+    }
 
     const fmt = (d) =>
       new Date(d).toLocaleDateString("en-US", {
