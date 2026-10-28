@@ -20,6 +20,9 @@ typecheck + build). If formatting fails, run `npm run format`, then rerun.
 - `collab-invite.spec.ts` members/invite tests skip unless
   `VITE_INVITE_ENABLED=true` AND the invite RPC migrations are applied to
   staging; the invalid-token test always runs.
+- `playwright.config.ts` defaults `VITE_ROUTES_LENS_ENABLED=true` (mirrors
+  prod) and `VITE_E2E_CHEAP=1`, but `reuseExistingServer` means a manually
+  started `npm run dev` without those flags gets reused — kill it first.
 - Several collab specs pin a trip **by name** and skip when it is absent, so a
   missing fixture reads as "skipped" rather than failing loudly. Check the skip
   count, not just the pass count.

@@ -126,7 +126,9 @@ async function seedTrip(sb: SupabaseClient, name: string) {
   return id;
 }
 
-// generate-itinerary streams the itinerary JSON as SSE string chunks.
+// generate-itinerary streams the itinerary JSON as SSE string chunks. The
+// first chunk ends past `"days":[`, so the client's mid-stream header path
+// (new name shown before the days arrive) runs on every test.
 function cannedItinerary() {
   const cities = [
     "Ziro Town",
@@ -203,7 +205,7 @@ async function rebuild(page: Page, tripId: string) {
 async function tripRow(sb: SupabaseClient, tripId: string) {
   const { data } = await sb
     .from("trips")
-    .select("ig_count, detailed_ready_at")
+    .select("name, ig_response, ig_count, detailed_ready_at, compact_ready_at")
     .eq("id", tripId)
     .single();
   return data;
@@ -264,6 +266,8 @@ test.describe("Regenerate replaces the itinerary atomically", () => {
     const trip = await tripRow(sb!, tripId);
     expect(trip?.ig_count).toBe(1);
     expect(trip?.detailed_ready_at).toBeTruthy();
+    expect(trip?.name.startsWith("Ziro Rebuilt")).toBe(true);
+    expect(trip?.compact_ready_at).toBeTruthy();
   });
 
   test("a failed save keeps the previous itinerary whole", async ({ page }) => {
@@ -300,5 +304,11 @@ test.describe("Regenerate replaces the itinerary atomically", () => {
     const trip = await tripRow(sb!, tripId);
     expect(trip?.ig_count).toBe(0);
     expect(trip?.detailed_ready_at).toBeNull();
+    // The streamed header was shown in memory only — it never reached the
+    // row, and the trip on screen went back to its old name.
+    expect(trip?.name).toBe("RR Failure Fixture");
+    expect(trip?.ig_response?.name).toBe("Ziro Festival + Villages");
+    expect(trip?.compact_ready_at).toBeNull();
+    await expect(page.getByText(/Ziro Rebuilt/)).toHaveCount(0);
   });
 });

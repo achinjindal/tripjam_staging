@@ -1,5 +1,12 @@
 import { defineConfig } from "@playwright/test";
 
+// Mirror .env.production: Routes Lens is live in prod, so test it on by
+// default (routes-lens.spec.ts and regenerate-replace.spec.ts skip without
+// it). Set by `??=` so `VITE_ROUTES_LENS_ENABLED=false npx playwright test`
+// still exercises the off state. Reaches Vite through webServer.env below and
+// the specs through process.env (the config is evaluated in each worker).
+process.env.VITE_ROUTES_LENS_ENABLED ??= "true";
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 60000,
