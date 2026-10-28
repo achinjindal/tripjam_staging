@@ -13,6 +13,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # `secrets` is NOT an available context in step-level `if:` conditions —
+    # a check like `if: secrets.X != ''` evaluates false and SILENTLY skips the
+    # step, which here would mean quietly shipping no signed bundle at all.
+    # Map it to env at job level, where secrets IS allowed, and branch on that.
+    env:
+      HAS_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -69,14 +75,57 @@ jobs:
       - name: Sync Capacitor Android
         run: npx cap sync android
 
-      - name: Build debug APK
+      # Play requires a SIGNED RELEASE .aab — it rejects debug-signed uploads
+      # and, for apps created after Aug 2021, bare APKs. This step is skipped
+      # when the signing secrets are absent so a fork still gets a build;
+      # the release step below then fails loudly rather than producing an
+      # artifact that looks uploadable and is not.
+      - name: Decode upload keystore
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+
+      - name: Build signed release bundle (.aab)
+        if: env.HAS_SIGNING == 'true'
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew bundleRelease
+
+      # Guard: a release bundle built WITHOUT the signing env is unsigned and
+      # Play rejects it at upload with an unhelpful error. Catch it here.
+      - name: Verify the bundle is signed
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          aab=android/app/build/outputs/bundle/release/app-release.aab
+          test -f "$aab" || { echo "::error::no .aab produced"; exit 1; }
+          unzip -l "$aab" | grep -q "META-INF/.*\.RSA\|META-INF/.*\.EC" \
+            || { echo "::error::$aab is UNSIGNED — Play will reject it"; exit 1; }
+          echo "::notice::signed bundle OK ($(du -h "$aab" | cut -f1))"
+
+      - name: Upload .aab artifact
+        if: env.HAS_SIGNING == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-aab
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 14
+
+      # Fallback for forks / runs without signing secrets: a debug APK is
+      # still useful for sideloading, and is clearly named so nobody mistakes
+      # it for something Play will accept.
+      - name: Build debug APK (no signing secrets)
+        if: env.HAS_SIGNING != 'true'
         working-directory: android
         run: ./gradlew assembleDebug
 
-      - name: Upload APK artifact
+      - name: Upload debug APK (NOT publishable)
+        if: env.HAS_SIGNING != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
+          name: app-debug-NOT-FOR-PLAY
           path: android/app/build/outputs/apk/debug/app-debug.apk
-          # Auto-expire quickly so APKs don't accumulate in Actions storage.
           retention-days: 5

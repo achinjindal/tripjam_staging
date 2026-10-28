@@ -16,10 +16,33 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Release signing, driven entirely by environment variables so no key
+    // material ever enters the repo. CI writes the keystore from the
+    // ANDROID_KEYSTORE_BASE64 secret to a temp file and exports these four.
+    //
+    // When the variables are absent — any local `./gradlew assembleRelease`,
+    // or a fork without the secrets — signingConfig stays null and Gradle
+    // produces an UNSIGNED release artifact rather than failing the build or,
+    // worse, silently falling back to the debug key (which Play rejects at
+    // upload with a confusing error).
+    signingConfigs {
+        release {
+            def ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
+            if (ksPath) {
+                storeFile file(ksPath)
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig System.getenv("ANDROID_KEYSTORE_PATH")
+                ? signingConfigs.release
+                : null
         }
     }
 }
