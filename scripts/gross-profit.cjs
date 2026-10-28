@@ -40,6 +40,12 @@ const since = DAYS
 // amount in its metadata. Flagged as an estimate wherever it is applied.
 const CREDIT_PRICE_USD = Number(process.env.CREDIT_PRICE_USD || 0.01);
 
+// Window used for the "recent" unit-cost column (see COST BY TASK).
+const RECENT_DAYS = Number(process.env.RECENT_DAYS || 7);
+const recentCutoff = new Date(
+  Date.now() - RECENT_DAYS * 86400_000,
+).toISOString();
+
 // ── rates: the ONE table, same as the billing path ──────────────────────────
 const rateData = require("../supabase/functions/_shared/llm-rates.json");
 const resolveRate = (r) =>
@@ -118,15 +124,28 @@ const rpad = (s, n) => String(s).padStart(n);
   // ── COST ────────────────────────────────────────────────────────────────
   const byTask = new Map();
   let costLLM = 0;
-  let unknownModels = new Set();
+  const unknownModels = new Map(); // model -> most recent created_at
   for (const r of usage) {
     const { cost, unknownModel } = rowCost(r);
-    if (unknownModel) unknownModels.add(r.model);
+    if (unknownModel) {
+      const seen = unknownModels.get(r.model);
+      if (!seen || r.created_at > seen)
+        unknownModels.set(r.model, r.created_at);
+    }
     costLLM += cost;
     const k = r.function_name || "(unknown)";
-    const e = byTask.get(k) || { calls: 0, cost: 0 };
+    const e = byTask.get(k) || {
+      calls: 0,
+      cost: 0,
+      recentCalls: 0,
+      recentCost: 0,
+    };
     e.calls++;
     e.cost += cost;
+    if (r.created_at >= recentCutoff) {
+      e.recentCalls++;
+      e.recentCost += cost;
+    }
     byTask.set(k, e);
   }
 
@@ -137,9 +156,18 @@ const rpad = (s, n) => String(s).padStart(n);
     if (t.amount < 0 && t.metadata?.pricing === "passthrough") {
       costExternal += Number(t.llm_cost_usd || 0);
       const k = t.reason || "(passthrough)";
-      const e = byTask.get(k) || { calls: 0, cost: 0 };
+      const e = byTask.get(k) || {
+        calls: 0,
+        cost: 0,
+        recentCalls: 0,
+        recentCost: 0,
+      };
       e.calls++;
       e.cost += Number(t.llm_cost_usd || 0);
+      if (t.created_at >= recentCutoff) {
+        e.recentCalls++;
+        e.recentCost += Number(t.llm_cost_usd || 0);
+      }
       byTask.set(k, e);
     }
   }
@@ -220,15 +248,39 @@ const rpad = (s, n) => String(s).padStart(n);
   );
 
   console.log("\nCOST BY TASK");
+  // $/call and a RECENT $/call column, because a total alone is actively
+  // misleading the moment a task's unit cost changes. Measured 2026-10-28:
+  // all-time showed Inspirations at $0.076/call while the live rate after the
+  // Brave switch was $0.004-0.007 — the total was dominated by ~200
+  // pre-optimisation calls, and reading it as current economics is the
+  // obvious mistake. A ">=2x" marker makes an era change impossible to miss.
   const rows = [...byTask.entries()].sort((a, b) => b[1].cost - a[1].cost);
   console.log(
-    `  ${pad("task", 46)}${rpad("calls", 7)}${rpad("cost", 12)}${rpad("share", 8)}`,
+    `  ${pad("task", 42)}${rpad("calls", 7)}${rpad("cost", 11)}${rpad("share", 7)}${rpad("$/call", 10)}${rpad("recent", 10)}`,
   );
+  const eraShift = [];
   for (const [k, v] of rows) {
     const share = cost > 0 ? ((v.cost / cost) * 100).toFixed(1) + "%" : "-";
+    const perCall = v.cost / v.calls;
+    const r = v.recentCalls ? v.recentCost / v.recentCalls : null;
+    const recent = r === null ? "—" : usd(r);
+    if (r !== null && perCall > 0 && (r / perCall >= 2 || perCall / r >= 2))
+      eraShift.push([k, perCall, r]);
     console.log(
-      `  ${pad(k.slice(0, 45), 46)}${rpad(v.calls, 7)}${rpad(usd(v.cost), 12)}${rpad(share, 8)}`,
+      `  ${pad(k.slice(0, 41), 42)}${rpad(v.calls, 7)}${rpad(usd(v.cost), 11)}${rpad(share, 7)}${rpad(usd(perCall), 10)}${rpad(recent, 10)}`,
     );
+  }
+  if (eraShift.length) {
+    console.log(
+      `\n  ⚠ UNIT COST CHANGED (recent ${RECENT_DAYS}d vs all-time) — totals above`,
+    );
+    console.log(
+      "    mix the two eras, so do NOT read them as current economics:",
+    );
+    for (const [k, was, now] of eraShift)
+      console.log(
+        `      ${pad(k.slice(0, 41), 42)} ${usd(was)} -> ${usd(now)}  (${(now / was).toFixed(2)}x)`,
+      );
   }
 
   const trips = new Set(usage.map((r) => r.trip_id).filter(Boolean)).size;
@@ -237,10 +289,38 @@ const rpad = (s, n) => String(s).padStart(n);
       `\n  ${trips} trips with usage · avg cost/trip ${usd(cost / trips)}`,
     );
 
-  if (unknownModels.size)
-    console.log(
-      `\n  ⚠ BILLING ALARM: model(s) absent from llm-rates.json, costed at the ` +
-        `${rateData.fallbackModel} fallback (over-states): ${[...unknownModels].join(", ")}`,
-    );
+  // Date every unknown model and separate LIVE from HISTORICAL. An alarm that
+  // fires forever on three-month-old bench rows is noise, and noise is how a
+  // real one gets ignored — the same failure as a GitHub issue titled "Error".
+  // Note these rows are costed at the fallback, so they INFLATE the totals
+  // above; they are not evidence that anyone was over-charged at the time.
+  if (unknownModels.size) {
+    const live = [];
+    const old = [];
+    for (const [m, last] of unknownModels)
+      (last >= recentCutoff ? live : old).push([m, last.slice(0, 10)]);
+    if (live.length) {
+      console.log(
+        `\n  ⚠ BILLING ALARM — model(s) in use within ${RECENT_DAYS}d and ABSENT from`,
+      );
+      console.log(
+        `    llm-rates.json. The fallback bills at ${rateData.fallbackModel}`,
+      );
+      console.log(
+        "    rates, so live traffic is being OVER-CHARGED. Add them now:",
+      );
+      for (const [m, last] of live)
+        console.log(`      ${m}  (last seen ${last})`);
+    }
+    if (old.length) {
+      console.log(
+        `\n  note: ${old.length} unrated model(s) appear only in older rows, so the` +
+          ` totals\n        above are inflated for those calls (costed at the` +
+          ` ${rateData.fallbackModel} fallback).\n        Not live traffic:`,
+      );
+      for (const [m, last] of old)
+        console.log(`      ${m}  (last seen ${last})`);
+    }
+  }
   console.log("");
 })();
