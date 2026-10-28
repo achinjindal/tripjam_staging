@@ -28,9 +28,9 @@ TripJam is an AI-powered travel planning app built for groups. Tell it where you
   web-search-backed research. Each step picks its own model, so a swap is a
   config change rather than an integration.
 - Brave Search for creator-sourced inspiration
-- Google Places API (New) for hotel search and venue verification
+- Google Places API (New) for destination and hotel search, and venue verification
 - Wikimedia Commons for activity photos
-- Photon / OpenStreetMap for destination and airport search
+- Photon / OpenStreetMap for map geocoding and airport search
 
 ## Status
 
