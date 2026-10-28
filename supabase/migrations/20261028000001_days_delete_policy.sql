@@ -4,6 +4,7 @@
 -- new ones. Staging had one, keyed on created_by, which the collab hardening
 -- (20261009000001) moved off for every other owner right. Same rule as the
 -- days UPDATE policy: edit members or the owner.
+-- SUPERSEDED by 20261028000005 (owner-only; replace_trip_days is DEFINER).
 DROP POLICY IF EXISTS "Edit members can delete days" ON days;
 CREATE POLICY "Edit members can delete days" ON days FOR DELETE TO authenticated
   USING (

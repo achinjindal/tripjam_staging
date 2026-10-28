@@ -639,3 +639,25 @@ update app_config set value = 'true', updated_at = now() where key = 'chat_proto
 ```
 
 Before flipping: confirm in PostHog that `trippy_chat_response` events from builds without protocol 2 have stopped (or are few), and that a Play release with chat v3 is live. Only then remove the v2 path from `supabase/functions/chat`.
+
+**Pre-gate APKs ignore all of this.** Android builds from before 2026-10-08 have no `UpdateGate` and never read `min_client_build` or prompt to update; only a Play update moves them. Their co-member Home delete / regenerate used to wipe a shared trip's itinerary; since `20261028000005` the server refuses those bulk deletes (owner-only days DELETE + the `activities_bulk_delete_guard` trigger), so a co-member on an old APK gets a failed delete or regenerate instead. Android also had **no PostHog at all** until `VITE_POSTHOG_KEY` was wired into `build-android.yml` (2026-10-28), so there are no `app_build` events from older APKs — "no Android events" means "no instrumented Android clients", not "no Android users".
+
+### Android release checklist (v1.1.1)
+
+1. **Build from `main`, as `v1.1.1`.** Do NOT upload `v1.1.0`: it predates `replace_trip_days` (it still saves itineraries with a client-side days delete, which co-members can no longer do). With `main` up to date and checks green: `git tag v1.1.1 <main sha> && git push origin v1.1.1` (the push starts the build). The tag yields versionCode `10101`.
+2. **Secrets** (repo → Settings → Secrets → Actions): `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (production), `VITE_REVENUECAT_ANDROID_KEY`, `VITE_POSTHOG_KEY`, plus the four `ANDROID_KEY*` signing secrets. There is deliberately no `VITE_POSTHOG_HOST` secret: Vercel production doesn't set one either, and `main.jsx` defaults to `https://us.i.posthog.com`.
+3. **Read `APP_BUILD` from the run log** — the "Build web app" step prints `::notice::APP_BUILD=YYYYMMDDHHmm`; it is pinned into the bundle, so it is exactly what this release reports. Note it with the versionCode.
+4. Download the `app-release-aab` artifact (14-day retention) and upload it to the Play Console **internal testing** track; promote once testers confirm sign-in, a trip, chat, purchase.
+5. **Testers update manually** (Play Store → TripJam → Update). Every installed build is pre-gate, so nothing will prompt them.
+6. **Verify:** PostHog shows events with `app_build = <APP_BUILD>` and the Android platform; a forced test exception from the APK shows up in error tracking.
+7. **Then gate** (only once the release is live on the track your users are on — a minimum newer than the live Play build locks every Android user out). Keep `web` at its current value:
+   ```sql
+   select value from app_config where key = 'min_client_build';   -- note the current web value
+   update app_config
+      set value = '{"web": <current web>, "android": <APP_BUILD>, "message": null}', updated_at = now()
+    where key = 'min_client_build';
+   ```
+   Check on a device with the previous gated build (if any) that the "Update TripJam" screen appears, and that v1.1.1 opens normally.
+8. **Later**, once PostHog shows chat traffic without protocol 2 has stopped: `chat_protocol1_retired = true` (above).
+
+**Rollback:** set `"android": 0` in `min_client_build` (the gate fails open within ~30 min or on next foreground); in Play, halt the rollout / promote the previous release. The server-side guard needs no rollback for a release problem — its own rollback SQL is in the header of `20261028000005_protect_shared_trip_bulk_deletes.sql`.

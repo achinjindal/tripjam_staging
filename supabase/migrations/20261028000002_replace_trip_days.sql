@@ -8,6 +8,10 @@
 -- insert in ONE transaction: either the whole new itinerary lands or the old
 -- one is untouched.
 --
+-- SUPERSEDED: 20261028000005_protect_shared_trip_bulk_deletes.sql re-creates
+-- this function as SECURITY DEFINER (days DELETE became owner-only there) and
+-- is its source of record. The paragraph below describes this file's version.
+--
 -- SECURITY INVOKER: runs as the calling user, so the days and activities RLS
 -- policies apply to every write. The caller must be an edit member (owners
 -- always are): that is what the inserts need anyway, and it lets the caller
