@@ -38,6 +38,7 @@ import { showToast, confirmSheet } from "./dialogs.jsx";
 import { APP_BUILD } from "./version";
 import { logActivity } from "./activity";
 import { subscribeTrip } from "./realtime";
+import { applyServerFields, mergeChatRows } from "./chatMerge";
 import MembersSheet from "./components/MembersSheet.jsx";
 import PreferencesSheet from "./components/PreferencesSheet.jsx";
 import { TripCreditsSheet } from "./CreditsOverlay.jsx";
@@ -7722,6 +7723,9 @@ const CHAT_META_KEYS = [
   "changes",
   "followUp",
   "followUpLabel",
+  // Set only by mark_trippy_change_undone (never on insert: the persist
+  // callers don't pass it), and only ever moves to true.
+  "undone",
 ];
 function chatMeta(fields) {
   const meta = {};
@@ -7738,6 +7742,21 @@ const fromChatMeta = (meta) =>
         CHAT_META_KEYS.filter((k) => meta[k] != null).map((k) => [k, meta[k]]),
       )
     : {};
+
+// The trip_messages columns the chat reads, and a saved row as a chat message
+// (history load, reconnect catch-up and realtime INSERT all map the same way).
+const CHAT_SELECT =
+  "id, role, content, user_id, audience, directed_user_id, meta, created_at";
+const fromChatRow = (m) => ({
+  id: m.id,
+  role: m.role,
+  content: m.content,
+  user_id: m.user_id,
+  audience: m.audience,
+  directed_user_id: m.directed_user_id,
+  created_at: m.created_at,
+  ...fromChatMeta(m.meta),
+});
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -8300,9 +8319,28 @@ export default function App({
     // Tier 2: board tables (todos/expenses/bookmarks) are owned by BoardView's
     // sub-views, so App can't hold their lists — bump a tick they refetch on.
     const bumpBoard = () => setBoardTick((t) => t + 1);
+    // Chat catch-up: messages (and "Undone" marks) saved while this browser
+    // was disconnected. A trip's chat is a handful of rows, so refetch all of
+    // it and merge (chatMerge.js) rather than keep a cursor. Waits for the
+    // history load (it would only race it), and runs on solo trips too — the
+    // same user on a second device writes to the same chat.
+    let cancelled = false;
+    const catchUpChat = async () => {
+      if (chatLoadedTripRef.current !== tripId) return;
+      const { data, error } = await supabase
+        .from("trip_messages")
+        .select(CHAT_SELECT)
+        .eq("trip_id", tripId)
+        .order("created_at");
+      if (cancelled || error || !data) return;
+      if (chatLoadedTripRef.current !== tripId) return;
+      const rows = data.map(fromChatRow);
+      setChatMessages((prev) => mergeChatRows(prev, rows));
+    };
     // Reconnect / initial backfill (postgres_changes doesn't replay).
     const backfill = () => {
       reconcileMembers();
+      catchUpChat();
       if (membersRef.current.length > 1) {
         reconcileDays();
         reconcileRoutes();
@@ -8331,23 +8369,32 @@ export default function App({
             debounce("prefs", reconcilePreferences, 300);
         },
         trip_messages: (payload) => {
-          // Echo-safe append: dedup by the client-supplied id (our optimistic
-          // bubble already carries it), so our own echoes are skipped and remote
-          // members' rows append once.
-          if (payload.eventType !== "INSERT" || !payload.new) return;
           const row = payload.new;
-          const mapped = {
-            id: row.id,
-            role: row.role,
-            content: row.content,
-            user_id: row.user_id,
-            audience: row.audience,
-            directed_user_id: row.directed_user_id,
-            ...fromChatMeta(row.meta),
-          };
-          setChatMessages((prev) =>
-            prev.some((m) => m.id === row.id) ? prev : [...prev, mapped],
-          );
+          if (!row?.id) return;
+          // UPDATE only ever comes from mark_trippy_change_undone. Take the
+          // meta flags alone: an UPDATE payload can leave out unchanged TOASTed
+          // columns (content), and a row we don't hold yet arrives with the
+          // next catch-up.
+          if (payload.eventType === "UPDATE") {
+            const flags = fromChatMeta(row.meta);
+            setChatMessages((prev) => {
+              let changed = false;
+              const next = prev.map((m) => {
+                if (m.id !== row.id) return m;
+                const merged = applyServerFields(m, flags);
+                if (merged !== m) changed = true;
+                return merged;
+              });
+              return changed ? next : prev;
+            });
+            return;
+          }
+          // INSERT: dedup by the client-supplied id (our optimistic bubble
+          // already carries it). Our own echo only fills in created_at; a
+          // remote member's row lands once, in created_at order.
+          if (payload.eventType !== "INSERT") return;
+          const mapped = fromChatRow(row);
+          setChatMessages((prev) => mergeChatRows(prev, [mapped]));
         },
         activity_log: (payload) => {
           // Phase 3: prepend new change rows live. Only INSERT is consumed (NEW is
@@ -8381,7 +8428,19 @@ export default function App({
       },
       backfill,
     );
+    // A phone waking up or a tab coming back may have missed messages before
+    // the socket even notices it dropped.
+    const onVisible = () => {
+      if (document.visibilityState === "visible")
+        debounce("chat", catchUpChat, 800);
+    };
+    const onOnline = () => debounce("chat", catchUpChat, 800);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onOnline);
     return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
       Object.values(timers).forEach(clearTimeout);
       unsubscribe();
     };
@@ -10105,32 +10164,34 @@ export default function App({
     });
   }, [chatMessages, chatLoading, chatOpen]);
 
-  // Load persisted chat messages once per trip (no realtime subscription —
-  // remote changes appear on next load)
+  // Load persisted chat messages once per trip. After this, new rows arrive
+  // over the realtime channel (trip_messages handler), and whatever it missed
+  // while disconnected comes back with catchUpChat on reconnect — which waits
+  // for this load (chatLoadedTripRef).
+  const chatLoadedTripRef = useRef(null);
   useEffect(() => {
-    if (!trip?.id) return;
+    const tripId = trip?.id;
+    if (!tripId) return;
+    let cancelled = false;
     supabase
       .from("trip_messages")
-      .select("id, role, content, user_id, audience, directed_user_id, meta")
-      .eq("trip_id", trip.id)
+      .select(CHAT_SELECT)
+      .eq("trip_id", tripId)
       .order("created_at")
-      .then(({ data }) => {
-        const loaded = (data || []).map((m) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          user_id: m.user_id,
-          audience: m.audience,
-          directed_user_id: m.directed_user_id,
-          ...fromChatMeta(m.meta),
-        }));
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        const loaded = (data || []).map(fromChatRow);
         setChatMessages((prev) => {
           // If the user already sent messages while we were loading (e.g. right after IG),
           // and the DB returned nothing, keep the local state rather than wiping it.
           if (loaded.length === 0 && prev.length > 0) return prev;
           return loaded;
         });
+        if (!error) chatLoadedTripRef.current = tripId;
       });
+    return () => {
+      cancelled = true;
+    };
   }, [trip?.id]);
   const [setupModal, setSetupModal] = useState(null);
   const [editingTrip, setEditingTrip] = useState(() =>
@@ -12205,13 +12266,25 @@ export default function App({
   // .then()'d — a bare `supabase.from().insert()` silently no-ops (this is why
   // chat history never persisted before, and why co-travelers' realtime never
   // fired: no row was ever written). Fire-and-forget but actually executed.
-  const persistMessage = (row) =>
-    supabase
+  // In-flight inserts by message id, so marking a change card undone can wait
+  // for its row to exist (a fast Undo tap can beat the insert).
+  const pendingPersistRef = useRef(new Map());
+  const persistMessage = (row) => {
+    const p = supabase
       .from("trip_messages")
       .insert(row)
       .then(({ error }) => {
         if (error) console.warn("trip_messages insert failed:", error.message);
       });
+    const pending = pendingPersistRef.current;
+    if (row.id) {
+      pending.set(row.id, p);
+      p.finally(() => {
+        if (pending.get(row.id) === p) pending.delete(row.id);
+      });
+    }
+    return p;
+  };
 
   // One-tap undo of a Trippy edit: put the touched days back exactly as the
   // RPC's before-snapshot had them. Asks first if a day changed since.
@@ -12252,6 +12325,18 @@ export default function App({
         m.id === msg.id ? { ...m, undo: null, undone: true } : m,
       ),
     );
+    // Save "Undone" on the message so it survives a reload and reaches
+    // co-travellers (realtime UPDATE). Fire-and-forget, after its insert.
+    if (trip?.id)
+      Promise.resolve(pendingPersistRef.current.get(msg.id))
+        .then(() =>
+          supabase.rpc("mark_trippy_change_undone", { p_message: msg.id }),
+        )
+        .then(({ error }) => {
+          if (error)
+            console.warn("mark_trippy_change_undone failed:", error.message);
+        })
+        .catch((e) => console.warn("mark_trippy_change_undone failed:", e));
     logActivity({
       tripId: trip?.id,
       userId: session?.user?.id,
