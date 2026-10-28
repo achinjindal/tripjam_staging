@@ -65,6 +65,20 @@ function extraProps(ctx: ErrorContext): Record<string, unknown> {
   return out;
 }
 
+/**
+ * The string PostHog shows as the issue title (and fingerprints on).
+ * Pure + exported so errortrack.test.ts can pin it without touching env.
+ */
+export function qualifyExceptionType(
+  errName: string,
+  functionName: string | undefined,
+  environment: string,
+): string {
+  const envTag = environment === "production" ? "prod" : "staging";
+  const origin = functionName ? `/${functionName}` : "";
+  return `${envTag}${origin}: ${errName}`;
+}
+
 /** Send an exception to PostHog error tracking. Never throws. */
 export async function captureException(
   err: unknown,
@@ -72,6 +86,20 @@ export async function captureException(
 ): Promise<void> {
   if (!KEY) return;
   const e = err instanceof Error ? err : new Error(String(err));
+  // PostHog's GitHub integration titles each filed issue from
+  // $exception_type, which is just e.name — so every `throw new Error(...)`
+  // from an edge function arrived as an issue literally titled "Error" with
+  // no environment and no origin (issues #9, #13, #15). The capture chain was
+  // working; the notification was unreadable, which is functionally the same
+  // as not being notified. Qualify the type so the title alone says where it
+  // came from and whether it matters: "prod/generate-itinerary: Error".
+  // NOTE: this changes the issue fingerprint, so pre-2026-10-28 issues will
+  // not receive new occurrences — intended, the old grouping was useless.
+  const qualifiedType = qualifyExceptionType(
+    e.name,
+    ctx.functionName,
+    ENVIRONMENT,
+  );
   try {
     await fetch(`${HOST}/capture/`, {
       method: "POST",
@@ -86,13 +114,16 @@ export async function captureException(
           ...extraProps(ctx),
           $exception_list: [
             {
-              type: e.name,
+              type: qualifiedType,
               value: e.message,
               mechanism: { handled: true, synthetic: false },
             },
           ],
           $exception_message: e.message,
-          $exception_type: e.name,
+          $exception_type: qualifiedType,
+          // Preserved unqualified so PostHog queries can still group by the
+          // raw JS error class across environments.
+          exception_class: e.name,
           $exception_stack_trace_raw: e.stack || null,
           app_env: ENVIRONMENT,
           runtime: "supabase-edge",

@@ -45,6 +45,33 @@ jobs:
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
+      # The failure mode this prevents has now happened three times (feature
+      # flags, the RevenueCat key, the PostHog key): an unset secret produces
+      # a perfectly green build whose artifact is missing a whole capability.
+      # Vite inlines these at build time, so a missing value is unrecoverable
+      # once the .aab exists — fail here instead of shipping it blind.
+      - name: Verify release secrets are present
+        run: |
+          missing=""
+          for v in VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY \
+                   VITE_REVENUECAT_ANDROID_KEY VITE_POSTHOG_KEY; do
+            if [ -z "${!v}" ]; then missing="$missing $v"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required repo secret(s):$missing"
+            echo "Add them under Settings → Secrets and variables → Actions."
+            echo "Shipping without these yields a green build and a broken APK:"
+            echo "  VITE_POSTHOG_KEY unset        → no crash reporting at all"
+            echo "  VITE_REVENUECAT_ANDROID_KEY   → Android payments dead"
+            exit 1
+          fi
+          echo "All required release secrets present."
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_REVENUECAT_ANDROID_KEY: ${{ secrets.VITE_REVENUECAT_ANDROID_KEY }}
+          VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
+
       - name: Build web app
         run: npm run build
         env:
@@ -52,6 +79,13 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
           VITE_REVENUECAT_ANDROID_KEY: ${{ secrets.VITE_REVENUECAT_ANDROID_KEY }}
+          # Error tracking. Absent until 2026-10-28, which meant the APK had
+          # ZERO crash reporting: main.jsx gates posthog.init on this key, and
+          # posthog.captureException without init is a SILENT no-op — no
+          # console warning, no throw. Every Android crash was invisible.
+          # Host intentionally omitted: main.jsx defaults to us.i.posthog.com,
+          # which matches Vercel production (verified against the live bundle).
+          VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
           # Feature flags — keep in lockstep with Vercel production env.
           # (Past APKs built with ALL of these unset: collab, realtime,
           # Routes Lens dark and Android payments dead.)
