@@ -220,8 +220,9 @@ export default function MembersSheet({
       setTransferMode(true);
       return;
     }
-    // Sole member (owner or not) → leaving deletes the trip.
-    if (members.length <= 1) {
+    // Sole owner → leaving deletes the trip. (A non-owner who is the only
+    // member row just leaves; leave_trip never deletes on their behalf.)
+    if (isOwner && members.length <= 1) {
       const ok = await confirmSheet({
         title: "Delete this trip?",
         message:

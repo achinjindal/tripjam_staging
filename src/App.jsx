@@ -8470,6 +8470,9 @@ export default function App({
   // A trip is "shared" once it has more than one member. Only then do we show
   // the pool pill / Trip Credits sheet — solo trips behave exactly as before.
   const isSharedTrip = INVITE_ENABLED && members.length > 1;
+  // Owner rights key on owner_id (trips_protect_owner_columns rejects a
+  // co-traveller's share_token change, for one).
+  const isTripOwner = !!session?.user?.id && trip?.owner_id === session.user.id;
   // Style nudge, demoted from auto-sheet to a passive badge (sheet-parade
   // fix): an amber dot on the members affordance until you've shared your
   // style. MembersSheet's "Share what you want from this trip" row is the
@@ -17555,69 +17558,79 @@ export default function App({
                             </div>
                           </div>
                         </button>
-                        <button
-                          onClick={async () => {
-                            let token = trip.share_token;
-                            if (!token) {
-                              // Generate a new share token
-                              const { data } = await supabase
-                                .from("trips")
-                                .update({ share_token: crypto.randomUUID() })
-                                .eq("id", trip.id)
-                                .select("share_token")
-                                .single();
-                              token = data?.share_token;
-                              if (token)
-                                setTrip((t) => ({ ...t, share_token: token }));
-                            }
-                            if (!token) return;
-                            const url = `${window.location.origin}/share/${token}`;
-                            if (navigator.share) {
-                              await navigator.share({
-                                title: trip.name,
-                                text: `Check out our trip: ${trip.name}`,
-                                url,
-                              });
-                            } else {
-                              await navigator.clipboard.writeText(url);
-                              showToast("Link copied");
-                            }
-                            setShowShare(false);
-                          }}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 14,
-                            padding: "14px 16px",
-                            borderRadius: RADIUS.lg,
-                            border: `1.5px solid ${T.sand}`,
-                            background: "white",
-                            cursor: "pointer",
-                            fontFamily: "Georgia,serif",
-                            fontSize: 14,
-                            color: T.ink,
-                            fontWeight: 600,
-                          }}
-                        >
-                          <span style={{ fontSize: 24 }}>🔗</span>
-                          <div style={{ textAlign: "left" }}>
-                            <div>
-                              {INVITE_ENABLED
-                                ? "Share a view-only link"
-                                : "Share link"}
+                        {/* Only the owner can create or revoke the link; a
+                            co-traveller can pass on one that exists. */}
+                        {(isTripOwner || trip.share_token) && (
+                          <button
+                            onClick={async () => {
+                              let token = trip.share_token;
+                              if (!token) {
+                                // Generate a new share token
+                                const { data } = await supabase
+                                  .from("trips")
+                                  .update({ share_token: crypto.randomUUID() })
+                                  .eq("id", trip.id)
+                                  .select("share_token")
+                                  .single();
+                                token = data?.share_token;
+                                if (token)
+                                  setTrip((t) => ({
+                                    ...t,
+                                    share_token: token,
+                                  }));
+                              }
+                              if (!token) {
+                                showToast("Couldn't create a share link");
+                                return;
+                              }
+                              const url = `${window.location.origin}/share/${token}`;
+                              if (navigator.share) {
+                                await navigator.share({
+                                  title: trip.name,
+                                  text: `Check out our trip: ${trip.name}`,
+                                  url,
+                                });
+                              } else {
+                                await navigator.clipboard.writeText(url);
+                                showToast("Link copied");
+                              }
+                              setShowShare(false);
+                            }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 14,
+                              padding: "14px 16px",
+                              borderRadius: RADIUS.lg,
+                              border: `1.5px solid ${T.sand}`,
+                              background: "white",
+                              cursor: "pointer",
+                              fontFamily: "Georgia,serif",
+                              fontSize: 14,
+                              color: T.ink,
+                              fontWeight: 600,
+                            }}
+                          >
+                            <span style={{ fontSize: 24 }}>🔗</span>
+                            <div style={{ textAlign: "left" }}>
+                              <div>
+                                {INVITE_ENABLED
+                                  ? "Share a view-only link"
+                                  : "Share link"}
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: T.mist,
+                                  fontWeight: 400,
+                                }}
+                              >
+                                Anyone with the link can view this trip
+                              </div>
                             </div>
-                            <div
-                              style={{
-                                fontSize: 11,
-                                color: T.mist,
-                                fontWeight: 400,
-                              }}
-                            >
-                              Anyone with the link can view this trip
-                            </div>
-                          </div>
-                        </button>
-                        {trip.share_token && (
+                          </button>
+                        )}
+                        {trip.share_token && isTripOwner && (
                           <button
                             onClick={async () => {
                               const ok = await confirmSheet({
@@ -17632,11 +17645,13 @@ export default function App({
                                 .from("trips")
                                 .update({ share_token: null })
                                 .eq("id", trip.id);
-                              if (!error) {
-                                setTrip((t) => ({ ...t, share_token: null }));
-                                setShowShare(false);
-                                showToast("Share link revoked");
+                              if (error) {
+                                showToast("Couldn't revoke the share link");
+                                return;
                               }
+                              setTrip((t) => ({ ...t, share_token: null }));
+                              setShowShare(false);
+                              showToast("Share link revoked");
                             }}
                             style={{
                               display: "flex",
