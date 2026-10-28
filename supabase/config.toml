@@ -1,0 +1,25 @@
+# Per-function deploy settings.
+#
+# These three are called by EXTERNAL services (Lemon Squeezy, RevenueCat,
+# Resend), not by a signed-in client, so a Supabase JWT check would reject
+# every legitimate request. Each verifies its own caller instead: HMAC for the
+# payment webhooks, Svix signature + SPF/DKIM for inbound mail.
+#
+# Declared here rather than relied on per-command. Measured 2026-10-28: the
+# CLI preserves an existing verify_jwt when the flag is omitted (staging
+# payment-webhook deployed without it went v115 -> v116, still false), so this
+# is NOT fixing a live bug. But that preservation is undocumented, and if a
+# future CLI starts sending the default instead, these three would silently
+# begin returning 401 — failed payments and dropped booking emails, with
+# nothing in the deploy output to show for it. This file makes the setting
+# explicit and version-controlled.
+project_id = "tripjam"
+
+[functions.payment-webhook]
+verify_jwt = false
+
+[functions.revenuecat-webhook]
+verify_jwt = false
+
+[functions.inbound-email]
+verify_jwt = false

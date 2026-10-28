@@ -68,15 +68,30 @@ Run `npm run` to list every script (`dev`, `build`, `check`, `test:e2e`,
   build — it does **not** run `format:check` or `test:functions`. Green CI does not mean
   the unit tests pass or the formatting is clean; only `npm run check` locally does.
 - **`npm run test:e2e`** runs sequentially (`workers: 1`) — the API-dependent
-  specs cannot run in parallel.
+  specs cannot run in parallel. Single spec / single test:
+  `npx playwright test e2e/board.spec.ts` / `npx playwright test -g "<title>"`.
+  Single Deno unit file:
+  `deno test --allow-env --config supabase/functions/deno.json supabase/functions/chat/_ops.test.ts`.
 - **`deploy:functions:*` ships your LOCAL working tree, not `origin/main`.**
   Deploying from a branch that is behind silently reverts whatever another
   session deployed, with a successful CLI response and a bumped version number.
   `git fetch origin` and confirm you are up to date before deploying.
 
 ```bash
-# NOT covered by any npm script — these three must bypass JWT verification,
-# and the bulk deploy scripts do not pass the flag:
+# These three must bypass JWT verification. supabase/config.toml now declares
+# verify_jwt = false for each, so ANY deploy keeps it — including the bulk
+# deploy:functions:* scripts, which do not pass the flag.
+#
+# MEASURED 2026-10-28, because it is easy to assume otherwise: deploying one
+# of these WITHOUT --no-verify-jwt does NOT re-enable JWT. Staging
+# payment-webhook went v115 -> v116 (so the deploy really happened) with
+# verify_jwt still false, and prod's three sat at false after two bulk
+# deploys. The CLI omits the field rather than sending the default, and the
+# server preserves it. That behaviour is UNDOCUMENTED, which is why the
+# config.toml exists — not to fix a live bug, but so a CLI change cannot
+# silently turn these into 401s (failed payments, dropped booking emails).
+#
+# Still use the explicit flag when deploying one of them on its own:
 supabase functions deploy payment-webhook    --no-verify-jwt --project-ref <ref>
 supabase functions deploy revenuecat-webhook --no-verify-jwt --project-ref <ref>
 supabase functions deploy inbound-email      --no-verify-jwt --project-ref <ref>
