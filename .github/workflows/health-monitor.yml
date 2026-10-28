@@ -34,6 +34,12 @@ jobs:
       # Soft-fail list — remove "checkout" once the Lemon Squeezy store is
       # activated and a live key is installed.
       KNOWN_ISSUES: "checkout"
+      # Signup-spike alert (check 8). Every account gets 100 free credits and
+      # there is no captcha, so farming shows up as a burst of signups. Set
+      # against prod's base rate (~35 users total by 2026-10-28) — raise both
+      # once normal traffic approaches them, or the alert becomes noise.
+      SIGNUP_ALERT_PER_HOUR: "15"
+      SIGNUP_ALERT_PER_6H: "40"
     steps:
       - name: Probe all services
         run: |
@@ -187,6 +193,37 @@ jobs:
             [ "$code" = "200" ] && note "frontend: 200 ($BUNDLE)" || hard "frontend bundle $BUNDLE: HTTP $code"
           else
             hard "tripjam.co: no bundle reference found (site down or shell changed)"
+          fi
+
+          # ── 8. Signup spike (prod) — free-credit farming signal ─────
+          # Counts auth.users rows, so UNCONFIRMED signups count too: a farm
+          # using throwaway inboxes shows up even before it confirms. Peak is
+          # the busiest rolling 60 minutes since the last run (the window can
+          # start just before the 6h cutoff, so a burst straddling two runs is
+          # still caught). If this fires and the signups look scripted, turn on
+          # Cloudflare Turnstile (Supabase Auth → Attack Protection) — that is
+          # the deferred captcha decision. Read-only SELECT via the Management
+          # API, same token as check 1.
+          SIGNUP_SQL="select coalesce(max(n),0) as peak_hour, (select count(*) from auth.users where created_at > now() - interval '6 hours') as last_6h from (select created_at, count(*) over (order by created_at range between interval '1 hour' preceding and current row) as n from auth.users where created_at > now() - interval '7 hours') w where created_at > now() - interval '6 hours'"
+          rm -f /tmp/signups.json
+          curl -s -o /tmp/signups.json -X POST "https://api.supabase.com/v1/projects/viyvdqwwnbbqjuwiuzbh/database/query" \
+            -H "Authorization: Bearer $MGMT_TOKEN" -H "Content-Type: application/json" \
+            -d "$(python3 -c 'import json,sys; print(json.dumps({"query": sys.argv[1]}))' "$SIGNUP_SQL")" --max-time 30
+          # Any failure (curl error, API error object, missing field) => "ERR ERR".
+          COUNTS=$(python3 -c '
+          import json
+          try:
+              r = json.load(open("/tmp/signups.json"))[0]
+              print(int(r["peak_hour"]), int(r["last_6h"]))
+          except Exception:
+              print("ERR ERR")' 2>/dev/null || echo "ERR ERR")
+          read -r PEAK SIX <<< "$COUNTS"
+          if [ "${PEAK:-ERR}" = "ERR" ] || [ "${SIX:-ERR}" = "ERR" ]; then
+            hard "signup-spike check failed (Management API query) — $(head -c 200 /tmp/signups.json). Farming is UNMONITORED until fixed."
+          elif [ "$PEAK" -gt "$SIGNUP_ALERT_PER_HOUR" ] || [ "$SIX" -gt "$SIGNUP_ALERT_PER_6H" ]; then
+            hard "SIGNUP SPIKE on prod: $PEAK in the busiest hour, $SIX in 6h (alert at >$SIGNUP_ALERT_PER_HOUR/h or >$SIGNUP_ALERT_PER_6H/6h). Possible free-credit farming — check auth.users for throwaway domains; consider enabling Turnstile."
+          else
+            note "signups: $PEAK peak/hour, $SIX in 6h"
           fi
 
           exit $FAIL

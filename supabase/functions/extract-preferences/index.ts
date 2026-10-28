@@ -12,6 +12,7 @@ import {
   rateLimit,
   unauthorized,
 } from "../_shared/credits.ts";
+import { buildPrefsInput } from "./_helpers.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -72,34 +73,28 @@ serve(async (req) => {
   // and this one has none. Without these two guards an authenticated user
   // could loop it to drain the Anthropic balance — the failure that has taken
   // production down twice — and LLM_KILL_SWITCH, the documented incident
-  // lever, could not stop it. The limiter is 20/min, so the 6-hourly
-  // health-monitor probe (4 calls/day) is unaffected.
+  // lever, could not stop it. Input size is capped in buildPrefsInput.
+  //
+  // Own bucket at 5/min. Real use is one call per "Build My Itinerary" on a
+  // fresh sheet (reopens in a session are cached client-side and skip this
+  // call), plus the health-monitor probe 4x/day. A 429 is harmless: the sheet
+  // is already open with defaults and the client ignores a non-OK response.
+  // Its own bucket also stops Build clicks eating into the shared "llm" 20/min
+  // that chat and IG need.
   const killed = llmKillSwitch(corsHeaders);
   if (killed) return killed;
 
   const user = await authenticateUser(req);
   if (!user) return unauthorized(corsHeaders);
 
-  const rateLimited = await rateLimit(user.id, corsHeaders);
+  const rateLimited = await rateLimit(user.id, corsHeaders, "prefs", 5);
   if (rateLimited) return rateLimited;
 
   try {
     const { notes, chatHistory, tripId } = await req.json();
 
-    // Build user message from available context
-    const parts: string[] = [];
-    if (notes?.trim()) parts.push(`User notes: "${notes.trim()}"`);
-    if (chatHistory?.length) {
-      const chatText = chatHistory
-        .map(
-          (m: { role: string; content: string }) => `${m.role}: ${m.content}`,
-        )
-        .slice(-10) // last 10 messages max
-        .join("\n");
-      parts.push(`Chat history:\n${chatText}`);
-    }
-
-    if (!parts.length) {
+    const input = buildPrefsInput(notes, chatHistory);
+    if (!input) {
       return new Response(
         JSON.stringify({ budget: null, morningStart: null, pace: null }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -117,7 +112,7 @@ serve(async (req) => {
     const msg = await callLLM({
       model,
       system: SYSTEM_PROMPT,
-      user: parts.join("\n\n"),
+      user: input,
       maxTokens: suggestCap(model, 100),
       json: true,
       schema: PREFS_SCHEMA as unknown as JSONSchema,
