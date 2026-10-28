@@ -9,6 +9,78 @@ import {
 } from "../theme";
 import { CityInput } from "./BoardView.jsx";
 import { placesAuthHeaders } from "../photos";
+import {
+  instantSuggestions,
+  destSuggestCache,
+  fold as destKey,
+} from "../destinationSuggest";
+
+// Destination autocomplete tuning. The first attempt gives up at 4s and
+// retries once with a longer budget: prod latency is mostly fine but has
+// multi-second spikes, and a fresh request often lands on a healthier path.
+const DEST_DEBOUNCE_MS = 300;
+const DEST_TIMEOUTS_MS = [4000, 8000];
+
+// Fire a cheap cached autocomplete call so the edge function's isolate is
+// warm before the user types. Throttled: one warm per 2 minutes is plenty.
+let _lastProxyWarm = 0;
+async function warmPlacesProxy() {
+  if (Date.now() - _lastProxyWarm < 120_000) return;
+  _lastProxyWarm = Date.now();
+  try {
+    await fetch(`${PLACES_PROXY}?action=autocomplete`, {
+      method: "POST",
+      headers: await placesAuthHeaders(),
+      body: JSON.stringify({ q: "lo" }),
+    });
+  } catch {
+    /* best effort */
+  }
+}
+
+// Shown when destination search timed out twice. Never a dead end: Enter
+// still adds the typed text as-is.
+function DestSlowNotice({ query, onRetry, padding }) {
+  return (
+    <div
+      data-testid="dest-search-slow"
+      style={{
+        padding,
+        fontFamily: "Georgia,serif",
+        fontSize: 13,
+        color: T.mist,
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        flexWrap: "wrap",
+        borderBottom: `1px solid ${T.sand}`,
+      }}
+    >
+      <span style={{ flex: "1 1 180px" }}>
+        Search is slow right now. Press Enter to add &ldquo;{query}&rdquo; as
+        typed, or
+      </span>
+      <button
+        type="button"
+        // Keep focus in the input (desktop dropdown closes on blur).
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onRetry}
+        style={{
+          background: "none",
+          border: `1.5px solid ${T.ocean}`,
+          borderRadius: RADIUS.lg,
+          padding: "6px 12px",
+          color: T.ocean,
+          fontFamily: "Georgia,serif",
+          fontSize: 13,
+          cursor: "pointer",
+        }}
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
 
 function DateRangePicker({ startDate, endDate, onChange, isDesktop = false }) {
   const todayISO = new Date().toISOString().slice(0, 10);
@@ -300,15 +372,11 @@ function SetupForm({
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  // Pre-warm places-proxy edge function so first autocomplete keystroke isn't a cold start
+  // Pre-warm places-proxy so the first keystroke doesn't pay for a cold
+  // isolate (and, once deployed, its one-off JWKS fetch). Also re-warmed when
+  // the destination sheet opens — see warmPlacesProxy.
   useEffect(() => {
-    (async () => {
-      fetch(`${PLACES_PROXY}?action=autocomplete`, {
-        method: "POST",
-        headers: await placesAuthHeaders(),
-        body: JSON.stringify({ q: "lo" }),
-      }).catch(() => {});
-    })();
+    warmPlacesProxy();
   }, []);
   const igReq = initialTrip?.ig_request || {};
   const prefill = initialTrip
@@ -364,10 +432,12 @@ function SetupForm({
   const [suggestions, setSuggestions] = useState([]);
   const [showSugg, setShowSugg] = useState(false);
   const [destLoading, setDestLoading] = useState(false);
+  // Both attempts timed out or failed — show "slow, retry" instead of an
+  // endless spinner or a misleading "No results".
+  const [destSlow, setDestSlow] = useState(false);
   const inputRef = useRef(null);
   const destTimer = useRef(null);
   const destAbortRef = useRef(null);
-  const destCacheRef = useRef(new Map());
 
   // Track visual viewport height (shrinks when the software keyboard opens on mobile).
   // Used to position the suggestions dropdown above the keyboard.
@@ -391,67 +461,103 @@ function SetupForm({
     onDestinationsChange?.(form.destinations);
   }, [form.destinations]);
 
+  // Cancel the pending debounce and any in-flight request (a newer keystroke,
+  // a pick, or closing the sheet). A cancelled search never touches state.
+  const cancelDestSearch = () => {
+    clearTimeout(destTimer.current);
+    destAbortRef.current?.abort();
+  };
+
+  // One search: up to DEST_TIMEOUTS_MS.length attempts, each with its own
+  // timeout. Previously a single 6s timeout aborted the same controller the
+  // catch block used to detect "superseded", so a timed-out search looked
+  // superseded, `destLoading` was never cleared and "Searching…" stayed up
+  // forever with no results and no retry.
+  const runDestSearch = async (val) => {
+    const search = new AbortController(); // aborted only by cancelDestSearch
+    destAbortRef.current = search;
+    for (const timeoutMs of DEST_TIMEOUTS_MS) {
+      const attempt = new AbortController();
+      const cancel = () => attempt.abort();
+      search.signal.addEventListener("abort", cancel);
+      const timer = setTimeout(cancel, timeoutMs);
+      try {
+        // getSession() can wait on an in-progress token refresh (an Auth
+        // round trip), so the timeout covers getting the header too.
+        const headers = await Promise.race([
+          placesAuthHeaders(),
+          new Promise((_, reject) =>
+            attempt.signal.addEventListener("abort", () =>
+              reject(new Error("aborted")),
+            ),
+          ),
+        ]);
+        const res = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ q: val }),
+          signal: attempt.signal,
+        });
+        if (!res.ok) throw new Error(`autocomplete ${res.status}`);
+        const data = await res.json();
+        if (search.signal.aborted) return;
+        const items = (data.suggestions || []).slice(0, 8);
+        // Only real answers are cached — a 5xx used to cache [] for the
+        // query, so it kept showing "No results" until a reload.
+        destSuggestCache.set(destKey(val), items);
+        setSuggestions(items);
+        setShowSugg(items.length > 0);
+        setDestLoading(false);
+        return;
+      } catch {
+        if (search.signal.aborted) return; // superseded — not our state now
+        // Timed out or failed: fall through to the next attempt.
+      } finally {
+        clearTimeout(timer);
+        search.signal.removeEventListener("abort", cancel);
+      }
+    }
+    // Every attempt failed. Keep any instant suggestions on screen; the user
+    // can still press Enter to add what they typed, or tap Retry.
+    setDestLoading(false);
+    setDestSlow(true);
+    setShowSugg(true);
+  };
+
+  const retryDestSearch = () => {
+    if (destInput.trim().length < 2) return;
+    cancelDestSearch();
+    setDestSlow(false);
+    setDestLoading(true);
+    runDestSearch(destInput);
+  };
+
   const handleDestChange = (val) => {
     setDestInput(val);
     setDestError("");
+    setDestSlow(false);
+    cancelDestSearch();
     // Require ≥2 characters — single-character queries are too broad and
     // the autocomplete API charges per call.
     if (val.trim().length < 2) {
       setSuggestions([]);
       setShowSugg(false);
       setDestLoading(false);
-      destAbortRef.current?.abort();
-      clearTimeout(destTimer.current);
       return;
     }
-    const cacheKey = val.trim().toLowerCase();
-    // In-memory cache (per component mount) — instant, no network round-trip.
-    const cached = destCacheRef.current.get(cacheKey);
-    if (cached) {
-      setSuggestions(cached);
-      setShowSugg(cached.length > 0);
+    // Answer from memory first: an exact earlier result needs no request; a
+    // prefix's results or a popular destination are shown while it runs.
+    const instant = instantSuggestions(val);
+    if (instant?.exact) {
+      setSuggestions(instant.items);
+      setShowSugg(instant.items.length > 0);
       setDestLoading(false);
       return;
     }
+    setSuggestions(instant?.items || []);
     setShowSugg(true);
     setDestLoading(true);
-    clearTimeout(destTimer.current);
-    destAbortRef.current?.abort();
-    // 400ms debounce — more forgiving on mobile where typing is slower and
-    // edge-function cold-starts add latency.
-    destTimer.current = setTimeout(async () => {
-      const ctrl = new AbortController();
-      destAbortRef.current = ctrl;
-      // 6s client timeout: edge functions occasionally cold-start (1–3s).
-      // If it takes longer than 6s, fail fast rather than hanging indefinitely.
-      const timeoutId = setTimeout(() => ctrl.abort(), 6000);
-      try {
-        const res = await fetch(`${PLACES_PROXY}?action=autocomplete`, {
-          method: "POST",
-          headers: await placesAuthHeaders(),
-          body: JSON.stringify({ q: val }),
-          signal: ctrl.signal,
-        });
-        clearTimeout(timeoutId);
-        const data = await res.json();
-        const items = (data.suggestions || []).slice(0, 8);
-        // Cache the result so typing back to the same prefix is instant.
-        destCacheRef.current.set(cacheKey, items);
-        if (ctrl.signal.aborted) return;
-        setSuggestions(items);
-        setShowSugg(items.length > 0);
-        setDestLoading(false);
-      } catch (err) {
-        clearTimeout(timeoutId);
-        if (err.name === "AbortError") {
-          // Timeout or newer keystroke — don't show an error, just clear.
-          if (!ctrl.signal.aborted) setDestLoading(false);
-          return;
-        }
-        setSuggestions([]);
-        setDestLoading(false);
-      }
-    }, 400);
+    destTimer.current = setTimeout(() => runDestSearch(val), DEST_DEBOUNCE_MS);
   };
 
   const addDestination = (name, currentDests) => {
@@ -462,12 +568,12 @@ function SetupForm({
     setSuggestions([]);
     setShowSugg(false);
     setDestLoading(false);
+    setDestSlow(false);
     // Cancel any in-flight autocomplete request + pending debounce timer.
     // Otherwise a pending 200ms fetch can resolve after this call and
     // reopen the dropdown over the Continue button (test flakiness +
     // real UX: the dropdown stays open after pressing Enter).
-    clearTimeout(destTimer.current);
-    destAbortRef.current?.abort();
+    cancelDestSearch();
     return name;
   };
 
@@ -525,7 +631,10 @@ function SetupForm({
     setDestInput("");
     setSuggestions([]);
     setShowSugg(false);
+    setDestSlow(false);
     setShowDestSheet(true);
+    // The mount-time warm may be minutes old; isolates go cold.
+    warmPlacesProxy();
   };
 
   const closeDestSheet = () => {
@@ -534,8 +643,8 @@ function SetupForm({
     setSuggestions([]);
     setShowSugg(false);
     setDestLoading(false);
-    destAbortRef.current?.abort();
-    clearTimeout(destTimer.current);
+    setDestSlow(false);
+    cancelDestSearch();
   };
 
   const pickSuggestionAndClose = (s) => {
@@ -605,11 +714,9 @@ function SetupForm({
         />
         {destInput && (
           <button
-            onClick={() => {
-              setDestInput("");
-              setSuggestions([]);
-              setShowSugg(false);
-            }}
+            // Through handleDestChange so an in-flight search is cancelled
+            // too — otherwise its results reappeared after clearing.
+            onClick={() => handleDestChange("")}
             style={{
               background: "none",
               border: "none",
@@ -652,18 +759,28 @@ function SetupForm({
             Searching…
           </div>
         )}
-        {!destLoading && destInput.length >= 2 && suggestions.length === 0 && (
-          <div
-            style={{
-              padding: "20px 16px",
-              fontFamily: "Georgia,serif",
-              fontSize: 14,
-              color: T.mist,
-            }}
-          >
-            No results for &ldquo;{destInput}&rdquo;
-          </div>
+        {destSlow && destInput.trim().length >= 2 && (
+          <DestSlowNotice
+            query={destInput.trim()}
+            onRetry={retryDestSearch}
+            padding="16px"
+          />
         )}
+        {!destLoading &&
+          !destSlow &&
+          destInput.length >= 2 &&
+          suggestions.length === 0 && (
+            <div
+              style={{
+                padding: "20px 16px",
+                fontFamily: "Georgia,serif",
+                fontSize: 14,
+                color: T.mist,
+              }}
+            >
+              No results for &ldquo;{destInput}&rdquo;
+            </div>
+          )}
         {suggestions.map((s, i) => {
           const main =
             s.placePrediction?.structuredFormat?.mainText?.text ||
@@ -918,7 +1035,7 @@ function SetupForm({
               transition: `border ${MOTION.normal}`,
             }}
           />
-          {showSugg && (destLoading || suggestions.length > 0) && (
+          {showSugg && (destLoading || destSlow || suggestions.length > 0) && (
             <div
               style={{
                 position: "absolute",
@@ -960,6 +1077,13 @@ function SetupForm({
                   />
                   Searching destinations…
                 </div>
+              )}
+              {destSlow && (
+                <DestSlowNotice
+                  query={destInput.trim()}
+                  onRetry={retryDestSearch}
+                  padding="10px 16px"
+                />
               )}
               {suggestions.map((s, i) => {
                 const main =

@@ -239,6 +239,9 @@ import {
   nameSimilarity,
   normalizeName,
   validateGoogleResult,
+  verifyUserJwt,
+  unverifiedSub,
+  type Jwk,
 } from "./_helpers.ts";
 
 function preEscalateToGoogle(
@@ -377,7 +380,44 @@ function costToCreditsPassthrough(usd: number): number {
   return Math.ceil((usd / USER_VALUE_PER_CREDIT) * 100) / 100;
 }
 
-async function authenticateUserId(req: Request): Promise<string | null> {
+// Public signing keys for user tokens, cached per isolate. Fetched once per
+// isolate (a cold isolate pays one Auth round trip, as every call used to);
+// refetched after JWKS_TTL_MS, or early — at most every JWKS_MIN_REFETCH_MS —
+// when a token names a kid we don't have (key rotation).
+const JWKS_TTL_MS = 10 * 60_000;
+const JWKS_MIN_REFETCH_MS = 30_000;
+let jwksCache: { keys: Jwk[]; at: number } | null = null;
+let jwksInflight: Promise<Jwk[]> | null = null;
+
+function loadJwks(force = false): Promise<Jwk[]> {
+  const now = Date.now();
+  if (
+    jwksCache &&
+    now - jwksCache.at < (force ? JWKS_MIN_REFETCH_MS : JWKS_TTL_MS)
+  )
+    return Promise.resolve(jwksCache.keys);
+  if (jwksInflight) return jwksInflight;
+  jwksInflight = (async () => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`, {
+        headers: { apikey: SUPABASE_SERVICE_KEY },
+      });
+      if (!res.ok) throw new Error(`jwks ${res.status}`);
+      const keys: Jwk[] = (await res.json())?.keys ?? [];
+      jwksCache = { keys, at: Date.now() };
+      return keys;
+    } catch (e) {
+      console.warn("jwks fetch failed:", (e as Error).message);
+      return jwksCache?.keys ?? [];
+    } finally {
+      jwksInflight = null;
+    }
+  })();
+  return jwksInflight;
+}
+
+// Token from the Authorization header, or null for none / the public anon key.
+function bearerToken(req: Request): string | null {
   const auth =
     req.headers.get("authorization") || req.headers.get("Authorization");
   if (!auth?.startsWith("Bearer ")) return null;
@@ -385,6 +425,20 @@ async function authenticateUserId(req: Request): Promise<string | null> {
   // Reject anon-key calls — must be a real user token
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
   if (anonKey && token === anonKey) return null;
+  return token;
+}
+
+async function authenticateUserId(req: Request): Promise<string | null> {
+  const token = bearerToken(req);
+  if (!token) return null;
+  // Fast path: verify the signature locally (no network once the JWKS is
+  // cached). Only a token it cannot judge (legacy HS256, unknown kid) falls
+  // through to the Auth server; an invalid one is rejected outright.
+  const issuer = `${SUPABASE_URL}/auth/v1`;
+  let local = await verifyUserJwt(token, await loadJwks(), { issuer });
+  if (local === undefined)
+    local = await verifyUserJwt(token, await loadJwks(true), { issuer });
+  if (local !== undefined) return local;
   const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
     headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_SERVICE_KEY },
   });
@@ -473,8 +527,28 @@ async function handleAutocomplete(req: Request): Promise<Response> {
   // PAID upstream — real user token required. These actions were reachable
   // with the anon key (public in the client bundle), i.e. a free Google Places
   // faucet billed to us outside the credits system.
-  const userId = await authenticateUserId(req);
-  if (!userId)
+  //
+  // Latency: this runs on every debounced keystroke. Production's DB and Auth
+  // are in ap-northeast-1 while the function runs nearest the caller, so each
+  // await below that touches Supabase is a cross-region round trip. The old
+  // shape awaited auth → cache read → usage read → Google in series (3 such
+  // hops before Google). Now auth is verified locally, and the cache read and
+  // the per-user usage read start together, before auth has finished. Neither
+  // read spends money; Google is still only called once auth has PASSED, the
+  // cache MISSED and the user is under the daily cap.
+  const t0 = performance.now();
+  const timing: string[] = [];
+  const mark = (name: string, since: number) =>
+    timing.push(`${name};dur=${Math.round(performance.now() - since)}`);
+  const respond = (body: unknown) => {
+    mark("total", t0);
+    return Response.json(body, {
+      headers: { ...corsHeaders, "Server-Timing": timing.join(", ") },
+    });
+  };
+
+  const token = bearerToken(req);
+  if (!token)
     return Response.json(
       { error: "Unauthorized" },
       { status: 401, headers: corsHeaders },
@@ -483,32 +557,94 @@ async function handleAutocomplete(req: Request): Promise<Response> {
   if (!q) return Response.json({ error: "q required" }, { status: 400 });
 
   // Cache ALL queries in DB — popular destination prefixes ("jap", "bali",
-  // "sant", etc.) are highly reusable across users and the cache hit is
-  // a single Postgres read (~5ms) vs. a Google API call (~150–400ms).
-  // Previously only ≤4-char queries were cached; extending to all queries
-  // dramatically reduces latency for returning/repeat users.
+  // "sant", etc.) are highly reusable across users.
   const cacheKey = `autocomplete:${q.trim().toLowerCase()}:${types || ""}`;
-  const cached = await cacheGet(cacheKey);
+  const timed = <T>(name: string, p: Promise<T>) => {
+    const s = performance.now();
+    return p.finally(() => mark(name, s));
+  };
+  const authP = timed("auth", authenticateUserId(req));
+  // In-isolate memo first: on a warm isolate a popular prefix is answered
+  // without touching the database at all (prod PostgREST has had
+  // multi-second spikes — see the commit message).
+  const memo = acMemoGet(cacheKey);
+  if (memo) {
+    if (!(await authP))
+      return Response.json(
+        { error: "Unauthorized" },
+        { status: 401, headers: corsHeaders },
+      );
+    timing.push("memo;dur=0");
+    incrementUsage("autocomplete", "cache-hit", today()).catch(() => {});
+    return respond(memo);
+  }
+  const cacheP = timed(
+    "cache",
+    cacheGet(cacheKey).then((r) => {
+      if (r) acMemoSet(cacheKey, r);
+      return r;
+    }),
+  );
+  // Keyed by the UNVERIFIED sub only so the read can start now; it is used
+  // below only when it matches the verified user id.
+  const claimedSub = unverifiedSub(token);
+  const usageP = claimedSub
+    ? timed("usage", getUsage("autocomplete", `user:${claimedSub}`, today()))
+    : null;
+
+  const userId = await authP;
+  if (!userId)
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders },
+    );
+  const cached = await cacheP;
   if (cached) {
     incrementUsage("autocomplete", "cache-hit", today()).catch(() => {});
-    return Response.json(cached, { headers: corsHeaders });
+    return respond(cached);
   }
   // Defence in depth: a compromised/curious signed-in user still can't turn
   // this into an unbounded Google bill. Degrades to "no suggestions" rather
   // than erroring — the field stays usable, just without autocomplete.
-  const perUser = await getUsage("autocomplete", `user:${userId}`, today());
+  const perUser =
+    usageP && claimedSub === userId
+      ? await usageP
+      : await getUsage("autocomplete", `user:${userId}`, today());
   if (perUser >= AUTOCOMPLETE_DAILY_PER_USER) {
     incrementUsage("autocomplete", "user-cap-hit", today()).catch(() => {});
-    return Response.json({ suggestions: [] }, { headers: corsHeaders });
+    return respond({ suggestions: [] });
   }
 
-  const data = await autocomplete(q, types);
+  const data = await timed("google", autocomplete(q, types));
   incrementUsage("autocomplete", "google", today()).catch(() => {});
   incrementUsage("autocomplete", `user:${userId}`, today()).catch(() => {});
   // Cache results for 7 days — city/destination autocomplete results are
   // stable. A TTL of null (permanent) would also be safe here.
   cacheSet(cacheKey, "autocomplete", data, "google", 7).catch(() => {});
-  return Response.json(data, { headers: corsHeaders });
+  acMemoSet(cacheKey, data);
+  return respond(data);
+}
+
+// Per-isolate memo of autocomplete results (bounded, insertion-order LRU).
+// The DB cache's TTL is 7 days; an hour here can't serve anything stale.
+const AC_MEMO_MAX = 500;
+const AC_MEMO_TTL_MS = 60 * 60_000;
+const acMemo = new Map<string, { at: number; data: unknown }>();
+function acMemoGet(key: string): unknown | null {
+  const hit = acMemo.get(key);
+  if (!hit) return null;
+  acMemo.delete(key);
+  if (Date.now() - hit.at > AC_MEMO_TTL_MS) return null;
+  acMemo.set(key, hit); // refresh recency
+  return hit.data;
+}
+function acMemoSet(key: string, data: unknown) {
+  acMemo.delete(key);
+  acMemo.set(key, { at: Date.now(), data });
+  if (acMemo.size > AC_MEMO_MAX) {
+    const oldest = acMemo.keys().next().value;
+    if (oldest !== undefined) acMemo.delete(oldest);
+  }
 }
 
 async function handleHotelPhoto(req: Request): Promise<Response> {
